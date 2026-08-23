@@ -50,7 +50,6 @@ constexpr uint32_t BLE_UN = bit (BinaryOp::BleUn);
 constexpr uint32_t BLT_UN = bit (BinaryOp::BltUn);
 constexpr uint32_t COMPARE_ALL =
 	BEQ | BGE | BGT | BLE | BLT | BNE_UN | BGE_UN | BGT_UN | BLE_UN | BLT_UN;
-// The cells the table spells out by name rather than accepting wholesale.
 constexpr uint32_t COMPARE_EQ = BEQ | BNE_UN;
 
 constexpr uint32_t ADD_OVF = bit (BinaryOp::AddOvf);
@@ -118,8 +117,6 @@ constexpr Cell I4_INT = {Int32, INTEGER_ALL};
 constexpr Cell I8_INT = {Int64, INTEGER_ALL};
 constexpr Cell NI_INT = {NativeInt, INTEGER_ALL};
 
-// Table III.5: Integer Operations. Every box here is verifiable - neither float nor
-// anything the GC tracks has a bitwise operation or an unsigned division.
 constexpr OperandTable INTEGER = {
 	/*            int32    int64   native int   F   &   O */
 	/* int32 */ {I4_INT, I8_INT, NI_INT, X, X, X},
@@ -137,8 +134,7 @@ constexpr Cell NI_SHIFT = {NativeInt, SHIFT_ALL};
 // Table III.6: Shift Operations, indexed [value to be shifted][shift amount].
 //
 // A shift does not change what it shifts. The result type follows only the left
-// operand, so every cell in a row carries that row's own type. This table refuses an
-// int64 shift amount.
+// operand, so every cell in a row carries that row's own type.
 constexpr OperandTable SHIFT = {
 	/*             int32     int64  native int   F   &   O */
 	/* int32 */ {I4_SHIFT, X, I4_SHIFT, X, X, X},
@@ -204,7 +200,6 @@ constexpr OperandTable OVERFLOW_ARITHMETIC = {
 	/* O     */ {X, X, X, X, X, X},
 };
 
-/// The operand table ECMA-335 gives for op.
 const OperandTable &
 table_for (BinaryOp op)
 {
@@ -356,7 +351,6 @@ MethodLLVMEmitter::binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs)
 		               ? m_class_get_byval_arg (mono_defaults.double_class)
 		               : m_class_get_byval_arg (mono_defaults.single_class);
 	case ManagedPtr:
-		// Pointer arithmetic keeps pointing at whatever the pointer operand did.
 		return a == ManagedPtr ? lhs : rhs;
 	case ObjectRef:
 		// Only Table III.4 has these, where the two are compared as addresses.
@@ -366,9 +360,6 @@ MethodLLVMEmitter::binary_result (BinaryOp op, MonoType *lhs, MonoType *rhs)
 	}
 }
 
-/// Take op's two operands off the evaluation stack, with the result type from
-/// whichever ECMA-335 III.1.5 table governs op. Fail if the stack cannot supply a
-/// valid pair.
 llvm::Expected<MethodLLVMEmitter::BinaryOperands>
 MethodLLVMEmitter::pop_binary_operands (BinaryOp op)
 {
@@ -1121,7 +1112,6 @@ MethodLLVMEmitter::emit_neg (MonoIrBuilder &builder)
 	StackType type = stack_type (value.type);
 	MonoType *result;
 
-	// Table III.3: Unary Numeric Operations - each numeric type maps to itself.
 	switch (type) {
 	case Int32:
 		result = mono_get_int32_type ();

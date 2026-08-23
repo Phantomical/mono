@@ -92,14 +92,12 @@ profile_with_no_records ()
 	return bytes;
 }
 
-// Helper to add AnnotationRemarksPass.
 static void
 addAnnotationRemarksPass (llvm::ModulePassManager &MPM)
 {
 	llvm::FunctionPassManager FPM;
 	FPM.addPass (llvm::AnnotationRemarksPass ());
 
-	// Count the stats for InstCount and FunctionPropertiesAnalysis
 	if (llvm::AreStatisticsEnabled ()) {
 		FPM.addPass (llvm::InstCountPass ());
 		FPM.addPass (llvm::FunctionPropertiesStatisticsPass ());
@@ -173,9 +171,6 @@ MonoPassBuilder::buildCommonFunctionSimplificationPipeline ()
 	if (llvm::AreStatisticsEnabled ())
 		FPM.addPass (llvm::CountVisitsPass ());
 
-	// Early cleanup
-
-	// Lower llvm.expect to metadata before attempting transforms.
 	FPM.addPass (llvm::LowerExpectIntrinsicPass ());
 
 	// The rest is the O1 function optimization pipeline, see
@@ -242,17 +237,10 @@ MonoPassBuilder::buildCommonModuleSimplificationPipeline ()
 {
 	llvm::ModulePassManager MPM;
 
-	// Convert @llvm.global.annotations to !annotation metadata.
 	MPM.addPass (llvm::Annotation2MetadataPass ());
-
-	// Force any function attributes we want the rest of the pipeline to observe.
 	MPM.addPass (llvm::ForceFunctionAttrsPass ());
-
-	// Do basic inference of function attributes from known properties of system
-	// attributes and other oracles.
 	MPM.addPass (llvm::InferFunctionAttrsPass ());
 
-	// Lower our builtins to actual LLVM IR
 	MPM.addPass (mono::ArrayAddressPass ());
 	MPM.addPass (mono::LowerBuiltinsPass ());
 
@@ -338,10 +326,7 @@ MonoPassBuilder::buildTier1Pipeline ()
 	if (PTO.EnablePromotion)
 		MPM.addPass (mono::TierCounterPass ());
 
-	// Clean up dominated class initialization checks
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
-
-	// Make sure that tail calls do not get merged into one block.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RestoreTailPositionPass ()));
 	MPM.addPass (arch::MonoAbiPass ());
 
@@ -390,8 +375,6 @@ MonoPassBuilder::buildTier2Pipeline ()
 	MPM.addPass (mono::TopDownInlinerPass (*TM, buildTier2MaterializePipeline (),
 	                                       buildTier2FunctionSimplificationPipeline ()));
 
-	// A copy neither inliner folded in goes back to being a call through the
-	// callee's thunk, which is where it was before the body was asked for.
 	MPM.addPass (mono::StripInlineCopiesPass ());
 
 	llvm::FunctionPassManager FPM;

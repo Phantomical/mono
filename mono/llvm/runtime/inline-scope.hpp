@@ -67,8 +67,6 @@ struct InlineScope {
 /// does not answer.
 bool may_fold (MonoDomain *domain, MonoMethod *callee);
 
-/// Reads a four-byte little-endian IL operand: a metadata token, or a
-/// displacement.
 uint32_t il_read_u32 (const unsigned char *at);
 
 /// Returns the method a call site's token names, or null when the metadata

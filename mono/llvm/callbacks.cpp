@@ -107,7 +107,6 @@ LazyCallbacks::fire (ExecutorAddr trampoline)
 	                                               std::memory_order_acquire))
 		return landed;
 
-	/* Another thread published before this one. Every caller goes where it went. */
 	return first;
 }
 

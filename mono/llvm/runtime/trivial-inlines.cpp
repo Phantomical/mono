@@ -31,7 +31,6 @@ namespace mono {
 
 namespace {
 
-/// The reduced shape of a candidate's IL.
 struct Shape {
 	/// The method the single call site names, null when the body calls nothing.
 	MonoMethod *forwards_to = nullptr;
@@ -134,15 +133,12 @@ computes_a_value (MonoOpcodeEnum op)
 	}
 }
 
-/// Whether an opcode enters another method and comes back.
 bool
 enters_a_method (MonoOpcodeEnum op)
 {
 	return op == MONO_CEE_CALL || op == MONO_CEE_CALLVIRT || op == MONO_CEE_NEWOBJ;
 }
 
-/// Whether a branch goes to the instruction behind it, which is a fallthrough
-/// written out.
 bool
 branches_to_the_next (const unsigned char *code, MonoOpcodeEnum op, size_t operand)
 {
@@ -248,9 +244,6 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 /// second mark takes in far more than it has to, and a fold declined costs
 /// the caller nothing. A math icall is the one body with no IL that answers
 /// no, because the front end leaves no call at the site.
-///
-/// A forwarder stands in for what it forwards to, so the walk follows the
-/// chain until it reaches a body that keeps a frame of its own.
 bool
 may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
 {
@@ -299,8 +292,6 @@ may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
 	return true;
 }
 
-/// Moves the calls \p caller makes to \p from onto \p to.
-///
 /// A copy belongs to the one compile that asked for it. Another body in the
 /// module keeps the declaration and reaches the published entry, until its own
 /// compile folds a copy of its own.

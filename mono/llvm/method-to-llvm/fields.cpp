@@ -16,9 +16,6 @@
 
 namespace mono {
 
-/// The declaration for the generic write barrier, the collector's hook for a store
-/// through a pointer it does not already track. The same barrier covers a field inside
-/// an object and an element inside an array.
 llvm::FunctionCallee
 MethodLLVMEmitter::wbarrier_decl ()
 {
@@ -88,11 +85,6 @@ MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static, bool *out_is
 	return field;
 }
 
-/// The external global named name, whose address the engine resolves against the
-/// runtime, created on first use.
-///
-/// A second call under the same name returns the first declaration instead of creating
-/// another one, whether that first declaration is this global or an unrelated function.
 llvm::Constant *
 MethodLLVMEmitter::extern_symbol (const std::string &name)
 {
@@ -103,8 +95,6 @@ MethodLLVMEmitter::extern_symbol (const std::string &name)
 	                                 llvm::GlobalValue::ExternalLinkage, nullptr, name);
 }
 
-/// Records that name stands for object, so the engine can resolve it without reading
-/// the metadata back out of the name.
 void
 MethodLLVMEmitter::record_external (const std::string &name, ExternalSymbol::Kind kind,
                                     void *object)
@@ -162,7 +152,6 @@ MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 	return extern_symbol (symbol);
 }
 
-/// The address the engine must resolve for field's own MonoClassField.
 llvm::Constant *
 MethodLLVMEmitter::field_symbol (MonoClassField *field)
 {
@@ -195,7 +184,6 @@ MethodLLVMEmitter::cctor_already_ran (MonoClass *klass)
 
 	MonoVTable *vtable = mono_class_try_get_vtable (cfg->domain, klass);
 
-	// Without a vtable the initializer cannot have run.
 	return vtable != nullptr && vtable->initialized != 0;
 }
 
@@ -207,8 +195,7 @@ MethodLLVMEmitter::cctor_already_ran (MonoClass *klass)
 llvm::Error
 MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 {
-	// The call would find the work done and return at once. A class stays
-	// initialized for as long as the domain the code is compiled into lives.
+	// The call would find the work done and return at once.
 	if (cctor_already_ran (klass))
 		return llvm::Error::success ();
 
@@ -272,7 +259,6 @@ MethodLLVMEmitter::push_field_wrapper_operands (MonoIrBuilder &builder,
 	push_stack (builder.getInt64 (m_field_get_offset (field)), nint);
 }
 
-/// Where field lives inside the object on top of the stack.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
                                   MonoClassField *field, bool null_check)

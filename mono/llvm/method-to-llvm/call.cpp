@@ -26,7 +26,6 @@
 
 namespace mono {
 
-/// Whether target is corlib's System.Diagnostics.Debugger::Break ().
 static bool
 is_debugger_break (MonoMethod *target, MonoMethodSignature *sig)
 {
@@ -39,7 +38,6 @@ is_debugger_break (MonoMethod *target, MonoMethodSignature *sig)
 	       && std::string_view (m_class_get_name_space (klass)) == "System.Diagnostics";
 }
 
-/// Resolves token to the method it names, against this method's generic context.
 llvm::Expected<MonoMethod *>
 MethodLLVMEmitter::resolve_method (uint32_t token)
 {
@@ -74,10 +72,6 @@ MethodLLVMEmitter::resolve_method (uint32_t token)
 	return target;
 }
 
-/// Returns the signature a call to target uses at this call site.
-///
-/// This differs from the declaration only at a vararg call site, where it also
-/// names the types the caller chose for the variable arguments.
 llvm::Expected<MonoMethodSignature *>
 MethodLLVMEmitter::call_site_signature (MonoMethod *target, uint32_t token)
 {
@@ -187,7 +181,6 @@ MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
 	if (from->isIntegerTy () && (*type)->isIntegerTy ()
 	    && (*type)->getIntegerBitWidth () > from->getIntegerBitWidth ())
 		return builder.CreateSExt (value.value, *type);
-	// An int32 meeting a pointer-typed parameter widens the same way before the cast.
 	if (from->isIntegerTy () && (*type)->isPointerTy ()
 	    && from->getIntegerBitWidth () < TARGET_SIZEOF_VOID_P * 8)
 		value.value = builder.CreateSExt (value.value,
@@ -199,7 +192,6 @@ MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
 	if (!coerced)
 		return coerced.takeError ();
 
-	// Every signature this backend converts takes a value class by value.
 	return materialize (builder, *coerced, destination, native);
 }
 
@@ -222,12 +214,6 @@ MethodLLVMEmitter::coerce_to_receiver (MonoIrBuilder &builder, llvm::Value *valu
 	return builder.CreateIntToPtr (value, llvm::PointerType::get (context (), 0));
 }
 
-/// Takes a call's arguments off the evaluation stack, converted to what the signature
-/// asks for.
-///
-/// The receiver of an instance method is argument zero, and it is not in the parameter
-/// list. It converts against the pointer every instance signature declares, not against
-/// a MonoType.
 llvm::Expected<std::vector<llvm::Value *>>
 MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig,
                                        bool native)
@@ -260,8 +246,6 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 	return args;
 }
 
-/// Loads the pointer stored offset bytes into the vtable of the object receiver
-/// points at.
 llvm::Value *
 MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver, int32_t offset)
 {
@@ -277,11 +261,6 @@ MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver, 
 		llvm::Align (TARGET_SIZEOF_VOID_P));
 }
 
-/// Loads the callee out of target's vtable slot in the object receiver points at.
-///
-/// A virtual call reads the callee out of the receiver instead of knowing it in
-/// advance. It indexes the object's vtable pointer by the slot the method was
-/// assigned when its class was laid out.
 llvm::Value *
 MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
                                    MonoMethod *target)
@@ -1239,9 +1218,6 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 				callee_method = impl;
 				direct_this = true;
 			} else {
-				// The value type does not override the method, because it
-				// lives on Object, ValueType, or Enum. So the receiver is
-				// boxed, and the call dispatches on the box.
 				box_receiver = true;
 			}
 		}
@@ -1464,7 +1440,6 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		MonoMethod *locked = synchronized_target (callee_method);
 
 		if (locked != callee_method) {
-			// The wrapper forwards a fixed argument list, losing the arglist.
 			if (vararg)
 				return unsupported_il ("a vararg call to a synchronized method");
 
@@ -1503,7 +1478,6 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0),
 		                                   (*args)[0], llvm::Align (TARGET_SIZEOF_VOID_P));
 
-	// The variable arguments leave the argument list for the cookie buffer.
 	if (vararg) {
 		llvm::Expected<llvm::Value *> cookie = build_sig_cookie (builder, sig, *args);
 
@@ -1614,7 +1588,6 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		callee = llvm::FunctionCallee (callee.getFunctionType (), *code);
 	}
 
-	// What the site says about its callee, whether or not it becomes a jump.
 	auto describe_site = [&] (llvm::CallBase *site) {
 		if (keyed)
 			site->addParamAttr (site->arg_size () - 1, llvm::Attribute::Nest);

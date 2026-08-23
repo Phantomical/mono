@@ -16,8 +16,7 @@ namespace mono {
 constexpr llvm::StringRef tier_counter_attribute = "mono-tier-threshold";
 
 /// Names the symbol the promotion call-out is handed, which resolves to the
-/// MonoDomainMethod record the body was compiled for. The translator records
-/// it, so the pass only has to find it.
+/// MonoDomainMethod record the body was compiled for.
 constexpr llvm::StringRef tier_handle_attribute = "mono-tier-handle";
 
 /// Puts a counted entry check in front of every body that asks for one.

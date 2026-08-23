@@ -24,7 +24,6 @@ struct EhFrame {
 
 /// One function a record's frame description covers.
 struct FrameFunction {
-	/// Where the function starts in the record's code.
 	size_t offset = 0;
 	size_t size = 0;
 	/// The CFI program `.mono_unwind` recorded for it. An empty one says the

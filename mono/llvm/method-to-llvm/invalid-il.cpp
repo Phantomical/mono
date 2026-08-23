@@ -115,8 +115,6 @@ MethodLLVMEmitter::invalid_il (const llvm::Twine &reason)
 	return runtime_error (error);
 }
 
-/// The current instruction expects needed values on the evaluation stack, but
-/// the stack does not hold exactly that many.
 llvm::Error
 MethodLLVMEmitter::unbalanced_stack (size_t needed)
 {
@@ -126,7 +124,6 @@ MethodLLVMEmitter::unbalanced_stack (size_t needed)
 	                   + llvm::Twine (stack.size ()) + " on the stack");
 }
 
-/// The current instruction names a local the method does not declare.
 llvm::Error
 MethodLLVMEmitter::invalid_local (uint32_t index)
 {
@@ -135,7 +132,6 @@ MethodLLVMEmitter::invalid_local (uint32_t index)
 	                   + llvm::Twine (local_count (method)) + " locals");
 }
 
-/// The current instruction names an argument the method does not take.
 llvm::Error
 MethodLLVMEmitter::invalid_argument (uint32_t index)
 {
@@ -240,8 +236,6 @@ MethodLLVMEmitter::emit_method_access_failure (MonoIrBuilder &builder, MonoMetho
 	return llvm::Error::success ();
 }
 
-/// The current instruction has fewer operand bytes left in the method body
-/// than it needs.
 llvm::Error
 MethodLLVMEmitter::truncated_il (size_t needed)
 {

@@ -1,8 +1,3 @@
-/**
- * \file
- * \brief Per-phase accounting of where a compile's time goes.
- */
-
 #ifndef MONO_LLVM_TIMING_HPP
 #define MONO_LLVM_TIMING_HPP
 

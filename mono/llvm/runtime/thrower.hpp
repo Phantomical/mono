@@ -1,8 +1,3 @@
-/**
- * \file
- * \brief What a method whose metadata failed to load is compiled into.
- */
-
 #ifndef MONO_LLVM_RUNTIME_THROWER_HPP
 #define MONO_LLVM_RUNTIME_THROWER_HPP
 

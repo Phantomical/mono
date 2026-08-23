@@ -180,8 +180,6 @@ fill_icall_for (uint32_t slot)
 	                                        : MONO_JIT_ICALL_mono_fill_class_rgctx;
 }
 
-/// Returns the patch kind that tells mini_get_rgctx_entry_slot () whether the
-/// data behind it is a class, a method or a field.
 static MonoJumpInfoType
 patch_kind_for (MonoRgctxInfoType info_type)
 {
@@ -263,12 +261,6 @@ MethodLLVMEmitter::pass_context_to (llvm::Function *callee, std::vector<llvm::Va
 	if (count == 0 || !callee->hasParamAttribute (count - 1, llvm::Attribute::Nest))
 		return false;
 
-	/*
-	 * A callee's declaration carries the parameter only when this body's own
-	 * call to it shares this instantiation's context (calls_through_context
-	 * ()). Either way, the context to hand on is the one this body was
-	 * entered with.
-	 */
 	args.push_back (rgctx);
 	return true;
 }

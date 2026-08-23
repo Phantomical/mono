@@ -42,9 +42,7 @@ verification_subject (MonoMethod *method)
 /// Whether the SkipVerification attribute on method's assembly lets method
 /// skip verification.
 ///
-/// A wrapper other than a dynamic method never counts. Otherwise the
-/// attribute counts unless the assembly is in the GAC or is corlib. The
-/// exclusion stops an assembly put into the GAC from claiming the attribute
+/// The exclusion stops an assembly put into the GAC from claiming the attribute
 /// and getting its unverifiable IL accepted.
 bool
 assembly_can_skip_verification (MonoMethod *method)
@@ -59,7 +57,6 @@ assembly_can_skip_verification (MonoMethod *method)
 	return mono_assembly_has_skip_verification (assembly) != FALSE;
 }
 
-/// The managed exception a verdict names, as a MonoError.
 void
 set_verification_error (MonoError *error, int exception_type, const char *message)
 {
@@ -91,11 +88,9 @@ set_verification_error (MonoError *error, int exception_type, const char *messag
 	}
 }
 
-/// Whether method is eligible for verification and has not already passed.
 bool
 wants_verifying (MonoMethod *method)
 {
-	/* Assemblies marked corlib_internal are the runtime's own. */
 	if (m_class_get_image (method->klass)->assembly->corlib_internal)
 		return false;
 	if (mono_method_get_verification_success (method))

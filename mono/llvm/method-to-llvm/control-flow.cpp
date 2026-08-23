@@ -75,7 +75,6 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 	if (stack.size () != 1)
 		return unbalanced_stack (1);
 
-	// The return slot is a location like any other, so it narrows the same way.
 	llvm::Expected<llvm::Value *> value =
 		coerce_to_location (builder, get_stack (0), ret, native_signature ());
 	if (!value)
@@ -108,7 +107,6 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 
 namespace {
 
-/// How op compares two integers.
 llvm::CmpInst::Predicate
 integer_predicate (BinaryOp op)
 {

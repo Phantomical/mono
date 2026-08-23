@@ -40,7 +40,6 @@ namespace {
 std::shared_mutex g_interp_mutex;
 std::unordered_map<std::string, std::unique_ptr<arch::InterpEntryLayout>> g_layouts;
 
-/// Prints a type as its whole shape, member by member.
 void
 print_shape (Type *t, raw_ostream &os)
 {

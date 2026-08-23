@@ -63,8 +63,6 @@ private:
 	InlineScope &scope_;
 	std::vector<std::pair<llvm::StringRef, void *>> &module_symbols_;
 
-	/// Names and resolves what the externals recorded since \p from refer to,
-	/// for the bodies \p module holds.
 	llvm::Error bind_and_resolve (llvm::Module &module, size_t from);
 };
 

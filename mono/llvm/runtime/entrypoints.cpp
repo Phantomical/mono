@@ -45,7 +45,6 @@ report (llvm::Error failure, MonoError *error)
 	g_assert (recovered);
 }
 
-/// Hands a compile's result back the way the runtime expects it.
 void *
 finish (llvm::Expected<void *> code, MonoError *error)
 {

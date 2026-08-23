@@ -67,7 +67,6 @@ namespace mono::arch {
 
 namespace {
 
-/// A refusal: this machine's entry cannot carry a call shaped like that.
 Error
 unsupported (const Twine &what)
 {
@@ -131,7 +130,6 @@ flatten (Type *t, uint64_t offset, const DataLayout &dl, SmallVectorImpl<Leaf> &
 	return Error::success ();
 }
 
-/// Whether a leaf rides the SSE file rather than the integer one.
 bool
 rides_sse (Type *t)
 {
@@ -194,11 +192,6 @@ place_parameter (Type *param, bool byref, Assigner &assign, const DataLayout &dl
 	for (const Leaf &leaf : leaves)
 		placed.push_back (assign.place (leaf, dl));
 
-	/*
-	 * A value that arrived in one piece is already storage the interpreter can
-	 * read through, so it is worth telling apart. It is every scalar argument,
-	 * which is nearly all of them, and it saves the copy below.
-	 */
 	if (placed.size () == 1 && placed[0].offset == 0 && placed[0].width == plan.size) {
 		switch (placed[0].file) {
 		case ArgPiece::File::Greg:
@@ -297,7 +290,6 @@ lay_out_scratch (InterpEntryLayout &layout)
 	return at;
 }
 
-/// Where a piece's bytes sit in a context.
 uint8_t *
 piece_address (const ArgPiece &piece, InterpArgContext *ctx)
 {
@@ -439,9 +431,7 @@ using namespace mono;
 using namespace mono::arch;
 
 /**
- * What interp-entry-thunk.S calls once it has spilled the call. Reads the
- * arguments back out of the context, runs the method interpreted, and leaves
- * the return value in the context for the thunk's epilogue to load.
+ * What interp-entry-thunk.S calls once it has spilled the call.
  */
 extern "C" void
 mono_llvm_interp_entry_from_context (MonoMethod *method, InterpArgContext *ctx)
@@ -483,7 +473,6 @@ mono_llvm_interp_entry_from_context (MonoMethod *method, InterpArgContext *ctx)
 			break;
 		}
 
-		// A byref parameter is the pointer itself, not the slot holding it.
 		args[i] = plan.byref ? *(void **) value : value;
 	}
 

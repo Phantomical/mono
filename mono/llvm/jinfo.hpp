@@ -40,9 +40,7 @@ enum class CodeKind {
 /// ops mono's unwinder executes, or returns an error naming the record it
 /// cannot express.
 ///
-/// Two records carry a rule mono has no opcode for and are replayed as one it
-/// does. A third carries no rule and is dropped. The implementation says which
-/// and why. An error means the frame description is incomplete, so the caller
+/// An error means the frame description is incomplete, so the caller
 /// must decline the method rather than unwind it from what came back.
 ///
 /// The caller owns the list and frees it with mono_free_unwind_info ().
@@ -64,7 +62,6 @@ llvm::Expected<GSList *> transcode_unwind (const std::vector<UnwindRecord> &reco
 ///        object's functions is registered. Code that shares a module with the
 ///        body it enters names its own range, and leaves the tables it has no
 ///        records in null.
-/// \param kind whether that code stands for the method in a stack trace.
 /// \param filters the entry of each IL clause's compiled filter body, which
 ///        the published clause hands to the runtime's search pass.
 /// \param bp_switch the body's soft-debugger breakpoint switch.

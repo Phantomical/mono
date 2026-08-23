@@ -106,7 +106,6 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
 	if (seq_points != nullptr)
 		*seq_points = emitter.sequence_points ();
 
-	// Each filter body rides along as a function of its own.
 	for (uint32_t i = 0; i < cfg->header->num_clauses; ++i) {
 		if (cfg->header->clauses[i].flags != MONO_EXCEPTION_CLAUSE_FILTER)
 			continue;
@@ -122,7 +121,6 @@ method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
 	return function;
 }
 
-/// How the CLI categorizes `t` on the evaluation stack.
 StackType
 MethodLLVMEmitter::stack_type (MonoType *t)
 {
@@ -216,7 +214,6 @@ MethodLLVMEmitter::widen_to_stack (MonoIrBuilder &builder, llvm::Value *value, M
 	}
 }
 
-/// The type a value loaded out of a location of type `t` is tracked as once it is pushed.
 MonoType *
 MethodLLVMEmitter::stack_slot_type (MonoType *t)
 {
@@ -484,7 +481,6 @@ MethodLLVMEmitter::mark_reachable_blocks ()
 		size_t at = worklist.back ();
 		worklist.pop_back ();
 
-		// Walk the block's instructions to find where it can go from here.
 		while (at < code_size) {
 			llvm::Expected<Flow> flow = decode_flow (at);
 
@@ -511,7 +507,6 @@ MethodLLVMEmitter::mark_reachable_blocks ()
 	}
 }
 
-/// The offset a branch at the current instruction jumps to.
 llvm::Expected<size_t>
 MethodLLVMEmitter::branch_target (int32_t displacement)
 {
@@ -668,7 +663,6 @@ MethodLLVMEmitter::enter_block (MonoIrBuilder &builder, size_t target,
 	return llvm::Error::success ();
 }
 
-/// Read back what a predecessor spilled, so the block starts with the stack it expects.
 void
 MethodLLVMEmitter::reload_stack (MonoIrBuilder &builder, const Block &block)
 {
@@ -815,9 +809,6 @@ MethodLLVMEmitter::emit ()
 	if (auto error = find_block_leaders ())
 		return std::move (error);
 
-	// A finally can be entered by falling into it or by unwinding through it. Before
-	// it jumps there, it needs a slot to record which one happened. It also needs a
-	// byte that holds off a thread abort until the finally body finishes.
 	for (uint32_t i = 0; i < num_clauses; ++i) {
 		if (clauses[i].flags != MONO_EXCEPTION_CLAUSE_FINALLY)
 			continue;
@@ -985,9 +976,6 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 			builder.SetInsertPoint (next.block);
 			reload_stack (builder, next);
 
-			// Entering a catch or filter handler is the only moment the caught
-			// exception is reliably in hand. It is remembered here for the
-			// rethrow, which can need it after the body has emptied the stack.
 			for (uint32_t i = 0; i < num_clauses; ++i) {
 				if (clauses[i].handler_offset != ip)
 					continue;
@@ -1133,7 +1121,6 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	return function;
 }
 
-/// The function-wide sweeps every translation ends with.
 void
 MethodLLVMEmitter::finish_function ()
 {
@@ -1756,9 +1743,6 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 			return emit_mono_calli_extra_arg (builder,
 			                                  static_cast<uint32_t> (operand));
 
-		// A sticky flag rather than a prefix. An address push can sit between it
-		// and the call whose errno it asks for, so it rides until the next call
-		// consumes it.
 		case MONO_CEE_MONO_SAVE_LAST_ERROR:
 			pending_save_last_error = true;
 			return llvm::Error::success ();

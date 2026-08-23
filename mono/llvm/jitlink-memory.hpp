@@ -1,8 +1,3 @@
-/**
- * \file
- * \brief Linking JIT'd objects into a code manager.
- */
-
 #ifndef MONO_LLVM_JITLINK_MEMORY_HPP
 #define MONO_LLVM_JITLINK_MEMORY_HPP
 
@@ -80,7 +75,6 @@ public:
 private:
 	class InFlight;
 
-	/// The record kept behind a FinalizedAlloc's address.
 	struct FinalizedInfo {
 		char *base;
 		size_t size;

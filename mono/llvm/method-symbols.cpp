@@ -19,7 +19,6 @@ namespace {
 /// The attribute holding a marked declaration's MonoMethod, printed as `%p`.
 constexpr StringRef method_attribute = "mono-method";
 
-/// Returns the marker on \p value, or nothing if it carries none.
 std::optional<MonoMethod *>
 marker_of (const GlobalValue &value)
 {

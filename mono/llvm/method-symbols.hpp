@@ -27,7 +27,6 @@ typedef struct _MonoMethod MonoMethod;
 
 namespace mono {
 
-/// Marks \p value as standing for \p method.
 void mark_method_reference (llvm::GlobalValue &value, MonoMethod *method);
 
 /// Returns the method \p value stands for, or null when it carries no marker.

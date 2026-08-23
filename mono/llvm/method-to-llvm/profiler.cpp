@@ -18,7 +18,6 @@ namespace mono {
 // before the class initializer. A type initializer that throws still unwinds
 // this frame.
 
-/// Ask the profilers what they want instrumented in this method.
 void
 MethodLLVMEmitter::resolve_call_instrumentation ()
 {

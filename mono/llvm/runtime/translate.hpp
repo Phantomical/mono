@@ -50,11 +50,6 @@ private:
 	MonoDomain *wanted_;
 };
 
-/// What an engine has to supply for a method to be translated into it.
-///
-/// The callbacks are the parts that differ between engines: where a callee's
-/// stub comes from, what is remembered so it can be freed again, and what a
-/// failure means.
 struct TranslationTarget {
 	MonoJit *jit;
 
@@ -74,7 +69,6 @@ struct TranslationTarget {
 	/// handed back unchanged.
 	llvm::function_ref<llvm::Expected<Compiled> (llvm::Error)> recover;
 
-	/// Which pipeline the body is compiled through.
 	JitTier tier = JitTier::tier1;
 
 	/// The counts a tier-2 body is laid out by. Empty for a method promoted
@@ -101,7 +95,6 @@ llvm::Expected<Compiled> translate_and_compile (const TranslationTarget &target,
 llvm::Expected<Compiled> translate_body (const TranslationTarget &target,
                                          MonoMethod *method, MonoJitInfo **published);
 
-/// One method's share of a batched compile.
 struct BatchResult {
 	llvm::Expected<Compiled> code;
 	/// The body's record, on the terms translate_body () states.

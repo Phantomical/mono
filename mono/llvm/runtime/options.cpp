@@ -30,12 +30,8 @@ is_truthy_env_var (const char *value)
 	return !set.empty () && set != "0" && !set.equals_insensitive ("false");
 }
 
-/// What MONO_LLVM_JIT_TIER0 narrows tier 0 to.
 struct Tier0Setting {
-	/// Whether any method at all is entered by interpreting it.
 	bool enabled = true;
-	/// A substring of the printed name a method has to match, or null when
-	/// every method that can start at tier 0 does.
 	const char *substring = nullptr;
 };
 
@@ -233,11 +229,10 @@ trivial_inline_il_limit ()
 		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_IL_LIMIT");
 
 		/*
-		 * Thirty-two bytes covers the shapes with room to spare. A forwarder
-		 * with eight arguments is 22 bytes, a field chain four deep is 22, and
-		 * a throw helper with three arguments is around 18. The limit is a
-		 * backstop on IL the shape test already read as one of these shapes,
-		 * not a policy of its own.
+		 * A forwarder with eight arguments is 22 bytes, a field chain four
+		 * deep is 22, and a throw helper with three arguments is around 18.
+		 * The limit is a backstop on IL the shape test already read as one of
+		 * these shapes, not a policy of its own.
 		 */
 		if (value == nullptr)
 			return 32;
@@ -276,10 +271,7 @@ costed_inline_il_limit ()
 		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_COST_IL_LIMIT");
 
 		/*
-		 * A hundred and twenty-eight bytes, and it is a bound on translation
-		 * rather than on code size: LLVM's own threshold decides what is worth
-		 * folding, and this only decides how large a body the compile will
-		 * translate in order to ask. A number with no sweep behind it.
+		 * A number with no sweep behind it.
 		 */
 		if (value == nullptr)
 			return 128;

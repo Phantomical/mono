@@ -1,8 +1,3 @@
-/**
- * \file
- * \brief The compile context the translator is handed.
- */
-
 #ifndef MONO_LLVM_RUNTIME_MINIMAL_COMPILE_HPP
 #define MONO_LLVM_RUNTIME_MINIMAL_COMPILE_HPP
 

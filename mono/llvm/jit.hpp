@@ -60,9 +60,6 @@ llvm::TargetMachine &tier2_target_machine ();
 /// a wider access has to be built some other way.
 unsigned host_max_atomic_bits (const llvm::Function &f);
 
-/// Whether the IR verifier runs over what this backend produces.
-///
-/// MONO_LLVM_JIT_VERIFY sets the level.
 bool ir_verification_enabled ();
 
 /// One row of a compiled function's line table: an offset from the start of the
@@ -183,7 +180,6 @@ struct CompiledMethod {
 	/// and then by depth. Empty when the inliners left it alone.
 	std::vector<IlInlineRow> inline_frames;
 
-	/// The same rows for every other function of this method, by name.
 	std::vector<std::pair<std::string, std::vector<IlInlineRow>>> other_inline_frames;
 
 	/// The entry function's sequence points, ascending by native offset: where
@@ -206,7 +202,6 @@ struct CompiledMethod {
 	/// module was compiled with the instrumentation off.
 	std::optional<ProfileCounters> profile;
 
-	/// The same for every other instrumented function of this method.
 	std::vector<ProfileCounters> other_profiles;
 
 	/// The dylib this compile's object was linked into - what remove_dylibs ()
@@ -223,7 +218,6 @@ public:
 	/// fails if LLVM rejects one.
 	static void add_option (llvm::StringRef opt);
 
-	/// Build the JIT for the host, carving its code out of the given arena.
 	static llvm::Expected<std::unique_ptr<MonoJit>>
 	create (CodeArena *arena);
 
@@ -311,7 +305,6 @@ public:
 	/// on modules that do not have one yet.
 	const llvm::DataLayout &data_layout () const;
 
-	/// The target codegen is emitting for.
 	const llvm::Triple &triple () const;
 
 private:
@@ -319,15 +312,11 @@ private:
 
 	std::unique_ptr<llvm::orc::LLJIT> jit_;
 
-	/// Dedicated dylib holding the explicitly-registered runtime helpers. Every
-	/// compiled module's dylib links against this.
 	llvm::orc::JITDylib *helpers_ = nullptr;
 
-	/// What each name handed to register_symbol () stands for.
 	std::mutex named_symbols_mutex_;
 	std::unordered_map<std::string, void *> named_symbols_;
 
-	/// Names the per-module dylibs.
 	std::atomic<uint64_t> module_counter_{0};
 
 	class ObjectCapturePlugin;
@@ -340,11 +329,8 @@ private:
 	std::mutex gdb_objects_mutex_;
 	std::unordered_map<llvm::orc::JITDylib *, std::vector<gdbjit::Registration *>> gdb_objects_;
 
-	/// Take back every object a debugger was told about for the given dylibs.
 	void retract_debug_objects (const std::vector<llvm::orc::JITDylib *> &dylibs);
 
-	/// Take back every object a debugger was told about, whichever dylib it
-	/// came from.
 	void retract_all_debug_objects ();
 };
 

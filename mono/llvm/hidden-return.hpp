@@ -54,8 +54,6 @@ namespace mono {
 
 namespace detail {
 
-/// The return registers of one register file, and how many of them an
-/// aggregate's leaves have claimed so far.
 struct ReturnRegisters {
 	static constexpr unsigned integer_count = 3; ///< RAX, RDX, RCX
 	static constexpr unsigned sse_count = 4;     ///< XMM0 - XMM3
@@ -219,8 +217,6 @@ hidden_return_prototype (llvm::FunctionType *type, llvm::Type *hidden)
 	                                type->isVarArg ());
 }
 
-/// The attributes the hidden return pointer carries: what it points at, and that
-/// it is the only name for that memory the callee is given.
 inline llvm::AttributeSet
 hidden_return_attributes (llvm::LLVMContext &ctx, llvm::Type *hidden)
 {

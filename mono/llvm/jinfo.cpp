@@ -3,10 +3,7 @@
  * \brief Publishing a compiled method's MonoJitInfo from its side tables.
  *
  * This file reads back three of the sections the compiler wrote next to the
- * code. The clause table comes back through the tiered backend's own reader
- * (parse_mono_lsda / build_ex_info) and the finally-guard table through
- * parse_guards (). transcode_unwind () turns the frame description into the
- * unwind ops mono's unwinder executes.
+ * code.
  *
  * What comes out is the MonoJitInfo mono_handle_exception and the stack walks
  * search for: from_llvm, so dispatch re-enters frames through the landing pads
@@ -143,13 +140,6 @@ parse_guards (const uint8_t *section, size_t size, const uint8_t *code,
 
 } // namespace
 
-/*
- * Most op kinds map onto mono's unwinder one to one: it executes def_cfa,
- * def_cfa_offset, def_cfa_register, offset, same_value and one level of
- * remember/restore state natively. RESTORE and ADJUST_CFA_OFFSET do not, and
- * are normalized at their cases below; ARGS_SIZE carries no rule mono needs
- * and is dropped.
- */
 Expected<GSList *>
 transcode_unwind (const std::vector<UnwindRecord> &records)
 {
@@ -177,7 +167,6 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 		return mono_dwarf_reg_to_hw_reg (dwarf_reg);
 	};
 
-	/* DWARF reg -> its rule at entry. Absent means not saved. */
 	std::vector<std::pair<int32_t, int64_t>> entry_offsets;
 	bool in_entry_state = true;
 
@@ -708,7 +697,6 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 		gi->this_offset = compiled.rgctx_slot.offset;
 	}
 
-	/* A null header is how the caller says this is not the method's main body. */
 	jinfo->llvm_side_body = header == nullptr;
 	jinfo->llvm_abi_thunk = kind == CodeKind::AbiThunk;
 	/*

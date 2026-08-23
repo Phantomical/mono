@@ -51,21 +51,12 @@ static Expected<Compiled> publish_body (const TranslationTarget &target, MonoMet
                                         const SeqPointGraph &seq_points,
                                         MonoJitInfo **published);
 
-/// Which of the IR points a compile at this tier prints its optimized module at.
 static DumpPoint
 optimized_ir_point (JitTier tier)
 {
 	return tier == JitTier::tier2 ? DumpPoint::tier2_ir : DumpPoint::tier1_ir;
 }
 
-/**
- * Prints one method's IR, when this point asked for this method.
- *
- * A batch shares one module between its members, so the dump is the method's
- * own function and a file named for a method holds that method. Before the
- * pipeline runs, the bodies the pre-pass folded in are still functions of their
- * own, so a direct call to one prints after the caller rather than being lost.
- */
 static void
 dump_ir (DumpPoint point, const Module &module, StringRef entry, StringRef name)
 {
@@ -410,7 +401,6 @@ publish_body (const TranslationTarget &target, MonoMethod *method, MonoMethodHea
 
 namespace {
 
-/// What one method of a batch keeps for as long as the module it shares.
 struct BatchMember {
 	const TranslationTarget *target = nullptr;
 	MonoMethod *method = nullptr;
@@ -531,21 +521,11 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 		members.push_back (std::move (member));
 	}
 
-	// After every member is translated: a member is declared to the others under
-	// a name of its own, and the pre-pass moves a call onto a copy of its own
-	// rather than onto the body next door.
 	InlineScope inlining;
 
 	inlining.defined.assign (methods.begin (), methods.end ());
 
 	for (auto &member : members) {
-		/*
-		 * Both the budget and the folded set belong to the member rather than
-		 * to the module, so what a method folds in does not depend on which
-		 * others promoted beside it. Both tiers hash the CFG a fold leaves
-		 * behind, and a member that folds a different set than its own tier-2
-		 * compile costs that compile the counts it gathered.
-		 */
 		inlining.root = member->method;
 		inlining.folded.assign ({ member->method });
 		inlining.budget = trivial_inline_budget ();

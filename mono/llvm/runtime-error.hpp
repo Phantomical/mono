@@ -28,7 +28,6 @@ class RuntimeError : public llvm::ErrorInfo<RuntimeError> {
 public:
 	static char ID;
 
-	/// Adopt the failure in error, leaving it clean.
 	explicit RuntimeError (MonoError *error);
 	~RuntimeError ();
 

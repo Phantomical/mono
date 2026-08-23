@@ -26,8 +26,6 @@ namespace mono {
 /// no other code sets it.
 constexpr llvm::StringRef class_init_attribute = "mono-class-init";
 
-/// Deletes every call to a `mono-class-init` declaration that another call for
-/// the same class dominates.
 class ClassInitPass : public llvm::PassInfoMixin<ClassInitPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Function &f,

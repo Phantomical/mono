@@ -119,7 +119,6 @@ private:
 	bool ok_;
 };
 
-// Do the half-open ranges [a_start, a_end) and [b_start, b_end) overlap?
 bool
 ranges_overlap (std::uint64_t a_start, std::uint64_t a_end,
                 std::uint64_t b_start, std::uint64_t b_end)
@@ -141,14 +140,13 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *code,
 	Reader r (sec, sec + size);
 
 	for (;;) {
-		// --- header ---
 		std::uint32_t magic = r.u32 ();
 		std::uint16_t version = r.u16 ();
 		std::uint16_t count = r.u16 ();
 		std::uint64_t function = r.u64 ();
 
 		if (!r.ok ())
-			return false; // truncated header
+			return false;
 		if (magic != MONO_LSDA_MAGIC)
 			return false;
 		if (version != MONO_LSDA_VERSION)
@@ -166,7 +164,6 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *code,
 			continue;
 		}
 
-		// --- entries ---
 		out.reserve (count);
 		for (unsigned i = 0; i < count; ++i) {
 			MonoLsdaEntry e;

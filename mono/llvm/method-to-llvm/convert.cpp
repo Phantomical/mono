@@ -32,8 +32,8 @@ enum Action {
 /// A row of Table III.8, one row per target width.
 ///
 /// A signed and an unsigned target of the same width share a row even where the table
-/// gives them different cells. Sign extend and Zero extend both collapse to the action
-/// IntToInt. adjust () supplies the fill direction separately, from target.is_signed.
+/// gives them different cells. adjust () supplies the fill direction separately, from
+/// target.is_signed.
 enum TargetRow {
 	NarrowIntRow,
 	Int32Row,
@@ -85,10 +85,6 @@ row_of (ConvType type)
 	llvm::report_fatal_error ("row_of: unknown conversion target");
 }
 
-/// The target type of a conversion: its width, sign and whether it is floating-point.
-///
-/// The evaluation stack can hold the result at a wider width. stack_bits () gives that
-/// width.
 struct Target {
 	unsigned bits;
 	bool is_signed;
@@ -130,17 +126,12 @@ target_of (ConvType type)
 	llvm::report_fatal_error ("target_of: unknown conversion target");
 }
 
-/// The width the result occupies on the evaluation stack.
-///
-/// The evaluation stack never stores a value narrower than 4 bytes, whatever the target
-/// type's own width is.
 unsigned
 stack_bits (Target target)
 {
 	return std::max (target.bits, 32u);
 }
 
-/// A readable name for this target type, for the conversion-refusal message.
 const char *
 target_name (ConvType type)
 {
@@ -180,10 +171,6 @@ native_int_type (llvm::IRBuilder<> &builder)
 	return builder.getIntNTy (NATIVE_BITS);
 }
 
-/// value resized to bits wide.
-///
-/// If value is wider than bits, it truncates. If value is narrower, is_signed decides
-/// whether it sign-extends or zero-extends.
 llvm::Value *
 adjust (llvm::IRBuilder<> &builder, llvm::Value *value, unsigned bits, bool is_signed)
 {
@@ -198,7 +185,6 @@ adjust (llvm::IRBuilder<> &builder, llvm::Value *value, unsigned bits, bool is_s
 	return is_signed ? builder.CreateSExt (value, to) : builder.CreateZExt (value, to);
 }
 
-/// A float to compare an operand against, and the predicate to compare it with.
 struct FloatBound {
 	llvm::Constant *bound;
 	llvm::CmpInst::Predicate pred;
@@ -304,7 +290,6 @@ float_to_uint64 (llvm::IRBuilder<> &builder, llvm::Value *value, llvm::Type *to)
 	return builder.CreateSelect (below, converted, put_back);
 }
 
-/// value truncated toward zero into target.
 llvm::Value *
 float_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, Target target)
 {
@@ -318,7 +303,6 @@ float_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, Target target)
 	return int_to_int (builder, converted, target);
 }
 
-/// The MonoType push_stack () records for this conversion's result.
 MonoType *
 result_type (ConvType type)
 {
@@ -341,7 +325,6 @@ result_type (ConvType type)
 
 } // namespace
 
-/// Return an error for any conversion Table III.8 calls invalid.
 llvm::Error
 MethodLLVMEmitter::check_conversion (ConvType type, MonoType *source)
 {

@@ -14,9 +14,6 @@ namespace mono {
 
 namespace {
 
-/// Declares one of mono's throw entry points by name: mono_llvm_throw_exception for
-/// a new throw, or mono_llvm_rethrow_exception for a rethrow that keeps the original
-/// trace.
 llvm::FunctionCallee
 throw_decl (llvm::Module *module, const char *name)
 {
@@ -32,8 +29,6 @@ throw_decl (llvm::Module *module, const char *name)
 	return callee;
 }
 
-/// Declares mono_llvm_resume_unwind, the call a finally or fault makes when it was
-/// entered by unwinding and control must return to the unwinder.
 llvm::FunctionCallee
 resume_unwind_decl (llvm::Module *module)
 {
@@ -101,9 +96,6 @@ MethodLLVMEmitter::innermost_handler (size_t at) const
 }
 
 /// Whether clause j's try region strictly encloses clause c's.
-///
-/// The test compares try regions only, and ignores handler placement. A sibling
-/// pair, whose try regions are identical, is excluded.
 static bool
 clause_encloses (const MonoExceptionClause *c, const MonoExceptionClause *j)
 {
@@ -213,9 +205,6 @@ MethodLLVMEmitter::resume_marker (uint32_t clause)
 	                                 llvm::GlobalValue::PrivateLinkage, value, name);
 }
 
-/// A block that enters the clause's handler the way the runtime expects.
-///
-/// A finally is told it was entered by unwinding, and a catch is handed exc.
 llvm::BasicBlock *
 MethodLLVMEmitter::handler_entry (uint32_t clause, llvm::Value *exc)
 {
@@ -226,8 +215,6 @@ MethodLLVMEmitter::handler_entry (uint32_t clause, llvm::Value *exc)
 	MonoIrBuilder prep (enter);
 
 	if (info->flags == MONO_EXCEPTION_CLAUSE_FINALLY) {
-		/* Arriving by unwinding is continuation 0: hand control back
-		 * to the unwinder afterwards. */
 		enter_finally (prep, clause, 0);
 	} else if (info->flags != MONO_EXCEPTION_CLAUSE_FAULT
 	           && !handler.entry.empty ()) {

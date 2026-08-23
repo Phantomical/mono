@@ -58,9 +58,6 @@
 
 namespace mono {
 
-/// Does nothing. emit_seq_point () calls this in place of a trampoline when
-/// that trampoline's arm is not armed, so the trap block always makes both
-/// calls.
 extern "C" void
 mono_llvm_seq_point_nop (void)
 {
@@ -136,7 +133,6 @@ MethodLLVMEmitter::collect_sym_seq_points ()
 	}
 }
 
-/// Whether an ordinary sequence point belongs at this offset.
 bool
 MethodLLVMEmitter::wants_seq_point_at (size_t offset) const
 {
@@ -230,13 +226,8 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 	builder.SetInsertPoint (trap);
 
 	/*
-	 * The nop's address is what the runtime records for this sequence point.
-	 * It sits ahead of both calls, so either trampoline's return address
-	 * resolves back to it through
-	 * mono_find_prev_seq_point_for_native_offset (). Nothing else with an
-	 * address of its own sits between the nop and the calls. An inline asm
-	 * block with side effects cannot be reordered across a call, and that is
-	 * all the ordering this needs.
+	 * An inline asm block with side effects cannot be reordered across a
+	 * call, and that is all the ordering this needs.
 	 */
 	uint32_t restore = (uint32_t) statement_offset;
 
@@ -323,10 +314,6 @@ tags_nested_calls (MonoMethod *method)
 void
 MethodLLVMEmitter::emit_after_call_seq_point (MonoIrBuilder &builder, bool nests)
 {
-	/*
-	 * Nothing follows a call the body ended on. An offset that is already a
-	 * stop in its own right gets its point from the ordinary rule instead.
-	 */
 	if (ip >= code_size || builder.GetInsertBlock ()->getTerminator () != nullptr)
 		return;
 	if (wants_seq_point_at (ip))

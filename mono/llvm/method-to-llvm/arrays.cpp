@@ -14,8 +14,6 @@
 
 namespace mono {
 
-/// The built-in type the suffixed forms of ldelem, stelem, ldind and stind carry in
-/// the opcode.
 MonoType *
 MethodLLVMEmitter::builtin_element_type (int opcode)
 {
@@ -74,7 +72,6 @@ MethodLLVMEmitter::builtin_element_type (int opcode)
 	}
 }
 
-/// The class the token names, resolved against this method's generic context.
 llvm::Expected<MonoClass *>
 MethodLLVMEmitter::resolve_class (uint32_t token)
 {
@@ -114,7 +111,6 @@ MethodLLVMEmitter::resolve_class (uint32_t token)
 	return klass;
 }
 
-/// The element type the token names.
 llvm::Expected<MonoType *>
 MethodLLVMEmitter::element_type_from_token (uint32_t token)
 {
@@ -142,10 +138,6 @@ MethodLLVMEmitter::element_type_from_token (uint32_t token)
 	return m_class_get_byval_arg (klass);
 }
 
-/// The number of elements in the array on top of the stack.
-///
-/// The length is read as a native unsigned int. ldlen pushes that width, and
-/// the bounds check below compares against it.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::array_length (MonoIrBuilder &builder, StackValue array)
 {
@@ -165,7 +157,6 @@ MethodLLVMEmitter::array_length (MonoIrBuilder &builder, StackValue array)
 	return builder.CreateAlignedLoad (builder.getIntNTy (bytes * 8), slot, llvm::Align (bytes));
 }
 
-/// Where element index of array lives, after checking that the element exists.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::element_address (MonoIrBuilder &builder, StackValue array, StackValue index,
                                     MonoType *element)
@@ -314,8 +305,7 @@ MethodLLVMEmitter::emit_ldelema (MonoIrBuilder &builder, uint32_t token)
 	MonoClass *klass = mono_class_from_mono_type_internal (*element);
 
 	/*
-	 * Wrappers are deliberately lax about the element type they name. Mini's
-	 * rule limits this exactness check to ordinary IL.
+	 * Wrappers are deliberately lax about the element type they name.
 	 */
 	if (!m_class_is_valuetype (klass) && method->wrapper_type == MONO_WRAPPER_NONE
 	    && !prefixes.readonly_)
@@ -591,7 +581,6 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 			return coerced.takeError ();
 		value = *coerced;
 
-		/* The covariance question stelem asks before it writes. */
 		if (mini_type_is_reference (element)) {
 			llvm::Expected<llvm::Function *> check =
 				icall_wrapper_decl (MONO_JIT_ICALL_mono_helper_stelem_ref_check);
@@ -678,9 +667,7 @@ unsafe_mov_compatible (MonoClass *from, MonoClass *to)
 	       || (!MONO_TYPE_ISSTRUCT (ftype) && from_size <= 4 && to_size <= 4);
 }
 
-/// R Array.UnsafeMov<S,R> (S): the reinterpret mini performs as a plain move.
-///
-/// The IL body boxes S and unboxes it as R. The unbox type
+/// The IL body of Array.UnsafeMov<S,R> (S) boxes S and unboxes it as R. The unbox type
 /// check rightly refuses that for pairs like an enum and its unsigned
 /// underlying type. The helper exists to skip that check.
 llvm::Error

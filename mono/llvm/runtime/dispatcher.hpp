@@ -1,9 +1,3 @@
-/**
- * \file
- * \brief What a method's stub binds to when its first caller came from another
- * domain.
- */
-
 #ifndef MONO_LLVM_RUNTIME_DISPATCHER_HPP
 #define MONO_LLVM_RUNTIME_DISPATCHER_HPP
 

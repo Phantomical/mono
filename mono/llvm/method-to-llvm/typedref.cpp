@@ -10,8 +10,7 @@
 namespace mono {
 
 /// Returns the address of the value on top of the evaluation stack, so its fields
-/// can be reached. A value class already has an address there. Anything else gets
-/// a new slot first.
+/// can be reached.
 llvm::Value *
 MethodLLVMEmitter::spill_to_temporary (MonoIrBuilder &builder, MonoType *type)
 {

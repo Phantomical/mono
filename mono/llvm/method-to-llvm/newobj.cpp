@@ -209,8 +209,6 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	}
 
 	if (m_class_is_valuetype (klass)) {
-		// A value type constructs in place: the instance is a zeroed slot. The
-		// code pushes back the value it reads out of that slot afterward.
 		llvm::Expected<llvm::Type *> type = convert_type (pushed);
 		if (!type)
 			return type.takeError ();
@@ -298,7 +296,6 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 namespace {
 
-/// Adds the NoAlias return attribute a GC allocator needs.
 llvm::FunctionCallee
 mark_gc_allocator (llvm::FunctionCallee callee)
 {
@@ -347,8 +344,6 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 	llvm::Value *result;
 
 	if (count == rank && count <= 4 && int32_lengths) {
-		// With one int32 length per dimension and four dimensions at most,
-		// this takes the direct icalls.
 		constexpr MonoJitICallId by_rank[] = {
 			MONO_JIT_ICALL_mono_array_new_1,
 			MONO_JIT_ICALL_mono_array_new_2,

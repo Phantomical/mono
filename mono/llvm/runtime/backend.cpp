@@ -94,12 +94,8 @@ struct Owned {
 /// MonoDomainMethod record. The record owns the thunk, the name, the tier and
 /// the bodies. This is what the engine needs beside them.
 struct MonoBackend::MethodState {
-	/// What this method's compiles put somewhere it has to be taken back out
-	/// of.
 	Owned owned;
 
-	/// The per-call dispatcher this method's thunk got instead of a direct
-	/// binding, when its first caller arrived from another domain.
 	void *dispatch = nullptr;
 
 	/// The stub that enters this instantiation's shared body carrying its
@@ -107,8 +103,6 @@ struct MonoBackend::MethodState {
 	/// for one whose shared body reads the context out of its receiver.
 	void *context = nullptr;
 
-	/// Where the tier-1 body's profile counters live. Absent until a compile
-	/// puts an instrumented body behind this method.
 	std::optional<ProfileCounters> profile;
 };
 
@@ -122,7 +116,6 @@ struct MonoBackend::DomainState {
 
 	std::unique_ptr<MonoJit> jit;
 
-	/// The re-entry trampolines a published-but-uncompiled thunk points at.
 	std::unique_ptr<LazyCallbacks> callbacks;
 
 	CompileQueue::Channel queue;
@@ -133,8 +126,6 @@ struct MonoBackend::DomainState {
 	std::mutex pending_mutex;
 	std::vector<MonoMethod *> pending;
 
-	/// Up to \p limit pending promotions, taken off the list. Empty when
-	/// nothing is waiting.
 	std::vector<MonoMethod *> take_pending (uint32_t limit)
 	{
 		std::lock_guard<std::mutex> lock (pending_mutex);
@@ -185,8 +176,6 @@ struct MonoBackend::DomainState {
 		return state;
 	}
 
-	/// Undefines everything \p dm was published as and hands its blocks and
-	/// trampolines back.
 	void retire (MonoDomainMethod &dm);
 };
 
@@ -912,8 +901,6 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 		taken.push_back (i);
 	}
 
-	/// The results in dms order: what each method was compiled to, or why it
-	/// was not.
 	auto answer = [&] (std::vector<llvm::Expected<Compiled>> compiled) {
 		std::vector<llvm::Expected<Compiled>> out;
 		size_t next = 0;
@@ -1328,8 +1315,6 @@ MonoBackend::release_method (MonoMethod *method)
 void
 MonoBackend::release_method_impl (MonoMethod *method)
 {
-	// No need to compile this anymore. Drop it if still in the queue and
-	// block on it if compilation is still in progress.
 	queue_.drop (method);
 
 	/*
@@ -1463,7 +1448,6 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 	if (llvm::Error err = entry_point (**state, **published).takeError ())
 		return std::move (err);
 
-	/* The C door where the method has one, and the thunk itself otherwise. */
 	if (publishes_interop_entry (method))
 		return (*published)->interop_entry ();
 

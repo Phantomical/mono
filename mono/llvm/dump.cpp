@@ -12,7 +12,6 @@ namespace mono {
 
 namespace {
 
-/// The metadata a function carries its method's dump name in.
 constexpr const char *dump_name_key = "mono.dump.name";
 
 } // namespace

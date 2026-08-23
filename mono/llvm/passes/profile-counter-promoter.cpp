@@ -70,7 +70,6 @@ cl::opt<bool>
                          cl::init (PromotionPolicy ().iterative), cl::Hidden,
                          cl::desc ("Promote a write-back again out of the loop it landed in"));
 
-/// The increments of one counter whose innermost loop is this one.
 using Group = SmallVector<InstrProfIncrementInst *, 4>;
 
 /// The counters one loop increments, keyed by counter index.
@@ -79,10 +78,8 @@ using Group = SmallVector<InstrProfIncrementInst *, 4>;
 /// found rather than in the order a DenseMap buckets the indices.
 using Groups = MapVector<uint64_t, Group>;
 
-/// What each loop of a function still has to promote.
 using Pending = DenseMap<Loop *, Groups>;
 
-/// Whether \p loop is shaped so a counter can be taken out of it.
 bool
 is_promotion_possible (const Loop &loop, ArrayRef<BasicBlock *> exits)
 {
@@ -104,7 +101,6 @@ is_promotion_possible (const Loop &loop, ArrayRef<BasicBlock *> exits)
 unsigned max_promotions_in (const PromotionPolicy &policy, Loop &loop, LoopInfo &li,
                             const Pending &pending);
 
-/// Returns how many counters \p loop can promote.
 unsigned
 promotion_budget (const PromotionPolicy &policy, Loop &loop, LoopInfo &li, const Pending &pending,
                   ArrayRef<BasicBlock *> exits)
@@ -158,7 +154,6 @@ max_promotions_in (const PromotionPolicy &policy, Loop &loop, LoopInfo &li, cons
 	return promotion_budget (policy, loop, li, pending, exits);
 }
 
-/// Hoists the counter updates one loop holds into a register each.
 class CounterPromoter {
 public:
 	CounterPromoter (const PromotionPolicy &policy, Loop &loop, LoopInfo &li, Pending &pending,

@@ -80,7 +80,6 @@ RestoreTailPositionPass::run (llvm::Function &f, llvm::FunctionAnalysisManager &
 		if (call == nullptr || !wants_to_be_a_jump (call))
 			continue;
 
-		/* The branch has to lead to a block that does nothing but return. */
 		llvm::BasicBlock *merged = branch->getSuccessor (0);
 		auto *ret = llvm::dyn_cast<llvm::ReturnInst> (merged->getTerminator ());
 

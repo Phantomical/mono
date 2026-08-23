@@ -144,7 +144,6 @@ classify_aggregate (Type *t, const DataLayout &dl)
 			                    "does not marshal");
 		}
 
-	/* A type whose bytes are all padding travels as nothing at all. */
 	if (leaves.empty ())
 		return shape;
 
@@ -514,11 +513,6 @@ rewrite_call (CallBase *call)
 	Value *result = lowered;
 
 	if (low.ret_by_address || low.ret_travel != nullptr) {
-		/*
-		 * The natural value reads back after the call. For an invoke, that
-		 * happens in a block of the normal edge's own - the only edge the
-		 * result was ever usable on.
-		 */
 		IRBuilder<> after (ctx);
 
 		if (auto *invoke = dyn_cast<InvokeInst> (lowered)) {

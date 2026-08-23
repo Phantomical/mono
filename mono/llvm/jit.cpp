@@ -71,7 +71,6 @@ thread_local uint64_t g_object_handed = 0;
 
 /// How much of what this backend produces the IR verifier gets to see.
 enum class VerifyLevel {
-	/// Nothing is checked.
 	off,
 	/// The translator's output, the module after each pass is_mono_pass ()
 	/// names, and the module codegen is handed.
@@ -333,7 +332,6 @@ parse_inline_table (const uint8_t *table, size_t size,
 constexpr uint64_t stackmap_function_list_offset = 16;
 constexpr uint64_t stackmap_function_size = 24;
 
-/// What each relocation on a section points at, by the offset it applies at.
 static std::map<uint64_t, std::string>
 relocation_targets (const object::ObjectFile &obj, const object::SectionRef &section)
 {

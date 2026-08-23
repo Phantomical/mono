@@ -46,7 +46,6 @@ pointer_type (llvm::LLVMContext &ctx)
 	return llvm::PointerType::get (ctx, 0);
 }
 
-/// The integer type as wide as a pointer, for native int and native unsigned int.
 llvm::Type *
 int_ptr_type (llvm::LLVMContext &ctx)
 {
@@ -166,7 +165,6 @@ speaks_marshalled_layout (MonoMethod *method, MonoMethodSignature *sig)
 	return sig->pinvoke != 0 && method->wrapper_type != MONO_WRAPPER_NONE;
 }
 
-/// One field of a value type, ready to be packed into a struct body.
 struct LayoutField {
 	int offset;
 	int size;

@@ -1,9 +1,3 @@
-/**
- * \file
- * \brief Turning what the translator recorded into addresses the linker can
- * bind.
- */
-
 #ifndef MONO_LLVM_RUNTIME_EXTERNALS_HPP
 #define MONO_LLVM_RUNTIME_EXTERNALS_HPP
 

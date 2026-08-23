@@ -150,8 +150,8 @@ public:
 	/// different piece of work and has to be taken.
 	void drop (void *tag);
 
-	/// Wait for the queue to empty and for every worker to be idle. Tests use
-	/// this, and so does shutdown. Ordinary teardown drains through a channel.
+	/// Wait for the queue to empty and for every worker to be idle. Ordinary
+	/// teardown drains through a channel.
 	void drain ();
 
 	/// Stop the workers. Anything queued is dropped, anything running finishes,
@@ -162,15 +162,13 @@ public:
 	/// entitled never to return.
 	void stop ();
 
-	/// How many pieces of work have run to completion.
 	uint64_t completed () const;
 
-	/// How many worker threads have been started. For tests and for reporting;
-	/// it counts the threads that exist rather than the ones doing anything.
+	/// How many worker threads have been started. It counts the threads that
+	/// exist rather than the ones doing anything.
 	unsigned workers () const;
 
 private:
-	/// One queued compile.
 	struct Item {
 		Channel *channel;
 		void *tag;
@@ -178,8 +176,7 @@ private:
 		Work work;
 	};
 
-	/// A piece of work a worker has taken and not yet finished. What close ()
-	/// and drop () wait on.
+	/// What close () and drop () wait on.
 	struct Ticket {
 		Channel *channel;
 		void *tag;

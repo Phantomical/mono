@@ -21,7 +21,6 @@
 
 namespace mono::arch {
 
-/// The target the backend generates code for.
 constexpr llvm::Triple::ArchType target_arch = llvm::Triple::x86_64;
 
 /*
@@ -50,8 +49,6 @@ constexpr unsigned managed_frame_size = 32;
  * because that one carries a whole MonoContext. lmf.cpp static_asserts the fit.
  */
 constexpr unsigned interp_frame_size = 512;
-
-/* -- Entering the interpreter --------------------------------------------- */
 
 /// The registers a call arrived in, as interp-entry-thunk.S spilled them.
 struct InterpArgContext {
@@ -83,7 +80,7 @@ struct ArgPiece {
 
 	File file = File::Greg;
 	uint8_t width = 0;   ///< how many bytes move
-	uint32_t at = 0;     ///< the register number, or the byte offset
+	uint32_t at = 0;
 	uint32_t offset = 0; ///< where they sit within the value
 };
 
@@ -102,7 +99,7 @@ struct ArgPlan {
 	/// The register number, the byte offset into the caller's arguments, or the
 	/// byte offset into the entry's scratch when Pieces.
 	uint32_t at = 0;
-	uint32_t size = 0; ///< how many bytes the value is
+	uint32_t size = 0;
 	/// The half-open range of InterpEntryLayout::pieces to gather from.
 	uint32_t first_piece = 0, piece_count = 0;
 };

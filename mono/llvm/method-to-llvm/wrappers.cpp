@@ -8,8 +8,7 @@
  * own opcode space behind MONO_CUSTOM_PREFIX.
  *
  * This backend is JIT-only, so most of these opcodes are simple to translate.
- * Mini has to record a runtime address as a patch for a later stage to fill
- * in. Here the address is already known while translating. It travels as a
+ * Here the address is already known while translating. It travels as a
  * symbol the engine resolves, which keeps it out of the IR. Every other
  * runtime address the translator emits works the same way.
  */

@@ -47,8 +47,6 @@ typedef struct _MonoMethodSignature MonoMethodSignature;
 
 namespace mono::arch {
 
-/* -- The lazy-entry resolver --------------------------------------------- */
-
 /// Links \p frame onto the LMF chain, standing for the managed frame that
 /// called the stub. Does nothing on a thread that is not running managed
 /// code.
@@ -63,15 +61,12 @@ void *lazy_frame_leave (void *frame);
 /// is interp_frame_size bytes.
 void interp_frame_enter (void *frame, const InterpArgContext *args);
 
-/// Unlinks a frame linked by interp_frame_enter.
 void interp_frame_leave (void *frame);
 
 /// Returns the slot holding the runtime's rethrow-preserving throw
 /// trampoline. The slot's value is read at throw time, so this can be called
 /// before the runtime installs the trampoline.
 void **rethrow_trampoline_slot ();
-
-/* -- Unwinding and dispatch ----------------------------------------------- */
 
 /// Whether a stack walk can rebuild \p hw_reg for the frame it is looking at.
 ///
@@ -80,11 +75,7 @@ void **rethrow_trampoline_slot ();
 /// the walk reaches the frame that set it.
 bool reg_is_recoverable (int hw_reg);
 
-/// Reads the exception a filter is entered with, out of the register where
-/// the unwinder leaves it.
 llvm::Value *emit_entered_exception (llvm::IRBuilderBase &b);
-
-/* -- The LMF a wrapper links ---------------------------------------------- */
 
 /// Clobbers the callee-saved registers so the prologue saves all of them.
 ///
@@ -100,8 +91,6 @@ void emit_lmf_capture_registers (llvm::IRBuilderBase &b, llvm::Value *slot);
 /// thread-local storage, or null when this machine cannot reach it without a
 /// call.
 llvm::Value *emit_lmf_address (llvm::IRBuilderBase &b);
-
-/* -- Crossing into C ------------------------------------------------------ */
 
 /// The attribute marking a call, or every call to a declaration, as crossing
 /// into C. It is a marker and carries no value.
@@ -128,8 +117,6 @@ llvm::Function *create_mono_entry_thunk (llvm::Module &m, llvm::StringRef name,
                                          llvm::Function *target,
                                          llvm::Value *through = nullptr);
 
-/* -- The context stub ----------------------------------------------------- */
-
 /// Writes at \p at the stub that enters \p target, carrying \p context in the
 /// register that holds a shared body's runtime generic context.
 ///
@@ -138,8 +125,6 @@ llvm::Function *create_mono_entry_thunk (llvm::Module &m, llvm::StringRef name,
 /// reach every other, so a target out of range is a fatal error rather than a
 /// wrong jump.
 void write_context_stub (char *at, void *context, void *target);
-
-/* -- Entering the interpreter --------------------------------------------- */
 
 /// Plans how a call to a method is taken apart into the arguments the
 /// interpreter wants.

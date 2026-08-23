@@ -176,7 +176,6 @@ solve (MachineFunction &mf, int clause, DenseMap<const MachineBasicBlock *, bool
 				}
 			}
 
-			// A marker is the whole transfer function.
 			bool out = transfer (mbb, clause, in);
 
 			if (known[&mbb] != have || in_body[&mbb] != in || out_body[&mbb] != out) {

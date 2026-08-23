@@ -21,8 +21,6 @@
 
 namespace mono {
 
-/// The name, hash and counter count the IR carries for one instrumented
-/// function.
 struct ProfileSite {
 	/// The function this counts, by the name it carries in the IR.
 	std::string function;
@@ -32,7 +30,6 @@ struct ProfileSite {
 	/// The hash of the CFG the counter indices were assigned over. The reader
 	/// drops a record whose hash disagrees with the function it is applied to.
 	uint64_t hash = 0;
-	/// How many counters the function has.
 	uint32_t counters = 0;
 };
 
@@ -58,7 +55,6 @@ struct ProfileArray {
 /// disagreement with LLVM about the record layout looks like from here.
 std::vector<ProfileArray> read_profile_arrays (const uint8_t *data, size_t size);
 
-/// The value `__llvm_prf_data` records a function's name under.
 uint64_t profile_name_key (llvm::StringRef name);
 
 /// Marks every function that will not promote as one to leave uninstrumented.

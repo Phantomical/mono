@@ -1,8 +1,3 @@
-/**
- * \file
- * \brief The jit-info record that resolves a stub's address back to its method.
- */
-
 #ifndef MONO_LLVM_RUNTIME_STUB_JINFO_HPP
 #define MONO_LLVM_RUNTIME_STUB_JINFO_HPP
 

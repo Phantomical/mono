@@ -92,8 +92,6 @@ thread_local uint64_t g_object_started = 0;
 thread_local uint64_t g_isel_done = 0;
 thread_local uint64_t g_function_started = 0;
 
-/// Marks where the pass manager starts on a function, ahead of the IR passes
-/// codegen runs and of ISel. The mark after ISel closes it.
 class FunctionMarkPass : public FunctionPass {
 public:
 	static char ID;
@@ -116,8 +114,6 @@ public:
 
 char FunctionMarkPass::ID;
 
-/// Marks the point ISel is finished with a function and the machine passes are
-/// about to start on it. The mark ahead of the printer closes it.
 class MachinePassMarkPass : public MachineFunctionPass {
 public:
 	static char ID;
@@ -143,8 +139,6 @@ public:
 
 char MachinePassMarkPass::ID;
 
-/// Marks the start of the AsmPrinter over one function. The side-table pass,
-/// which the legacy pass manager runs immediately after the printer, closes it.
 class PrinterMarkPass : public MachineFunctionPass {
 public:
 	static char ID;
@@ -309,11 +303,9 @@ private:
 	std::vector<Function> functions_;
 	DenseMap<const DISubprogram *, uint64_t> ids_;
 	unsigned line_ = 0;
-	/// The chain the last row recorded, which is what the next one is against.
 	SmallVector<Inlined, 2> inlined_;
 };
 
-/// One `.mono_unwind` record: the wire form of one MCCFIInstruction.
 struct UnwindRecord {
 	const MCSymbol *at;
 	uint8_t op;
@@ -380,12 +372,6 @@ transcribe_cfi (const MCCFIInstruction &i)
 	return r;
 }
 
-/**
- * Writes the side tables at doFinalization, which the legacy pass manager runs
- * in reverse pass order. Added after the AsmPrinter, this runs once every
- * function has been emitted but before the printer's own finalization closes
- * the streamer and writes the object.
- */
 class SideTableEmitPass : public MachineFunctionPass {
 public:
 	static char ID;
@@ -399,10 +385,6 @@ public:
 
 	StringRef getPassName () const override { return "Mono side-table emission"; }
 
-	/**
-	 * This runs immediately after the AsmPrinter's own, so the interval since
-	 * the marker pass ahead of the printer is the printer over one function.
-	 */
 	bool runOnMachineFunction (MachineFunction &) override
 	{
 		timing::span_end (timing::Phase::emit, g_printer_started);
@@ -702,8 +684,6 @@ private:
 
 char SideTableEmitPass::ID;
 
-/// The two things codegen can write: the ELF object the linker loads, or
-/// the assembly text a human reads.
 enum class OutputKind { object, assembly };
 
 /**
@@ -773,7 +753,6 @@ struct ObjectPipeline {
 	SmallVector<char, 0> object;
 	std::optional<raw_svector_ostream> object_stream;
 
-	/// What the EH passes fill in for the run in progress.
 	MonoEHSideChannel side_channel;
 
 	MCStreamer *streamer = nullptr;
@@ -955,7 +934,6 @@ thread_object_pipeline (TargetMachine &tm)
 	return built.back ().second.get ();
 }
 
-/// Compiles m into an object with the pipeline this thread reuses.
 Error
 emit_object_reused (TargetMachine &tm, Module &m, SmallVectorImpl<char> &object,
                     MonoEHSideChannel &side_channel)
@@ -983,7 +961,6 @@ emit_object_reused (TargetMachine &tm, Module &m, SmallVectorImpl<char> &object,
 	return Error::success ();
 }
 
-/// Compiles m into an object with a pipeline of its own, and then destroys it.
 Error
 emit_object_fresh (TargetMachine &tm, Module &m, SmallVectorImpl<char> &object,
                    MonoEHSideChannel &side_channel)
@@ -1004,7 +981,6 @@ emit_object_fresh (TargetMachine &tm, Module &m, SmallVectorImpl<char> &object,
 	return Error::success ();
 }
 
-/// Writes the assembly m compiles to out.
 Error
 emit_assembly_text (TargetMachine &tm, Module &m, raw_pwrite_stream &out)
 {
@@ -1076,7 +1052,6 @@ pipeline_use ()
 	return use;
 }
 
-/// Compiles m into the object the linker is handed.
 Error
 emit_method_object (TargetMachine &tm, Module &m, SmallVectorImpl<char> &object,
                     MonoEHSideChannel &side_channel)

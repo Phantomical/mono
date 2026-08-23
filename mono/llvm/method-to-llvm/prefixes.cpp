@@ -198,8 +198,6 @@ MethodLLVMEmitter::emit_prefix (int opcode, uint64_t operand)
 		prefixes.constrained = static_cast<uint32_t> (operand);
 		return llvm::Error::success ();
 	case MONO_CEE_TAIL_:
-		// A request the call site can decline. It falls back to an ordinary
-		// call when the shape does not allow a tail call.
 		prefixes.tail = true;
 		return llvm::Error::success ();
 	case MONO_CEE_READONLY_:
@@ -212,8 +210,6 @@ MethodLLVMEmitter::emit_prefix (int opcode, uint64_t operand)
 	}
 }
 
-/// The alignment for the coming memory access: the location's own, unless an
-/// unaligned. prefix promised less.
 llvm::Align
 MethodLLVMEmitter::access_alignment (MonoType *location)
 {
@@ -246,8 +242,6 @@ MethodLLVMEmitter::can_access_atomically (llvm::Type *type, llvm::Align align)
 	       && bits <= host_max_atomic_bits (*function) && bits <= align.value () * 8;
 }
 
-/// One load from an address, read as the given type, honoring the volatile. and
-/// unaligned. prefixes on the instruction this emits.
 llvm::Value *
 MethodLLVMEmitter::emit_memory_load (MonoIrBuilder &builder, llvm::Type *type, llvm::Value *address,
                                      MonoType *location)

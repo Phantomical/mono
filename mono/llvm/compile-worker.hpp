@@ -1,8 +1,3 @@
-/**
- * \file
- * \brief The runtime's half of a background compile thread.
- */
-
 #ifndef MONO_LLVM_COMPILE_WORKER_HPP
 #define MONO_LLVM_COMPILE_WORKER_HPP
 

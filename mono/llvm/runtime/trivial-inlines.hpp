@@ -29,10 +29,7 @@ namespace mono {
 /// callee outside them keeps its call, and so does one that will not translate.
 /// A candidate declined costs the caller nothing.
 ///
-/// A copy belongs to this compile, and only the calls in body move onto it. What
-/// one method folds in therefore does not depend on what else the module holds.
-/// That is what lets a batched tier-1 body and the tier-2 body behind it hash the
-/// same CFG. This walks the chain under body, so a forwarder that forwards to a
+/// This walks the chain under body, so a forwarder that forwards to a
 /// forwarder collapses in one call.
 ///
 /// scope.folded must already name root, or the compile folds root into its own

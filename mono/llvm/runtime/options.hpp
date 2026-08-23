@@ -55,7 +55,6 @@ uint32_t promotion_batch_size ();
 
 /// The most threads the compile queue can run promotions on at once.
 ///
-/// Two fewer than the processor count, capped at four, and never below one.
 /// MONO_LLVM_JIT_WORKERS moves it, and one there puts every background compile
 /// back on a single thread, which is what separates a bug in a compile from a
 /// bug in two compiles overlapping. The queue starts threads only as work

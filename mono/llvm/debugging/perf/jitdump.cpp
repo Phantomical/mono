@@ -101,9 +101,7 @@ code_slack ()
 	 * many filter bodies. Over the mini corpora the largest is 192 bytes.
 	 *
 	 * There is no bound on how many functions an object can hold, so this is a
-	 * generous number rather than a proof. publish () drops a description that
-	 * still does not fit, which costs that one method its stack walk instead of
-	 * reaching into the next method's bytes.
+	 * generous number rather than a proof.
 	 */
 	return enabled () ? 512 : 0;
 }
@@ -136,8 +134,6 @@ mono_llvm_perf_dump_stub (const char *name, gpointer code, guint32 code_size,
 	if (!mono::perf::enabled () || code == nullptr || code_size == 0)
 		return;
 
-	/* The room behind one of these is whatever its allocator left, and both of
-	 * them ask for mono_llvm_perf_code_slack (). */
 	mono::perf::write (name, (const uint8_t *) code, code_size,
 	                   mono::perf::build_eh_frame (cfi, cfi_size, code_size,
 	                                               code_size));

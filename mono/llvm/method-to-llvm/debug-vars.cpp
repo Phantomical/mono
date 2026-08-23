@@ -32,8 +32,6 @@
 
 namespace mono {
 
-/// Reports whether this method must pin its arguments and locals to frame
-/// slots for a debugger or profiler to read.
 bool
 MethodLLVMEmitter::debug_var_slots_wanted () const
 {

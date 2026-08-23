@@ -35,7 +35,6 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-/// What one declaration's attribute spells out.
 struct AddressSpec {
 	uint64_t rank;
 	uint64_t elem_size;

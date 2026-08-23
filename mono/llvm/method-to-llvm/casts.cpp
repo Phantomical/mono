@@ -457,8 +457,6 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	result->addIncoming (answer, hit);
 	result->addIncoming (slow, from_miss);
 
-	// An inline test that said yes answers with the reference itself, for
-	// both forms.
 	if (told_yes != nullptr)
 		result->addIncoming (obj.value, told_yes);
 

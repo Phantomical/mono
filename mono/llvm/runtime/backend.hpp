@@ -47,48 +47,22 @@ public:
 	/// this is the first thing to ask for either.
 	static llvm::Error attach (MonoDomainMethod &dm);
 
-	/// Gives \p dm the C-convention entry native code enters it through, or
-	/// leaves it with none when nothing native enters the method.
 	static llvm::Error attach_interop (MonoDomainMethod &dm);
 
-	/// Stops all compilation for a specific domain. Blocks until any
-	/// in-progress work is completed.
 	static void stop_compilation (MonoDomain *domain);
 
-	/// Releases all backend data associated with a MonoDomain.
 	static void release_domain (MonoDomain *domain);
 
-	/// Releases everything associated with a MonoMethod.
-	///
 	/// Calling this while a thread is still executing the method can free the
 	/// memory that thread is running in.
 	static void release_method (MonoMethod *method);
 
-	/// Stops all background compilation. Blocks until any in-progress work is
-	/// completed.
-	///
-	/// No compilation runs again once this returns.
 	static void stop_compilation ();
 
-	/// Returns the address \p method's body starts at in \p domain, or null
-	/// when this engine has not compiled it there.
 	static void *body_of (MonoDomain *domain, MonoMethod *method);
 
-	/// Asks for \p method to be compiled in \p domain at \p tier, replacing
-	/// the tier running it.
-	///
-	/// Returns as soon as the work is queued, never once it is done.
-	/// Returning false means the work was refused and nothing retries it. A
-	/// domain on its way out takes nothing new, and neither does an engine
-	/// already taken apart. A caller that counts calls towards a promotion
-	/// has to count again.
 	static bool request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier tier);
 
-	/// Compiles \p method at \p tier in \p domain on the calling thread, and
-	/// points its entry at the result before returning.
-	///
-	/// Returns false when the compile was refused or failed, and the method
-	/// is then left at whatever tier already ran it.
 	static bool promote_now (MonoMethod *method, MonoDomain *domain, MonoTier tier);
 
 	/// Returns the profile counters \p dm's tier-1 body counts into.
@@ -103,27 +77,16 @@ public:
 	/// domain does.
 	static std::optional<ProfileCounters> profile_of (MonoDomainMethod &dm);
 
-	/// Calls \p visit with the jit info of each live body this engine
-	/// compiled \p method into in \p domain, oldest first.
 	static void foreach_body (MonoDomain *domain, MonoMethod *method,
 	                          void (*visit) (MonoJitInfo *, void *), void *user_data);
 
-	/// Returns the address to enter \p method at when the receiver is still
-	/// boxed, or null when this engine generated no such entry for it.
 	static void *unbox_entry_of (MonoMethod *method);
 
 public:
-	/// Compiles \p method within \p domain, and returns its function pointer.
 	llvm::Expected<void *> compile (MonoMethod *method, MonoDomain *domain);
 
-	/// Returns the function pointer for \p method in \p domain, without
-	/// compiling it.
-	///
-	/// This allocates a stub if not already created. If you need the method
-	/// compiled immediately use compile () instead, otherwise it is compiled
-	/// when first called. A method native code enters has an address of its
-	/// own, handed back by compile () instead: this function is never asked
-	/// for one.
+	/// A method native code enters has an address of its own, handed back by
+	/// compile () instead: this function is never asked for one.
 	llvm::Expected<void *> stub_for (MonoMethod *method, MonoDomain *domain);
 
 private:
@@ -133,29 +96,18 @@ private:
 
 	~MonoBackend ();
 
-	/// Gets the DomainState for a given domain, or the current one otherwise.
 	llvm::Expected<DomainState *> state ();
 	llvm::Expected<DomainState *> state (MonoDomain *domain);
 
-	/// Returns the record for \p method in \p domain, publishing its stubs if
-	/// this is the first time anything has asked for it.
 	static llvm::Expected<MonoDomainMethod *> publish (DomainState &domain,
 	                                                   MonoMethod *method);
 
-	/// Carves \p dm's stub and gives it the state behind it.
 	llvm::Error attach_entry (DomainState &domain, MonoDomainMethod &dm);
 
-	/// Points \p dm's stub at the interpreter.
 	llvm::Expected<Compiled> interp_entries (DomainState &domain, MonoDomainMethod &dm);
 
-	/// Returns the per-call dispatcher \p dm's body stub binds to when its
-	/// first caller arrived from another domain.
 	llvm::Expected<void *> dispatcher (DomainState &domain, MonoDomainMethod &dm);
 
-	/// Returns the current domain's body for \p method, compiling it now if
-	/// this domain has not yet.
-	///
-	/// This is the runtime helper a dispatcher calls.
 	static void *body_for_current_domain (MonoMethod *method);
 
 	/// Returns where \p dm's body has ended up, compiling the method if it

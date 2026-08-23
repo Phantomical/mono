@@ -1,8 +1,3 @@
-/**
- * \file
- * \brief Linking JIT'd objects into a code manager.
- */
-
 #include "jitlink-memory.hpp"
 
 #include "debugging/perf/jitdump.hpp"

@@ -97,7 +97,6 @@ struct MonoEHFinallyBody {
 	std::int64_t exvar_offset = 0;
 };
 
-/// The finally body ranges MonoFinallyRangePass found in one MachineFunction.
 struct MonoEHFinallyFunction {
 	/// MF.getName (). SideTableEmitPass keys `.mono_guards` blocks by this
 	/// name, the same way it keys `.mono_lsda` blocks by

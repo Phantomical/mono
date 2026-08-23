@@ -170,7 +170,6 @@ write_rule (Writer &w, const UnwindRecord &r)
 	}
 }
 
-/// Move the program's current location forward to a rule's code offset.
 void
 write_advance (Writer &w, uint32_t from, uint32_t to)
 {

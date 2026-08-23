@@ -223,7 +223,6 @@ private:
 		bool native = false;
 	};
 
-	/// The two operands of a binary numeric operation and the type it leaves behind.
 	struct BinaryOperands {
 		StackValue value1;
 		StackValue value2;
@@ -250,8 +249,8 @@ private:
 		llvm::BasicBlock *block = nullptr;
 		std::vector<Slot> entry;
 		bool entry_known = false;
-		/// Whether control can reach this block. A block nothing reaches has
-		/// no entry stack, so its body is never translated.
+		/// A block nothing reaches has no entry stack, so its body is never
+		/// translated.
 		bool reachable = false;
 	};
 
@@ -262,7 +261,6 @@ private:
 		size_t next = 0;
 		llvm::SmallVector<size_t, 4> targets;
 
-		/// Whether control can carry on into the instruction after this one.
 		bool falls_through () const;
 	};
 
@@ -279,8 +277,6 @@ private:
 
 	llvm::DenseMap<MonoMethod *, llvm::Function *> declarations;
 
-	/// Where the emitters writing into one module keep the struct types they
-	/// have built, so that all of them name a value type the same way.
 	ModuleTypes own_types;
 	ModuleTypes &types;
 	/// What an exception clause needs on the LLVM side.
@@ -321,7 +317,6 @@ private:
 	llvm::DenseMap<std::pair<size_t, llvm::Type *>, llvm::AllocaInst *> spills;
 	llvm::BasicBlock *entry_block = nullptr;
 
-	/// The blocks create_cold_block () made, in the order it made them.
 	std::vector<llvm::BasicBlock *> cold_blocks;
 
 	std::vector<Entry> args;
@@ -428,8 +423,6 @@ private:
 	llvm::Instruction *call_seq_point_marker = nullptr;
 	uint32_t call_seq_point_offset = 0;
 
-	/// Whether a call in the statement being translated has already had a
-	/// sequence point emitted after it.
 	bool call_seq_point_run = false;
 
 	/// The IL offsets the symbol file names as sequence points, and whether it
@@ -466,14 +459,11 @@ private:
 	/// copy folded into a caller beside it needs a name of its own.
 	std::string body_suffix;
 
-	/// Attribute everything emitted from here on to the IL instruction at
-	/// offset.
 	void set_il_location (llvm::IRBuilder<> &builder, size_t offset)
 	{
 		il_debug_set_location (il_scope, &builder, (uint32_t) offset);
 	}
 
-	/// Whether offset is where a catch, filter or finally body begins.
 	bool is_handler_start (size_t offset) const
 	{
 		for (uint32_t i = 0; i < num_clauses; ++i)
@@ -580,7 +570,6 @@ private:
 	llvm::Error unsupported_il (const llvm::Twine &what);
 	llvm::Error emit_bad_image_call (MonoIrBuilder &builder, MonoMethodSignature *sig);
 
-	/// Whether the CLI's accessibility rules bind what this body can reach.
 	bool checks_accessibility () const;
 	llvm::Error field_access_failure (MonoClassField *field);
 	llvm::Error emit_method_access_failure (MonoIrBuilder &builder, MonoMethod *callee);
@@ -597,13 +586,10 @@ private:
 	/// its storage rather than as an SSA value.
 	bool held_in_memory (MonoType *t);
 
-	/// A slot of this frame to hold one value of type t.
 	llvm::Expected<llvm::Value *> vtype_slot (MonoType *t, bool native = false);
 
-	/// How many bytes one value of type t occupies.
 	unsigned vtype_size (MonoType *t, bool native);
 
-	/// Copy the value of type t at source into the frame slot destination.
 	void copy_vtype (MonoIrBuilder &builder, llvm::Value *destination,
 	                 llvm::Value *source, MonoType *t, bool native);
 
@@ -834,10 +820,6 @@ private:
 	llvm::Constant *field_symbol (MonoClassField *field);
 	llvm::Constant *address_symbol (const std::string &name, void *address);
 
-	/* -- Generic sharing -------------------------------------------------- */
-
-	/// Whether this body stands for every reference instantiation of its method
-	/// rather than for one of them.
 	bool sharing () const { return context_used != 0; }
 
 	/// Whether this body is entered with its runtime generic context in a
@@ -897,7 +879,6 @@ private:
 	llvm::Expected<llvm::Value *> method_operand (MonoIrBuilder &builder,
 	                                              MonoMethod *target);
 
-	/// The entry \p target is called at, as a value to push or to store.
 	llvm::Expected<llvm::Value *> code_operand (MonoIrBuilder &builder,
 	                                            MonoMethod *target);
 
@@ -1022,8 +1003,6 @@ private:
 	llvm::Error emit_user_break (MonoIrBuilder &builder);
 
 private:
-	/// The next byte of the IL stream, or a refusal if the instruction runs off the
-	/// end of the method body.
 	llvm::Expected<uint8_t> read_u8 ()
 	{
 		if (code_size - ip < 1)
@@ -1045,7 +1024,6 @@ private:
 		return value;
 	}
 
-	/// The next four bytes, little-endian.
 	llvm::Expected<uint32_t> read_u32 ()
 	{
 		if (code_size - ip < 4)
@@ -1060,7 +1038,6 @@ private:
 		return value;
 	}
 
-	/// The next eight bytes, little-endian.
 	llvm::Expected<uint64_t> read_u64 ()
 	{
 		if (code_size - ip < 8)

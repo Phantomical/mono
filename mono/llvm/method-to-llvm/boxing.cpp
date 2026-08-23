@@ -22,8 +22,6 @@ extern "C" {
 
 namespace mono {
 
-/// Declares the runtime's allocator for a plain instance of a known class,
-/// called with its vtable.
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::object_new_decl ()
 {
@@ -37,9 +35,6 @@ MethodLLVMEmitter::object_new_decl ()
 	return wrapper;
 }
 
-/// Allocate an instance of klass and return the reference.
-///
-/// \param for_box  whether this allocation is for a boxed value type.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, bool for_box)
 {
@@ -163,10 +158,6 @@ nullable_unbox_helper (MonoClass *klass)
 	return exact ? "UnboxExact" : "Unbox";
 }
 
-/// Emit a call to the one-argument Nullable<T> helper called name, one of
-/// Box, Unbox, or UnboxExact. Pop its argument off the stack and push the
-/// result.
-///
 /// Boxing and unboxing a nullable both branch on HasValue against a null
 /// reference. The corlib helpers are that branch, written once as ordinary
 /// IL.
@@ -197,8 +188,6 @@ MethodLLVMEmitter::call_nullable_helper (MonoIrBuilder &builder, MonoClass *klas
 	return push_produced (builder, result, sig->ret);
 }
 
-/// Box value, a Nullable<T>, into null or a boxed T.
-///
 /// Unlike every other value type, the boxed form of a Nullable<T> is not a
 /// boxed Nullable<T> (III.4.1).
 llvm::Expected<llvm::Value *>
@@ -302,7 +291,6 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 		return llvm::Error::success ();
 	}
 
-	// A reference type's boxed form is itself, so there is nothing to do.
 	if (!m_class_is_valuetype (klass))
 		return llvm::Error::success ();
 
@@ -320,9 +308,6 @@ MethodLLVMEmitter::emit_box (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
-/// Allocate klass's box, copy value into the payload, and return the new
-/// object.
-///
 /// \param value  what coerce_to_location produced for a location of type.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType *type,
@@ -518,7 +503,6 @@ MethodLLVMEmitter::emit_unbox_any (MonoIrBuilder &builder, uint32_t token)
 
 	if (mono_class_is_nullable (klass))
 		return call_nullable_helper (builder, klass, nullable_unbox_helper (klass));
-	// For a reference type, the spec treats this instruction as castclass.
 	if (!m_class_is_valuetype (klass))
 		return emit_castclass (builder, token);
 	if (stack.empty ())
@@ -533,8 +517,6 @@ MethodLLVMEmitter::emit_unbox_any (MonoIrBuilder &builder, uint32_t token)
 
 	llvm::Value *payload = unbox_payload (builder, obj.value, klass);
 
-	// The spec defines this as unbox, followed by a load through the pointer
-	// unbox pushed.
 	pop_stack (1);
 	push_stack (payload, m_class_get_this_arg (klass));
 	return emit_ldind (builder, *type);

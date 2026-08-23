@@ -34,8 +34,6 @@ AnalysisKey InlineCandidatesAnalysis::Key;
 
 namespace {
 
-/// A call the loop has still to weigh, with the count it was ranked by and how
-/// many folds it sits behind the root.
 struct Site {
 	WeakTrackingVH call;
 	uint64_t count = 0;
@@ -46,11 +44,8 @@ struct Colder {
 	bool operator() (const Site &a, const Site &b) const { return a.count < b.count; }
 };
 
-/// Whether a site is one the loop may take at all.
-///
 /// A musttail site is a real tail call, and a body in its place takes that
-/// away. An intrinsic has no managed method behind it, and neither does a call
-/// through a pointer.
+/// away.
 bool
 foldable_site (const CallBase &call)
 {
@@ -160,8 +155,7 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 	/*
 	 * The translator names a copy for itself rather than after the declaration
 	 * it stands in for, so the site can still be calling the one it always
-	 * did. Moving the uses across is what a materialization straight into the
-	 * caller's module did on the spot.
+	 * did.
 	 */
 	Function *site = m.getFunction (name);
 

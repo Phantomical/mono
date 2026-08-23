@@ -55,8 +55,6 @@ strip_casts (const Value *v)
 	return v;
 }
 
-/// Whether a and b are checks for the same class.
-///
 /// The class is whatever the call names. It is a symbol for the vtable when
 /// the class is known while compiling, and a value read from the runtime
 /// generic context otherwise. Equal operands are the same class either way.

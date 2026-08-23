@@ -15,7 +15,6 @@ namespace mono {
 
 namespace {
 
-/// The encoded unwind program every stub runs under.
 llvm::ArrayRef<uint8_t>
 stub_unwind_info ()
 {

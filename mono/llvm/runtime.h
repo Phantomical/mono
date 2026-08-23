@@ -17,8 +17,6 @@ typedef struct _MonoMethod MonoMethod;
 typedef struct _MonoDomain MonoDomain;
 typedef struct _MonoJitInfo MonoJitInfo;
 
-/// Starts the backend.
-///
 /// Call this from runtime startup, before any method can be entered. The
 /// engine is otherwise built by whichever thread asks for the first compile or
 /// promotion, which can be a mutator inside the interpreter.
@@ -27,8 +25,6 @@ typedef struct _MonoJitInfo MonoJitInfo;
 /// consume the options queued by mono_llvm_jit_add_option ().
 void mono_llvm_jit_init (void);
 
-/// Compiles a method and returns its function pointer.
-///
 /// The code goes into the given domain's linker. The address is a stub, and
 /// it stays the same for the life of the process however often the method is
 /// recompiled. Callers can cache it.
@@ -61,8 +57,6 @@ void mono_llvm_jit_stop_compiling (void);
 /// lock.
 void mono_llvm_jit_stop_compiling_for_domain (MonoDomain *domain);
 
-/// Releases everything the backend holds for a domain.
-///
 /// Call this once the runtime has proved that nothing can execute in the
 /// domain any more. A domain the backend never compiled for is a no-op.
 void mono_llvm_jit_free_domain (MonoDomain *domain);
@@ -142,8 +136,6 @@ mono_bool mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domai
 /// stays at the tier already running it.
 mono_bool mono_llvm_jit_promote_now (MonoMethod *method, MonoDomain *domain, uint8_t tier);
 
-/// Puts a method's IL through the verifier.
-///
 /// Whichever engine enters a method first is the one that has to call this. A
 /// method the interpreter reaches on its own is never asked for through
 /// mono_llvm_jit_compile_method (), so only an explicit call to this decides

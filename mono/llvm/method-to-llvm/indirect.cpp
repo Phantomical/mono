@@ -6,11 +6,6 @@
 
 namespace mono {
 
-/// Returns the operand as an LLVM pointer, after a null check.
-///
-/// The operand can hold a managed pointer or a native int. An object
-/// reference is not a dereferenceable address. If the operand holds one,
-/// this function refuses it instead of reinterpreting it as a pointer.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::indirect_address (MonoIrBuilder &builder, StackValue address)
 {
@@ -22,7 +17,6 @@ MethodLLVMEmitter::indirect_address (MonoIrBuilder &builder, StackValue address)
 
 	llvm::Value *pointer = address.value;
 
-	// A native int is only a number until code dereferences it.
 	if (!pointer->getType ()->isPointerTy ())
 		pointer = builder.CreateIntToPtr (pointer, llvm::PointerType::get (context (), 0));
 
@@ -498,8 +492,6 @@ MethodLLVMEmitter::emit_initobj (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
-/// Returns a block operation's byte count, taken off the stack and widened to the
-/// machine's pointer width. If the operand is not int32 or native int, this fails.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::block_size (MonoIrBuilder &builder, StackValue size)
 {

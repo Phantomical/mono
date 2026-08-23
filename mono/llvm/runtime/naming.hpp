@@ -31,7 +31,6 @@ namespace mono {
 /// as distinct as what it was generated from.
 std::string identity_of (MonoMethod *method);
 
-/// The symbol a method's stub is published under.
 std::string stub_symbol (MonoMethod *method);
 
 /// The symbol the C-convention entry is compiled under.

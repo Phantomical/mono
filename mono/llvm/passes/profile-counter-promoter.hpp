@@ -20,43 +20,17 @@
 
 namespace mono {
 
-/// Settings for ProfileCounterPromoterPass.
-///
-/// Each field below is the default of the `mono-` option that sets it. A
-/// default-constructed policy and the one from_command_line () returns agree
-/// until a command line moves one.
 struct PromotionPolicy {
-	/// Whether to promote at all.
 	bool enabled = true;
-
-	/// The maximum number of counter variables that can be promoted in any
-	/// one loop.
 	unsigned max_per_loop = 20;
-
-	/// How many loop-exit blocks are allowed before we give up on promoting
-	/// counter writes out of the loop.
-	///
-	/// We need to write all the relevant counters in each loop exit, so this
-	/// option exists to prevent code size blowup in that case.
 	unsigned max_exiting = 8;
-
-	/// If true, we skip loops that contain function exits.
 	bool skip_ret_exit_block = false;
-
-	/// Allow promoting a counter out of a nested loop even if there is not
-	/// capacity for it in the parent loop.
 	bool speculative_promotion_to_loop = false;
-
-	/// Whether a counter already promoted out of a nested loop can also be
-	/// promoted out of the loops around it.
 	bool iterative = true;
 
-	/// Returns the policy the command line describes.
 	static PromotionPolicy from_command_line ();
 };
 
-/// Hoists counter updates out of loops.
-///
 /// Must run after `PGOInstrumentationGen` and `LoopSimplifyPass`, and before
 /// `InstrProfilingLoweringPass`.
 class ProfileCounterPromoterPass : public llvm::PassInfoMixin<ProfileCounterPromoterPass> {

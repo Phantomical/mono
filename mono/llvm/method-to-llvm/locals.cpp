@@ -148,11 +148,9 @@ MethodLLVMEmitter::emit_ldloca (MonoIrBuilder &builder, uint32_t index)
 /// `destination`.
 ///
 /// The evaluation stack tracks fewer types than a location can hold. A value already
-/// at destination's width or layout passes through unchanged. This function narrows
-/// an int32 back to its byte or char width, widens an int32 to a native int, and
-/// casts between float widths. It also converts between an address and a native int.
-/// Any other combination is a type mismatch that correct IL cannot produce, and the
-/// function returns an error for it.
+/// at destination's width or layout passes through unchanged. Any other combination
+/// is a type mismatch that correct IL cannot produce, and the function returns an
+/// error for it.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::coerce_to_location (MonoIrBuilder &builder, StackValue value,
                                        MonoType *destination, bool native)

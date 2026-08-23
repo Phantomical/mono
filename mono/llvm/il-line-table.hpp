@@ -40,8 +40,7 @@ namespace mono {
 
 /// One function's subprogram, plus the IL offset currently in effect for it.
 ///
-/// Owned by the IlDebugModule that handed it out. It stays opaque here, so a
-/// translator TU can hold one without seeing an LLVM debug type.
+/// Owned by the IlDebugModule that handed it out.
 struct IlDebugScope;
 
 /// The debug info for one compile's module: a single compile unit, and a

@@ -29,9 +29,6 @@ constexpr llvm::StringRef builtin_prefix = "mono.builtin.";
 constexpr llvm::StringRef builtin_attribute = "mono-builtin";
 constexpr llvm::StringRef builtin_target_attribute = "mono-builtin-target";
 
-/// The builtin kind for a constructor that returns what it built instead of
-/// filling in a caller-allocated instance. Its declaration takes the
-/// constructor's arguments without the this, and returns the object.
 constexpr llvm::StringRef builtin_string_constructor = "string_constructor";
 
 /// Rewrites every call to a `mono.builtin.*` declaration into the call it

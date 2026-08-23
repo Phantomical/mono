@@ -47,10 +47,6 @@ dump_method (MonoMethod *method, const CompiledMethod &compiled)
 	if (start == nullptr)
 		return;
 
-	/* The record takes the name of the function the object starts with, and
-	 * everything else in it prints under that name. That is this method's own
-	 * filter bodies, and the object's linker stubs, which several methods can
-	 * share. */
 	std::string display;
 	std::vector<FrameFunction> functions;
 

@@ -16,8 +16,6 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-/// The name the reader keys the function on.
-///
 /// The instrumentation put it in a global of its own: the text an on-disk
 /// profile's names section holds for this function.
 std::string
@@ -30,7 +28,6 @@ recorded_name (const InstrProfCntrInstBase &inc, const Function &f)
 	return getIRPGOFuncName (f);
 }
 
-/// Whether the profiling machinery wrote \p global, not the translator.
 bool
 is_profile_global (const GlobalVariable &global)
 {
@@ -45,7 +42,6 @@ is_profile_global (const GlobalVariable &global)
 	       || name.starts_with (getInstrProfBitmapVarPrefix ());
 }
 
-/// Whether \p address points into an array of counters the lowering wrote.
 bool
 is_counter_address (const Value *address)
 {

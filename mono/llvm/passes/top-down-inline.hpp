@@ -39,7 +39,6 @@ public:
 	/// allowed. What comes back is fresh translator output.
 	virtual llvm::Function *materialize (llvm::Function &decl, llvm::Module &into) = 0;
 
-	/// Report a site the inliner took.
 	virtual void folded (llvm::Function &caller, llvm::Function &callee) = 0;
 
 	/// How many folds deep past the root a chain can go. Without a limit a call
@@ -83,17 +82,12 @@ public:
 /// Folds a method's hottest call sites into it.
 ///
 /// Sites are ranked by the caller's own block counts, so a caller the profile
-/// describes spends its budget where the calls really are. One with no profile
-/// still inlines, off the static frequencies BFI falls back to.
+/// describes spends its budget where the calls really are.
 ///
 /// Each candidate is materialized when its site reaches the front of the queue.
 /// So a site the gates or the cost model refuse costs nothing but the questions.
 /// A body materialized and then declined is left where it is, and
 /// StripInlineCopiesPass takes it off.
-///
-/// A root the loop took a site in is simplified again before the pass returns,
-/// because a folded body with the caller's arguments as constants is where the
-/// win is. A root it took nothing in costs the compile nothing.
 class TopDownInlinerPass : public llvm::PassInfoMixin<TopDownInlinerPass> {
 public:
 	/// materialize is run over the module each candidate is translated into,

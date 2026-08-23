@@ -25,11 +25,6 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-/// Rewrites the builtin call into the call it stands for.
-///
-/// A string constructor keeps the this every instance method's signature has -
-/// the runtime gives it a null and its body never reads it - so the call it
-/// stands for is the same call with that null in front.
 void
 lower_string_constructor (CallBase *site, Function *target)
 {
