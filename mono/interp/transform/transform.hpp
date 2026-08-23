@@ -395,6 +395,11 @@ struct TransformData {
 	/// inlined callee, which the caller then writes through
 	/// interp_emit_sfld_access_dyn ().
 	bool may_share_field_access (MonoClass *klass, gboolean is_static, bool inlining);
+	/// Builds the vtable a value copy of klass reads its GC descriptor from.
+	///
+	/// Records a refusal instead where a shared body names the class, so a
+	/// caller tests sharing_refusal as well as the error.
+	void value_copy_vtable (MonoClass *klass, MonoError *error);
 	/// Whether a call to a method the generic context names has to fetch the
 	/// callee's InterpMethod out of the context.
 	///

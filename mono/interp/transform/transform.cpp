@@ -1494,21 +1494,17 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			return_val_if_nok (error, FALSE);
 
 			/*
-			 * MINT_NEWOBJ_DYN takes the class, its vtable and its initializer
-			 * off the constructor, so the constructor is the whole of what the
-			 * context has to answer. Every arm before that one names the class
-			 * itself, so each of them refuses instead.
+			 * MINT_NEWOBJ_DYN and MINT_NEWOBJ_VT_DYN take the class, its
+			 * vtable and its initializer off the constructor, so the
+			 * constructor is the whole of what the context has to answer. Every
+			 * arm before those two names the class itself, so each of them
+			 * refuses instead.
 			 */
 			bool ctor_from_context = false;
 
 			if (sharing && depends_on_context (m)) {
 				if (inlining) {
 					cannot_share ("a newobj inside an inlined callee");
-					return TRUE;
-				}
-
-				if (m_class_is_valuetype (m->klass)) {
-					cannot_share ("a newobj of a value type the generic context names");
 					return TRUE;
 				}
 
@@ -1652,10 +1648,16 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 					if (sharing_refusal != nullptr)
 						return TRUE;
 
-					interp_add_ins (MINT_NEWOBJ_DYN);
+					if (is_vt) {
+						interp_add_ins (MINT_NEWOBJ_VT_DYN);
+						last_ins->data[0] = ALIGN_TO (vtsize, MINT_STACK_SLOT_SIZE);
+						last_ins->data[1] = params_stack_size;
+					} else {
+						interp_add_ins (MINT_NEWOBJ_DYN);
+						last_ins->data[0] = params_stack_size;
+					}
 					interp_ins_set_dreg (last_ins, dreg);
 					interp_ins_set_sreg (last_ins, callee);
-					last_ins->data[0] = params_stack_size;
 				} else if (!mono_class_is_marshalbyref (klass) && !mono_class_has_finalizer (klass)
 				           && !m_class_has_weak_fields (klass)) {
 					InterpInst *newobj_fast;
@@ -2125,7 +2127,9 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 					sp--;
 
 					/* the vtable of the field might not be initialized at this point */
-					mono_class_vtable_checked (domain, field_klass, error);
+					value_copy_vtable (field_klass, error);
+					if (sharing_refusal != nullptr)
+						return TRUE;
 					return_val_if_nok (error, FALSE);
 				} else {
 					int opcode = op_for_mint_type (MINT_STFLD_I1, mt);
@@ -2142,7 +2146,9 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 					                        : field->offset;
 					if (mt == MintType::VT) {
 						/* the vtable of the field might not be initialized at this point */
-						mono_class_vtable_checked (domain, field_klass, error);
+						value_copy_vtable (field_klass, error);
+						if (sharing_refusal != nullptr)
+							return TRUE;
 						return_val_if_nok (error, FALSE);
 						if (m_class_has_references (field_klass)) {
 							last_ins->data[1] = get_data_item_index (field_klass);
@@ -2230,7 +2236,9 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 
 			/* the vtable of the field might not be initialized at this point */
 			MonoClass *fld_klass = mono_class_from_mono_type_internal (ftype);
-			mono_class_vtable_checked (domain, fld_klass, error);
+			value_copy_vtable (fld_klass, error);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 			return_val_if_nok (error, FALSE);
 
 			if (from_context) {
@@ -4028,6 +4036,24 @@ TransformData::may_share_field_access (MonoClass *klass, gboolean is_static, boo
 #endif
 
 	return true;
+}
+
+void
+TransformData::value_copy_vtable (MonoClass *klass, MonoError *error)
+{
+	/*
+	 * A shared class is open. get_shared_type ()
+	 * (mono/mini/mini-generic-sharing.c) gives a reference argument a
+	 * constrained type variable rather than object itself, so a value type of
+	 * one holds a field the collector has no bitmap for and
+	 * compute_class_bitmap () aborts on it.
+	 */
+	if (sharing && m_class_is_valuetype (klass) && depends_on_context (klass)) {
+		cannot_share ("a value-type field the generic context names");
+		return;
+	}
+
+	mono_class_vtable_checked (rtm->domain, klass, error);
 }
 
 static void

@@ -192,6 +192,47 @@ MONO_INTERP_OP_IMPL (MINT_NEWOBJ_VT_FAST)
 	return &exec_call;
 }
 
+/*
+ * The constructor arrives in a local, for the reason MINT_NEWOBJ_DYN gives.
+ * Reference sharing keeps the value's size common, so that stays a constant.
+ *
+ * The initializer runs here rather than at transform time, which is where a
+ * body of one instantiation runs it. A shared body has no instantiation to
+ * ask until it is entered.
+ */
+MONO_INTERP_OP_IMPL (MINT_NEWOBJ_VT_DYN)
+{
+	guint16 ret_size = ip[3];
+	guint16 param_size = ip[4];
+	call_args_offset = ip[1];
+	gpointer this_vt = locals + call_args_offset;
+
+	cmethod = LOCAL_VAR (ip[2], InterpMethod *);
+
+	error_init_reuse (error);
+	MonoVTable *vtable =
+		mono_class_vtable_checked (frame->imethod->domain, cmethod->method->klass, error);
+	if (!is_ok (error)) {
+		MonoException *exc = mono_error_convert_to_exception (error);
+		g_assert (exc);
+		THROW_EX (exc, ip);
+	}
+	INIT_VTABLE (vtable);
+
+	if (param_size)
+		std::memmove (locals + call_args_offset + ret_size + MINT_STACK_SLOT_SIZE,
+		              locals + call_args_offset, param_size);
+
+	// clear the valuetype
+	std::memset (this_vt, 0, ret_size);
+	call_args_offset += ret_size;
+	// pass the address of the valuetype
+	LOCAL_VAR (call_args_offset, gpointer) = this_vt;
+
+	MONO_INTERP_OP_ADVANCE ();
+	return &exec_call;
+}
+
 MONO_INTERP_OP_IMPL (MINT_NEWOBJ_STRING)
 {
 	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
