@@ -168,17 +168,11 @@ MethodLLVMEmitter::emit_mono_icall (MonoIrBuilder &builder, uint32_t id)
 	llvm::Value *result;
 
 	if (icall_has_no_wrapper (info)) {
-		llvm::Expected<llvm::FunctionType *> type =
-			convert_method_signature (info->sig, info->sig->pinvoke);
-		if (!type)
-			return type.takeError ();
+		llvm::Expected<llvm::FunctionCallee> target = raw_icall_decl (info);
+		if (!target)
+			return target.takeError ();
 
-		llvm::Constant *target =
-			address_symbol (std::string ("mono_icall_") + info->name,
-		                        const_cast<void *> (info->func));
-
-		result = emit_protected_call (builder, llvm::FunctionCallee (*type, target),
-		                              *args);
+		result = emit_protected_call (builder, *target, *args);
 
 		// The icall is a C function. Its signature says so.
 		mark_mono_call (llvm::cast<llvm::CallBase> (result));

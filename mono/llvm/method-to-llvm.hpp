@@ -529,6 +529,7 @@ private:
 	llvm::Expected<llvm::Function *> create_method_decl (MonoMethod *method,
 	                                                     bool by_context = false);
 	llvm::Expected<llvm::Function *> icall_wrapper_decl (MonoJitICallId id);
+	llvm::Expected<llvm::FunctionCallee> raw_icall_decl (const MonoJitICallInfo *info);
 	std::vector<llvm::Value *> adapt_to_callee (MonoIrBuilder &builder,
 	                                            llvm::Function *callee,
 	                                            llvm::ArrayRef<llvm::Value *> args);
@@ -960,6 +961,8 @@ private:
 	llvm::FunctionCallee libm_decl (const char *name, llvm::Type *type, size_t arity);
 	llvm::Error emit_math_call (MonoIrBuilder &builder, const MathIntrinsic &math,
 	                            MonoMethodSignature *sig);
+	llvm::Error emit_monitor_enter (MonoIrBuilder &builder, MonoMethod *callee_method,
+	                                MonoMethodSignature *sig, MonoJitICallId helper);
 
 	llvm::Expected<llvm::Value *> indirect_address (MonoIrBuilder &builder,
 	                                                StackValue address);
@@ -1146,6 +1149,12 @@ MonoMethod *icall_wrapper_target (MonoMethod *method);
 /// What to emit for a call to method, or nothing when the backend has no
 /// arithmetic for it. sig is the signature the call site was written against.
 std::optional<MathIntrinsic> math_intrinsic_for (MonoMethod *method, MonoMethodSignature *sig);
+
+/// The fast helper that answers a call to method, or nothing when method is not
+/// a Monitor.Enter overload. sig is the signature the call site was written
+/// against.
+std::optional<MonoJitICallId> monitor_enter_fast_icall (MonoMethod *method,
+                                                        MonoMethodSignature *sig);
 
 /// The number of sig's parameters that are ordinary ones, which for a vararg
 /// signature means the fixed part ahead of the sentinel.

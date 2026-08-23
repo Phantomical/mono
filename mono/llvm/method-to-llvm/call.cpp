@@ -1333,6 +1333,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (std::optional<MathIntrinsic> math = math_intrinsic_for (callee_method, sig))
 		return emit_math_call (builder, *math, sig);
 
+	// Asked here for the same reason, and the call it puts on the contended
+	// edge is the one the rest of this function would have emitted.
+	if (std::optional<MonoJitICallId> fast = monitor_enter_fast_icall (callee_method, sig))
+		return emit_monitor_enter (builder, callee_method, sig, *fast);
+
 	// Debugger.Break () has an empty body and a comment where the code goes: the
 	// JIT gives the call its meaning, and that meaning is the one the break
 	// instruction has. An embedder can say no through mono_set_break_policy.

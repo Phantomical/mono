@@ -823,6 +823,25 @@ MethodLLVMEmitter::icall_wrapper_decl (MonoJitICallId id)
 	return create_method_decl (mono_marshal_get_icall_wrapper (info, check));
 }
 
+/// The declaration of the raw C entry point info was registered with.
+///
+/// A call to it is a C call, so the caller marks the site with
+/// mark_mono_call (). It carries no checkpoint, which is why only an entry
+/// point registered as needing no wrapper may be reached this way.
+llvm::Expected<llvm::FunctionCallee>
+MethodLLVMEmitter::raw_icall_decl (const MonoJitICallInfo *info)
+{
+	llvm::Expected<llvm::FunctionType *> type =
+		convert_method_signature (info->sig, info->sig->pinvoke);
+
+	if (!type)
+		return type.takeError ();
+
+	return llvm::FunctionCallee (
+		*type, address_symbol (std::string ("mono_icall_") + info->name,
+	                               const_cast<void *> (info->func)));
+}
+
 /// The declaration of method in this module, created on first use and cached.
 ///
 /// A method this backend translates is declared in this backend's own
