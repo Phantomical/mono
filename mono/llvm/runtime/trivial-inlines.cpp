@@ -9,6 +9,7 @@
 #include "options.hpp"
 
 #include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
@@ -36,97 +37,85 @@ struct Shape {
 	MonoMethod *forwards_to = nullptr;
 };
 
-/// Whether an opcode only computes a value, and does so without a branch, a
-/// bounds check or a call.
+/// Whether an opcode keeps the body it is in out of the pre-pass.
+///
+/// A body holding none of these is left to is_small_and_clause_free (), which is
+/// what bounds the cost. Nothing on this list is here for cost: the opcodes it
+/// permits already emit a branch and a throw, because ldfld reaches its field
+/// through emit_null_check () (method-to-llvm/fields.cpp), and box allocates.
+/// What the list protects is the one-line shape shape_of () walks, and the frame
+/// the fold takes away.
 bool
-computes_a_value (MonoOpcodeEnum op)
+declines_a_fold (MonoOpcodeEnum op)
 {
 	switch (op) {
-	case MONO_CEE_NOP:
-	case MONO_CEE_LDARG_0:
-	case MONO_CEE_LDARG_1:
-	case MONO_CEE_LDARG_2:
-	case MONO_CEE_LDARG_3:
-	case MONO_CEE_LDARG_S:
-	case MONO_CEE_LDARG:
-	case MONO_CEE_LDARGA_S:
-	case MONO_CEE_LDARGA:
-	case MONO_CEE_LDLOC_0:
-	case MONO_CEE_LDLOC_1:
-	case MONO_CEE_LDLOC_2:
-	case MONO_CEE_LDLOC_3:
-	case MONO_CEE_LDLOC_S:
-	case MONO_CEE_LDLOC:
-	case MONO_CEE_LDLOCA_S:
-	case MONO_CEE_LDLOCA:
-	case MONO_CEE_STLOC_0:
-	case MONO_CEE_STLOC_1:
-	case MONO_CEE_STLOC_2:
-	case MONO_CEE_STLOC_3:
-	case MONO_CEE_STLOC_S:
-	case MONO_CEE_STLOC:
-	case MONO_CEE_LDFLD:
-	case MONO_CEE_LDFLDA:
-	case MONO_CEE_LDSFLD:
-	case MONO_CEE_LDSFLDA:
-	// A property setter is a field access the same way its getter is. The write
-	// barrier a reference field wants is emitted either way, so what the fold
-	// takes off is the frame around it.
-	case MONO_CEE_STFLD:
-	case MONO_CEE_STSFLD:
-	case MONO_CEE_STOBJ:
-	case MONO_CEE_STIND_I1:
-	case MONO_CEE_STIND_I2:
-	case MONO_CEE_STIND_I4:
-	case MONO_CEE_STIND_I8:
-	case MONO_CEE_STIND_I:
-	case MONO_CEE_STIND_R4:
-	case MONO_CEE_STIND_R8:
-	case MONO_CEE_STIND_REF:
-	case MONO_CEE_LDIND_I1:
-	case MONO_CEE_LDIND_U1:
-	case MONO_CEE_LDIND_I2:
-	case MONO_CEE_LDIND_U2:
-	case MONO_CEE_LDIND_I4:
-	case MONO_CEE_LDIND_U4:
-	case MONO_CEE_LDIND_I8:
-	case MONO_CEE_LDIND_I:
-	case MONO_CEE_LDIND_R4:
-	case MONO_CEE_LDIND_R8:
-	case MONO_CEE_LDIND_REF:
-	case MONO_CEE_LDOBJ:
-	case MONO_CEE_LDNULL:
-	case MONO_CEE_LDSTR:
-	case MONO_CEE_LDC_I4_M1:
-	case MONO_CEE_LDC_I4_0:
-	case MONO_CEE_LDC_I4_1:
-	case MONO_CEE_LDC_I4_2:
-	case MONO_CEE_LDC_I4_3:
-	case MONO_CEE_LDC_I4_4:
-	case MONO_CEE_LDC_I4_5:
-	case MONO_CEE_LDC_I4_6:
-	case MONO_CEE_LDC_I4_7:
-	case MONO_CEE_LDC_I4_8:
-	case MONO_CEE_LDC_I4_S:
-	case MONO_CEE_LDC_I4:
-	case MONO_CEE_LDC_I8:
-	case MONO_CEE_LDC_R4:
-	case MONO_CEE_LDC_R8:
-	case MONO_CEE_CONV_I1:
-	case MONO_CEE_CONV_I2:
-	case MONO_CEE_CONV_I4:
-	case MONO_CEE_CONV_I8:
-	case MONO_CEE_CONV_R4:
-	case MONO_CEE_CONV_R8:
-	case MONO_CEE_CONV_U1:
-	case MONO_CEE_CONV_U2:
-	case MONO_CEE_CONV_U4:
-	case MONO_CEE_CONV_U8:
-	case MONO_CEE_CONV_I:
-	case MONO_CEE_CONV_U:
-	case MONO_CEE_CONV_R_UN:
-	// An argument a throw helper reports is often a boxed value.
-	case MONO_CEE_BOX:
+	/*
+	 * Control flow. shape_of () walks the IL forward once and reads a
+	 * terminator as the end of the body, so a second edge is a shape it cannot
+	 * describe. br and br.s are here as well: the fallthrough case is the
+	 * caller's, which reads the displacement.
+	 */
+	case MONO_CEE_BR:
+	case MONO_CEE_BR_S:
+	case MONO_CEE_BRFALSE:
+	case MONO_CEE_BRFALSE_S:
+	case MONO_CEE_BRTRUE:
+	case MONO_CEE_BRTRUE_S:
+	case MONO_CEE_BEQ:
+	case MONO_CEE_BEQ_S:
+	case MONO_CEE_BGE:
+	case MONO_CEE_BGE_S:
+	case MONO_CEE_BGE_UN:
+	case MONO_CEE_BGE_UN_S:
+	case MONO_CEE_BGT:
+	case MONO_CEE_BGT_S:
+	case MONO_CEE_BGT_UN:
+	case MONO_CEE_BGT_UN_S:
+	case MONO_CEE_BLE:
+	case MONO_CEE_BLE_S:
+	case MONO_CEE_BLE_UN:
+	case MONO_CEE_BLE_UN_S:
+	case MONO_CEE_BLT:
+	case MONO_CEE_BLT_S:
+	case MONO_CEE_BLT_UN:
+	case MONO_CEE_BLT_UN_S:
+	case MONO_CEE_BNE_UN:
+	case MONO_CEE_BNE_UN_S:
+	case MONO_CEE_SWITCH:
+	case MONO_CEE_LEAVE:
+	case MONO_CEE_LEAVE_S:
+	case MONO_CEE_ENDFINALLY:
+	case MONO_CEE_ENDFILTER:
+	case MONO_CEE_RETHROW:
+	case MONO_CEE_JMP:
+
+	// A call the shape test cannot name a target for, so the one-call rule
+	// cannot hold it and may_read_the_callers_frame () has nothing to follow.
+	case MONO_CEE_CALLI:
+	// A tail call hands the frame over, and the folded copy is standing in that
+	// frame.
+	case MONO_CEE_TAIL_:
+
+	/*
+	 * The frame. Each of these describes the frame the body runs in, which the
+	 * fold replaces with the caller's.
+	 */
+	// Reads the frame it was called from, which is the hazard
+	// may_read_the_callers_frame () exists for.
+	case MONO_CEE_ARGLIST:
+	// emit_user_break () calls a helper that walks the stack for a managed
+	// frame to report the break against, and asserts that it finds one.
+	case MONO_CEE_BREAK:
+	// A typedref is frame-shaped.
+	case MONO_CEE_MKREFANY:
+	case MONO_CEE_REFANYVAL:
+	case MONO_CEE_REFANYTYPE:
+	// An alloca folded into a caller lives as long as that caller's frame.
+	case MONO_CEE_LOCALLOC:
+	// Publishes a thunk and asks for a compile that lands at tier 0. That is a
+	// tiering side effect rather than a value.
+	case MONO_CEE_LDFTN:
+	case MONO_CEE_LDVIRTFTN:
 		return true;
 	default:
 		return false;
@@ -152,9 +141,9 @@ branches_to_the_next (const unsigned char *code, MonoOpcodeEnum op, size_t opera
 	return false;
 }
 
-/// Returns the method's shape when its IL is a straight line of value
-/// opcodes. The line holds at most one call, and its terminator is the last
-/// IL byte. Returns nullopt otherwise.
+/// Returns the method's shape when its IL is one straight line. The line holds
+/// at most one call, declines_a_fold () names what it may not hold, and its
+/// terminator is the last IL byte. Returns nullopt otherwise.
 ///
 /// These are the shapes worth folding in without weighing them:
 ///
@@ -177,11 +166,13 @@ branches_to_the_next (const unsigned char *code, MonoOpcodeEnum op, size_t opera
 ///   ldarg.1  newobj Y::.ctor       make an object and return it
 ///   ret
 ///
-/// Every opcode on the value list is a load, a store or a conversion, so a
-/// cost model has nothing to weigh in a line of them, however they are
-/// arranged. Refusing a real branch
-/// is what keeps the body to that one line, and it also leaves the method
-/// with exactly one terminator.
+///   ldarg.0  ldarg.1  sizeof T     step a pointer by an element
+///   conv.i  mul  add
+///   ret
+///
+/// One line is what the shape test is for. It bounds the walk below, and it
+/// leaves the method with one terminator. What the line costs is the size
+/// limit's question rather than this one's.
 std::optional<Shape>
 shape_of (MonoMethod *method, MonoMethodHeader *header)
 {
@@ -219,7 +210,7 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 			shape.forwards_to = il_call_target (method, il_read_u32 (code + operand));
 			if (shape.forwards_to == nullptr)
 				return std::nullopt;
-		} else if (!computes_a_value (op)
+		} else if (declines_a_fold (op)
 		           // A C# compiler ends a value-returning method with
 		           // stloc.0, a branch to the next instruction, ldloc.0,
 		           // then ret. Letting that one branch through as a
@@ -236,6 +227,60 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 	return std::nullopt;
 }
 
+// How far the two walks below follow a chain of forwarders. Longer than any
+// chain worth following, and each link costs a header. Both use the same bound,
+// which is what lets each one rely on what the other does with a chain that
+// outruns it.
+constexpr int max_links = 8;
+
+/// Whether target reaches itself through the forwarder chain shape_of ()
+/// describes.
+///
+/// A recursive body is one no inliner can fold the call out of, so the pre-pass
+/// declines it however small it is. Direct recursion and a cycle through other
+/// forwarders read the same here.
+bool
+forwards_into_a_cycle (MonoMethod *target, MonoDomain *domain)
+{
+	SmallPtrSet<MonoMethod *, max_links> seen;
+
+	for (int link = 0; link < max_links && target != nullptr; ++link) {
+		if (!seen.insert (target).second)
+			return true;
+
+		if (implemented_outside_il (target))
+			return false;
+
+		ERROR_DECL (metadata_error);
+		MinimalCompile cfg (target, domain, metadata_error);
+		MonoMethodHeader *header = cfg.get ()->header;
+
+		if (header == nullptr) {
+			mono_error_cleanup (metadata_error);
+			return false;
+		}
+
+		// A body the shape test declines ends the chain. It keeps its own call
+		// sites, so a cycle behind it is one the pre-pass never folds through.
+		if (header->num_clauses != 0)
+			return false;
+
+		std::optional<Shape> shape = shape_of (target, header);
+
+		if (!shape)
+			return false;
+
+		target = shape->forwards_to;
+	}
+
+	/*
+	 * A chain that reaches here is at least max_links long, so the walk
+	 * may_read_the_callers_frame () starts one link further along runs out too
+	 * and refuses the body. Answering "no cycle" costs nothing.
+	 */
+	return false;
+}
+
 /// Whether target, or something it forwards to in turn, can read the frame it
 /// was called from.
 ///
@@ -245,10 +290,6 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 bool
 may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
 {
-	// Longer than any forwarder chain worth following, and each link costs a
-	// header. A chain that outruns it is refused rather than read further.
-	constexpr int max_links = 8;
-
 	for (int link = 0; link < max_links; ++link) {
 		if (target == nullptr)
 			return false;
@@ -438,8 +479,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			if (!shape)
 				continue;
 
-			// A body that calls itself is one the inliner cannot fold away.
-			if (shape->forwards_to == callee)
+			if (forwards_into_a_cycle (callee, domain))
 				continue;
 
 			if (shape->forwards_to != nullptr

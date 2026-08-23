@@ -370,8 +370,12 @@ fold is visible from outside:
 - `MONO_LLVM_JIT_INLINE_IL_LIMIT=<n>` — largest callee in IL bytes the shape-test
   pre-pass folds in, default 32. Both compiled tiers run that pre-pass. Zero turns it
   off, which separates a bug in a folded body from one in the method that folded it. The
-  limit is a backstop rather than a policy, because the shape test in front of it
-  already refuses everything but a straight line ending in one call.
+  limit is the policy: the shape test in front of it refuses control flow and the opcodes
+  that describe a frame, and lets everything else through, so this is what decides how
+  large a body folds. 32 is the knee rather than a round number — `GoParse` folds 851
+  distinct callees at 16, 878 at 32 and 887 at 128, so below it loses bodies and above it
+  buys almost none. Raising `MONO_LLVM_JIT_INLINE_BUDGET` with it moves that 878 to 889,
+  so neither knob is a large lever past the defaults.
 - `MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=<n>` — largest callee the tier-2 cost model
   translates so it can weigh it, default 128. It bounds translation rather than code
   size, because LLVM's own threshold decides what is worth folding. Zero leaves tier 2
@@ -571,13 +575,20 @@ standing, which is the shape tier 2 matches the profile against.
 What the pass finds are bodies `materialize_trivial_callees ()`
 (`runtime/trivial-inlines.cpp`) translated in beside the method, right after the method
 itself and before naming and resolution, each marked always-inline and given local
-linkage. A candidate is a straight line of value opcodes, then at most one call, then
-`ret` or `throw`: a constant, a chain of field accesses, a forward to one other method, a
-throw, or an object made and returned. It must fit inside `MONO_LLVM_JIT_INLINE_IL_LIMIT`
-bytes of IL. It must also pass gates that are about correctness rather than cost
-(`may_fold ()`, `runtime/inline-scope.cpp`): no wrapper, no dynamic method, no clauses,
-no `NoInlining` on the callee, no shared body, no call instrumentation, and nothing at
-all while `gen-seq-points` is on.
+linkage. A candidate is one straight line, then at most one call, then `ret` or `throw`:
+a constant, a chain of field accesses, arithmetic on the arguments, a forward to one
+other method, a throw, or an object made and returned. `declines_a_fold ()` names what
+the line may not hold, and it is a denylist rather than an allowlist: control flow, and
+the opcodes that describe the frame the body runs in. A body that reaches itself through
+the forwarder chain is refused too, because no inliner takes that call away. The rest is
+the size limit's question, and `MONO_LLVM_JIT_INLINE_IL_LIMIT` bounds it. A candidate
+must also pass gates that are about correctness rather than cost (`may_fold ()`,
+`runtime/inline-scope.cpp`): no wrapper, no dynamic method, no clauses, no `NoInlining`
+on the callee, no shared body, no call instrumentation, and nothing at all while
+`gen-seq-points` is on. It also refuses a callee something else owns the entry of: a
+detour or an override on the record, and an override the *table* holds
+(`registered_override_for ()`), which is the one that catches a declared override before
+anything has asked for the method's record and installed it.
 
 A forwarder is refused as well when what it forwards to reads the frame it was called
 from. `may_read_the_callers_frame ()` follows the chain, and a body with no IL counts,

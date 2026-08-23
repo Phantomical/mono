@@ -3,6 +3,7 @@
 #include "inline-scope.hpp"
 
 #include "domain-method.hpp"
+#include "method-override.hpp"
 #include "naming.hpp"
 #include "passes/inline-copies.hpp"
 #include "timing.hpp"
@@ -61,12 +62,28 @@ may_fold (MonoDomain *domain, MonoMethod *callee)
 		return false;
 
 	/*
-	 * Native code owns the entry, so a call to the method no longer runs the IL
-	 * this would copy. Last because it takes the domain's table lock, and every
-	 * test above reads a field.
+	 * A declared override is installed the first time anything asks for the
+	 * method's record (domain_method_get ()), and a compile can reach the method
+	 * as a callee before that happens. So ask the table rather than the record:
+	 * folding the IL of a method something is about to replace bakes in the body
+	 * the replacement is there to remove.
+	 */
+	if (registered_override_for (callee) != nullptr)
+		return false;
+
+	/*
+	 * Something else owns the entry, so a call to the method no longer runs the
+	 * IL this would copy: native code behind a detour, or the replacement behind
+	 * an override installed through the icall, which the table above does not
+	 * hold. Both cover a compile that starts after the install. A copy that
+	 * already stands is drop_folded_bodies ()'s to take down, and it reaches
+	 * only the ones a tier-2 body holds.
+	 *
+	 * Last because it takes the domain's table lock, and every test above reads
+	 * a field.
 	 */
 	if (MonoDomainMethod *dm = domain_method_find (domain, callee))
-		if (dm->tier () == MonoTier::detoured)
+		if (dm->tier () == MonoTier::detoured || dm->override_method () != nullptr)
 			return false;
 
 	return true;

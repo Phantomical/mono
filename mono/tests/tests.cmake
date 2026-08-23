@@ -1096,6 +1096,11 @@ set(MONO_TESTS_DISABLED
   # Scrapes "converting method ..." out of a --compile-all run. Neither the
   # option nor that trace exists any more.
   verbose.exe
+  # An override does not reach a copy a tier-1 body folded in, which is task
+  # 206. This test asserts that it does. The defect predates the shape test
+  # taking arithmetic: it needs a callee both compiled tiers fold, and the
+  # allowlist refused this one at tier 1 until then.
+  tier2-inline-override.exe
 )
 
 # Additionally excluded when running under the interpreter.
