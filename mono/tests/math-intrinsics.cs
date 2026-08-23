@@ -181,9 +181,9 @@ static class Program {
 			got.Add (MathF.Asinh (F (f)));
 			got.Add (MathF.Acosh (F (f)));
 			got.Add (MathF.Atanh (F (f)));
-			// Managed IL rather than icalls. Truncate is answered with an
-			// intrinsic and the rest are not, so the tiers have to agree on
-			// all of them either way.
+			// Managed IL rather than icalls. Truncate and MathF.Round are
+			// answered with an intrinsic and Max and Min are not, so the tiers
+			// have to agree on all of them either way.
 			got.Add (Math.Truncate (D (x)));
 			got.Add (MathF.Truncate (F (f)));
 			got.Add (MathF.Round (F (f)));
@@ -243,12 +243,13 @@ static class Program {
 		Same ("Math.Ceiling (0)", Math.Ceiling (D (0.0)), 0.0);
 
 		/*
-		 * Round is the mono_round_to_even () icall, and it computes IEEE 754
-		 * roundToIntegralTiesToEven. It rounds a half to the even neighbour
-		 * the way llvm.roundeven does and llvm.round does not, so the halves
-		 * below catch that substitution. The last pair is the one that says
-		 * the icall does not compute floor (x + 0.5): that addition carries
-		 * the largest value under a half up to one.
+		 * Round computes IEEE 754 roundToIntegralTiesToEven in both engines:
+		 * the mono_round_to_even () icall under the interpreter and
+		 * llvm.roundeven in the compiled tiers. It rounds a half to the even
+		 * neighbour the way llvm.round does not, so the halves below catch
+		 * that substitution. The last pair is the one that says neither
+		 * engine computes floor (x + 0.5): that addition carries the largest
+		 * value under a half up to one.
 		 */
 		Same ("Math.Round (0.5)", Math.Round (D (0.5)), 0.0);
 		Same ("Math.Round (1.5)", Math.Round (D (1.5)), 2.0);
@@ -327,7 +328,8 @@ static class Program {
 		NaN ("Math.Max (1, NaN)", Math.Max (D (1.0), E (double.NaN)));
 
 		/*
-		 * MathF.Round is managed IL rather than an icall. It computes the same
+		 * MathF.Round is managed IL rather than an icall, so the intrinsic has
+		 * to answer as that IL answers. It computes the same
 		 * roundToIntegralTiesToEven the double form does, over floats.
 		 */
 		Same ("MathF.Round (0.5)", MathF.Round (F (0.5f)), 0.0f);

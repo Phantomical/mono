@@ -66,27 +66,27 @@ constexpr llvm::Intrinsic::ID no_intrinsic = llvm::Intrinsic::not_intrinsic;
  * keep a value in a register across it. Each row below computes the same value
  * with none of that.
  *
- * Truncate is the one managed row, and it is held to a stricter test. The
- * interpreter runs its IL, so the intrinsic has to answer as that IL answers on
- * every input rather than merely as the documentation reads. Math.Truncate is
- * `ModF (d, &d); return d`, and modf writes the integral part through the
- * pointer. That is llvm.trunc. Both give -0.0 for -0.5 and for -0.0, and both
- * pass an infinity and a NaN through.
+ * A managed row is held to a stricter test, because the interpreter runs the
+ * method's IL. The intrinsic has to answer as that IL answers on every input,
+ * rather than as the documentation reads.
+ *
+ * Truncate is `ModF (d, &d); return d`, and modf writes the integral part
+ * through the pointer. That is llvm.trunc. Both give -0.0 for -0.5 and for -0.0,
+ * and both pass an infinity and a NaN through.
+ *
+ * Round takes two rows because the two forms are implemented differently.
+ * Math.Round (double) is the mono_round_to_even () icall (mono/utils/mono-math.h)
+ * and MathF.Round (float) is managed IL. Both compute IEEE 754
+ * roundToIntegralTiesToEven, which is what llvm.roundeven computes, so the three
+ * agree on every input including the largest value under a half. Change either
+ * body and this row has to be re-checked against it.
  *
  * ModF is the row that writes memory. llvm.modf hands back the fractional and
  * the integral half as a pair. Storing the integral half through the call's
  * second argument is what the icall's out parameter was. Truncate no longer
  * calls it, but the Round overloads that take a digit count still do.
  *
- * Three names are deliberately absent.
- *
- * Round stays. The double form is the mono_round_to_even () icall
- * (mono/utils/mono-math.h). MathF.Round is managed IL that computes the same
- * thing, floor (x + 0.5) with a half-to-even correction. Both answer 1 for the
- * largest value under a half, 0.49999999999999994 and 0.49999997f, where
- * llvm.roundeven answers 0. That is the better answer and a different one. The
- * interpreter runs the icall and the IL, so taking the intrinsic would make
- * Round depend on which tier the caller runs at.
+ * The names below are deliberately absent.
  *
  * Max and Min stay, and the reason is signed zero rather than NaN. The body of
  * Math.Max (double, double) returns the first operand when it is greater and
@@ -140,6 +140,13 @@ const MathTableEntry math_table[] = {
 	  nullptr, nullptr },
 
 	{ "Truncate", 1, Body::Managed, call_intrinsic, llvm::Intrinsic::trunc,
+	  nullptr, nullptr },
+
+	// Math.Round (double) against the first row, MathF.Round (float) against
+	// the second.
+	{ "Round", 1, icall, call_intrinsic, llvm::Intrinsic::roundeven,
+	  nullptr, nullptr },
+	{ "Round", 1, Body::Managed, call_intrinsic, llvm::Intrinsic::roundeven,
 	  nullptr, nullptr },
 };
 
