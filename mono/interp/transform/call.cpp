@@ -492,13 +492,12 @@ TransformData::dispatch_reads_the_context (MonoMethod *target)
 
 	/*
 	 * A remoted class keeps the site dispatched even for a method that is not
-	 * virtual, and get_virtual_method () hands such a one straight back as the
-	 * callee. That is the shared form, which no thread can enter.
+	 * virtual, and get_virtual_method () then hands the method it was given
+	 * straight back as the callee. So the site fetches, and what it hands over
+	 * is the instantiation's own.
 	 */
-	if (mono_class_is_marshalbyref (target->klass)) {
-		cannot_share ("a remoted method the generic context names");
-		return false;
-	}
+	if (mono_class_is_marshalbyref (target->klass))
+		return true;
 
 	/*
 	 * A method with type arguments of its own is re-inflated against the
@@ -1081,7 +1080,17 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			if (sharing_refusal != nullptr)
 				return TRUE;
 
-			interp_add_ins (is_virtual ? MINT_CALLVIRT_DYN : MINT_CALL_DYN);
+			// A remoted receiver can be a proxy with no slot of its own, which
+			// is why the ordinary arm sends one to MINT_CALLVIRT as well.
+			bool by_slot = is_virtual && !mono_class_is_marshalbyref (target_method->klass);
+
+			if (!is_virtual)
+				interp_add_ins (MINT_CALL_DYN);
+			else if (by_slot)
+				interp_add_ins (MINT_CALLVIRT_FAST_DYN);
+			else
+				interp_add_ins (MINT_CALLVIRT_DYN);
+
 			interp_ins_set_dreg (last_ins, dreg);
 			interp_ins_set_sreg (last_ins, callee);
 
@@ -1089,7 +1098,7 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			// answer for as well as the instantiation would. An interface slot
 			// is hashed from the method's definition, and a class slot is an
 			// index reference sharing keeps common.
-			if (is_virtual) {
+			if (by_slot) {
 				if (mono_class_is_interface (target_method->klass))
 					last_ins->data[0] =
 						-2 * MONO_IMT_SIZE + mono_method_get_imt_slot (target_method);

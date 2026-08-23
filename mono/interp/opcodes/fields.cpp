@@ -590,4 +590,115 @@ MONO_INTERP_OP_IMPL (MINT_STRMFLD_VT)
 	MONO_INTERP_DISPATCH ();
 }
 
+/*
+ * The four below take the field from a local, because a body shared between
+ * reference instantiations reads it out of its generic context. A remoted
+ * access hands the field to the remoting layer, which reads its type and its
+ * declaring class, so the shared form does not serve.
+ */
+
+MONO_INTERP_OP_IMPL (MINT_LDRMFLD_DYN)
+{
+	auto o = LOCAL_VAR (ip[2], MonoObject *);
+	NULL_CHECK (o);
+
+	auto field = LOCAL_VAR (ip[3], MonoClassField *);
+
+	gpointer addr;
+#ifndef DISABLE_REMOTING
+	gpointer tmp;
+	if (G_UNLIKELY (mono_object_is_transparent_proxy (o))) {
+		ERROR_DECL (error);
+		MonoClass *klass =
+			(reinterpret_cast<MonoTransparentProxy *> (o))->remote_class->proxy_class;
+		addr = mono_load_remote_field_checked (o, klass, field, &tmp, error);
+		if (G_UNLIKELY (!is_ok (error)))
+			THROW_EX (mono_error_convert_to_exception (error), ip);
+	} else
+#endif
+		addr = reinterpret_cast<char *> (o) + field->offset;
+
+	stackval_from_data (field->type, &LOCAL_VAR (ip[1], stackval), addr, FALSE);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
+MONO_INTERP_OP_IMPL (MINT_LDRMFLD_VT_DYN)
+{
+	auto o = LOCAL_VAR (ip[2], MonoObject *);
+	NULL_CHECK (o);
+
+	auto field = LOCAL_VAR (ip[3], MonoClassField *);
+	MonoClass *klass = mono_class_from_mono_type_internal (field->type);
+	int size = mono_class_value_size (klass, NULL);
+
+	gpointer addr;
+#ifndef DISABLE_REMOTING
+	gpointer tmp;
+	if (G_UNLIKELY (mono_object_is_transparent_proxy (o))) {
+		ERROR_DECL (error);
+		klass = (reinterpret_cast<MonoTransparentProxy *> (o))->remote_class->proxy_class;
+		addr = mono_load_remote_field_checked (o, klass, field, &tmp, error);
+		if (G_UNLIKELY (!is_ok (error)))
+			THROW_EX (mono_error_convert_to_exception (error), ip);
+	} else
+#endif
+		addr = reinterpret_cast<char *> (o) + field->offset;
+
+	std::memcpy (locals + ip[1], addr, size);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
+MONO_INTERP_OP_IMPL (MINT_STRMFLD_DYN)
+{
+	auto o = LOCAL_VAR (ip[1], MonoObject *);
+	NULL_CHECK (o);
+
+	auto field = LOCAL_VAR (ip[3], MonoClassField *);
+
+#ifndef DISABLE_REMOTING
+	if (G_UNLIKELY (mono_object_is_transparent_proxy (o))) {
+		ERROR_DECL (error);
+		MonoClass *klass =
+			(reinterpret_cast<MonoTransparentProxy *> (o))->remote_class->proxy_class;
+		mono_store_remote_field_checked (o, klass, field, locals + ip[2], error);
+		if (G_UNLIKELY (!is_ok (error)))
+			THROW_EX (mono_error_convert_to_exception (error), ip);
+	} else
+#endif
+		stackval_to_data (field->type, &LOCAL_VAR (ip[2], stackval),
+		                  reinterpret_cast<char *> (o) + field->offset, FALSE);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
+MONO_INTERP_OP_IMPL (MINT_STRMFLD_VT_DYN)
+{
+	auto o = LOCAL_VAR (ip[1], MonoObject *);
+	NULL_CHECK (o);
+
+	auto field = LOCAL_VAR (ip[3], MonoClassField *);
+	MonoClass *klass = mono_class_from_mono_type_internal (field->type);
+
+#ifndef DISABLE_REMOTING
+	if (G_UNLIKELY (mono_object_is_transparent_proxy (o))) {
+		ERROR_DECL (error);
+		MonoClass *proxy_class =
+			(reinterpret_cast<MonoTransparentProxy *> (o))->remote_class->proxy_class;
+		mono_store_remote_field_checked (o, proxy_class, field, locals + ip[2], error);
+		if (G_UNLIKELY (!is_ok (error)))
+			THROW_EX (mono_error_convert_to_exception (error), ip);
+	} else
+#endif
+		mono_value_copy_internal (reinterpret_cast<char *> (o) + field->offset, locals + ip[2],
+		                          klass);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
 } // namespace mono::interp

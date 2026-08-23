@@ -614,7 +614,7 @@ MONO_INTERP_OP_IMPL (MINT_CALLVIRT_FAST)
  * the method's definition rather than from its instantiation, so every
  * reference instantiation of the site lands on the same one.
  */
-MONO_INTERP_OP_IMPL (MINT_CALLVIRT_DYN)
+MONO_INTERP_OP_IMPL (MINT_CALLVIRT_FAST_DYN)
 {
 	cmethod = LOCAL_VAR (ip[2], InterpMethod *);
 	call_args_offset = ip[1];
@@ -671,6 +671,31 @@ MONO_INTERP_OP_IMPL (MINT_CALLVIRT)
 {
 	// FIXME: CALLVIRT opcodes are not used on netcore. Remove them.
 	cmethod = static_cast<InterpMethod *> (frame->imethod->data_items[ip[2]]);
+	call_args_offset = ip[1];
+
+	MonoObject *this_arg = LOCAL_VAR (call_args_offset, MonoObject *);
+
+	cmethod = get_virtual_method (cmethod, this_arg->vtable);
+	if (m_class_is_valuetype (this_arg->vtable->klass)
+	    && m_class_is_valuetype (cmethod->method->klass)) {
+		/* unbox */
+		gpointer unboxed = mono_object_unbox_internal (this_arg);
+		LOCAL_VAR (call_args_offset, gpointer) = unboxed;
+	}
+
+	MONO_INTERP_OP_ADVANCE ();
+	return &exec_call;
+}
+
+/*
+ * The method the site named arrives in a local, for the reason MINT_CALL_DYN
+ * gives. get_virtual_method () wraps a remoted target in a remoting invoke,
+ * which it builds from the method it is handed, so that has to be the
+ * instantiation's own.
+ */
+MONO_INTERP_OP_IMPL (MINT_CALLVIRT_DYN)
+{
+	cmethod = LOCAL_VAR (ip[2], InterpMethod *);
 	call_args_offset = ip[1];
 
 	MonoObject *this_arg = LOCAL_VAR (call_args_offset, MonoObject *);

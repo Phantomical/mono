@@ -2009,10 +2009,26 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			if (m_class_get_marshalbyref (klass) || mono_class_is_contextbound (klass)
 			    || klass == mono_defaults.marshalbyrefobject_class) {
 				g_assert (!is_static);
-				interp_add_ins (mt == MintType::VT ? MINT_LDRMFLD_VT : MINT_LDRMFLD);
+
+				int field_local = -1;
+
+				if (from_context) {
+					field_local = emit_rgctx_fetch (MONO_RGCTX_INFO_CLASS_FIELD, field);
+
+					if (sharing_refusal != nullptr)
+						return TRUE;
+
+					interp_add_ins (mt == MintType::VT ? MINT_LDRMFLD_VT_DYN : MINT_LDRMFLD_DYN);
+				} else {
+					interp_add_ins (mt == MintType::VT ? MINT_LDRMFLD_VT : MINT_LDRMFLD);
+				}
 				sp--;
-				interp_ins_set_sreg (last_ins, sp[0].local);
-				last_ins->data[0] = get_data_item_index (field);
+				if (field_local >= 0)
+					interp_ins_set_sregs2 (last_ins, sp[0].local, field_local);
+				else
+					interp_ins_set_sreg (last_ins, sp[0].local);
+				if (field_local < 0)
+					last_ins->data[0] = get_data_item_index (field);
 				if (mt == MintType::VT)
 					push_type_vt (field_klass, field_size);
 				else
@@ -2106,10 +2122,26 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 #ifndef DISABLE_REMOTING
 			if (m_class_get_marshalbyref (klass)) {
 				g_assert (!is_static);
-				interp_add_ins (mt == MintType::VT ? MINT_STRMFLD_VT : MINT_STRMFLD);
+
+				int field_local = -1;
+
+				if (from_context) {
+					field_local = emit_rgctx_fetch (MONO_RGCTX_INFO_CLASS_FIELD, field);
+
+					if (sharing_refusal != nullptr)
+						return TRUE;
+
+					interp_add_ins (mt == MintType::VT ? MINT_STRMFLD_VT_DYN : MINT_STRMFLD_DYN);
+				} else {
+					interp_add_ins (mt == MintType::VT ? MINT_STRMFLD_VT : MINT_STRMFLD);
+				}
 				sp -= 2;
-				interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
-				last_ins->data[0] = get_data_item_index (field);
+				if (field_local >= 0)
+					interp_ins_set_sregs3 (last_ins, sp[0].local, sp[1].local, field_local);
+				else
+					interp_ins_set_sregs2 (last_ins, sp[0].local, sp[1].local);
+				if (field_local < 0)
+					last_ins->data[0] = get_data_item_index (field);
 			} else
 #endif
 			{
@@ -4066,21 +4098,22 @@ TransformData::resolve_field (MonoMethod *method, guint32 token, MonoClass **kla
 bool
 TransformData::may_share_field_access (MonoClass *klass, gboolean is_static, bool inlining)
 {
-	if (is_static) {
-		// The storage is reached through a fetch, and a fetch inside an inlined
-		// callee reads the caller's receiver rather than the callee's own.
-		if (inlining) {
-			cannot_share ("a static field inside an inlined callee");
-			return false;
-		}
-
+	// A static access reaches its storage through a fetch, and a remoted one
+	// hands the field itself to the remoting layer, so both fetch. A fetch
+	// inside an inlined callee reads the caller's receiver rather than the
+	// callee's own.
+	if (!inlining)
 		return true;
+
+	if (is_static) {
+		cannot_share ("a static field inside an inlined callee");
+		return false;
 	}
 
 #ifndef DISABLE_REMOTING
 	if (m_class_get_marshalbyref (klass) || mono_class_is_contextbound (klass)
 	    || klass == mono_defaults.marshalbyrefobject_class) {
-		cannot_share ("a remoted field of a class the generic context names");
+		cannot_share ("a remoted field inside an inlined callee");
 		return false;
 	}
 #endif
