@@ -264,6 +264,25 @@ MONO_INTERP_OP_IMPL (MINT_NEWARR)
 	MONO_INTERP_DISPATCH ();
 }
 
+/*
+ * The vtable arrives in a local rather than a data item, because a body shared
+ * between reference instantiations reads it out of its generic context. The
+ * element type is what differs, so no two instantiations name one array class.
+ */
+MONO_INTERP_OP_IMPL (MINT_NEWARR_DYN)
+{
+	ERROR_DECL (error);
+	auto vtable = LOCAL_VAR (ip[3], MonoVTable *);
+	gint32 length = LOCAL_VAR (ip[2], gint32);
+	LOCAL_VAR (ip[1], MonoObject *) =
+		reinterpret_cast<MonoObject *> (mono_array_new_specific_checked (vtable, length, error));
+	if (G_UNLIKELY (!is_ok (error)))
+		THROW_EX (mono_error_convert_to_exception (error), ip);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
 MONO_INTERP_OP_IMPL (MINT_NEWOBJ_ARRAY)
 {
 	guint16 token = ip[2];

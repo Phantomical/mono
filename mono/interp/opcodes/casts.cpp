@@ -160,6 +160,39 @@ IMPL_CAST (MINT_ISINST_COMMON, false, CAST_COMMON);
 IMPL_CAST (MINT_CASTCLASS_INTERFACE, true, CAST_INTERFACE);
 IMPL_CAST (MINT_ISINST_INTERFACE, false, CAST_INTERFACE);
 
+/*
+ * The class arrives in a local rather than a data item, because a body shared
+ * between reference instantiations reads it out of its generic context. The
+ * general answer is the only one available: the transform picks a narrower
+ * opcode above off the class it knows, and here it knows only the type variable.
+ */
+#define IMPL_CAST_DYN(opcode, throwing)                                 \
+	MONO_INTERP_OP_IMPL (opcode)                                        \
+	{                                                                   \
+		auto o = LOCAL_VAR (ip[2], MonoObject *);                       \
+                                                                        \
+		if (o) {                                                        \
+			auto c = LOCAL_VAR (ip[3], MonoClass *);                    \
+                                                                        \
+			if (!interp_isinst (o, c)) {                                \
+				if (throwing)                                           \
+					THROW_EX (mono_get_exception_invalid_cast (), ip);  \
+				else                                                    \
+					LOCAL_VAR (ip[1], MonoObject *) = nullptr;          \
+			} else {                                                    \
+				LOCAL_VAR (ip[1], MonoObject *) = o;                    \
+			}                                                           \
+		} else {                                                        \
+			LOCAL_VAR (ip[1], MonoObject *) = nullptr;                  \
+		}                                                               \
+                                                                        \
+		MONO_INTERP_OP_ADVANCE ();                                      \
+		MONO_INTERP_DISPATCH ();                                        \
+	}
+
+IMPL_CAST_DYN (MINT_CASTCLASS_DYN, true);
+IMPL_CAST_DYN (MINT_ISINST_DYN, false);
+
 MONO_INTERP_OP_IMPL (MINT_MKREFANY)
 {
 	auto c = static_cast<MonoClass *> (frame->imethod->data_items[ip[3]]);

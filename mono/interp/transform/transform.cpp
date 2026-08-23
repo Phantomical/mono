@@ -338,6 +338,22 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 		if (mono_threads_are_safepoints_enabled ())
 			interp_add_ins (MINT_SAFEPOINT);
 #endif
+
+		/*
+		 * shared_form () shares an instance method of a reference generic class
+		 * and nothing else, so argument 0 is an object whose vtable carries the
+		 * instantiation's runtime generic context.
+		 *
+		 * Entry copies it, so a fetch further down reads the receiver the method
+		 * was entered with rather than whatever argument 0 holds by then.
+		 * starg.0 and a write through ldarga.0 both reach that argument.
+		 */
+		if (sharing && signature->hasthis) {
+			rgctx_receiver_local = create_interp_local (mono_get_object_type ());
+			interp_add_ins (MINT_MOV_P);
+			interp_ins_set_dreg (last_ins, rgctx_receiver_local);
+			interp_ins_set_sreg (last_ins, 0);
+		}
 	} else {
 		int local;
 		arg_locals.resize (!!signature->hasthis + signature->param_count);
@@ -1660,10 +1676,21 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 		case CEE_CASTCLASS:
 		case CEE_ISINST: {
 			gboolean isinst_instr = *ip == CEE_ISINST;
+			bool from_context = false;
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
-			klass = resolve_class (method, token, generic_context);
+			klass = resolve_class (method, token, generic_context,
+			                       inlining ? nullptr : &from_context);
 			CHECK_TYPELOAD (klass);
+			if (from_context) {
+				int klass_local = emit_rgctx_fetch (MONO_RGCTX_INFO_KLASS, klass);
+
+				if (sharing_refusal != nullptr)
+					return TRUE;
+
+				interp_handle_isinst_dyn (klass_local, klass, isinst_instr);
+				break;
+			}
 			if (sharing_refusal != nullptr)
 				return TRUE;
 			interp_handle_isinst (klass, isinst_instr);
@@ -1735,14 +1762,34 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				ip += 5;
 			}
 			break;
-		case CEE_UNBOX_ANY:
+		case CEE_UNBOX_ANY: {
+			bool from_context = false;
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
 
-			klass = resolve_class (method, token, generic_context);
+			klass = resolve_class (method, token, generic_context,
+			                       inlining ? nullptr : &from_context);
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
 				return TRUE;
+
+			if (from_context) {
+				// The unbox arm below burns the class in as a data item, and
+				// MINT_UNBOX compares the boxed object against it. That is the
+				// shared form's class, which matches no instantiation.
+				if (!mini_type_is_reference (m_class_get_byval_arg (klass))) {
+					cannot_share ("unbox.any of a value type the generic context names");
+					return TRUE;
+				}
+
+				int klass_local = emit_rgctx_fetch (MONO_RGCTX_INFO_KLASS, klass);
+
+				if (sharing_refusal != nullptr)
+					return TRUE;
+
+				interp_handle_isinst_dyn (klass_local, klass, FALSE);
+				break;
+			}
 
 			// Common in generic code:
 			// box T + unbox.any T -> nop
@@ -1793,6 +1840,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			}
 
 			break;
+		}
 		case CEE_THROW:
 			INLINE_FAILURE;
 			CHECK_STACK (1);
@@ -2205,15 +2253,30 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			break;
 		}
 		case CEE_BOX: {
+			bool from_context = false;
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
 			if (method->wrapper_type != MONO_WRAPPER_NONE)
 				klass = (MonoClass *) mono_method_get_wrapper_data (method, token);
 			else
-				klass = resolve_class (method, token, generic_context);
+				klass = resolve_class (method, token, generic_context,
+				                       inlining ? nullptr : &from_context);
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
 				return TRUE;
+
+			if (from_context) {
+				// The arms below allocate against the vtable of the class the
+				// token resolved to, and each instantiation has its own.
+				if (!mini_type_is_reference (m_class_get_byval_arg (klass))) {
+					cannot_share ("box of a value type the generic context names");
+					return TRUE;
+				}
+
+				// Already an object, whatever the context stands for.
+				ip += 5;
+				break;
+			}
 
 			if (mono_class_is_nullable (klass)) {
 				MonoMethod *target_method =
@@ -2253,20 +2316,32 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			break;
 		}
 		case CEE_NEWARR: {
+			bool from_context = false;
 			CHECK_STACK (1);
 			token = read32 (ip + 1);
 
 			if (method->wrapper_type != MONO_WRAPPER_NONE)
 				klass = (MonoClass *) mono_method_get_wrapper_data (method, token);
 			else
-				klass = resolve_class (method, token, generic_context);
+				klass = resolve_class (method, token, generic_context,
+				                       inlining ? nullptr : &from_context);
 			CHECK_TYPELOAD (klass);
 			if (sharing_refusal != nullptr)
 				return TRUE;
 
 			MonoClass *array_class = mono_class_create_array (klass, 1);
-			MonoVTable *vtable = mono_class_vtable_checked (domain, array_class, error);
-			return_val_if_nok (error, FALSE);
+			int vtable_local = -1;
+			MonoVTable *vtable = nullptr;
+
+			if (from_context) {
+				vtable_local = emit_rgctx_fetch (MONO_RGCTX_INFO_VTABLE, array_class);
+
+				if (sharing_refusal != nullptr)
+					return TRUE;
+			} else {
+				vtable = mono_class_vtable_checked (domain, array_class, error);
+				return_val_if_nok (error, FALSE);
+			}
 
 			StackType lentype = (sp - 1)->type;
 			if (lentype == StackType::I8) {
@@ -2277,11 +2352,17 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				interp_add_conv (sp - 1, NULL, StackType::I4, MINT_CONV_OVF_U4_I4);
 			}
 			sp--;
-			interp_add_ins (MINT_NEWARR);
-			interp_ins_set_sreg (last_ins, sp[0].local);
+			if (from_context) {
+				interp_add_ins (MINT_NEWARR_DYN);
+				interp_ins_set_sregs2 (last_ins, sp[0].local, vtable_local);
+			} else {
+				interp_add_ins (MINT_NEWARR);
+				interp_ins_set_sreg (last_ins, sp[0].local);
+			}
 			push_type (StackType::O, array_class);
 			interp_ins_set_dreg (last_ins, sp[-1].local);
-			last_ins->data[0] = get_data_item_index (vtable);
+			if (!from_context)
+				last_ins->data[0] = get_data_item_index (vtable);
 			ip += 5;
 			break;
 		}
@@ -3461,13 +3542,18 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				tailcall = TRUE;
 				// TODO: This should raise a method_tail_call profiler event.
 				break;
-			case CEE_INITOBJ:
+			case CEE_INITOBJ: {
+				bool from_context = false;
 				CHECK_STACK (1);
 				token = read32 (ip + 1);
-				klass = resolve_class (method, token, generic_context);
+				// Both arms below are right for every reference instantiation.
+				// One writes a null and names no class, and the other zeroes a
+				// value type whose size reference sharing keeps common.
+				klass = resolve_class (method, token, generic_context,
+				                       inlining ? nullptr : &from_context);
 				CHECK_TYPELOAD (klass);
-			if (sharing_refusal != nullptr)
-				return TRUE;
+				if (sharing_refusal != nullptr)
+					return TRUE;
 				if (m_class_is_valuetype (klass)) {
 					--sp;
 					interp_add_ins (MINT_INITOBJ);
@@ -3486,6 +3572,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				}
 				ip += 5;
 				break;
+			}
 			case CEE_CPBLK:
 				CHECK_STACK (3);
 				/* FIX? convert length to I8? */
@@ -3667,11 +3754,22 @@ TransformData::cannot_share (const char *what)
 
 MonoClass *
 TransformData::resolve_class (MonoMethod *method, guint32 token,
-                              MonoGenericContext *generic_context)
+                              MonoGenericContext *generic_context, bool *from_context)
 {
 	MonoClass *resolved = mini_get_class (method, token, generic_context);
 
-	if (sharing && resolved != nullptr && depends_on_context (resolved))
+	if (!sharing || resolved == nullptr || !depends_on_context (resolved))
+		return resolved;
+
+	/*
+	 * A caller that can read the class out of the context asks for it here
+	 * instead of a refusal. The class resolved above is then the shared form's,
+	 * so it says what the site means and never what the instantiation runs
+	 * against.
+	 */
+	if (from_context != nullptr)
+		*from_context = true;
+	else
 		cannot_share ("a class the generic context names");
 
 	return resolved;

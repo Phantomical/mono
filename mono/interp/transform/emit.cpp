@@ -761,6 +761,85 @@ get_unaligned_opcode (int opcode)
 }
 #endif
 
+static MonoJumpInfoType
+patch_kind_for (MonoRgctxInfoType info_type)
+{
+	switch (info_type) {
+	case MONO_RGCTX_INFO_STATIC_DATA:
+	case MONO_RGCTX_INFO_KLASS:
+	case MONO_RGCTX_INFO_VTABLE:
+	case MONO_RGCTX_INFO_CAST_CACHE:
+	case MONO_RGCTX_INFO_REFLECTION_TYPE:
+		return MONO_PATCH_INFO_CLASS;
+	case MONO_RGCTX_INFO_METHOD:
+	case MONO_RGCTX_INFO_GENERIC_METHOD_CODE:
+		return MONO_PATCH_INFO_METHODCONST;
+	case MONO_RGCTX_INFO_CLASS_FIELD:
+		return MONO_PATCH_INFO_FIELD;
+	default:
+		g_assert_not_reached ();
+	}
+}
+
+/*
+ * This restates MethodLLVMEmitter::rgctx_fetch () for the interpreter, so a slot
+ * one tier allocated is the slot the other reads. It is shorter because
+ * shared_form () only shares a method that reads its context out of a receiver,
+ * so every entry goes in the class rgctx an instantiation's vtable carries.
+ */
+int
+TransformData::emit_rgctx_fetch (MonoRgctxInfoType info_type, gpointer data)
+{
+	// An entry the class rgctx cannot answer needs an MRGCTX, which arrives as
+	// an argument no interpreter entry carries.
+	if (rgctx_receiver_local < 0 || mini_method_needs_mrgctx (method)) {
+		cannot_share ("a generic context with no receiver to read it from");
+		return -1;
+	}
+
+	MonoJumpInfo patch {};
+	MonoJumpInfoRgctxEntry lookup {};
+
+	patch.type = patch_kind_for (info_type);
+	patch.data.target = data;
+
+	lookup.d.klass = method->klass;
+	lookup.in_mrgctx = FALSE;
+	lookup.data = &patch;
+	lookup.info_type = info_type;
+
+	int slot = mini_get_rgctx_entry_slot (&lookup);
+
+	// in_mrgctx was FALSE, so the slot is the class rgctx's and the index below
+	// is what mono_class_fill_runtime_generic_context () takes.
+	g_assert (!MONO_RGCTX_SLOT_IS_MRGCTX (slot));
+
+	int index = MONO_RGCTX_SLOT_INDEX (slot);
+	int dreg = create_interp_local (mono_get_int_type ());
+
+	interp_add_ins (MINT_RGCTX_FETCH);
+	interp_ins_set_dreg (last_ins, dreg);
+	interp_ins_set_sreg (last_ins, rgctx_receiver_local);
+	WRITE32_INS (last_ins, 0, &index);
+
+	return dreg;
+}
+
+void
+TransformData::interp_handle_isinst_dyn (int klass_local, MonoClass *klass, gboolean isinst_instr)
+{
+	interp_add_ins (isinst_instr ? MINT_ISINST_DYN : MINT_CASTCLASS_DYN);
+	sp--;
+	interp_ins_set_sregs2 (last_ins, sp[0].local, klass_local);
+	if (isinst_instr)
+		push_type (sp[0].type, sp[0].klass);
+	else
+		push_type (StackType::O, klass);
+	interp_ins_set_dreg (last_ins, sp[-1].local);
+
+	ip += 5;
+}
+
 void
 TransformData::interp_handle_isinst (MonoClass *klass, gboolean isinst_instr)
 {

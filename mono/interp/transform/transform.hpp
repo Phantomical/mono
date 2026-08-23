@@ -286,6 +286,12 @@ struct TransformData {
 	int create_interp_stack_local (StackType type, MonoClass *k, int type_size, int offset);
 	guint16 *emit_compacted_instruction (guint16 *start_ip, InterpBasicBlock *bb, InterpInst *ins);
 	void emit_convert (MonoType *ftype);
+	/// Emits the fetch of one runtime generic context entry, and returns the
+	/// local it lands in.
+	///
+	/// Returns -1 with a refusal recorded when this body has no context to read
+	/// the entry out of, so a caller checks sharing_refusal before it goes on.
+	int emit_rgctx_fetch (MonoRgctxInfoType info_type, gpointer data);
 	void fixup_newbb_stack_locals (InterpBasicBlock *newbb);
 	gboolean generate_code (MonoMethod *method, MonoMethodHeader *header,
 	                        MonoGenericContext *generic_context, MonoError *error);
@@ -335,6 +341,7 @@ struct TransformData {
 	gboolean interp_handle_intrinsics (MonoMethod *target_method, MonoClass *constrained_class,
 	                                   MonoMethodSignature *csignature, gboolean readonly, int *op);
 	void interp_handle_isinst (MonoClass *klass, gboolean isinst_instr);
+	void interp_handle_isinst_dyn (int klass_local, MonoClass *klass, gboolean isinst_instr);
 	gboolean interp_handle_magic_type_intrinsics (MonoMethod *target_method,
 	                                              MonoMethodSignature *csignature, int type_index);
 	gboolean interp_inline_method (MonoMethod *target_method, MonoMethodHeader *header,
@@ -374,8 +381,20 @@ struct TransformData {
 	void push_types (StackInfo *types, int count);
 	void realloc_stack ();
 	void recursively_make_pred_seq_points (InterpBasicBlock *bb);
+	/// Resolves a class token, and records a refusal to share when the class
+	/// depends on the generic context.
+	///
+	/// A caller that can instead read the class out of the context at run time
+	/// passes from_context, which is set rather than the refusal being taken.
+	/// The class returned is then the shared form's, so it describes the site
+	/// and never the instantiation.
+	///
+	/// A site inside an inlined callee passes NULL. A fetch reads the receiver
+	/// of the body being written, which is the caller's rather than the
+	/// callee's, so it would answer for the wrong generic context.
 	MonoClass *resolve_class (MonoMethod *method, guint32 token,
-	                          MonoGenericContext *generic_context);
+	                          MonoGenericContext *generic_context,
+	                          bool *from_context = nullptr);
 	MonoClassField *resolve_field (MonoMethod *method, guint32 token, MonoClass **klass,
 	                               MonoGenericContext *generic_context, MonoError *error);
 	void save_seq_points (MonoJitInfo *jinfo);
@@ -397,6 +416,10 @@ struct TransformData {
 	/// names the generic context a refusal rather than an ordinary resolution,
 	/// so a transform of a concrete instantiation asks no such question.
 	bool sharing = false;
+
+	/// The local holding the receiver a fetch reads the generic context out of,
+	/// or -1 in a body with no such receiver.
+	int rgctx_receiver_local = -1;
 
 	MonoMethod *method = nullptr;
 	MonoMethod *inlined_method = nullptr;
