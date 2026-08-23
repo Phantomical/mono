@@ -12,6 +12,7 @@
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Error.h>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -138,11 +139,14 @@ private:
 	///
 	/// Fails with a SharingRefusal unless the shared body fails verification,
 	/// which comes back as that failure instead. The SharingRefusal cases:
-	/// another thread already holds the claim to compile the shared body,
-	/// this thread's own compile of it fails, or that compile succeeds and
-	/// the record still shows no body right after. \p dm is then left
-	/// untouched on a SharingRefusal, which is the caller's signal to compile
-	/// it against its own instantiation.
+	/// no thread can build the shared body, or a mutator found another thread
+	/// building it. \p dm is then left untouched, which is the caller's signal
+	/// to compile it against its own instantiation.
+	///
+	/// A refusal decides for the life of the domain which body this
+	/// instantiation runs, so a detour on the shared form misses it from then
+	/// on. Only a compile worker waits for another thread's build; see
+	/// claim_shared_body ().
 	llvm::Expected<Compiled> enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 	                                            MonoMethod *shared, MonoTier tier);
 
@@ -154,6 +158,33 @@ private:
 	///
 	/// Marks \p result checked either way, so a caller may take its error.
 	static bool answered_by_sharing (llvm::Expected<Compiled> &result);
+
+	/// What a thread that asked to build a shared body found.
+	enum class SharedClaim {
+		/// This thread holds the claim and must build the body.
+		held,
+		/// Another thread holds the claim and this thread did not wait.
+		taken,
+		/// The thread that held the claim released it. The record shows
+		/// what it left, which can be nothing.
+		done,
+	};
+
+	/// Takes the claim to build \p owner's shared body.
+	///
+	/// A claim this returns as held must be given back with
+	/// release_shared_body (). Every thread but a compile worker gets taken as
+	/// soon as another thread holds the claim. A worker waits instead, and
+	/// comes back with done or with the claim.
+	///
+	/// Take no other lock across this call. It blocks until another thread's
+	/// compile is finished, and that compile takes the domain and loader
+	/// locks.
+	SharedClaim claim_shared_body (MonoDomainMethod *owner);
+
+	/// Gives back the claim \p owner is built under and wakes what waits for
+	/// it.
+	void release_shared_body (MonoDomainMethod *owner);
 
 	/// Returns the stub \p dm's entry is published as when its shared body
 	/// has no receiver to read a context out of. It writes this
@@ -222,6 +253,9 @@ private:
 	 * itself rather than across the compile.
 	 */
 	llvm::DenseSet<MonoDomainMethod *> sharing_;
+	/// Signalled when a record leaves sharing_. It covers every record, so a
+	/// waiter reads the set again to find out whether the wake was its own.
+	std::condition_variable shared_claims_;
 };
 
 } // namespace mono

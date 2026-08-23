@@ -35,6 +35,8 @@
 #include "mono/metadata/appdomain.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/domain-internals.h"
+#include "mono/utils/mono-threads-api.h"
+#include <condition_variable>
 
 namespace mono {
 
@@ -641,6 +643,56 @@ shared_form (MonoMethod *method)
 }
 
 /*
+ * One thread at a time per shared form. Two instantiations of one generic reach
+ * the same record, and two threads that both find it unbuilt would both build
+ * it - publishing two bodies for it and defining one method's symbols twice in
+ * the one domain's linker.
+ *
+ * A wait for a claim cannot cycle, because no thread that holds one comes to
+ * want a second. The holder compiles the shared method, which is open, and
+ * shared_form () refuses an open method, so that nested compile takes no claim.
+ *
+ * Only a compile worker waits. A compile takes the loader lock, and a mutator
+ * that arrives here can already hold it, so a mutator that waits for another
+ * thread's compile deadlocks against it. CompileQueue has that cycle in full. A
+ * worker takes its work with no runtime lock held and gives back each one it
+ * takes, so it holds none here.
+ */
+MonoBackend::SharedClaim
+MonoBackend::claim_shared_body (MonoDomainMethod *owner)
+{
+	std::unique_lock<std::mutex> lock (mutex_);
+
+	while (!sharing_.insert (owner).second) {
+		if (!on_compile_worker ())
+			return SharedClaim::taken;
+
+		/*
+		 * A thread parked here reaches no safepoint, so a collection that
+		 * tries to suspend it waits for a compile on another thread. The
+		 * wait reads no managed object, which is what the safe region asks
+		 * of it.
+		 */
+		MONO_ENTER_GC_SAFE;
+		shared_claims_.wait (lock);
+		MONO_EXIT_GC_SAFE;
+
+		if (sharing_.count (owner) == 0)
+			return SharedClaim::done;
+	}
+
+	return SharedClaim::held;
+}
+
+void
+MonoBackend::release_shared_body (MonoDomainMethod *owner)
+{
+	MONO_LOCK (mutex_) { sharing_.erase (owner); }
+
+	shared_claims_.notify_all ();
+}
+
+/*
  * The shared method gets a record of its own, so its body is compiled once and
  * carries the jit info a stack walk reads. This method's entry then names that
  * body and it keeps no body record for it: the frame belongs to the shared
@@ -657,46 +709,56 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 
 	std::optional<MonoMethodBody> ready = (*owner)->body ();
 
-	if (!ready || ready->tier < tier) {
+	while (!ready || ready->tier < tier) {
+		SharedClaim claim = claim_shared_body (*owner);
+
 		/*
-		 * One thread at a time per shared form. Two instantiations of one
-		 * generic reach the same record, and two threads that both find it
-		 * unbuilt would both build it - publishing two bodies for it and
-		 * defining one method's symbols twice in the one domain's linker.
-		 * The loser refuses rather than waits: a refusal already means
-		 * "compile the instantiation instead", and waiting here would be a
-		 * compile thread waiting on another compile.
+		 * A mutator does not wait, and this is where an instantiation loses
+		 * the shared body for the life of the domain: a detour on the shared
+		 * form moves every instantiation but this one.
 		 */
-		bool claimed;
-
-		MONO_LOCK (mutex_) { claimed = sharing_.insert (*owner).second; }
-
-		if (!claimed)
+		if (claim == SharedClaim::taken)
 			return llvm::make_error<SharingRefusal> (
 				"another thread is compiling the shared body");
 
-		auto unclaim = llvm::make_scope_exit ([&] {
-			MONO_LOCK (mutex_) { sharing_.erase (*owner); }
-		});
+		if (claim == SharedClaim::done) {
+			// claim_shared_body () decides under mutex_, and a read of
+			// the body takes the record's own lock, so the read is here.
+			ready = (*owner)->body ();
+
+			if (!ready)
+				return llvm::make_error<SharingRefusal> (
+					"the shared body could not be built");
+
+			/* Back to the condition, which ends the loop when the body
+			 * the holder built is at this compile's tier and asks for
+			 * the claim again when it is below it. */
+			continue;
+		}
+
+		auto unclaim = llvm::make_scope_exit ([&] { release_shared_body (*owner); });
 
 		/* Again, now that we hold the claim: the thread that had it may have
 		 * published the body between our first read and the claim. */
 		ready = (*owner)->body ();
 
-		if (!ready || ready->tier < tier) {
-			llvm::Expected<Compiled> built =
-				compile_body (domain, **owner, /*allow_tier0=*/false, tier,
-			                      /*for_sharing=*/true);
+		if (ready && ready->tier >= tier)
+			break;
 
-			if (!built)
-				return built.takeError ();
+		llvm::Expected<Compiled> built =
+			compile_body (domain, **owner, /*allow_tier0=*/false, tier,
+		                      /*for_sharing=*/true);
 
-			ready = (*owner)->body ();
+		if (!built)
+			return built.takeError ();
 
-			if (!ready)
-				return llvm::make_error<SharingRefusal> (
-					"the shared body was not published");
-		}
+		ready = (*owner)->body ();
+
+		if (!ready)
+			return llvm::make_error<SharingRefusal> (
+				"the shared body was not published");
+
+		break;
 	}
 
 	void *entry = ready->code;
