@@ -510,6 +510,28 @@ enum_type:
 	case MONO_TYPE_GENERICINST:
 		type = m_class_get_byval_arg (type->data.generic_class->container_class);
 		goto enum_type;
+	case MONO_TYPE_VAR:
+	case MONO_TYPE_MVAR: {
+		/*
+		 * A body shared between reference instantiations still names the type
+		 * variables it was built from. Each stands for one reference, and the
+		 * constraint the shared form recorded says which, so the variable is
+		 * as wide as what it is constrained to.
+		 *
+		 * A constraint that names a value type is gsharedvt, which this
+		 * interpreter does not produce. It is asserted rather than read as a
+		 * reference, because one slot cannot hold it.
+		 */
+		MonoType *constraint = type->data.generic_param->gshared_constraint;
+
+		if (constraint == nullptr)
+			return MintType::O;
+
+		g_assert (!MONO_TYPE_ISSTRUCT (constraint));
+
+		type = constraint;
+		goto enum_type;
+	}
 	default:
 		g_warning ("got type 0x%02x", type->type);
 		g_assert_not_reached ();

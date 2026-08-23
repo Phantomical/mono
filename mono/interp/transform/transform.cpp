@@ -709,8 +709,10 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			token = read32 (ip + 1);
 			m = mono_get_method_checked (image, token, NULL, generic_context, error);
 			return_val_if_nok (error, FALSE);
-			if (sharing && depends_on_context (m))
+			if (sharing && depends_on_context (m)) {
 				cannot_share ("a jump to a method the generic context names");
+				return TRUE;
+			}
 			interp_add_ins (MINT_JMP);
 			last_ins->data[0] = get_data_item_index (mono_interp_get_imethod (domain, m, error));
 			return_val_if_nok (error, FALSE);
@@ -1474,8 +1476,10 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 
 			m = interp_get_method (method, token, image, generic_context, error);
 			return_val_if_nok (error, FALSE);
-			if (sharing && depends_on_context (m))
+			if (sharing && depends_on_context (m)) {
 				cannot_share ("a method the generic context names");
+				return TRUE;
+			}
 
 			csignature = mono_method_signature_internal (m);
 			klass = m->klass;
@@ -1660,6 +1664,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			token = read32 (ip + 1);
 			klass = resolve_class (method, token, generic_context);
 			CHECK_TYPELOAD (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 			interp_handle_isinst (klass, isinst_instr);
 			break;
 		}
@@ -1733,6 +1739,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 
 			klass = resolve_class (method, token, generic_context);
 			CHECK_TYPELOAD (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 
 			// Common in generic code:
 			// box T + unbox.any T -> nop
@@ -1797,6 +1805,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			token = read32 (ip + 1);
 			field = resolve_field (method, token, &klass, generic_context, error);
 			return_val_if_nok (error, FALSE);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 			MonoType *ftype = mono_field_get_type_internal (field);
 			gboolean is_static = !!(ftype->attrs & FIELD_ATTRIBUTE_STATIC);
 			mono_class_init_internal (klass);
@@ -1863,6 +1873,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			token = read32 (ip + 1);
 			field = resolve_field (method, token, &klass, generic_context, error);
 			return_val_if_nok (error, FALSE);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 			MonoType *ftype = mono_field_get_type_internal (field);
 			gboolean is_static = !!(ftype->attrs & FIELD_ATTRIBUTE_STATIC);
 			mono_class_init_internal (klass);
@@ -1966,6 +1978,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			token = read32 (ip + 1);
 			field = resolve_field (method, token, &klass, generic_context, error);
 			return_val_if_nok (error, FALSE);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 			MonoType *ftype = mono_field_get_type_internal (field);
 			gboolean is_static = !!(ftype->attrs & FIELD_ATTRIBUTE_STATIC);
 			MonoClass *field_klass = mono_class_from_mono_type_internal (ftype);
@@ -2029,6 +2043,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			token = read32 (ip + 1);
 			field = resolve_field (method, token, &klass, generic_context, error);
 			return_val_if_nok (error, FALSE);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 			interp_emit_ldsflda (field, error);
 			return_val_if_nok (error, FALSE);
 			ip += 5;
@@ -2038,6 +2054,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			token = read32 (ip + 1);
 			field = resolve_field (method, token, &klass, generic_context, error);
 			return_val_if_nok (error, FALSE);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 			MonoType *ftype = mono_field_get_type_internal (field);
 			mt = mint_type (ftype);
 			klass = mono_class_from_mono_type_internal (ftype);
@@ -2065,6 +2083,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			token = read32 (ip + 1);
 			field = resolve_field (method, token, &klass, generic_context, error);
 			return_val_if_nok (error, FALSE);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 			MonoType *ftype = mono_field_get_type_internal (field);
 			mt = mint_type (ftype);
 
@@ -2089,6 +2109,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			else
 				klass = resolve_class (method, token, generic_context);
 			CHECK_TYPELOAD (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 
 			BARRIER_IF_VOLATILE (MONO_MEMORY_BARRIER_REL);
 
@@ -2188,6 +2210,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			else
 				klass = resolve_class (method, token, generic_context);
 			CHECK_TYPELOAD (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 
 			if (mono_class_is_nullable (klass)) {
 				MonoMethod *target_method =
@@ -2235,6 +2259,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			else
 				klass = resolve_class (method, token, generic_context);
 			CHECK_TYPELOAD (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 
 			MonoClass *array_class = mono_class_create_array (klass, 1);
 			MonoVTable *vtable = mono_class_vtable_checked (domain, array_class, error);
@@ -2282,6 +2308,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				klass = resolve_class (method, token, generic_context);
 
 			CHECK_TYPELOAD (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 
 			if (!m_class_is_valuetype (klass) && method->wrapper_type == MONO_WRAPPER_NONE
 			    && !readonly) {
@@ -2291,6 +2319,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				 */
 				mono_class_setup_vtable (klass);
 				CHECK_TYPELOAD (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 				interp_add_ins (MINT_LDELEMA_TC);
 				sp -= 2;
 				locals[sp[0].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
@@ -2352,6 +2382,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			token = read32 (ip + 1);
 			klass = resolve_class (method, token, generic_context);
 			CHECK_TYPELOAD (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 			switch (mint_type (m_class_get_byval_arg (klass))) {
 			case MintType::I1:
 				handle_ldelem (MINT_LDELEM_I1, StackType::I4);
@@ -2435,6 +2467,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			token = read32 (ip + 1);
 			klass = resolve_class (method, token, generic_context);
 			CHECK_TYPELOAD (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 			switch (mint_type (m_class_get_byval_arg (klass))) {
 			case MintType::I1:
 				handle_stelem (MINT_STELEM_I1);
@@ -2504,6 +2538,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			token = read32 (ip + 1);
 			klass = resolve_class (method, token, generic_context);
 			CHECK_TYPELOAD (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 
 			interp_add_ins (MINT_MKREFANY);
 			sp--;
@@ -2520,6 +2556,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			token = read32 (ip + 1);
 			klass = resolve_class (method, token, generic_context);
 			CHECK_TYPELOAD (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 
 			interp_add_ins (MINT_REFANYVAL);
 			sp--;
@@ -2732,6 +2770,16 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			int size;
 			gpointer handle;
 			token = read32 (ip + 1);
+			/*
+			 * The token names a type, a field or a method, and the handle is
+			 * built from the shared form rather than resolved through a site
+			 * the walk classifies. typeof (T) in a body shared between string
+			 * and object has one answer and needs two.
+			 */
+			if (sharing) {
+				cannot_share ("a token the generic context names");
+				return TRUE;
+			}
 			if (method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD
 			    || method->wrapper_type == MONO_WRAPPER_SYNCHRONIZED) {
 				handle = mono_method_get_wrapper_data (method, token);
@@ -3197,8 +3245,10 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				token = read32 (ip + 1);
 				m = interp_get_method (method, token, image, generic_context, error);
 				return_val_if_nok (error, FALSE);
-				if (sharing && depends_on_context (m))
+				if (sharing && depends_on_context (m)) {
 					cannot_share ("a method the generic context names");
+					return TRUE;
+				}
 
 				if (!mono_method_can_access_method (method, m))
 					interp_generate_mae_throw (method, m);
@@ -3413,6 +3463,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				token = read32 (ip + 1);
 				klass = resolve_class (method, token, generic_context);
 				CHECK_TYPELOAD (klass);
+			if (sharing_refusal != nullptr)
+				return TRUE;
 				if (m_class_is_valuetype (klass)) {
 					--sp;
 					interp_add_ins (MINT_INITOBJ);
@@ -3653,8 +3705,28 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm,
 
 	td->sharing = mono_method_check_context_used (method) != 0;
 
-	td->interp_method_compute_offsets (rtm, mono_method_signature_internal (method), header, error);
-	return_if_nok (error);
+	/*
+	 * Before the walk, because the clauses are copied from the header rather
+	 * than resolved, so no site the walk visits classifies a catch type.
+	 */
+	if (td->sharing) {
+		for (i = 0; i < header->num_clauses; i++) {
+			MonoExceptionClause *clause = &header->clauses[i];
+
+			if (clause->flags == MONO_EXCEPTION_CLAUSE_NONE
+			    && clause->data.catch_class != nullptr
+			    && depends_on_context (clause->data.catch_class)) {
+				td->cannot_share ("a catch of a class the generic context names");
+				break;
+			}
+		}
+	}
+
+	if (td->sharing_refusal == nullptr) {
+		td->interp_method_compute_offsets (rtm, mono_method_signature_internal (method),
+		                                   header, error);
+		return_if_nok (error);
+	}
 
 	if (verbose_method_name) {
 		const char *name = verbose_method_name;
@@ -3673,8 +3745,10 @@ generate (MonoMethod *method, MonoMethodHeader *header, InterpMethod *rtm,
 		}
 	}
 
-	td->generate_code (method, header, generic_context, error);
-	return_if_nok (error);
+	if (td->sharing_refusal == nullptr) {
+		td->generate_code (method, header, generic_context, error);
+		return_if_nok (error);
+	}
 
 	/*
 	 * The walk runs to the end before the refusal is read, because a site that
@@ -3882,10 +3956,20 @@ shared_body (MonoMethod *method, MonoDomain *domain, MonoError *error)
 	if (body->transformed)
 		return body;
 
+	/*
+	 * A shared form that will not transform is a refusal rather than a
+	 * failure, because the instantiation writes its own body and runs. Only
+	 * the shared form was asked about, so its error says nothing about the
+	 * method the caller wants.
+	 */
 	MonoMethodHeader *header = mono_method_get_header_checked (shared, error);
 
-	if (!is_ok (error))
+	if (!is_ok (error)) {
+		mono_error_cleanup (error);
+		error_init (error);
+		body->sharing_refused = 1;
 		return nullptr;
+	}
 
 	/*
 	 * Into a copy, the way mono_interp_transform_method () does, so a thread
@@ -3898,8 +3982,12 @@ shared_body (MonoMethod *method, MonoDomain *domain, MonoError *error)
 	generate (shared, header, &tmp, mono_method_get_context (shared), error);
 	mono_metadata_free_mh (header);
 
-	if (!is_ok (error))
+	if (!is_ok (error)) {
+		mono_error_cleanup (error);
+		error_init (error);
+		body->sharing_refused = 1;
 		return nullptr;
+	}
 
 	mono_os_mutex_lock (&calc_section);
 	if (!body->transformed && !body->sharing_refused) {

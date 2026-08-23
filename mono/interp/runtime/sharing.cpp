@@ -106,6 +106,27 @@ depends_on_context (MonoMethod *target)
 	return depends_on_context (target->klass);
 }
 
+/*
+ * mini_get_basic_type_from_generic () answers the same question for the
+ * compiled tier and is static to mini-generic-sharing.c. gsharedvt is out of
+ * scope here, so the case it carries for a variable that stands for a value
+ * type has no counterpart below: shared_form () asks for SHARE_MODE_NONE, and
+ * every variable a body meets under it stands for a reference.
+ */
+MonoType *
+shared_type (MonoType *type)
+{
+	if (type->byref || (type->type != MONO_TYPE_VAR && type->type != MONO_TYPE_MVAR))
+		return type;
+
+	MonoType *constraint = type->data.generic_param->gshared_constraint;
+
+	if (constraint == nullptr)
+		return mono_get_object_type ();
+
+	return m_class_get_byval_arg (mono_class_from_mono_type_internal (constraint));
+}
+
 bool
 takes_rgctx_argument (MonoMethod *method)
 {

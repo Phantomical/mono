@@ -17,6 +17,7 @@
 
 #include "mintops.hpp"
 #include "runtime/internals.hpp"
+#include "runtime/sharing.hpp"
 #include "transform.hpp"
 #include "internal.hpp"
 
@@ -74,6 +75,7 @@ TransformData::create_interp_local_explicit (MonoType *type, int size)
 {
 	InterpLocal local{};
 
+	type = shared_type (type);
 	local.type = type;
 	local.mt = mint_type (type);
 	local.offset = -1;
@@ -174,6 +176,8 @@ TransformData::get_arg_type_exact (int n, MintType *mt)
 		type = m_class_get_byval_arg (method->klass);
 	else
 		type = mono_method_signature_internal (method)->params[n - !!hasthis];
+
+	type = shared_type (type);
 
 	if (mt)
 		*mt = mint_type (type);
@@ -365,6 +369,7 @@ TransformData::create_interp_local (MonoType *type)
 {
 	int size, align;
 
+	type = shared_type (type);
 	size = mono_type_size (type, &align);
 	g_assert (align <= MINT_STACK_SLOT_SIZE);
 
@@ -428,6 +433,7 @@ TransformData::interp_method_compute_offsets (InterpMethod *imethod, MonoMethodS
 			type = m_class_get_byval_arg (method->klass);
 		else
 			type = mono_method_signature_internal (method)->params[i - sig->hasthis];
+		type = shared_type (type);
 		MintType mt = mint_type (type);
 		locals[i].type = type;
 		locals[i].offset = offset;
@@ -447,21 +453,22 @@ TransformData::interp_method_compute_offsets (InterpMethod *imethod, MonoMethodS
 	il_locals_offset = offset;
 	for (i = 0; i < num_il_locals; ++i) {
 		int index = num_args + i;
-		size = mono_type_size (header->locals[i], &align);
-		if (header->locals[i]->type == MONO_TYPE_VALUETYPE) {
-			if (mono_class_has_failure (header->locals[i]->data.klass)) {
-				mono_error_set_for_class_failure (error, header->locals[i]->data.klass);
+		MonoType *local_type = shared_type (header->locals[i]);
+		size = mono_type_size (local_type, &align);
+		if (local_type->type == MONO_TYPE_VALUETYPE) {
+			if (mono_class_has_failure (local_type->data.klass)) {
+				mono_error_set_for_class_failure (error, local_type->data.klass);
 				return;
 			}
 		}
 		offset += align - 1;
 		offset &= ~(align - 1);
 		imethod->local_offsets[i] = offset;
-		locals[index].type = header->locals[i];
+		locals[index].type = local_type;
 		locals[index].offset = offset;
 		locals[index].flags = 0;
 		locals[index].indirects = 0;
-		locals[index].mt = mint_type (header->locals[i]);
+		locals[index].mt = mint_type (local_type);
 		if (locals[index].mt == MintType::VT)
 			locals[index].size = size;
 		else

@@ -36,6 +36,15 @@ bool depends_on_context (MonoClassField *field);
 
 bool depends_on_context (MonoMethod *target);
 
+/// Returns the type a body holds a value of \p type in.
+///
+/// A shared form still names the type variables it was built from, and they
+/// have no width of their own. Each stands for one reference, so this answers
+/// the constraint the shared form recorded against it. Every other type is its
+/// own answer, which is what lets a caller apply this without asking whether
+/// the body it is transforming is shared.
+MonoType *shared_type (MonoType *type);
+
 /// Whether \p method is entered with its context passed in rather than read out
 /// of its receiver.
 ///

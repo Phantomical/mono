@@ -494,6 +494,14 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 
 		if (constrained_class != nullptr && depends_on_context (constrained_class))
 			cannot_share ("a constrained call on a class the generic context names");
+
+		/*
+		 * Before the class initializer below, which would otherwise run on a
+		 * shared class. Asking one for a vtable reaches its type variables,
+		 * and the collector has no bitmap for a field of that type.
+		 */
+		if (sharing_refusal != nullptr)
+			return TRUE;
 	}
 
 	if (check_visibility && target_method && !mono_method_can_access_method (method, target_method))
