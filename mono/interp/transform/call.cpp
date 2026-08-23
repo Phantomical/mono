@@ -433,17 +433,6 @@ TransformData::may_call_through_context (MonoMethod *body, MonoMethod *target,
 		return false;
 	}
 
-	/*
-	 * Every callvirt, because the arm that degrades one on a final method to a
-	 * direct call has not run yet. A site that stays dispatched settles its
-	 * callee off the receiver's vtable, so what it wants is the slot index
-	 * rather than an entry.
-	 */
-	if (is_virtual) {
-		cannot_share ("a callvirt to a method the generic context names");
-		return false;
-	}
-
 	// The tail-call arm asks the shared class for a runtime vtable, which is
 	// what interp_transform_call () refuses to let a shared body reach.
 	if (tailcall) {
@@ -456,9 +445,46 @@ TransformData::may_call_through_context (MonoMethod *body, MonoMethod *target,
 		return false;
 	}
 
-	// The abstract arm below turns the site into a dispatched one.
-	if (target->flags & METHOD_ATTRIBUTE_ABSTRACT) {
-		cannot_share ("a call to an abstract method the generic context names");
+	/*
+	 * A dispatched site settles its callee off the receiver's vtable, which is
+	 * the instantiation's own, so it needs nothing from the context and takes
+	 * the ordinary arm. get_virtual_method () reads the shared form only for
+	 * the slot index, and reference sharing keeps that common.
+	 */
+	if (is_virtual) {
+		/*
+		 * Except off an interface, where the slot is an offset into the
+		 * receiver's interface table. get_virtual_method () looks that up under
+		 * the interface the callee is declared on, and the receiver implements
+		 * the instantiation's rather than the shared form's.
+		 */
+		if (mono_class_is_interface (target->klass)) {
+			cannot_share ("an interface call the generic context names");
+			return false;
+		}
+
+		/*
+		 * A remoted class keeps the site dispatched even for a method that is
+		 * not virtual, and get_virtual_method () hands such a one straight back
+		 * as the callee. That is the shared form, which no thread can enter.
+		 */
+		if (mono_class_is_marshalbyref (target->klass)) {
+			cannot_share ("a remoted call the generic context names");
+			return false;
+		}
+
+		/*
+		 * A method with type arguments of its own is re-inflated against the
+		 * receiver's class, and the arguments it is re-inflated with are this
+		 * body's shared ones.
+		 */
+		MonoGenericContext *own = mini_method_get_context (target);
+
+		if (own != nullptr && own->method_inst != nullptr) {
+			cannot_share ("a generic virtual call the generic context names");
+			return false;
+		}
+
 		return false;
 	}
 
@@ -532,18 +558,19 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	 * Every path above has settled the target by now, whichever token shape it
 	 * came from, so one test covers the lot.
 	 *
-	 * A callee the context names is called through an InterpMethod fetched out
-	 * of the context. callee_from_context is what routes the rest of this
-	 * function onto that, and every arm it cannot reach tests it.
+	 * Whether such a callee is reached through a fetch is settled further down,
+	 * once is_virtual has, and callee_from_context is what routes the rest of
+	 * this function onto the fetch. context_named is the wider question, and it
+	 * keeps the shared form away from what answers for the method it matched.
 	 */
+	bool context_named = false;
 	bool callee_from_context = false;
 
 	if (sharing) {
 		if (constrained_class != nullptr && depends_on_context (constrained_class))
 			cannot_share ("a constrained call on a class the generic context names");
 		else if (target_method != nullptr && depends_on_context (target_method))
-			callee_from_context =
-				may_call_through_context (method, target_method, csignature, is_virtual, tailcall);
+			context_named = true;
 
 		/*
 		 * Before the class initializer below, which would otherwise run on a
@@ -578,7 +605,7 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	/* Intrinsics */
 	// An intrinsic answers for the method it matched, and a shared form matches
 	// as the type variable rather than as the instantiation.
-	if (target_method && !callee_from_context
+	if (target_method && !context_named
 	    && interp_handle_intrinsics (target_method, constrained_class, csignature, readonly, &op))
 		return TRUE;
 
@@ -615,7 +642,7 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		         target_method);
 #endif
 		/* Intrinsics: try again. mono_get_method_constrained_with_method () can resolve to a method we can substitute. */
-		if (target_method && !callee_from_context
+		if (target_method && !context_named
 		    && interp_handle_intrinsics (target_method, constrained_class, csignature, readonly,
 		                                 &op))
 			return TRUE;
@@ -648,7 +675,7 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 
 	// A shared class is left alone. Its own instantiation is initialized where
 	// the call lands, and this one has no storage of its own to prepare.
-	if (target_method && !callee_from_context)
+	if (target_method && !context_named)
 		mono_class_init_internal (target_method->klass);
 
 	if (!is_virtual && target_method && (target_method->flags & METHOD_ATTRIBUTE_ABSTRACT)) {
@@ -666,6 +693,17 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		/* Not really virtual: it needs a null check */
 		is_virtual = FALSE;
 		need_null_check = TRUE;
+	}
+
+	// Here rather than where context_named was decided, because whether the
+	// site dispatches is what settles the route and is_virtual has only just
+	// stopped moving.
+	if (context_named) {
+		callee_from_context =
+			may_call_through_context (method, target_method, csignature, is_virtual, tailcall);
+
+		if (sharing_refusal != nullptr)
+			return TRUE;
 	}
 
 	CHECK_STACK (csignature->param_count + csignature->hasthis);

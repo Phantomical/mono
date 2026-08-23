@@ -395,12 +395,17 @@ struct TransformData {
 	/// inlined callee, which the caller then writes through
 	/// interp_emit_sfld_access_dyn ().
 	bool may_share_field_access (MonoClass *klass, gboolean is_static, bool inlining);
-	/// Whether a call to a method the generic context names can be written as a
-	/// fetch of the callee's InterpMethod and a call through it, recording the
-	/// refusal when it cannot.
+	/// Whether a call to a method the generic context names has to fetch the
+	/// callee's InterpMethod out of the context.
 	///
-	/// body is the method whose IL is being read, which is this->method except
-	/// while a callee is inlined.
+	/// A dispatched site answers false and records no refusal: it settles its
+	/// callee off the receiver, so the ordinary arm already serves every
+	/// instantiation. A shape neither route carries answers false as well, with
+	/// the refusal recorded, so a caller tests sharing_refusal to tell the two
+	/// apart.
+	///
+	/// Call this only once is_virtual has settled. body is the method whose IL
+	/// is being read, which is this->method except while a callee is inlined.
 	bool may_call_through_context (MonoMethod *body, MonoMethod *target,
 	                               MonoMethodSignature *csignature, gboolean is_virtual,
 	                               gboolean tailcall);
