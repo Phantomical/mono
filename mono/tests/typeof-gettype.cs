@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Runtime.Remoting.Messaging;
 using System.Runtime.Remoting.Proxies;
@@ -160,6 +162,34 @@ static class Program {
 		return o.GetType ();
 	}
 
+	/*
+	 * typeof on a type that Reflection.Emit has not created yet. The runtime
+	 * answers with the builder's own object rather than with a pinned
+	 * RuntimeType, so a moving collector can move it and the compiled tiers
+	 * have to leave the site alone there. The answer is the same object either
+	 * way, which is what this asks, because a test that reads the shape would
+	 * read a different one under each collector.
+	 */
+	static Func<Type> EmitTypeOfUncreated (out TypeBuilder built)
+	{
+		AssemblyName name = new AssemblyName ("typeof-gettype-emit");
+		AssemblyBuilder assembly = AppDomain.CurrentDomain.DefineDynamicAssembly (
+			name, AssemblyBuilderAccess.Run);
+		ModuleBuilder module = assembly.DefineDynamicModule ("m");
+
+		built = module.DefineType ("Emitted", TypeAttributes.Public);
+
+		DynamicMethod emitted = new DynamicMethod (
+			"OfEmitted", typeof (Type), Type.EmptyTypes, typeof (Program), true);
+		ILGenerator il = emitted.GetILGenerator ();
+
+		il.Emit (OpCodes.Ldtoken, built);
+		il.Emit (OpCodes.Call, typeof (Type).GetMethod ("GetTypeFromHandle"));
+		il.Emit (OpCodes.Ret);
+
+		return (Func<Type>) emitted.CreateDelegate (typeof (Func<Type>));
+	}
+
 	public static int Main ()
 	{
 		Shapes ();
@@ -189,6 +219,18 @@ static class Program {
 
 		Check (proxy.GetType () == typeof (Remote), "a transparent proxy answers Remote");
 		Check (TypeOf (proxy) == typeof (Remote), "a proxy through a compiled caller");
+
+		/* A type Reflection.Emit has not created, entered enough to compile. */
+		TypeBuilder built;
+		Func<Type> of_emitted = EmitTypeOfUncreated (out built);
+
+		for (int i = 0; i < 30000; ++i)
+			if (!ReferenceEquals (of_emitted (), built)) {
+				Console.WriteLine ("FAIL: typeof on an uncreated builder type,"
+				                   + " iteration {0}", i);
+				++fails;
+				break;
+			}
 
 		/* The shapes again, now that both compiled tiers have the bodies. */
 		Shapes ();

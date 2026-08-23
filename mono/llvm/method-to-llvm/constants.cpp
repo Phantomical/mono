@@ -4,6 +4,7 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/domain-internals.h"
+#include "mono/metadata/gc-internals.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/opcodes.h"
@@ -358,10 +359,18 @@ MethodLLVMEmitter::fold_type_from_handle (MonoIrBuilder &builder, MonoType *type
 		/*
 		 * A type built through Reflection.Emit answers with the builder's own
 		 * object, which is not pinned. mono_class_create_runtime_vtable ()
-		 * registers a moving root for the vtable slot that holds one. A
-		 * constant in code has no such root, so the site keeps its call.
+		 * registers a moving root for the vtable slot that holds one, and a
+		 * constant in code can have no such root.
+		 *
+		 * Only a collector that moves needs that root, which is the same
+		 * question MONO_GC_REGISTER_ROOT_IF_MOVING () asks before it registers
+		 * one. The object stays reachable either way: the class holds a strong
+		 * handle to it (mono_class_set_ref_info ()) until
+		 * deregister_reflection_info_roots () drops it, and that is the domain
+		 * teardown this code goes with.
 		 */
-		if (mono_object_class (object) != mono_defaults.runtimetype_class)
+		if (mono_gc_is_moving ()
+		    && mono_object_class (object) != mono_defaults.runtimetype_class)
 			return false;
 
 		char *name = mono_type_full_name (type);
