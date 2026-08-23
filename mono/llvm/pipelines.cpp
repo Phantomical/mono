@@ -125,8 +125,18 @@ MonoPipelineTuningOptions::forTier1 ()
 MonoPipelineTuningOptions
 MonoPipelineTuningOptions::forTier2 ()
 {
-	// LLVM's defaults throughout: they already match tier 2's O3.
-	return MonoPipelineTuningOptions ();
+	MonoPipelineTuningOptions options;
+
+	// What LLVM sets these to at O3. It raises them from the level in a
+	// function local to PassBuilder.cpp, so tier 2 sets them itself. The
+	// optimization stage in buildTier2Pipeline () is what reads them.
+	options.LoopVectorization = true;
+	options.SLPVectorization = true;
+
+	// leaving this as true causes link errors
+	options.CallGraphProfile = false;
+
+	return options;
 }
 
 llvm::IntrusiveRefCntPtr<OneFileFS>
@@ -376,6 +386,9 @@ MonoPassBuilder::buildTier2Pipeline ()
 	                                       buildTier2FunctionSimplificationPipeline ()));
 
 	MPM.addPass (mono::StripInlineCopiesPass ());
+
+	MPM.addPass (buildModuleOptimizationPipeline (llvm::OptimizationLevel::O3,
+	                                              llvm::ThinOrFullLTOPhase::None));
 
 	llvm::FunctionPassManager FPM;
 

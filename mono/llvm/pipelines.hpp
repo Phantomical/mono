@@ -47,12 +47,13 @@ OneFileFS::CurrentFileGuard pushProfile (OneFileFS &fs, llvm::ArrayRef<uint8_t> 
 /// not build for the same one.
 class MonoPipelineTuningOptions : public llvm::PipelineTuningOptions {
 public:
-	/// LLVM's own defaults, which are what it uses at O2 and above.
+	/// The defaults llvm::PipelineTuningOptions constructs itself with.
 	///
-	/// PassBuilder settles the level-dependent ones in
-	/// setupOptionsForPipelineAlias (), a function local to PassBuilder.cpp. A
-	/// builder of ours starts from these whatever level it goes on to build
-	/// for. Prefer a tier's own settings below.
+	/// These are not what LLVM builds an O2 or O3 pipeline with. It raises
+	/// LoopVectorization and SLPVectorization from the level in
+	/// setupOptionsForPipelineAlias (), a function local to PassBuilder.cpp, so
+	/// a builder of ours starts from these whatever level it goes on to build
+	/// for. SLPVectorization starts off. Prefer a tier's own settings below.
 	MonoPipelineTuningOptions ();
 
 	/// The settings each tier's builder is made with.
