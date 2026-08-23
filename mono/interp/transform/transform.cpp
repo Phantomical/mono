@@ -2513,25 +2513,35 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				// MINT_LDELEMA_TC tests the element against the class it is
 				// given, and that is the shared form's rather than the
 				// instantiation's.
+				int klass_local = -1;
+
 				if (from_context) {
-					cannot_share ("a checked ldelema of a class the generic context names");
-					return TRUE;
+					klass_local = emit_rgctx_fetch (MONO_RGCTX_INFO_KLASS, klass);
+
+					if (sharing_refusal != nullptr)
+						return TRUE;
+				} else {
+					/*
+					 * Check the class for failures before the type check, which
+					 * can throw other exceptions. A class the context names is
+					 * open, and the fetch above answers with the
+					 * instantiation's own, which the opcode then checks.
+					 */
+					mono_class_setup_vtable (klass);
+					CHECK_TYPELOAD (klass);
 				}
 
-				/*
-				 * Check the class for failures before the type check, which can
-				 * throw other exceptions.
-				 */
-				mono_class_setup_vtable (klass);
-				CHECK_TYPELOAD (klass);
-				interp_add_ins (MINT_LDELEMA_TC);
+				interp_add_ins (from_context ? MINT_LDELEMA_TC_DYN : MINT_LDELEMA_TC);
 				sp -= 2;
 				locals[sp[0].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
 				locals[sp[1].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
 				push_simple_type (StackType::MP);
 				interp_ins_set_dreg (last_ins, sp[-1].local);
 				locals[sp[-1].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
-				last_ins->data[0] = get_data_item_index (klass);
+				if (from_context)
+					interp_ins_set_sreg (last_ins, klass_local);
+				else
+					last_ins->data[0] = get_data_item_index (klass);
 			} else {
 				interp_add_ins (MINT_LDELEMA1);
 				sp -= 2;

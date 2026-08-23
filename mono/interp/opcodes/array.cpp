@@ -227,6 +227,26 @@ MONO_INTERP_OP_IMPL (MINT_LDELEMA_TC)
 	MONO_INTERP_DISPATCH ();
 }
 
+/*
+ * The element class arrives in a local, because a body shared between
+ * reference instantiations reads it out of its generic context. The store this
+ * checks is covariant, so the class has to be the instantiation's own.
+ */
+MONO_INTERP_OP_IMPL (MINT_LDELEMA_TC_DYN)
+{
+	stackval *sp = &LOCAL_VAR (ip[1], stackval);
+	MonoObject *obj = static_cast<MonoObject *> (sp[0].data.o);
+	NULL_CHECK (obj);
+
+	auto klass = LOCAL_VAR (ip[2], MonoClass *);
+	if (auto ex = ves_array_element_address (frame, klass, reinterpret_cast<MonoArray *> (obj),
+	                                         sp + 1, true))
+		THROW_EX (ex, ip);
+
+	MONO_INTERP_OP_ADVANCE ();
+	MONO_INTERP_DISPATCH ();
+}
+
 MONO_INTERP_OP_IMPL (MINT_LDLEN)
 {
 	auto array = LOCAL_VAR (ip[2], MonoArray *);
