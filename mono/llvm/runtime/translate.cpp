@@ -222,7 +222,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	inlining.root = method;
 	inlining.defined.push_back (method);
 	inlining.folded.push_back ({ method, nullptr });
-	inlining.budget = trivial_inline_budget ();
+	inlining.budget = { trivial_inline_budget (), costed_inline_budget () };
 
 	// Both compiled tiers fold in the callees whose IL already says the inline
 	// pays. It runs here so that the bodies it adds still reach the naming and
@@ -527,7 +527,7 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 	for (auto &member : members) {
 		inlining.root = member->method;
 		inlining.folded.assign ({ InlineScope::Folded { member->method, nullptr } });
-		inlining.budget = trivial_inline_budget ();
+		inlining.budget = { trivial_inline_budget (), costed_inline_budget () };
 
 		materialize_trivial_callees (*module, shared.domain, member->method,
 		                             *member->body, member->externals, types,

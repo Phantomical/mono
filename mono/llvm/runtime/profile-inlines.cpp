@@ -100,7 +100,7 @@ ProfileInliner::materialize (Function &decl, Module &into)
 	// A folded copy carries no sequence points of its own; see
 	// materialize_trivial_callees (). A rebuild is free, so only a method new
 	// to this root meets the budget.
-	if (limit == 0 || (!rebuild && scope_.budget == 0)
+	if (limit == 0 || (!rebuild && scope_.budget.costed == 0)
 	    || mini_get_debug_options ()->gen_sdb_seq_points)
 		return nullptr;
 
@@ -126,7 +126,8 @@ ProfileInliner::materialize (Function &decl, Module &into)
 
 	size_t resolved = externals_.size ();
 	Function *copy = materialize_inline_copy (into, target_.domain, callee, cfg.get (),
-	                                          externals_, types_, scope_);
+	                                          externals_, types_, scope_,
+	                                          Inliner::costed);
 
 	if (copy == nullptr)
 		return nullptr;

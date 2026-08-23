@@ -84,14 +84,19 @@ uint32_t tier2_threshold ();
 /// the method that folded it.
 uint32_t trivial_inline_il_limit ();
 
-/// How many bodies one method's compile can fold in.
+/// How many bodies the shape-test pre-pass can fold into one method.
 ///
-/// MONO_LLVM_JIT_INLINE_BUDGET moves it. It bounds the translation both
-/// inliners add to a compile, and they spend the one count between them. A
-/// chain of forwarders is what spends it. A batch gives each member its own
-/// count, so a method folds in the same bodies however many others promoted
-/// beside it.
+/// MONO_LLVM_JIT_INLINE_BUDGET moves it. A chain of forwarders is what spends
+/// it. A batch gives each member its own count, so a method folds in the same
+/// bodies however many others promoted beside it.
 uint32_t trivial_inline_budget ();
+
+/// How many bodies the tier-2 cost model can fold into one method.
+///
+/// MONO_LLVM_JIT_INLINE_COST_BUDGET moves it. A count of its own rather than
+/// the pre-pass's, so what one inliner takes in does not decide what the other
+/// one is left to fold.
+uint32_t costed_inline_budget ();
 
 /// The largest callee, in IL bytes, the tier-2 cost model will translate in
 /// order to weigh it.
@@ -113,10 +118,8 @@ uint32_t inline_depth_limit ();
 /// the cost model's, because the two take different candidates: this one takes
 /// a forwarder, and a chain of them reaches much further for the same budget.
 ///
-/// Both inliners spend one budget, so what the pre-pass folds deep is what the
-/// cost model cannot fold at all. Raising this to 3 costs
-/// mono/tests/trivial-inline.cs its tier-2 case, where the pre-pass then takes
-/// the last of the budget and the cost model folds nothing.
+/// The pre-pass drains its worklist least deep first, so this decides where the
+/// count left over goes rather than what the first folds are.
 uint32_t trivial_inline_depth_limit ();
 
 /// How many calls a method takes at tier 0 before it is asked for as tier 1.

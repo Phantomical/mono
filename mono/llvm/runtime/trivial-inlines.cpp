@@ -412,7 +412,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 
 			// A rebuild is free, so a spent budget stops the new methods
 			// below it rather than the whole scan.
-			if (!rebuild && scope.budget == 0)
+			if (!rebuild && scope.budget.trivial == 0)
 				continue;
 
 			if (!may_fold (domain, callee))
@@ -448,7 +448,8 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 
 			Function *copy =
 				materialize_inline_copy (module, domain, callee, cfg.get (),
-			                                 externals, types, scope);
+			                                 externals, types, scope,
+			                                 Inliner::trivial);
 
 			if (copy == nullptr)
 				continue;
@@ -471,9 +472,10 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			 * past what the first fold decided and spends the budget on
 			 * methods that fold deeper rather than on the sites in hand.
 			 *
-			 * The depth bound is what stops a chain of forwarders from
-			 * spending the whole budget. Without it the budget is the only
-			 * limit, and it is a total rather than a reach.
+			 * The depth bound is how far past root the loop follows a chain
+			 * of forwarders. It drains least deep first, so the bound decides
+			 * where the count left over goes rather than what the first folds
+			 * are.
 			 */
 			if (!rebuild && depth + 1 < trivial_inline_depth_limit ())
 				pending.push_back ({ callee, copy, depth + 1 });

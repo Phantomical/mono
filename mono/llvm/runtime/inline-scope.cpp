@@ -273,7 +273,7 @@ loses_its_frame_safely (MonoMethod *method, MonoMethodHeader *header)
 Function *
 materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
                          MonoCompile *cfg, std::vector<ExternalSymbol> &externals,
-                         ModuleTypes &types, InlineScope &scope)
+                         ModuleTypes &types, InlineScope &scope, Inliner who)
 {
 	// The root and the callee together name the copy. A module holds the
 	// callee's own body as well, and one copy of it for each root that folds it
@@ -320,15 +320,14 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 	 * The budget counts the methods this root takes in, so the second body for
 	 * one of them is free. A rebuild is the same method again, asked for
 	 * because the copy went with a candidate's module or the pipeline erased
-	 * it, and charging for it would let a chain of tiny callees spend what the
-	 * cost model needs for the candidates the profile ranked.
+	 * it, and charging for it would spend two counts on one method.
 	 *
 	 * Spent either way for a method that is new here. A translation that failed
 	 * cost as much as one that did not, and the budget is all that stops a
 	 * second site from asking for the same body.
 	 */
 	if (entry == nullptr)
-		--scope.budget;
+		--scope.budget.of (who);
 
 	if (!materialized) {
 		consumeError (materialized.takeError ());

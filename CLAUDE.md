@@ -362,10 +362,18 @@ fold is visible from outside:
 - `MONO_LLVM_JIT_INLINE_DEPTH=<n>` — folds deep past a method the cost model may go,
   default 4. A call graph with a cycle never runs out of sites, so the loop needs this
   whatever the budget says.
-- `MONO_LLVM_JIT_INLINE_BUDGET=<n>` — bodies one method's compile may fold in, default
-  16. Both inliners spend the one count, and a chain of forwarders is what spends it.
-  Each batch member gets its own count, so `MONO_LLVM_JIT_BATCH` changes how many
-  compiles run, not what any one of them folds in.
+- `MONO_LLVM_JIT_INLINE_PREPASS_DEPTH=<n>` — the same reach for the pre-pass, default 8.
+  It drains its worklist least deep first, so this decides what the leftover count goes
+  on rather than what the first folds are. The count below is what bounds the
+  translation, which is why the reach can be generous.
+- `MONO_LLVM_JIT_INLINE_BUDGET=<n>` — bodies the pre-pass may fold into one method,
+  default 16. A chain of forwarders is what spends it. Each batch member gets its own
+  count, so `MONO_LLVM_JIT_BATCH` changes how many compiles run, not what any one of
+  them folds in.
+- `MONO_LLVM_JIT_INLINE_COST_BUDGET=<n>` — bodies the tier-2 cost model may fold into
+  one method, default 16. A count of its own, so what one inliner takes in does not
+  decide what the other is left to fold. Zero refuses every method this root has not
+  folded already, which separates a cost-model fold from a pre-pass one.
 
 ## Architecture of the backend (`mono/llvm/`)
 
@@ -575,7 +583,9 @@ the module holds.
 names what the module publishes a body for, which is what the translator declares a call
 through a thunk from. `folded` names what this root has taken in, which is what both
 inliners read. In a batch every member is translated first, the pre-pass then runs over
-each of them, and each member gets its own `folded` and its own budget.
+each of them, and each member gets its own `folded` and its own counts. The two inliners
+keep a count each: what one of them takes in leaves the other's untouched, and a compile
+translates at most the two added together.
 
 **Behind it is a cost model, and it goes top-down.** `TopDownInlinerPass`
 (`passes/top-down-inline.cpp`) runs after the first simplification and ranks the method's

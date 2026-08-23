@@ -265,6 +265,26 @@ trivial_inline_budget ()
 }
 
 uint32_t
+costed_inline_budget ()
+{
+	static uint32_t bodies = [] () -> uint32_t {
+		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_COST_BUDGET");
+
+		// The same count the pre-pass gets. What the cost model translates it
+		// also weighs, and a candidate it refuses is stripped again, so this
+		// bounds the questions rather than the code a body ends up with.
+		if (value == nullptr)
+			return 16;
+
+		int set = atoi (value);
+
+		return set > 0 ? (uint32_t) set : 0;
+	}();
+
+	return bodies;
+}
+
+uint32_t
 costed_inline_il_limit ()
 {
 	static uint32_t bytes = [] () -> uint32_t {
@@ -307,8 +327,16 @@ trivial_inline_depth_limit ()
 	static uint32_t levels = [] () -> uint32_t {
 		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_PREPASS_DEPTH");
 
+		/*
+		 * Generous rather than tuned. The budget bounds what the pre-pass
+		 * translates, and it drains least deep first, so a deeper bound only
+		 * spends what the shallower folds left. Reach stops paying before
+		 * this on what we measure — folds on sharpchess go 858, 863, 863, 863
+		 * for depth 2, 3, 4 and 8, and raytracer3 is at 42 from depth 2 up —
+		 * so the room is for a chain longer than either of them has.
+		 */
 		if (value == nullptr)
-			return 2;
+			return 8;
 
 		int set = atoi (value);
 

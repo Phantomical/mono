@@ -26,19 +26,20 @@ class Module;
 
 namespace mono {
 
+/// Which inliner is asking, and so which count a copy is charged to.
+enum class Inliner {
+	/// The shape-test pre-pass, which runs at both compiled tiers.
+	trivial,
+
+	/// The tier-2 cost model.
+	costed,
+};
+
 /// What the two inliners share while they build one method's body.
 ///
 /// A batch reuses one of these and resets root, folded and budget for each
 /// member, because defined describes the module and the rest describe the
 /// method.
-///
-/// The budget counts methods rather than instructions, and the two inliners spend
-/// one counter between them. A budget of its own for each would make a compile's
-/// translation count the product rather than the sum.
-///
-/// A method is charged once. The second body for one of them is free, so a chain
-/// of tiny callees rebuilt into a candidate's module cannot spend what the cost
-/// model needs for the candidates the profile ranked.
 struct InlineScope {
 	/// The method the body is being built for. A folded body's code belongs to
 	/// this method's frame, and a detour on the folded method has to be able to
@@ -79,7 +80,22 @@ struct InlineScope {
 	/// the two tiers hash the same CFG.
 	llvm::SmallVector<Folded, 8> folded;
 
-	uint32_t budget = 0;
+	/// How many more methods each inliner may translate into this body. A
+	/// compile translates at most the two added together.
+	///
+	/// A method is charged once, to the inliner that took it in first.
+	struct Budget {
+		/// What the shape-test pre-pass spends, at both compiled tiers.
+		uint32_t trivial = 0;
+
+		/// What the tier-2 cost model spends. A candidate arrives with its own
+		/// trivial callees folded in, and those come out of trivial above.
+		uint32_t costed = 0;
+
+		uint32_t &of (Inliner who) { return who == Inliner::trivial ? trivial : costed; }
+	};
+
+	Budget budget;
 };
 
 /// Whether a callee can be folded into its caller without changing what the
@@ -159,7 +175,7 @@ bool reads_the_callers_frame (MonoMethod *target);
 bool loses_its_frame_safely (MonoMethod *method, MonoMethodHeader *header);
 
 /// Translates callee into the module its caller is being built in, marks the
-/// result as an inline copy and spends one of the scope's budget.
+/// result as an inline copy and spends one of who's count.
 ///
 /// The body is built under a name of its own rather than over the declaration
 /// the caller calls, so the module can hold the method's own body beside it and
@@ -176,7 +192,8 @@ bool loses_its_frame_safely (MonoMethod *method, MonoMethodHeader *header);
 llvm::Function *materialize_inline_copy (llvm::Module &module, MonoDomain *domain,
                                          MonoMethod *callee, MonoCompile *cfg,
                                          std::vector<ExternalSymbol> &externals,
-                                         ModuleTypes &types, InlineScope &scope);
+                                         ModuleTypes &types, InlineScope &scope,
+                                         Inliner who);
 
 } // namespace mono
 
