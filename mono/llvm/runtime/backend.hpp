@@ -201,7 +201,8 @@ private:
 	 * thread the collector does not know to suspend.
 	 */
 	CompileQueue queue_ { [] { return std::make_unique<CompileWorker> (); },
-		              compile_worker_count () };
+		              compile_worker_count (),
+		              compile_worker_idle_timeout () };
 	llvm::DenseMap<MonoDomain *, std::unique_ptr<DomainState>> domains_;
 
 	/*

@@ -182,6 +182,46 @@ compile_worker_count ()
 	return threads;
 }
 
+std::chrono::milliseconds
+compile_worker_idle_timeout ()
+{
+	static std::chrono::milliseconds timeout = [] {
+		const char *value = g_getenv ("MONO_LLVM_JIT_WORKER_IDLE_MS");
+
+		/*
+		 * A second. That is long against the burst a promotion arrives in, and
+		 * short against the quiet a program settles into.
+		 *
+		 * An idle thread costs a signal and a wait at every collection. The
+		 * default suspend policy is preemptive, and it suspends an attached
+		 * thread wherever that thread parked. bh (BH.exe -b 700 -s 1000) takes
+		 * 51010 voluntary context switches and 1.64 s of system time while it
+		 * holds its workers, against 17367 and 0.75 s while it retires them.
+		 *
+		 * A restart costs one attach. It also costs the pipelines and the
+		 * TargetMachine on the first compile that follows, because those are
+		 * thread_local (jit.cpp). A 1 ms timeout retires a thread as soon as it
+		 * runs dry, and turns that same run into 114 more thread starts. Compile
+		 * CPU goes from 4.09 ms a method to 4.51, so a restart is around 0.7 ms.
+		 * Most of it is in cgsetup and pbsetup.
+		 *
+		 * The floor is therefore soft. A shorter timeout cuts more of the
+		 * transient that a short run is mostly made of, and 250 ms takes bh to
+		 * 7066 switches. A second is the conservative end of that range. It
+		 * keeps a program that promotes a method every few seconds from
+		 * restarting a thread for each one.
+		 */
+		if (value == nullptr)
+			return std::chrono::milliseconds (1000);
+
+		int set = atoi (value);
+
+		return std::chrono::milliseconds (set > 0 ? set : 0);
+	}();
+
+	return timeout;
+}
+
 bool
 tier2_enabled ()
 {

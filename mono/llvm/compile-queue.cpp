@@ -15,8 +15,10 @@ CompileQueue::self_wait (const char *what)
 	                          + " from the compile worker waits for itself");
 }
 
-CompileQueue::CompileQueue (WorkerFactory factory, unsigned workers)
-	: factory_ (std::move (factory)), limit_ (std::max (workers, 1u))
+CompileQueue::CompileQueue (WorkerFactory factory, unsigned workers,
+                            std::chrono::milliseconds idle_timeout)
+	: factory_ (std::move (factory)), limit_ (std::max (workers, 1u)),
+	  idle_timeout_ (idle_timeout)
 {
 }
 
@@ -165,15 +167,18 @@ CompileQueue::workers () const
 {
 	std::lock_guard<std::mutex> lock (mutex_);
 
-	return (unsigned) threads_.size ();
+	unsigned live = 0;
+
+	for (const Thread &worker : threads_)
+		if (!worker.vacant)
+			live++;
+
+	return live;
 }
 
 void
 CompileQueue::ensure_worker ()
 {
-	if (threads_.size () >= limit_)
-		return;
-
 	/*
 	 * Everything parked is going to take an item, so a thread is worth adding
 	 * only for what is queued behind them. That grows the pool one thread per
@@ -185,7 +190,22 @@ CompileQueue::ensure_worker ()
 
 	size_t index = threads_.size ();
 
-	threads_.push_back (Thread {});
+	for (size_t candidate = 0; candidate < threads_.size (); candidate++)
+		if (threads_[candidate].vacant) {
+			index = candidate;
+			break;
+		}
+
+	if (index == threads_.size ()) {
+		if (threads_.size () >= limit_)
+			return;
+
+		threads_.push_back (Thread {});
+	}
+
+	/* A vacant entry's thread detached itself before it gave the entry back,
+	 * so this drops the last of what the retired thread left. */
+	threads_[index] = Thread {};
 	threads_[index].worker = factory_ ? factory_ () : nullptr;
 	threads_[index].thread = std::thread ([this, index] { run (index); });
 }
@@ -213,8 +233,17 @@ CompileQueue::run (size_t index)
 	threads_[index].started = true;
 
 	auto wait = [&] {
-		ready_.wait (lock, [this] { return stopping_ || !pending_.empty (); });
+		auto ready = [this] { return stopping_ || !pending_.empty (); };
+
+		if (idle_timeout_ == std::chrono::milliseconds::zero ())
+			ready_.wait (lock, ready);
+		else
+			ready_.wait_for (lock, idle_timeout_, ready);
 	};
+
+	/* The Worker this thread takes with it when it retires, so that
+	 * Worker::stop () runs on an object the queue can no longer reach. */
+	std::unique_ptr<Worker> retiring;
 
 	for (;;) {
 		idle_++;
@@ -231,6 +260,29 @@ CompileQueue::run (size_t index)
 		 */
 		if (stopping_)
 			break;
+
+		/*
+		 * The timeout ran out and there is still nothing to do, so retire the
+		 * thread. An idle worker is not free. It is attached to the runtime,
+		 * and a preemptive suspend policy signals an attached thread and waits
+		 * for it at every collection, wherever that thread parked. The cost is
+		 * threads times collections in kernel time.
+		 *
+		 * The entry goes back here, in the same critical section that takes the
+		 * decision. An enqueue that arrives behind this one then finds a vacant
+		 * entry and starts a thread on it. An entry held until after
+		 * Worker::stop () leaves that item with no thread to run it.
+		 */
+		if (pending_.empty ()) {
+			retiring = std::move (threads_[index].worker);
+			threads_[index].started = false;
+			threads_[index].vacant = true;
+
+			/* stop () joins the entries it started. This entry is no longer
+			 * one of them, so no one is left to join this thread. */
+			threads_[index].thread.detach ();
+			break;
+		}
 
 		Item item = std::move (pending_.front ());
 		pending_.pop_front ();
@@ -259,6 +311,9 @@ CompileQueue::run (size_t index)
 
 	lock.unlock ();
 
+	/* Past this point a retired thread reads nothing the queue owns, so it can
+	 * outlive the queue. worker belongs either to an entry that stop () joins,
+	 * or to retiring, which is this thread's own. */
 	if (worker != nullptr)
 		worker->stop ();
 }

@@ -73,12 +73,13 @@ private:
 	bool open_ = false;
 };
 
-/// Spin until PREDICATE holds, or give up after a second and fail the test.
+/// Spin until PREDICATE holds, or fail the test once within has gone by.
 template <typename Predicate>
 static void
-wait_for (Predicate predicate, const char *what)
+wait_for (Predicate predicate, const char *what,
+          std::chrono::milliseconds within = 1s)
 {
-	auto deadline = std::chrono::steady_clock::now () + 1s;
+	auto deadline = std::chrono::steady_clock::now () + within;
 
 	while (!predicate ()) {
 		ASSERT_LT (std::chrono::steady_clock::now (), deadline) << what;
@@ -360,6 +361,7 @@ public:
 	struct Counts {
 		std::atomic<int> built {0};
 		std::atomic<int> started {0};
+		std::atomic<int> stopped {0};
 	};
 
 	explicit PooledWorker (Counts &counts) : counts_ (&counts) { counts.built++; }
@@ -370,9 +372,20 @@ public:
 		return true;
 	}
 
+	void stop () override { counts_->stopped++; }
+
 private:
 	Counts *counts_;
 };
+
+/// Builds a worker for each thread of a pool. Each one reports into counts.
+static CompileQueue::WorkerFactory
+pooled (PooledWorker::Counts &counts)
+{
+	return [&counts] {
+		return std::unique_ptr<CompileQueue::Worker> (new PooledWorker (counts));
+	};
+}
 
 /*
  * Each thread gets a Worker of its own, so an implementation can keep its
@@ -384,9 +397,7 @@ TEST (CompileQueue, EachWorkerThreadGetsItsOwnHooks)
 	const int wanted = 4;
 	PooledWorker::Counts counts;
 
-	CompileQueue queue ([&counts] {
-		return std::unique_ptr<CompileQueue::Worker> (new PooledWorker (counts));
-	}, wanted);
+	CompileQueue queue (pooled (counts), wanted);
 	CompileQueue::Channel channel (&queue);
 
 	std::mutex mutex;
@@ -414,6 +425,112 @@ TEST (CompileQueue, EachWorkerThreadGetsItsOwnHooks)
 
 	release.open ();
 	channel.close ();
+}
+
+/*
+ * A thread with nothing to do is not free. It stays attached to the runtime, and
+ * a preemptive suspend policy signals an attached thread at every collection. A
+ * pool that outlives the work therefore costs the program kernel time for as
+ * long as it runs. The queue retires such a thread, hooks and all.
+ */
+TEST (CompileQueue, AnIdleWorkerIsRetired)
+{
+	PooledWorker::Counts counts;
+
+	CompileQueue queue (pooled (counts), 4, 20ms);
+	CompileQueue::Channel channel (&queue);
+
+	std::atomic<bool> ran {false};
+
+	ASSERT_TRUE (channel.enqueue (nullptr, [&] { ran.store (true); }));
+	queue.drain ();
+	ASSERT_TRUE (ran.load ());
+
+	wait_for ([&] { return counts.stopped.load () == 1; },
+	          "the idle worker was never retired", 5s);
+	EXPECT_EQ (queue.workers (), 0u);
+}
+
+/*
+ * And the queue is as good as new afterwards. A retired thread hands its entry
+ * back, so the next enqueue starts a thread on that entry rather than on a new
+ * one. Three rounds here build three workers and never hold two at once.
+ */
+TEST (CompileQueue, WorkAfterARetirementStartsAThreadAgain)
+{
+	const int rounds = 3;
+	PooledWorker::Counts counts;
+
+	CompileQueue queue (pooled (counts), 2, 20ms);
+	CompileQueue::Channel channel (&queue);
+
+	for (int round = 1; round <= rounds; round++) {
+		std::atomic<bool> ran {false};
+
+		ASSERT_TRUE (channel.enqueue (nullptr, [&] { ran.store (true); }));
+		queue.drain ();
+		ASSERT_TRUE (ran.load ());
+
+		wait_for ([&] { return counts.stopped.load () == round; },
+		          "a round's worker was never retired", 5s);
+		ASSERT_EQ (queue.workers (), 0u);
+	}
+
+	EXPECT_EQ (counts.built.load (), rounds);
+	EXPECT_EQ (counts.started.load (), rounds);
+}
+
+/*
+ * The race the retirement path is arranged around. A thread gives its entry back
+ * in the same critical section that takes the decision, so an enqueue that
+ * arrives behind it finds a vacant entry and starts a thread on it. Hold the
+ * entry any longer and that item has no thread to run it, and never runs.
+ *
+ * A 1 ms timeout with a gap between the items puts the queue in that window for
+ * every one of them.
+ */
+TEST (CompileQueue, AnItemQueuedAgainstARetirementStillRuns)
+{
+	const int items = 100;
+
+	CompileQueue queue (no_hooks (), 4, 1ms);
+	CompileQueue::Channel channel (&queue);
+
+	std::atomic<int> ran {0};
+
+	/*
+	 * Each item is waited for before the next is queued, so an item that lands
+	 * on an entry held too long fails here rather than at the end. A run that
+	 * only counted at the end would be answered by the thread the next enqueue
+	 * starts, and only the last item of the run could ever strand.
+	 */
+	for (int i = 1; i <= items; i++) {
+		ASSERT_TRUE (channel.enqueue (nullptr, [&] { ran++; }));
+		wait_for ([&] { return ran.load () == i; }, "an item never ran", 5s);
+
+		/* Long enough for the thread that took it to run dry and retire. */
+		std::this_thread::sleep_for (2ms);
+	}
+}
+
+/*
+ * A queue with no timeout keeps what it started, which is what separates the
+ * cost of retiring threads from the cost of holding them.
+ */
+TEST (CompileQueue, WithoutATimeoutAnIdleWorkerStays)
+{
+	PooledWorker::Counts counts;
+
+	CompileQueue queue (pooled (counts), 4);
+	CompileQueue::Channel channel (&queue);
+
+	ASSERT_TRUE (channel.enqueue (nullptr, [] {}));
+	queue.drain ();
+
+	std::this_thread::sleep_for (50ms);
+
+	EXPECT_EQ (queue.workers (), 1u);
+	EXPECT_EQ (counts.stopped.load (), 0);
 }
 
 /*

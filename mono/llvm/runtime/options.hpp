@@ -15,6 +15,7 @@
 
 #include "../util/lock.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 
@@ -84,6 +85,13 @@ uint32_t promotion_batch_size ();
 /// outruns the ones it has, so this is a ceiling and not a count of threads a
 /// process will have.
 uint32_t compile_worker_count ();
+
+/// How long a compile worker waits for work before the queue retires it.
+///
+/// MONO_LLVM_JIT_WORKER_IDLE_MS moves it. Zero there keeps every thread the
+/// queue started for as long as the runtime lives, which is what separates the
+/// cost of retiring threads from the cost of holding them.
+std::chrono::milliseconds compile_worker_idle_timeout ();
 
 /// Whether tier 2 exists at all, which is what decides whether a tier-1 body
 /// carries profiling instrumentation.

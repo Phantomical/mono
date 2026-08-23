@@ -344,6 +344,16 @@ and the note says which split:
   process pays for the shorter wait in compile CPU and wins anyway, because a method
   waiting for a body runs interpreted.
   `.claude/plans/tier1-promotion-latency.md` has the sweeps and what is still open.
+- `MONO_LLVM_JIT_WORKER_IDLE_MS=<n>` — how long a worker waits for work before the queue
+  retires it, default 1000. A retired thread detaches and exits, and the next enqueue
+  that wants a thread starts a fresh one on the entry it gave back. So this decides how
+  long a program past its warm-up keeps compile threads, where `MONO_LLVM_JIT_WORKERS`
+  decides how many it can have. Zero keeps every thread that started, which separates
+  the cost of retiring threads from the cost of holding them. Holding one is not free:
+  the default suspend policy is preemptive, so the collector signals an attached thread
+  and waits for it at every collection, wherever that thread parked. A restart costs
+  around 0.7 ms, most of it rebuilding the pipelines and the TargetMachine, which are
+  per-thread.
 - `MONO_LLVM_JIT_RECOMPILE=<substr>` — translate matching methods afresh on every
   request instead of answering from the cache, so they end up with several live bodies.
   No other setting produces one, and the code that has to cope has no other exerciser.

@@ -53,8 +53,9 @@ CompileWorker::start ()
 	internal->flags |= MONO_THREAD_FLAG_DONT_MANAGE;
 	mono_thread_set_state (internal, ThreadState_Background);
 
-	/* The queue adds threads under load, so how many a run ends up with is not
-	 * the setting and is otherwise invisible. */
+	/* The queue adds threads under load and retires them when they go quiet.
+	 * So how many threads a run has is not the setting, and no other output
+	 * reports it. */
 	if (is_jit_trace_enabled ())
 		MONO_LOCK (jit_trace_mutex ())
 		{

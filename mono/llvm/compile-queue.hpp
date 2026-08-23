@@ -13,6 +13,7 @@
 #include <llvm/ADT/FunctionExtras.h>
 #include <llvm/ADT/STLFunctionalExtras.h>
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -76,6 +77,10 @@ public:
 		/// hook at all. A thread parked in a condition variable reaches no
 		/// safepoint, so a runtime that suspends threads cooperatively has to
 		/// hand this one over for the duration, or its next GC waits forever.
+		///
+		/// wake () can come back with nothing to do, which is how a queue with
+		/// an idle timeout retires a thread. A worker does nothing of its own on
+		/// that answer, because stop () follows it.
 		virtual void idle (llvm::function_ref<void ()> wake) { wake (); }
 	};
 
@@ -132,7 +137,14 @@ public:
 	/// Threads start one at a time and only while work is waiting that no parked
 	/// thread is going to take, so a process that never compiles in the
 	/// background has none and one that compiles a method at a time keeps one.
-	CompileQueue (WorkerFactory factory, unsigned workers);
+	///
+	/// idle_timeout is how long a parked thread waits before the queue retires
+	/// it. A retired thread runs Worker::stop () and exits. The next enqueue
+	/// that wants a thread starts a fresh one in its place. Zero keeps every
+	/// thread that started for as long as the queue lives.
+	CompileQueue (WorkerFactory factory, unsigned workers,
+	              std::chrono::milliseconds idle_timeout
+	                      = std::chrono::milliseconds::zero ());
 
 	/// Builds a queue of a single thread, running worker's hooks.
 	explicit CompileQueue (std::unique_ptr<Worker> worker = nullptr);
@@ -164,8 +176,9 @@ public:
 
 	uint64_t completed () const;
 
-	/// How many worker threads have been started. It counts the threads that
-	/// exist rather than the ones doing anything.
+	/// How many worker threads the queue has. It counts the threads that exist
+	/// rather than the ones with work. A thread an idle timeout retired is gone
+	/// from the count.
 	unsigned workers () const;
 
 private:
@@ -194,6 +207,10 @@ private:
 		/// Whether this one got through Worker::start () and reached the loop.
 		/// Until it has, it is not a thread stop () may wait for.
 		bool started = false;
+		/// Whether the thread that had this entry gave it back, which is what
+		/// an idle timeout makes it do. ensure_worker () starts the next thread
+		/// on a vacant entry rather than on a new one.
+		bool vacant = false;
 	};
 
 	bool enqueue (Channel &channel, void *tag, Work work);
@@ -248,6 +265,7 @@ private:
 
 	WorkerFactory factory_;
 	unsigned limit_;
+	std::chrono::milliseconds idle_timeout_;
 	std::vector<Thread> threads_;
 	/// How many workers are parked waiting for something to do. Compared
 	/// against what is queued to decide whether another thread would have
