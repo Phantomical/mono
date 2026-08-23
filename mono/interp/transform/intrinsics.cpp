@@ -218,16 +218,16 @@ TransformData::interp_handle_magic_type_intrinsics (MonoMethod *target_method,
 		int src_size = mini_magic_type_size (src);
 		int dst_size = mini_magic_type_size (dst);
 
-		gboolean store_value_as_local = FALSE;
+		gboolean keeps_managed_body = FALSE;
 
 		switch (type_index) {
 		case 0:
 		case 1:
 			if (!mini_magic_is_int_type (src) || !mini_magic_is_int_type (dst)) {
 				if (mini_magic_is_int_type (src))
-					store_value_as_local = TRUE;
+					keeps_managed_body = TRUE;
 				else if (mono_class_is_magic_float (src_klass))
-					store_value_as_local = TRUE;
+					keeps_managed_body = TRUE;
 				else
 					return FALSE;
 			}
@@ -235,21 +235,17 @@ TransformData::interp_handle_magic_type_intrinsics (MonoMethod *target_method,
 		case 2:
 			if (!mini_magic_is_float_type (src) || !mini_magic_is_float_type (dst)) {
 				if (mini_magic_is_float_type (src))
-					store_value_as_local = TRUE;
+					keeps_managed_body = TRUE;
 				else if (mono_class_is_magic_int (src_klass))
-					store_value_as_local = TRUE;
+					keeps_managed_body = TRUE;
 				else
 					return FALSE;
 			}
 			break;
 		}
 
-		if (store_value_as_local) {
-			emit_store_value_as_local (src);
-
-			/* emit call to managed conversion method */
+		if (keeps_managed_body)
 			return FALSE;
-		}
 
 		if (src_size > dst_size) { // 8 -> 4
 			switch (type_index) {
@@ -308,15 +304,6 @@ TransformData::interp_handle_magic_type_intrinsics (MonoMethod *target_method,
 		ip += 5;
 		return TRUE;
 	} else if (!strcmp ("CompareTo", tm) || !strcmp ("Equals", tm)) {
-		MonoType *arg = csignature->params[0];
-		MintType mt = mint_type (arg);
-
-		/* For the System.n*::{CompareTo,Equals} (System.n*) overload we push a
-		 * managed pointer to the argument instead of the value. */
-		if (mt != MintType::O)
-			emit_store_value_as_local (arg);
-
-		/* emit call to managed conversion method */
 		return FALSE;
 	} else if (!strcmp (".cctor", tm)) {
 		return FALSE;

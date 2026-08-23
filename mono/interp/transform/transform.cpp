@@ -1851,6 +1851,22 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			int obj_size = mono_class_value_size (klass, NULL);
 			obj_size = ALIGN_TO (obj_size, MINT_VT_ALIGNMENT);
 
+			/*
+			 * A magic type rides the stack as the native type it stands for, so
+			 * an entry marked with one already holds the field. Reading through
+			 * it would take the value for an address. check_magic_int_layout ()
+			 * and mono_class_is_magic_float () are what make the two the same
+			 * bytes.
+			 */
+			if (!is_static && sp[-1].klass == klass
+			    && mono_class_get_magic_index (klass) >= 0) {
+				g_assert (field->offset - MONO_ABI_SIZEOF (MonoObject) == 0);
+				SET_TYPE (sp - 1, stack_type_of (mt), field_klass);
+				ip += 5;
+				BARRIER_IF_VOLATILE (MONO_MEMORY_BARRIER_ACQ);
+				break;
+			}
+
 #ifndef DISABLE_REMOTING
 			if (m_class_get_marshalbyref (klass) || mono_class_is_contextbound (klass)
 			    || klass == mono_defaults.marshalbyrefobject_class) {

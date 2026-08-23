@@ -285,7 +285,6 @@ struct TransformData {
 	int create_interp_stack_local (StackType type, MonoClass *k, int type_size, int offset);
 	guint16 *emit_compacted_instruction (guint16 *start_ip, InterpBasicBlock *bb, InterpInst *ins);
 	void emit_convert (MonoType *ftype);
-	void emit_store_value_as_local (MonoType *src);
 	void fixup_newbb_stack_locals (InterpBasicBlock *newbb);
 	gboolean generate_code (MonoMethod *method, MonoMethodHeader *header,
 	                        MonoGenericContext *generic_context, MonoError *error);

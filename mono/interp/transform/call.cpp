@@ -85,8 +85,9 @@ TransformData::interp_method_check_inlining (MonoMethod *method, MonoMethodSigna
 	if (method->wrapper_type != MONO_WRAPPER_NONE)
 		return FALSE;
 
-	/* Our usage of `emit_store_value_as_local ()` for nint, nuint and nfloat
-	 * is fragile, and does not work with the inliner */
+	/* An inlined body reads its arguments as locals of the inlining method, and
+	 * only load_arg () marks one as holding a magic value. The body's ldfld
+	 * would take that value for an address. */
 	if (mono_class_get_magic_index (method->klass) >= 0)
 		return FALSE;
 

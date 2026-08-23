@@ -181,6 +181,7 @@ MonoMethod *interp_transform_internal_calls (MonoMethod *method, MonoMethod *tar
 
 /// Which of the magic-int families (nint, nuint, nfloat) this class is, or -1.
 int mono_class_get_magic_index (MonoClass *k);
+MonoClass *magic_class_of (MonoType *type);
 
 /// The MINT_LDIND that loads a value of this storage type.
 int interp_get_ldind_for_mt (MintType mt);

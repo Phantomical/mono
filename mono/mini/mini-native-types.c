@@ -51,6 +51,31 @@ mono_class_is_magic_assembly (MonoClass *klass)
 	return FALSE;
 }
 
+/*
+ * Aborts unless a magic integer is the size of the native type it stands for.
+ *
+ * The interpreter holds a magic type as that native type, and CEE_LDFLD reads
+ * the field straight out of it. Those two views name the same bytes only while
+ * the sizes agree.
+ */
+static void
+check_magic_int_layout (MonoClass *klass)
+{
+	MonoType *declared = m_class_get_byval_arg (klass);
+	MonoType *native = mini_native_type_replace_type (declared);
+	int align;
+	int declared_size = mono_type_size (declared, &align);
+	int native_size = mono_type_size (native, &align);
+
+	/* The size, rather than the field type mono_class_is_magic_float ()
+	 * compares: nint declares a 64-bit field where the native type is a
+	 * native int. */
+	if (declared_size != native_size)
+		g_error ("Assembly used for native types '%s' doesn't match this runtime, %s is %d bytes where %s is %d.\n",
+		         m_class_get_image (klass)->name, m_class_get_name (klass), declared_size,
+		         mono_type_full_name (native), native_size);
+}
+
 gboolean
 mono_class_is_magic_int (MonoClass *klass)
 {
@@ -74,11 +99,13 @@ mono_class_is_magic_int (MonoClass *klass)
 
 	if (strcmp ("nint", m_class_get_name (klass)) == 0) {
 		magic_nint_class = klass;
+		check_magic_int_layout (klass);
 		return TRUE;
 	}
 
 	if (strcmp ("nuint", m_class_get_name (klass)) == 0){
 		magic_nuint_class = klass;
+		check_magic_int_layout (klass);
 		return TRUE;
 	}
 	return FALSE;

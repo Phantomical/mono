@@ -441,21 +441,6 @@ interp_method_get_header (MonoMethod *method, MonoError *error)
 		return mono_method_get_header_internal (method, error);
 }
 
-/* stores top of stack as local and pushes address of it on stack */
-void
-TransformData::emit_store_value_as_local (MonoType *src)
-{
-	int local = create_interp_local (mini_native_type_replace_type (src));
-
-	store_local (local);
-
-	interp_add_ins (MINT_LDLOCA_S);
-	push_simple_type (StackType::MP);
-	interp_ins_set_dreg (last_ins, sp[-1].local);
-	interp_ins_set_sreg (last_ins, local);
-	locals[local].indirects++;
-}
-
 gboolean
 TransformData::interp_ip_in_cbb (int il_offset)
 {

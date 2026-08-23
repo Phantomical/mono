@@ -98,8 +98,8 @@
 		ret
 	}
 
-	// A magic float source keeps the managed body as well, through its own arm
-	// of the store_value_as_local test.
+	// A magic float source keeps the managed body as well: the source and the
+	// destination are not both integer types.
 	.method public hidebysig specialname static valuetype System.nint op_Explicit (valuetype System.nfloat x) cil managed
 	{
 		.locals init (valuetype System.nint r)
@@ -128,11 +128,9 @@
 	}
 
 	// A conversion out of a magic type to a type that is not an integer keeps
-	// its managed body.  emit_store_value_as_local () then gives that body the
-	// address of the value, not the value.  So these bodies read the parameter
-	// with ldarg, which is also correct when a compiled caller passes it by
-	// value.  CompareTo, Equals (nint) and the nfloat conversions below take
-	// their argument the same way.
+	// its managed body, so this one runs in both engines.  Each passes the
+	// argument by value, which is what ldarg reads.  CompareTo, Equals (nint)
+	// and the nfloat conversions below take their argument the same way.
 	.method public hidebysig specialname static float64 op_Explicit (valuetype System.nint x) cil managed
 	{
 		ldarg.0
@@ -877,6 +875,14 @@
 
 } // .namespace System
 
+.class private abstract auto ansi sealed Mono.Tiering.MonoTier
+	extends [mscorlib]System.Object
+{
+	.method public hidebysig static bool PromoteNow (native int, int32) cil managed internalcall
+	{
+	}
+}
+
 // ---------------------------------------------------------------------------
 // The tests
 // ---------------------------------------------------------------------------
@@ -1336,6 +1342,82 @@
 		brtrue.s FAIL
 
 		ldc.i4.1
+		ret
+	FAIL:
+		ldc.i4.0
+		ret
+	}
+
+	// These need an interpreted caller calling a compiled callee, and no arm
+	// produces that pair. A callee the interpreter resolved for itself never
+	// reaches runs_at_tier0 (), so MONO_LLVM_JIT_TIER0 leaves it interpreted
+	// whatever it selects. PromoteNow () compiles it outright.
+	//
+	// A magic type's own body reads a parameter of that type with ldfld, and
+	// the two engines have to agree on what that reads.
+
+	.method public hidebysig static int32 test_1_nint_compare_to_promoted () cil managed
+	{
+		.locals init (valuetype System.nint a, valuetype System.nint b,
+		              valuetype [mscorlib]System.RuntimeMethodHandle h)
+
+		ldtoken method instance int32 System.nint::CompareTo(valuetype System.nint)
+		stloc.2
+		ldloca.s 2
+		call instance native int [mscorlib]System.RuntimeMethodHandle::get_Value()
+		ldc.i4.2
+		call bool Mono.Tiering.MonoTier::PromoteNow(native int, int32)
+		brfalse.s FAIL
+
+		ldc.i4.5
+		call int32 MagicConv::Id4(int32)
+		call valuetype System.nint System.nint::op_Explicit(int32)
+		stloc.0
+		ldc.i4.7
+		call int32 MagicConv::Id4(int32)
+		call valuetype System.nint System.nint::op_Explicit(int32)
+		stloc.1
+
+		ldloca.s 0
+		ldloc.1
+		call instance int32 System.nint::CompareTo(valuetype System.nint)
+		ldc.i4.m1
+		bne.un.s FAIL
+		ldloca.s 1
+		ldloc.0
+		call instance int32 System.nint::CompareTo(valuetype System.nint)
+		ldc.i4.1
+		bne.un.s FAIL
+		ldloca.s 0
+		ldloc.0
+		call instance int32 System.nint::CompareTo(valuetype System.nint)
+		brtrue.s FAIL
+
+		ldc.i4.1
+		ret
+	FAIL:
+		ldc.i4.0
+		ret
+	}
+
+	.method public hidebysig static int32 test_1_nint_explicit_to_r8_promoted () cil managed
+	{
+		.locals init (valuetype [mscorlib]System.RuntimeMethodHandle h)
+
+		ldtoken method float64 System.nint::op_Explicit(valuetype System.nint)
+		stloc.0
+		ldloca.s 0
+		call instance native int [mscorlib]System.RuntimeMethodHandle::get_Value()
+		ldc.i4.2
+		call bool Mono.Tiering.MonoTier::PromoteNow(native int, int32)
+		brfalse.s FAIL
+
+		ldc.i4.3
+		call int32 MagicConv::Id4(int32)
+		call valuetype System.nint System.nint::op_Explicit(int32)
+		call float64 System.nint::op_Explicit(valuetype System.nint)
+		ldc.r8 3.0
+		ceq
 		ret
 	FAIL:
 		ldc.i4.0

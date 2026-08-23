@@ -181,6 +181,23 @@ TransformData::get_arg_type_exact (int n, MintType *mt)
 	return type;
 }
 
+/// Returns the magic class of type, or null if it is not one.
+///
+/// A stack entry carrying one holds the value rather than a pointer to it.
+/// CEE_LDFLD reads such an entry instead of dereferencing it.
+MonoClass *
+magic_class_of (MonoType *type)
+{
+	MonoClass *klass;
+
+	if (type->byref || type->type != MONO_TYPE_VALUETYPE)
+		return NULL;
+
+	klass = mono_class_from_mono_type_internal (type);
+
+	return mono_class_get_magic_index (klass) >= 0 ? klass : NULL;
+}
+
 void
 TransformData::load_arg (int n)
 {
@@ -208,13 +225,21 @@ TransformData::load_arg (int n)
 			push_type_vt (klass, size);
 		}
 	} else {
+		/* Only an instance method's receiver is a pointer to the value, and the
+		 * pointer-sized case below covers a static method's first argument as
+		 * well. */
+		MonoClass *magic = hasthis && n == 0 ? NULL : magic_class_of (type);
+
 		if ((hasthis || mt == MintType::I) && n == 0) {
 			// Special case loading of the first ptr sized argument
 			if (mt != MintType::O)
 				mt = MintType::I;
+			klass = magic;
 		} else {
 			if (mt == MintType::O)
 				klass = mono_class_from_mono_type_internal (type);
+			else
+				klass = magic;
 		}
 		push_type (stack_type_of (mt), klass);
 	}
