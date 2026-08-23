@@ -278,6 +278,7 @@ struct TransformData {
 	// The transform, defined in transform.cpp.
 	void alloc_ins_locals (InterpInst *ins);
 	void binary_arith_op (int mint_op);
+	void cannot_share (const char *what);
 	void coerce_fp (StackInfo *sp, std::optional<StackType> dtype);
 	void collect_pred_seq_points (InterpBasicBlock *bb, SeqPoint *seqp, GSList **next);
 	int create_interp_local (MonoType *type);
@@ -373,6 +374,10 @@ struct TransformData {
 	void push_types (StackInfo *types, int count);
 	void realloc_stack ();
 	void recursively_make_pred_seq_points (InterpBasicBlock *bb);
+	MonoClass *resolve_class (MonoMethod *method, guint32 token,
+	                          MonoGenericContext *generic_context);
+	MonoClassField *resolve_field (MonoMethod *method, guint32 token, MonoClass **klass,
+	                               MonoGenericContext *generic_context, MonoError *error);
 	void save_seq_points (MonoJitInfo *jinfo);
 	void set_simple_type_and_local (StackInfo *sp, StackType type);
 	void set_type_and_local (StackInfo *sp, MonoClass *klass, StackType type);
@@ -382,6 +387,17 @@ struct TransformData {
 	void two_arg_branch (int mint_op, int offset, int inst_size);
 	void unary_arith_op (int mint_op);
 	void widen_i4_to_i8 (StackInfo *sp, MonoType *type);
+
+	/// Why this body cannot serve every reference instantiation, or NULL while
+	/// it still can. Only a transform of a shared form fills it in, and the
+	/// first reason wins: the ones behind it describe the same refusal.
+	const char *sharing_refusal = nullptr;
+
+	/// Whether this transform is of a shared form, which is what makes a site
+	/// that names the generic context a refusal rather than an ordinary
+	/// resolution. A concrete instantiation names no context, so the test
+	/// below is skipped rather than answered.
+	bool sharing = false;
 
 	MonoMethod *method = nullptr;
 	MonoMethod *inlined_method = nullptr;

@@ -168,6 +168,10 @@ struct InterpMethod {
 	unsigned int init_locals : 1;
 	unsigned int vararg : 1;
 	unsigned int needs_thread_attach : 1;
+	/// Whether this record holds a shared form whose body met a site that
+	/// names its generic context. The transform sets it instead of a body, so
+	/// every instantiation behind it transforms its own IL from then on.
+	unsigned int sharing_refused : 1;
 #ifdef ENABLE_INTERP_TRACE
 	/* Whether MONO_INTERP_TRACE names this method. */
 	unsigned int tracing : 1;

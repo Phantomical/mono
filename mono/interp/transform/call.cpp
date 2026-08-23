@@ -26,6 +26,7 @@
 
 #include "mintops.hpp"
 #include "runtime/internals.hpp"
+#include "runtime/sharing.hpp"
 #include "interp.h"
 #include "transform.hpp"
 #include "internal.hpp"
@@ -481,6 +482,18 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 		}
 	} else {
 		csignature = mono_method_signature_internal (target_method);
+	}
+
+	/*
+	 * Every path above has settled the target by now, whichever token shape it
+	 * came from, so one test covers the lot.
+	 */
+	if (sharing) {
+		if (target_method != nullptr && depends_on_context (target_method))
+			cannot_share ("a call to a method the generic context names");
+
+		if (constrained_class != nullptr && depends_on_context (constrained_class))
+			cannot_share ("a constrained call on a class the generic context names");
 	}
 
 	if (check_visibility && target_method && !mono_method_can_access_method (method, target_method))
