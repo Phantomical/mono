@@ -423,6 +423,10 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 	}
 
 	pop_stack (count);
+
+	// The array holds the element class this constructor named, so a store
+	// into it while it is still this value needs no covariance test.
+	allocated_here.insert (result);
 	push_stack (result, m_class_get_byval_arg (klass));
 	return llvm::Error::success ();
 }

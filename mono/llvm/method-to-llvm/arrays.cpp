@@ -1,16 +1,22 @@
 #include "method-to-llvm.hpp"
 #include "runtime-error.hpp"
 #include "../passes/array-address.hpp"
+#include "../runtime/options.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-init.h"
+#include "mono/metadata/class-inlines.h"
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/opcodes.h"
 #include "mono/metadata/tokentype.h"
 #include <llvm/IR/Attributes.h>
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
+
+#include <cstdio>
 
 namespace mono {
 
@@ -392,6 +398,226 @@ MethodLLVMEmitter::emit_ldelem (MonoIrBuilder &builder, MonoType *element)
 	return push_from_location (builder, *address, element);
 }
 
+namespace {
+
+/// Whether nothing but element itself can be the element class of an array
+/// that a variable of that array type holds.
+///
+/// This is the exclusion list of `get_virtual_stelemref_kind ()`
+/// (`mono/metadata/marshal.c`), copied rather than rebuilt. The sealed flag
+/// alone answers wrongly. An array class carries the flag and is covariant on
+/// its element type all the same. A variant generic argument makes an
+/// unrelated instantiation assignable. `string[]` is assignable to
+/// `IComparable[]`, so an interface is out whatever flags it carries. A
+/// marshal-by-ref class is out because only the runtime reasons about a
+/// transparent proxy.
+bool
+element_class_is_final (MonoClass *element)
+{
+	if (m_class_get_rank (element) != 0 || mono_class_is_interface (element)
+	    || mono_class_is_marshalbyref (element)
+	    || mono_class_has_variant_generic_params (element))
+		return false;
+
+	return mono_class_is_sealed (element);
+}
+
+/// Prints the form a reference store into an array was given.
+///
+/// Counting these lines over a corpus is what says how its sites divide
+/// between the three forms.
+void
+trace_stelem_check (MonoMethod *method, const char *form)
+{
+	if (!is_jit_trace_enabled ())
+		return;
+
+	char *name = mono_method_full_name (method, TRUE);
+
+	fprintf (stderr, "[llvm-jit] stelem.ref %s in %s\n", form, name);
+	g_free (name);
+}
+
+} // namespace
+
+/// The class every reference the array holds is an instance of, or null where
+/// covariance leaves that open until the store runs.
+///
+/// A variable of type `object[]` can hold a `string[]`. So the static type
+/// answers only for an element class nothing derives from, or for an array
+/// this body allocated itself.
+MonoClass *
+MethodLLVMEmitter::exact_element_class (const StackValue &array)
+{
+	if (stack_type (array.type) != ObjectRef || array.type->type == MONO_TYPE_VAR
+	    || array.type->type == MONO_TYPE_MVAR)
+		return nullptr;
+
+	MonoClass *klass = mono_class_from_mono_type_internal (array.type);
+
+	if (klass == nullptr || m_class_get_rank (klass) == 0 || depends_on_context (klass))
+		return nullptr;
+
+	MonoClass *element = m_class_get_element_class (klass);
+
+	// newarr and an array newobj name the class they allocate, so this value
+	// is an array of exactly that element class. A value that reached here
+	// through a spill is not in the set, which costs a test and never
+	// correctness.
+	if (allocated_here.count (array.value) != 0)
+		return element;
+
+	return element_class_is_final (element) ? element : nullptr;
+}
+
+/// Whether every object this stack slot can hold is an instance of element.
+///
+/// A value's run-time class is assignable to the type the IL tracks it as, and
+/// assignability is transitive. So a static type this says yes to leaves the
+/// store nothing to ask about. The caller still has to know that the array
+/// really holds element, which `exact_element_class ()` answers.
+bool
+MethodLLVMEmitter::is_always_an_instance_of (const StackValue &value, MonoClass *element)
+{
+	if (stack_type (value.type) != ObjectRef || value.type->type == MONO_TYPE_VAR
+	    || value.type->type == MONO_TYPE_MVAR)
+		return false;
+
+	MonoClass *klass = mono_class_from_mono_type_internal (value.type);
+
+	if (klass == nullptr || depends_on_context (klass))
+		return false;
+
+	return mono_class_is_assignable_from_internal (element, klass) != 0;
+}
+
+/// Emits what a reference store into an array has to test before it writes:
+/// the ArrayTypeMismatchException that `stelem.ref` and `Set` both list.
+///
+/// value is the stack slot the store reads, and stored is that slot coerced to
+/// the element type. The static type comes from the first and the reference
+/// the test reads from the second. Leaves the builder on the block the store
+/// goes in.
+///
+/// `mono_helper_stelem_ref_check ()` leaves the exception pending, and the
+/// wrapper call around it is what throws it.
+llvm::Error
+MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackValue &array,
+                                          const StackValue &value, llvm::Value *stored)
+{
+	MonoClass *element = exact_element_class (array);
+
+	// Storing null always succeeds, whatever the array turns out to hold.
+	if (llvm::isa<llvm::ConstantPointerNull> (stored)
+	    || (element != nullptr && is_always_an_instance_of (value, element))) {
+		trace_stelem_check (method, "needs no check");
+		return llvm::Error::success ();
+	}
+
+	llvm::Expected<llvm::Function *> check =
+		icall_wrapper_decl (MONO_JIT_ICALL_mono_helper_stelem_ref_check);
+
+	if (!check)
+		return check.takeError ();
+
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	llvm::BasicBlock *test = llvm::BasicBlock::Create (context (), "stelem_test", function);
+	llvm::BasicBlock *ask = create_cold_block ("stelem_ask");
+	llvm::BasicBlock *done = llvm::BasicBlock::Create (context (), "stelem_ok", function);
+
+	// The test below reads the value's vtable, so the null goes in front of it.
+	builder.CreateCondBr (builder.CreateIsNull (stored), done, test);
+	builder.SetInsertPoint (test);
+
+	llvm::Value *wanted = nullptr;
+
+	if (element != nullptr) {
+		llvm::Expected<llvm::Value *> constant =
+			class_operand (builder, element, "mono_class_");
+
+		if (!constant)
+			return constant.takeError ();
+
+		wanted = *constant;
+		trace_stelem_check (method, "tests a constant element class");
+	} else {
+		emit_null_check (builder, array.value);
+
+		llvm::Value *array_vtable = builder.CreateAlignedLoad (
+			ptr,
+			builder.CreateGEP (builder.getInt8Ty (), array.value,
+		                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+			llvm::Align (TARGET_SIZEOF_VOID_P), "array_vtable");
+		llvm::Value *array_class = builder.CreateAlignedLoad (
+			ptr,
+			builder.CreateGEP (builder.getInt8Ty (), array_vtable,
+		                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
+			llvm::Align (TARGET_SIZEOF_VOID_P), "array_class");
+
+		// LLVM CSEs this load across the stores of an initializer. A
+		// call through the array's stelemref vtable slot, which is how
+		// mini answers this, is opaque to it.
+		wanted = builder.CreateAlignedLoad (
+			ptr,
+			builder.CreateGEP (builder.getInt8Ty (), array_class,
+		                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, element_class))),
+			llvm::Align (TARGET_SIZEOF_VOID_P), "element_class");
+		trace_stelem_check (method, "tests the array's element class");
+	}
+
+	llvm::Value *value_vtable = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (builder.getInt8Ty (), stored,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+		llvm::Align (TARGET_SIZEOF_VOID_P), "value_vtable");
+	llvm::Value *value_class = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (builder.getInt8Ty (), value_vtable,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
+		llvm::Align (TARGET_SIZEOF_VOID_P), "value_class");
+
+	// A value of exactly the element class is the general answer, so it goes
+	// first. A store the compare below catches pays this one as well.
+	llvm::BasicBlock *inexact = ask;
+
+	if (element == nullptr)
+		inexact = llvm::BasicBlock::Create (context (), "stelem_inexact", function);
+
+	builder.CreateCondBr (builder.CreateICmpEQ (value_class, wanted), done, inexact);
+
+	if (element == nullptr) {
+		/*
+		 * Every object is an instance of System.Object, so an array that
+		 * really holds object[] takes any reference. Only the array
+		 * answers this: covariance leaves the static type saying object[]
+		 * for a string[] as well.
+		 *
+		 * It earns its compare on the containers. ArrayList, List<object>
+		 * and a params array all store into object[], and a string or a
+		 * boxed int misses the exact compare above every time.
+		 */
+		builder.SetInsertPoint (inexact);
+
+		llvm::Expected<llvm::Value *> any =
+			class_operand (builder, mono_defaults.object_class, "mono_class_");
+
+		if (!any)
+			return any.takeError ();
+
+		builder.CreateCondBr (builder.CreateICmpEQ (wanted, *any), done, ask);
+	}
+
+	// Both tests are exact, so a legal store still arrives here. A derived
+	// class, a class implementing an interface element class, and a
+	// transparent proxy standing in for either are all legal and all miss.
+	builder.SetInsertPoint (ask);
+	emit_protected_call (builder, *check,
+	                     adapt_to_callee (builder, *check, { array.value, stored }));
+	builder.CreateBr (done);
+	builder.SetInsertPoint (done);
+	return llvm::Error::success ();
+}
+
 /*
  * III.4.29  stelem - store element to array
  * III.4.30  stelem.<type> - store an element of an array
@@ -452,23 +678,12 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 	if (!value)
 		return value.takeError ();
 
-	/*
-	 * The element type here is the opcode's, but what the array holds is
-	 * known only at run time. Storing a reference must ask before
-	 * it writes - that check is the ArrayTypeMismatchException the spec
-	 * lists. The check leaves the exception pending, and the wrapper call
-	 * that follows is what throws it.
-	 */
-	if (mini_type_is_reference (element)) {
-		llvm::Expected<llvm::Function *> check =
-			icall_wrapper_decl (MONO_JIT_ICALL_mono_helper_stelem_ref_check);
-
-		if (!check)
-			return check.takeError ();
-		emit_protected_call (builder, *check,
-		                     adapt_to_callee (builder, *check,
-		                                      {array.value, *value}));
-	}
+	// The element type here is the opcode's, and what the array really holds
+	// can be narrower than that.
+	if (mini_type_is_reference (element))
+		if (llvm::Error refused =
+			    emit_stelem_ref_check (builder, array, get_stack (0), *value))
+			return refused;
 
 	llvm::Expected<llvm::Value *> address =
 		element_address (builder, array, get_stack (1), element);
@@ -581,16 +796,10 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 			return coerced.takeError ();
 		value = *coerced;
 
-		if (mini_type_is_reference (element)) {
-			llvm::Expected<llvm::Function *> check =
-				icall_wrapper_decl (MONO_JIT_ICALL_mono_helper_stelem_ref_check);
-
-			if (!check)
-				return check.takeError ();
-			emit_protected_call (builder, *check,
-			                     adapt_to_callee (builder, *check,
-			                                      {array.value, value}));
-		}
+		if (mini_type_is_reference (element))
+			if (llvm::Error refused = emit_stelem_ref_check (builder, array,
+			                                                 get_stack (0), value))
+				return refused;
 	}
 
 	if (what == "Address" && !m_class_is_valuetype (eclass) && !prefixes.readonly_)
@@ -821,6 +1030,10 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 	                          builder.CreateSExtOrTrunc (length, builder.getInt32Ty ())}));
 
 	pop_stack (1);
+
+	// The array holds the element class this opcode named, so a store into it
+	// while it is still this value needs no covariance test.
+	allocated_here.insert (created);
 	push_stack (created, m_class_get_byval_arg (array));
 	return llvm::Error::success ();
 }

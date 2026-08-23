@@ -324,11 +324,12 @@ private:
 	std::vector<Entry> locals;
 	std::vector<StackValue> stack;
 
-	/// The objects newobj allocated in this body, so their class is exactly
-	/// the one their stack type names.
+	/// The objects newobj and newarr allocated in this body, so their class is
+	/// exactly the one their stack type names.
 	///
-	/// A value that reached its use through a spill is not in here, which
-	/// costs a devirtualization and never correctness.
+	/// A value that reached its use through a spill is not in here. That costs
+	/// a devirtualization or an array store's covariance test, and never
+	/// correctness.
 	llvm::DenseSet<llvm::Value *> allocated_here;
 
 	/// This frame's LMF and where the thread's chain head lives.
@@ -935,6 +936,10 @@ private:
 	llvm::Error emit_ldelema (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldelem (MonoIrBuilder &builder, MonoType *element);
 	llvm::Error emit_stelem (MonoIrBuilder &builder, MonoType *element);
+	MonoClass *exact_element_class (const StackValue &array);
+	bool is_always_an_instance_of (const StackValue &value, MonoClass *element);
+	llvm::Error emit_stelem_ref_check (MonoIrBuilder &builder, const StackValue &array,
+	                                   const StackValue &value, llvm::Value *stored);
 	llvm::Error emit_array_type_check (MonoIrBuilder &builder, llvm::Value *array,
 	                                   MonoClass *array_class);
 	void consume_save_last_error (MonoIrBuilder &builder);

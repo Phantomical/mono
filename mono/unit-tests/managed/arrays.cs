@@ -21,6 +21,9 @@ public class Arrays {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static object IdO (object x) { return x; }
 
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static string IdS (string x) { return x; }
+
 	// A test that expects an allocation to throw stores it here, so its answer
 	// never comes from the allocation.
 	static Array ArrSink;
@@ -441,6 +444,60 @@ public class Arrays {
 	public static int test_4_stelem_ref_takes_a_subclass ()
 	{
 		ArrShape[] a = new ArrSquare[Id (2)];
+
+		a[Id (1)] = new ArrSquare ();
+		return a[Id (1)].Sides ();
+	}
+
+	// Nothing derives from a sealed element class, so no covariant array can
+	// stand in for this one and the store is settled where it is translated.
+	public static int test_1_stelem_ref_into_a_sealed_element_type ()
+	{
+		string[] a = new string[Id (2)];
+
+		a[Id (1)] = IdS ("x");
+		return a[Id (1)] == "x" ? 1 : 0;
+	}
+
+	// A null constant passes whatever the array turns out to hold, so this
+	// store is settled as well - and the covariant array is what proves that
+	// the store still happens.
+	public static int test_1_stelem_ref_of_a_null_constant ()
+	{
+		object[] a = new string[Id (2)];
+
+		a[Id (0)] = IdO ("x");
+		a[Id (0)] = null;
+		return a[Id (0)] == null ? 1 : 0;
+	}
+
+	// An array initializer stores through a dup of the newarr, so every store
+	// writes into the element class the opcode named.
+	public static int test_3_stelem_ref_into_an_array_initializer ()
+	{
+		object[] a = new object[] { IdO ("a"), IdO (new ArrSquare ()), IdO (null) };
+
+		return (a[Id (0)] != null ? 1 : 0) + (a[Id (1)] != null ? 2 : 0)
+		       + (a[Id (2)] != null ? 4 : 0);
+	}
+
+	// Every object is an instance of System.Object, so an array that really
+	// holds object[] takes any reference. Covariance leaves the static type
+	// saying object[] for a string[] as well, so only the array answers this.
+	public static int test_3_stelem_ref_into_a_real_object_array ()
+	{
+		object[] a = new object[Id (2)];
+
+		a[Id (0)] = IdS ("x");
+		a[Id (1)] = IdO (new ArrSquare ());
+		return (a[Id (0)] != null ? 1 : 0) + (a[Id (1)] != null ? 2 : 0);
+	}
+
+	// The inline test compares classes exactly, so a store of a derived class
+	// still has to reach the runtime and be allowed there.
+	public static int test_4_stelem_ref_of_a_derived_class_asks_the_runtime ()
+	{
+		ArrShape[] a = new ArrShape[Id (2)];
 
 		a[Id (1)] = new ArrSquare ();
 		return a[Id (1)].Sides ();

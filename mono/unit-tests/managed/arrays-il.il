@@ -196,6 +196,60 @@
 		ret
 	}
 
+	// A sealed element class is exact, so the store tests the value against it
+	// as a constant instead of reading it off the array. C# never writes a
+	// site of this shape, because it casts the value first and the cast is
+	// what the store then trusts.
+	//
+	// The value here really is a string, so the inline test answers and the
+	// runtime is never asked.
+	.method public static int32 test_1_stelem_ref_sealed_element_takes_a_hit () cil managed
+	{
+		.maxstack 3
+		.locals init (string[] a, object v)
+		ldstr "x"
+		stloc.1
+		ldc.i4.2
+		newarr [mscorlib]System.String
+		stloc.0
+		ldloc.0
+		ldc.i4.0
+		ldloc.1
+		stelem.ref
+		ldloc.0
+		ldc.i4.0
+		ldelem.ref
+		brfalse IL_empty
+		ldc.i4.1
+		ret
+	IL_empty:
+		ldc.i4.0
+		ret
+	}
+
+	// The same shape with a value of another class. The inline test says no,
+	// and the runtime is what draws the exception.
+	.method public static int32 test_1_stelem_ref_sealed_element_refuses () cil managed
+	{
+		.maxstack 3
+		.locals init (string[] a)
+		.try {
+			ldc.i4.2
+			newarr [mscorlib]System.String
+			stloc.0
+			ldloc.0
+			ldc.i4.0
+			newobj instance void [mscorlib]System.Object::.ctor ()
+			stelem.ref
+			ldc.i4.0
+			ret
+		} catch [mscorlib]System.ArrayTypeMismatchException {
+			pop
+			ldc.i4.1
+			ret
+		}
+	}
+
 	.method public static int32 test_5_ldelem_of_a_reference_type_token () cil managed
 	{
 		.maxstack 4
