@@ -1100,9 +1100,9 @@ set(MONO_TESTS_INTERP_DISABLED
   # reason: the engine is the interpreter either way.
   interp-threadstatic-cctor.exe
   interp-array-set-typecheck.exe
-  # With the interpreter as the whole engine there is no compiled tier, so the
-  # address handed out is the interpreter's own entry and no jit call can be made
-  # to go through it. A patch written over that address cannot take effect.
+  # A patch over a method's entry reaches the callers that go through it. Those
+  # are the compiled callers. With the interpreter as the whole engine there is
+  # no compiled tier, so the test cannot compile its caller.
   interp-native-detour.exe
   delegate-async-exception.exe
   bug-348522.2.exe

@@ -4,12 +4,18 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 // A native patcher asks for a method's entry address and writes a jump over it.
-// Harmony and MonoMod redirect a method this way, and Unity mod code is built on
-// them, so a patch has to reach the method whichever engine runs it.
+// MonoMod redirects a method this way.
 //
-// An interpreted caller reaches its callee through the callee's InterpMethod and
-// touches no stub, so a jump written over the stub reached nothing. A method
-// whose address has gone to native code is called through that address instead.
+// A method that starts in the interpreter has one entry address all the same.
+// GetFunctionPointer mints the redirectable stub without a compile, and hands
+// out the address a compiled ldftn names. So a patch written over that address
+// takes effect for every compiled caller, at any tier the method reaches.
+//
+// A patch written this way does not reach an interpreted caller, which calls
+// through the callee's InterpMethod and touches no stub. A patcher that needs
+// both engines asks for the redirect through mono_install_method_detour ()
+// instead, which mono/unit-tests/gtest/runtime/test-detour.cpp covers. Harmony
+// is patched to take that route.
 //
 // The jump below is amd64, and the page permissions are POSIX. Both match the
 // scope of this corpus.
@@ -17,6 +23,9 @@ class Test {
 	const int PROT_READ = 1;
 	const int PROT_WRITE = 2;
 	const int PROT_EXEC = 4;
+
+	/* MonoTier::tier1, as PromoteNow takes it. */
+	const int tier1 = 2;
 
 	[DllImport ("libc", SetLastError = true)]
 	static extern int mprotect (IntPtr addr, ulong len, int prot);
@@ -27,17 +36,20 @@ class Test {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int Replacement () { return 2; }
 
-	// The call under test. Its first calls are interpreted, which is the arm the
-	// patch used to be lost on.
+	// The call under test. It is compiled before it runs, so the call reaches
+	// Patched through the stub the patch was written over.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int CallPatched () { return Patched (); }
 
+	static MethodInfo MethodOf (string name)
+	{
+		return typeof (Test).GetMethod (name,
+			BindingFlags.NonPublic | BindingFlags.Static);
+	}
+
 	static IntPtr AddressOf (string name)
 	{
-		MethodInfo m = typeof (Test).GetMethod (name,
-			BindingFlags.NonPublic | BindingFlags.Static);
-
-		return m.MethodHandle.GetFunctionPointer ();
+		return MethodOf (name).MethodHandle.GetFunctionPointer ();
 	}
 
 	// movabs $target, %rax ; jmp *%rax - twelve bytes, which is what fits in the
@@ -73,6 +85,13 @@ class Test {
 
 		WriteDetour (original, replacement);
 
+		// Calling the method in a loop races the compile queue, so the test asks
+		// for the tier outright.
+		if (!Mono.Tiering.MonoTier.PromoteNow (MethodOf ("CallPatched").MethodHandle.Value, tier1)) {
+			Console.WriteLine ("FAILED: CallPatched would not compile");
+			return 1;
+		}
+
 		int got = CallPatched ();
 
 		if (got != 2) {
@@ -82,5 +101,12 @@ class Test {
 		}
 
 		return 0;
+	}
+}
+
+namespace Mono.Tiering {
+	static class MonoTier {
+		[MethodImpl (MethodImplOptions.InternalCall)]
+		public static extern bool PromoteNow (IntPtr method, int tier);
 	}
 }
