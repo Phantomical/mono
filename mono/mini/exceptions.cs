@@ -5176,6 +5176,129 @@ class Tests
 		}
 		return 1;
 	}
+
+	/*
+	 * Catch-clause matching. object_is_instance_of () (mono/mini/mini-exceptions.c)
+	 * answers a clause from the clause's class and the exception's class where those two
+	 * settle it, and asks the runtime where they do not. Each test below covers one
+	 * answer it gives. A wrong answer here selects the wrong handler, so each test
+	 * states which clause has to run and not only that the exception was caught.
+	 */
+	class MatchBase : Exception { }
+	class MatchMid : MatchBase { }
+	class MatchLeaf : MatchMid { }
+	class MatchOther : Exception { }
+	class MatchGeneric<T> : Exception { }
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void MatchThrow (Exception e) {
+		throw e;
+	}
+
+	/* An exact class hit is the answer the clause's own type gives. */
+	public static int test_0_catch_exact_class () {
+		try {
+			MatchThrow (new MatchMid ());
+		} catch (MatchMid) {
+			return 0;
+		} catch (Exception) {
+			return 1;
+		}
+		return 2;
+	}
+
+	/* A base clause one step up the parent chain catches the derived type. */
+	public static int test_0_catch_parent_one_step () {
+		try {
+			MatchThrow (new MatchMid ());
+		} catch (MatchBase) {
+			return 0;
+		} catch (Exception) {
+			return 1;
+		}
+		return 2;
+	}
+
+	/* The same, two steps up, so the supertypes array is indexed rather than walked. */
+	public static int test_0_catch_parent_two_steps () {
+		try {
+			MatchThrow (new MatchLeaf ());
+		} catch (MatchBase) {
+			return 0;
+		} catch (Exception) {
+			return 1;
+		}
+		return 2;
+	}
+
+	/* A sibling type is a miss, so the exception goes past the clause to the next one. */
+	public static int test_0_sibling_clause_is_a_miss () {
+		try {
+			try {
+				MatchThrow (new MatchOther ());
+			} catch (MatchBase) {
+				return 1;
+			}
+		} catch (MatchOther) {
+			return 0;
+		}
+		return 2;
+	}
+
+	/*
+	 * A clause deeper than the thrown class is a miss. mono_class_has_parent_fast ()
+	 * indexes the thrown class's supertypes array with the clause class's depth, so this
+	 * is the case its idepth test guards.
+	 */
+	public static int test_0_deeper_clause_is_a_miss () {
+		try {
+			try {
+				MatchThrow (new MatchBase ());
+			} catch (MatchLeaf) {
+				return 1;
+			}
+		} catch (MatchBase) {
+			return 0;
+		}
+		return 2;
+	}
+
+	/* System.Exception is the top of every clause chain here, and the throw path asks
+	 * the same question of the thrown object before any clause runs. */
+	public static int test_0_catch_exception_base () {
+		try {
+			MatchThrow (new MatchLeaf ());
+		} catch (Exception) {
+			return 0;
+		}
+		return 1;
+	}
+
+	/* An inflated clause class: get_exception_catch_class () builds it per frame. */
+	public static int test_0_catch_generic_instance () {
+		try {
+			MatchThrow (new MatchGeneric<int> ());
+		} catch (MatchGeneric<string>) {
+			return 1;
+		} catch (MatchGeneric<int>) {
+			return 0;
+		}
+		return 2;
+	}
+
+	/* A clause the runtime has to answer, because an interface is not a parent chain.
+	 * Only the class hierarchy is tested here; iltests.il carries the interface clause,
+	 * which C# cannot write. */
+	public static int test_0_catch_runtime_wrapped_class () {
+		try {
+			MatchThrow (new InvalidCastException ());
+		} catch (ArithmeticException) {
+			return 1;
+		} catch (SystemException) {
+			return 0;
+		}
+		return 2;
+	}
 }
 
 #if !__MOBILE__

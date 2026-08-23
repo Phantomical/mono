@@ -13,6 +13,25 @@
 	 .size 1
   }
 
+  // An exception type that carries an interface, for the catch clause below. C# refuses
+  // to write a clause on an interface, so the case lives here.
+  .class interface private abstract auto ansi IMatchMarker
+  {
+  }
+
+  .class private auto ansi beforefieldinit MarkedException
+  extends [mscorlib]System.Exception
+  implements IMatchMarker
+  {
+	.method public hidebysig specialname rtspecialname instance void .ctor () cil managed
+	{
+		.maxstack 8
+		ldarg.0
+		call instance void [mscorlib]System.Exception::.ctor()
+		ret
+	}
+  }
+
 .class public auto ansi sealed beforefieldinit Tests {
 
 	.method static public int32 Main(string[] args) il managed {
@@ -4188,6 +4207,38 @@ L3:
 		ret
 	OK:
 		ldc.i4.0
+		ret
+	}
+
+	// A clause on an interface. object_is_instance_of () (mono/mini/mini-exceptions.c)
+	// compares parent chains, and an interface is not on one, so this clause is the case
+	// it hands to the runtime. The first clause is a class the thrown type does not
+	// derive from, so a matcher that answers the interface wrongly runs that one instead.
+	.method public static default int32 test_0_catch_interface_clause () cil managed
+	{
+		.maxstack 2
+		.locals init (int32 V_0)
+
+		ldc.i4.2
+		stloc.0
+	.try {
+		newobj instance void MarkedException::.ctor ()
+		throw
+	}
+	catch [mscorlib]System.ArithmeticException {
+		pop
+		ldc.i4.1
+		stloc.0
+		leave.s DONE
+	}
+	catch IMatchMarker {
+		pop
+		ldc.i4.0
+		stloc.0
+		leave.s DONE
+	}
+	DONE:
+		ldloc.0
 		ret
 	}
 

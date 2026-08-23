@@ -2401,6 +2401,60 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 	return TRUE;
 }
 
+/*
+ * Tells whether assignability to klass follows the parent chain of the candidate class
+ * and nothing else.
+ *
+ * mono_object_handle_isinst () sends an interface and a marshal-by-ref class to the
+ * proxy path. mono_class_is_assignable_from_general () keeps a rule of its own for an
+ * array, a pointer, a variant delegate, a nullable and a generic parameter. Every other
+ * class ends at mono_class_has_parent (). A class that is not inited yet has no
+ * supertypes array, so it goes to the runtime as well.
+ */
+static gboolean
+assignable_by_parent_chain (MonoClass *klass)
+{
+	return m_class_is_inited (klass)
+		&& m_class_get_supertypes (klass) != NULL
+		&& !mono_class_has_failure (klass)
+		&& !MONO_CLASS_IS_INTERFACE_INTERNAL (klass)
+		&& !mono_class_is_marshalbyref (klass)
+		&& !m_class_is_delegate (klass)
+		&& !m_class_is_valuetype (klass)
+		&& m_class_get_rank (klass) == 0
+		&& m_class_get_class_kind (klass) != MONO_CLASS_POINTER;
+}
+
+/*
+ * Tells whether obj is an instance of klass. Sets error where the runtime answers and
+ * fails.
+ */
+static gboolean
+object_is_instance_of (MonoObject *obj, MonoClass *klass, MonoError *error)
+{
+	error_init (error);
+
+	/*
+	 * A throw asks this to find out whether it carries an Exception, and then once for
+	 * each clause it tests, so an unwind pays it for each frame it walks.
+	 * mono_object_isinst_checked () costs two handles and a walk of the general
+	 * assignability rules. The two classes answer most of those questions on their
+	 * own: a catch clause names its class when the method compiles, and the object
+	 * carries the other class.
+	 */
+	if (obj != NULL && klass != NULL) {
+		MonoClass *obj_class = mono_object_class (obj);
+
+		if (obj_class == klass)
+			return TRUE;
+
+		if (assignable_by_parent_chain (klass) && assignable_by_parent_chain (obj_class))
+			return mono_class_has_parent_fast (obj_class, klass);
+	}
+
+	return mono_object_isinst_checked (obj, klass, error) != NULL;
+}
+
 static MonoClass*
 get_exception_catch_class (MonoJitExceptionInfo *ei, MonoJitInfo *ji, MonoContext *ctx)
 {
@@ -2768,7 +2822,7 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 	if (mono_ex->caught_in_unmanaged)
 		MONO_OBJECT_SETREF_INTERNAL (mono_ex, caught_in_unmanaged, 0);
 
-	if (!mono_object_isinst_checked (obj, mono_defaults.exception_class, error)) {
+	if (!object_is_instance_of (obj, mono_defaults.exception_class, error)) {
 		mono_error_assert_ok (error);
 		mono_ex = NULL;
 	}
@@ -2959,7 +3013,7 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 				}
 
 				ERROR_DECL (isinst_error); // FIXME not used https://github.com/mono/mono/pull/3055/files#r240548187
-				if (ei->flags == MONO_EXCEPTION_CLAUSE_NONE && mono_object_isinst_checked (ex_obj, catch_class, error)) {
+				if (ei->flags == MONO_EXCEPTION_CLAUSE_NONE && object_is_instance_of (ex_obj, catch_class, error)) {
 					/* runtime invokes catch even unhandled exceptions */
 					setup_stack_trace (mono_ex, &dynamic_methods, trace_ips, method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE);
 					g_list_free (trace_ips);
@@ -3207,7 +3261,7 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 		obj = (MonoObject *)mono_get_exception_null_reference ();
 	}
 
-	if (!mono_object_isinst_checked (obj, mono_defaults.exception_class, error)) {
+	if (!object_is_instance_of (obj, mono_defaults.exception_class, error)) {
 		mono_error_assert_ok (error);
 		non_exception = obj;
 		obj = (MonoObject *)mono_get_exception_runtime_wrapped_checked (obj, error);
@@ -3226,7 +3280,7 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 		is_caught_unmanaged = TRUE;
 	
 
-	if (mono_object_isinst_checked (obj, mono_defaults.exception_class, error)) {
+	if (object_is_instance_of (obj, mono_defaults.exception_class, error)) {
 		mono_ex = (MonoException*)obj;
 	} else {
 		mono_error_assert_ok (error);
@@ -3503,8 +3557,8 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 				}
 
 				error_init (error);
-				if ((ei->flags == MONO_EXCEPTION_CLAUSE_NONE && 
-				     mono_object_isinst_checked (ex_obj, catch_class, error)) || filtered) {
+				if ((ei->flags == MONO_EXCEPTION_CLAUSE_NONE &&
+				     object_is_instance_of (ex_obj, catch_class, error)) || filtered) {
 					/*
 					 * This guards against the situation that we abort a thread that is executing a finally clause
 					 * that was called by the EH machinery. It won't have a guard trampoline installed, so we must
@@ -4556,7 +4610,7 @@ throw_exception (MonoObject *ex, gboolean rethrow)
 	MonoJitTlsData *jit_tls = mono_get_jit_tls ();
 	MonoException *mono_ex;
 
-	if (!mono_object_isinst_checked (ex, mono_defaults.exception_class, error)) {
+	if (!object_is_instance_of (ex, mono_defaults.exception_class, error)) {
 		mono_error_assert_ok (error);
 		mono_ex = mono_get_exception_runtime_wrapped_checked (ex, error);
 		mono_error_assert_ok (error);
@@ -4755,7 +4809,7 @@ mono_llvm_match_exception (MonoJitInfo *jinfo, guint32 region_start, guint32 reg
 		}
 
 		// FIXME: Handle edge cases handled in get_exception_catch_class
-		if (ei->flags == MONO_EXCEPTION_CLAUSE_NONE && mono_object_isinst_checked (exc, catch_class, error)) {
+		if (ei->flags == MONO_EXCEPTION_CLAUSE_NONE && object_is_instance_of (exc, catch_class, error)) {
 			index = ei->clause_index;
 			break;
 		} else
