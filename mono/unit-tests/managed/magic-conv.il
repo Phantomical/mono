@@ -1798,9 +1798,9 @@
 		ret
 	}
 
-	// The unary table gives nfloat a 4-byte move while the value is 8 bytes.
-	// The move has one stack slot for both source and destination, and cprop
-	// takes it for a whole-value copy, so the lost half never shows.
+	// Unary plus on an nfloat, which the unary table answers with a move. A move
+	// narrower than the value drops its high half, and an nfloat is as wide as
+	// the native float it stands for.
 	.method public hidebysig static int32 test_7_nfloat_unary_plus () cil managed
 	{
 		ldc.r8 7.0

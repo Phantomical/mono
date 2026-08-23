@@ -27,6 +27,7 @@
 #define MINT_NEG_P MINT_NEG_I8
 #define MINT_NOT_P MINT_NOT_I8
 
+#define MINT_MOV_FP MINT_MOV_8
 #define MINT_NEG_FP MINT_NEG_R8
 
 #define MINT_ADD_P MINT_ADD_I8
@@ -73,6 +74,7 @@
 #define MINT_NEG_P MINT_NEG_I4
 #define MINT_NOT_P MINT_NOT_I4
 
+#define MINT_MOV_FP MINT_MOV_4
 #define MINT_NEG_FP MINT_NEG_R4
 
 #define MINT_ADD_P MINT_ADD_I4
@@ -124,7 +126,7 @@ struct MagicIntrinsic {
 };
 
 static const MagicIntrinsic int_unnop[] = {
-	{"op_UnaryPlus", {MINT_MOV_P, MINT_MOV_P, MINT_MOV_4}},
+	{"op_UnaryPlus", {MINT_MOV_P, MINT_MOV_P, MINT_MOV_FP}},
 	{"op_UnaryNegation", {MINT_NEG_P, MINT_NEG_P, MINT_NEG_FP}},
 	{"op_OnesComplement", {MINT_NOT_P, MINT_NOT_P, MINT_NIY}}};
 
