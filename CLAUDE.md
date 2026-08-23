@@ -46,6 +46,13 @@ cmake --build build -j"$(nproc)"
 
 **Always pass all of these.** The build turns none of them on by itself.
 
+**Build with `-j"$(nproc)"`.** A smaller `-j` is not how you keep out of another
+worktree's way: it makes your own build longer, and it leaves the machine idle
+whenever the other work is not runnable. Set the priority instead — `nice -n 20 cmake
+--build build -j"$(nproc)"` for a background build. The scheduler then gives the cores
+to whatever else wants them and gives them back the moment nothing does. Benchmarks
+run at `nice 5` and sweeps at `nice 10`, so a build at 20 yields to both.
+
 `MONO_LLVM_PREFIX` is what defines `ENABLE_LLVM`. Empty, which is the default, means no
 LLVM tier at all. It replaces the old `--with-llvm=`, and the remaining defaults already
 match Unity's desktop Linux configuration.
