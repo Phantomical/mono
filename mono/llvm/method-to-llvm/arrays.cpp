@@ -11,10 +11,18 @@
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/opcodes.h"
 #include "mono/metadata/tokentype.h"
+
+// gc-internals.h declares C functions but does not mark them extern "C"
+// itself, so this include must supply the wrap.
+extern "C" {
+#include "mono/metadata/gc-internals.h"
+}
+
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
+#include <llvm/Support/ErrorHandling.h>
 
 #include <cstdio>
 
@@ -926,6 +934,68 @@ MethodLLVMEmitter::emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature 
 	return push_produced (builder, result, sig->ret);
 }
 
+/// Allocates an array of length elements and answers it. array must be a
+/// szarray class, and length an integer of any width.
+///
+/// The collector's array allocator serves the call where the collector has one,
+/// and the runtime's array-new icall where it does not. Both raise
+/// OverflowException for a negative length. The two disagree above
+/// MONO_ARRAY_MAX_INDEX: the allocator refuses with OutOfMemoryException and the
+/// icall with OverflowException. A caller that can present such a length must
+/// test it first.
+llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
+                                      llvm::Value *length)
+{
+	// mono_gc_get_managed_array_allocator () tests the rank alone. AllocVector
+	// sizes the object as a header plus the elements, so a rank-1 array that
+	// carries bounds comes out short.
+	if (m_class_get_byval_arg (array)->type != MONO_TYPE_SZARRAY)
+		llvm::reportFatalInternalError ("emit_vector_alloc needs a szarray class");
+
+	llvm::Expected<llvm::Value *> vtable = class_operand (builder, array, "mono_vtable_");
+
+	if (!vtable)
+		return vtable.takeError ();
+
+	MonoMethod *allocator = mono_gc_get_managed_array_allocator (array);
+
+	if (allocator != nullptr) {
+		llvm::Expected<llvm::Function *> fast = create_method_decl (allocator);
+
+		if (!fast)
+			return fast.takeError ();
+
+		(*fast)->addRetAttr (llvm::Attribute::NoAlias);
+		// The allocator raises OutOfMemoryException instead of answering null.
+		(*fast)->addRetAttr (llvm::Attribute::NonNull);
+
+		// Argument 0 is the vtable and argument 1 the element count. The count
+		// is a signed native int: the allocator tells a negative length from an
+		// oversized one by its sign.
+		llvm::Type *native = builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8);
+
+		return emit_protected_call (
+			builder, *fast,
+			adapt_to_callee (builder, *fast,
+		                         {*vtable, builder.CreateSExtOrTrunc (length, native)}));
+	}
+
+	llvm::Expected<llvm::Function *> slow =
+		icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_array_new_specific);
+
+	if (!slow)
+		return slow.takeError ();
+
+	(*slow)->addRetAttr (llvm::Attribute::NoAlias);
+
+	return emit_protected_call (
+		builder, *slow,
+		adapt_to_callee (builder, *slow,
+	                         {*vtable,
+	                          builder.CreateSExtOrTrunc (length, builder.getInt32Ty ())}));
+}
+
 /*
  * III.4.20  newarr - create a zero-based, one-dimensional array
  *
@@ -984,12 +1054,11 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 		length = builder.CreatePtrToInt (length, native);
 
 	/*
-	 * The allocator's count is unsigned. Without this check, a negative
-	 * length reaches it as an enormous one and comes back as OutOfMemory.
-	 * The spec asks for
-	 * OverflowException instead, so the check must run before the sign is
-	 * lost. The allocator also takes an int32, so a native-int length that
-	 * does not survive the narrowing overflowed too.
+	 * The spec asks for OverflowException on a negative length, and the two
+	 * allocators disagree about which exception an oversized one draws. These
+	 * tests settle both answers here. They also keep a native-int length off
+	 * the icall's int32 count, where 2^32 truncates to a legal zero and
+	 * allocates an empty array instead of raising anything.
 	 */
 	emit_cond_exception (
 		builder,
@@ -1009,32 +1078,17 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 
 	MonoClass *array =
 		mono_class_create_array (mono_class_from_mono_type_internal (*element), 1);
+	llvm::Expected<llvm::Value *> created = emit_vector_alloc (builder, array, length);
 
-	llvm::Expected<llvm::Function *> allocate =
-		icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_array_new_specific);
-
-	if (!allocate)
-		return allocate.takeError ();
-
-	(*allocate)->addRetAttr (llvm::Attribute::NoAlias);
-
-	llvm::Expected<llvm::Value *> vtable = class_operand (builder, array, "mono_vtable_");
-
-	if (!vtable)
-		return vtable.takeError ();
-
-	llvm::Value *created = emit_protected_call (
-		builder, *allocate,
-		adapt_to_callee (builder, *allocate,
-	                         {*vtable,
-	                          builder.CreateSExtOrTrunc (length, builder.getInt32Ty ())}));
+	if (!created)
+		return created.takeError ();
 
 	pop_stack (1);
 
 	// The array holds the element class this opcode named, so a store into it
 	// while it is still this value needs no covariance test.
-	allocated_here.insert (created);
-	push_stack (created, m_class_get_byval_arg (array));
+	allocated_here.insert (*created);
+	push_stack (*created, m_class_get_byval_arg (array));
 	return llvm::Error::success ();
 }
 

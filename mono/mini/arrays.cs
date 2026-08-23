@@ -806,6 +806,68 @@ class Tests
 		return 0;
 	}
 
+	static Type alloc_refusal (long l) {
+		try {
+			var arr = new byte[l];
+			return null;
+		} catch (Exception e) {
+			return e.GetType ();
+		}
+	}
+
+	// The collector's array allocator and the runtime's array-new icall both
+	// serve newarr, and a length either of them refuses must draw the same
+	// exception whichever one the method got.
+	public static int test_0_newarr_refusal_kind () {
+		if (alloc_refusal (-1) != typeof (OverflowException))
+			return 1;
+		if (alloc_refusal (-6000000000) != typeof (OverflowException))
+			return 2;
+		if (alloc_refusal (5000000000) != typeof (OverflowException))
+			return 3;
+		return 0;
+	}
+
+	// An array past the collector's small-object size leaves the allocator's
+	// inline path for the runtime, and the two must agree on the object.
+	public static int test_0_newarr_past_the_fast_path () {
+		var small = new int [8];
+		var large = new int [1 << 20];
+
+		if (small.Length != 8 || large.Length != (1 << 20))
+			return 1;
+		for (int i = 0; i < small.Length; ++i)
+			if (small [i] != 0)
+				return 2;
+		if (large [0] != 0 || large [large.Length - 1] != 0)
+			return 3;
+
+		large [large.Length - 1] = 42;
+		if (large [large.Length - 1] != 42)
+			return 4;
+		if (large.GetType () != typeof (int []))
+			return 5;
+		return 0;
+	}
+
+	// A vector of a reference type needs its elements zeroed, or the collector
+	// traces whatever the memory held before.
+	public static int test_0_newarr_of_references () {
+		var arr = new object [64];
+
+		for (int i = 0; i < arr.Length; ++i)
+			if (arr [i] != null)
+				return 1;
+
+		arr [63] = "kept";
+		GC.Collect ();
+		if ((string) arr [63] != "kept")
+			return 2;
+		if (arr [62] != null)
+			return 3;
+		return 0;
+	}
+
 	static int llvm_ldlen_licm (int[] arr) {
 		int sum = 0;
 		// The ldlen should be moved out of the loop

@@ -932,6 +932,8 @@ private:
 	llvm::Expected<llvm::Value *> element_address (MonoIrBuilder &builder, StackValue array,
 	                                               StackValue index, MonoType *element);
 	llvm::Error emit_ldlen (MonoIrBuilder &builder);
+	llvm::Expected<llvm::Value *> emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
+	                                                 llvm::Value *length);
 	llvm::Error emit_newarr (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldelema (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldelem (MonoIrBuilder &builder, MonoType *element);

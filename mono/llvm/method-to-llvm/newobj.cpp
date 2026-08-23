@@ -333,10 +333,11 @@ bound_or_length_slot (size_t i, size_t count, size_t rank)
 
 } // namespace
 
-/// Handles the array shapes that construct through newobj instead of newarr:
-/// rank above one, or explicit lower bounds. The metadata constructor has no
-/// body. The runtime's array-new icalls implement it, keyed by the
-/// constructor's method so they can recover the array class.
+/// Handles every array shape that constructs through newobj: rank above one,
+/// explicit lower bounds, and the vector that newarr also writes. The metadata
+/// constructor has no body. A vector allocates the way newarr does. Every other
+/// shape goes to one of the runtime's array-new icalls, keyed by the
+/// constructor's method so the icall can recover the array class.
 llvm::Error
 MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
                                       MonoMethodSignature *sig)
@@ -369,7 +370,18 @@ MethodLLVMEmitter::emit_array_newobj (MonoIrBuilder &builder, MonoMethod *ctor,
 	                                  [] (MonoType *p) { return p->type == MONO_TYPE_I4; });
 	llvm::Value *result;
 
-	if (count == rank && count <= 4 && int32_lengths) {
+	// A szarray constructor with one length builds the same object newarr does,
+	// so it takes the same allocator. Its negative-length answer is
+	// OverflowException either way.
+	if (count == 1 && rank == 1 && int32_lengths
+	    && m_class_get_byval_arg (klass)->type == MONO_TYPE_SZARRAY) {
+		llvm::Expected<llvm::Value *> created =
+			emit_vector_alloc (builder, klass, operands[0]);
+
+		if (!created)
+			return created.takeError ();
+		result = *created;
+	} else if (count == rank && count <= 4 && int32_lengths) {
 		constexpr MonoJitICallId by_rank[] = {
 			MONO_JIT_ICALL_mono_array_new_1,
 			MONO_JIT_ICALL_mono_array_new_2,

@@ -673,6 +673,7 @@ set(MONO_TESTS_IL_SRC
   tailcall/interface-conservestack/9.il
   tailcall-interface-justrun.il
   field-access.il
+  vector-newobj.il
   method-access.il
   ldftn-access.il
   cpblkTest.il
