@@ -40,8 +40,8 @@ bool recompiling (MonoMethod *method);
 /// methods called once or twice out of the compiler. What the trade is worth
 /// past that needs an execution-count distribution measured off a real
 /// workload, not an argument. MONO_LLVM_JIT_TIER1_THRESHOLD moves it, which is
-/// the point of it being a variable at all. Zero there leaves the selected
-/// methods interpreted for good. That is what separates the tier-0 entry path
+/// the point of it being a variable at all. Zero there leaves every tier-0
+/// method interpreted for good. That is what separates the tier-0 entry path
 /// from promotion when one of them misbehaves.
 uint32_t tier1_threshold ();
 
@@ -53,7 +53,7 @@ uint32_t tier1_threshold ();
 /// Tier 2 is never batched: its code is laid out by its own method's counts.
 uint32_t promotion_batch_size ();
 
-/// The most threads the compile queue may run promotions on at once.
+/// The most threads the compile queue can run promotions on at once.
 ///
 /// Two fewer than the processor count, capped at four, and never below one.
 /// MONO_LLVM_JIT_WORKERS moves it, and one there puts every background compile
@@ -102,7 +102,7 @@ uint32_t trivial_inline_budget ();
 /// cost model from one in what it folded.
 uint32_t costed_inline_il_limit ();
 
-/// How many folds deep past a method the tier-2 inliner may go.
+/// How many folds deep past a method the tier-2 inliner can go.
 ///
 /// MONO_LLVM_JIT_INLINE_DEPTH moves it. A call graph with a cycle in it never
 /// runs out of sites, so the loop needs a floor whatever the budget says.

@@ -680,12 +680,10 @@ MethodLLVMEmitter::reload_stack (MonoIrBuilder &builder, const Block &block)
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::emit ()
 {
-	/*
-	 * Before the declaration: a method whose signature still names its own type
-	 * parameters is a shared one, asked for on behalf of every reference
-	 * instantiation at once, and one with no receiver takes a parameter the
-	 * others do not.
-	 */
+	// A method whose signature still names its own type parameters is a shared
+	// one, asked for on behalf of every reference instantiation at once. One
+	// with no receiver takes a parameter the others do not, so
+	// create_method_decl () below needs this worked out first.
 	context_used = mono_method_check_context_used (method);
 
 	auto declr = create_method_decl (method);
@@ -796,10 +794,10 @@ MethodLLVMEmitter::emit ()
 	// asserts on the stackmap ("Expected the FP as base register") and quietly
 	// emits the wrong offset for LOCAL_ESCAPE.
 	//
-	// Nothing here asks for more than 16-byte alignment. So the only thing that ever
-	// realigns these frames is a vector spill slot the register allocator invented.
-	// Declining the realignment clamps that slot instead, at the cost of an unaligned
-	// move.
+	// This emitter never asks for more than 16-byte alignment. So the only thing
+	// that ever realigns these frames is a vector spill slot the register
+	// allocator invented. Declining the realignment clamps that slot instead,
+	// at the cost of an unaligned move.
 	if (has_filters || has_finally || pinned_vars || pinned_receiver)
 		function->addFnAttr ("no-realign-stack");
 

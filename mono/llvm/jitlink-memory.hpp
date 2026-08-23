@@ -19,11 +19,9 @@ typedef struct _MonoCodeManager MonoCodeManager;
 
 namespace mono {
 
-/// The code memory a domain's compiled methods and their thunks come out of.
+/// An arena allocator for executable memory.
 ///
-/// A reservation is readable, writable and executable, and stays that way.
-/// There is no free. A retired method keeps its bytes until the whole arena
-/// goes, which is when its domain does.
+/// Individual allocations are not freed until the whole arena is.
 class CodeArena {
 public:
 	CodeArena ();
@@ -65,8 +63,7 @@ private:
 ///
 /// Protection does not enter into the packing. Code memory is read-write-execute
 /// for its whole life, so a method's read-only data, its mutable globals and its
-/// code all sit in one block. That also puts every fixup inside an object within
-/// PCRel32 reach by construction.
+/// code all sit in one block.
 class CodeMemoryManager final : public llvm::jitlink::JITLinkMemoryManager {
 public:
 	explicit CodeMemoryManager (CodeArena *arena) : arena_ (arena) {}

@@ -145,9 +145,10 @@ parse_guards (const uint8_t *section, size_t size, const uint8_t *code,
 
 /*
  * Most op kinds map onto mono's unwinder one to one: it executes def_cfa,
- * def_cfa_register, offset, same_value and one level of remember/restore
- * state natively. RESTORE and ADJUST_CFA_OFFSET do not, and are normalized at
- * their cases below.
+ * def_cfa_offset, def_cfa_register, offset, same_value and one level of
+ * remember/restore state natively. RESTORE and ADJUST_CFA_OFFSET do not, and
+ * are normalized at their cases below; ARGS_SIZE carries no rule mono needs
+ * and is dropped.
  */
 Expected<GSList *>
 transcode_unwind (const std::vector<UnwindRecord> &records)
@@ -457,10 +458,10 @@ fill_var_info (MonoDebugVarInfo &var, const VarSlot &slot, MonoType *type)
  * a caller's line number is unknown.
  *
  * The variable half is only filled in when the translator pinned this method's
- * arguments and locals to frame slots, which it does when a debugger is
- * attached. Without that there is one home per variable to report and no such
- * home to report, so has_var_info stays off and the debugger answers
- * ERR_ABSENT_INFORMATION - which is the truth.
+ * arguments and locals to frame slots. That happens when a debugger is
+ * attached or a profiler asked for call contexts. Without that there is no
+ * home to report for any variable, so has_var_info stays off and the
+ * debugger answers ERR_ABSENT_INFORMATION - which is the truth.
  */
 static void
 publish_debug_info (MonoDomain *domain, MonoMethod *method,

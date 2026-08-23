@@ -37,9 +37,10 @@ namespace mono {
 /// synchronously, it is urgent" optimisation would put the waiter back.
 ///
 /// The two waits that do exist - Channel::close () and drop () - run the other
-/// way round. They are how a thread tearing something down proves the work
-/// using it has finished, before the thing it was using is destroyed. Call both
-/// with no lock the work can want, the loader lock included.
+/// way round. A thread tearing something down waits for whatever is left
+/// running under its channel or tag, not for work of its own. That is how it
+/// proves the work is finished before the thing it was using is destroyed. Do
+/// not call either while holding the loader lock or a domain lock.
 ///
 /// Several workers take from the one queue, so work is unordered: two items run
 /// at the same time whether or not they came from the same channel, and an item
@@ -149,8 +150,8 @@ public:
 	/// different piece of work and has to be taken.
 	void drop (void *tag);
 
-	/// Wait for the queue to empty and for every worker to be idle. For tests
-	/// and for shutdown; ordinary teardown drains through a channel.
+	/// Wait for the queue to empty and for every worker to be idle. Tests use
+	/// this, and so does shutdown. Ordinary teardown drains through a channel.
 	void drain ();
 
 	/// Stop the workers. Anything queued is dropped, anything running finishes,
@@ -241,8 +242,8 @@ private:
 	mutable std::mutex mutex_;
 	/// Signalled when work arrives or the queue is stopping.
 	std::condition_variable ready_;
-	/// Signalled when a piece of work finishes, which is what the two drains
-	/// and drain () itself are waiting for.
+	/// Signalled when a piece of work finishes, which is what close (), drop ()
+	/// and drain () are all waiting for.
 	std::condition_variable retired_;
 
 	std::deque<Item> pending_;

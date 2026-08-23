@@ -32,9 +32,9 @@ MethodLLVMEmitter::wbarrier_decl ()
 /// Resolves the field that token names and lays out its declaring class, so callers can
 /// read the field's offset.
 ///
-/// An instance opcode passes out_is_static. If the field turns out static, the caller
-/// pops the object and reroutes to the static opcode instead. A static opcode always
-/// refuses an instance field.
+/// An instance opcode passes out_is_static. A field that turns out static then succeeds
+/// instead of raising a mismatch, and out_is_static is set to true, leaving the reroute
+/// to the caller. A static opcode always refuses an instance field.
 llvm::Expected<MonoClassField *>
 MethodLLVMEmitter::resolve_field (uint32_t token, bool want_static, bool *out_is_static)
 {
@@ -142,7 +142,7 @@ MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 {
 	// A shared body serves every reference instantiation, and each of them has
 	// its own class, vtable and statics. class_operand () is the form that
-	// fetches one from the context; a site that still burns the symbol in
+	// fetches one from the context. A site that still burns the symbol in
 	// refuses here, and the method is compiled against the instantiation the
 	// caller asked for instead.
 	if (depends_on_context (klass))
@@ -202,13 +202,12 @@ MethodLLVMEmitter::cctor_already_ran (MonoClass *klass)
 /// Emits the check that runs klass's static constructor, unless it has already run.
 ///
 /// The constructor itself never runs here. It is arbitrary managed code, and a
-/// compilation thread must not execute it. So a site that still needs the check gets
-/// a call. Every site the CIL asks for a check emits one, and ClassInitPass deletes
-/// the ones a dominating check already covers.
+/// compilation thread must not execute it. A site that still needs the check gets a
+/// call, and ClassInitPass deletes the ones a dominating check already covers.
 llvm::Error
 MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 {
-	// The call would find the work done and return at once, and a class stays
+	// The call would find the work done and return at once. A class stays
 	// initialized for as long as the domain the code is compiled into lives.
 	if (cctor_already_ran (klass))
 		return llvm::Error::success ();

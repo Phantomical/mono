@@ -166,7 +166,7 @@ compile_worker_count ()
 		 * against 39 s less of everything else.
 		 *
 		 * mono_cpu_count () reads the affinity mask and the cgroup quota, so a
-		 * container gets what it may use rather than what the machine has.
+		 * container gets what it can use rather than what the machine has.
 		 */
 		int cpus = mono_cpu_count ();
 
@@ -200,7 +200,7 @@ tier2_enabled ()
  * thousand over 8 paired reps, almost all of it compile time it no longer
  * spends, because that workload is full of methods entered a few thousand times
  * and then never again. SharpChess reads -2.5% over 8 reps, and it is the arm
- * that says how far this may go: at two hundred thousand it turns and costs
+ * that says how far this can go: at two hundred thousand it turns and costs
  * +8.5%, because its hot methods stay at tier 1 for the whole search.
  *
  * The counter counts only entries, so a loop that runs for a minute inside one

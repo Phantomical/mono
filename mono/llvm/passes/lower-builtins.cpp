@@ -4,8 +4,8 @@
  *
  * Each builtin declaration carries the name of the function it stands for, so
  * the rewrite is a matter of restating the site against that function with the
- * arguments the real shape wants. Nothing here reads mono's metadata: what the
- * translator could not say in the call it said on the declaration.
+ * arguments the real shape wants. The rewrite reads none of mono's metadata:
+ * what the translator could not say in the call it said on the declaration.
  */
 
 #include "lower-builtins.hpp"
@@ -50,7 +50,7 @@ lower_string_constructor (CallBase *site, Function *target)
 	} else {
 		CallInst *call = b.CreateCall (target, args);
 
-		/* A managed frame is observable; emit_protected_call says why. */
+		/* A managed frame is observable. emit_protected_call says why. */
 		call->setTailCallKind (CallInst::TCK_NoTail);
 		lowered = call;
 	}
@@ -103,7 +103,7 @@ LowerBuiltinsPass::run (Module &m, ModuleAnalysisManager &)
 			                    + kind + "' on " + decl->getName ());
 		}
 
-		/* Anything left is a use no lowering understands; fail loudly. */
+		/* Anything left is a use no lowering understands, so fail loudly. */
 		if (!decl->use_empty ())
 			report_fatal_error (Twine ("unlowered use of ") + decl->getName ());
 		decl->eraseFromParent ();

@@ -50,9 +50,9 @@ public:
 	/// LLVM's own defaults, which are what it uses at O2 and above.
 	///
 	/// PassBuilder settles the level-dependent ones in
-	/// setupOptionsForPipelineAlias (), which is private to it, so a builder of
-	/// ours starts from these whatever level it goes on to build for. Prefer a
-	/// tier's own settings below.
+	/// setupOptionsForPipelineAlias (), a function local to PassBuilder.cpp. A
+	/// builder of ours starts from these whatever level it goes on to build
+	/// for. Prefer a tier's own settings below.
 	MonoPipelineTuningOptions ();
 
 	/// The settings each tier's builder is made with.
@@ -70,12 +70,11 @@ public:
 	bool EnablePromotion = true;
 };
 
-/// This class builds the pipelines used for various tiers.
+/// A builder for both tiers' pipelines, and nothing else.
 ///
-/// It is a builder and nothing else: a pipeline it returns owns what it needs,
-/// so the builder can go as soon as the pipeline is built. The target machine
-/// and the file system are the caller's, and both have to outlive every
-/// pipeline built against them.
+/// A pipeline it returns owns what it needs, so the builder can go as soon
+/// as the pipeline is built. The target machine and the file system are the
+/// caller's, and both have to outlive every pipeline built against them.
 class MonoPassBuilder : public llvm::PassBuilder {
 	llvm::TargetMachine *TM;
 	MonoPipelineTuningOptions PTO;
@@ -104,11 +103,10 @@ public:
 	llvm::ModulePassManager buildTier2MaterializePipeline ();
 
 private:
-	/// This is the common simplification pipeline that runs before we apply profiling
-	/// statistics.
+	/// The simplification pipeline both tiers run before their own PGO pass.
 	///
-	/// It needs to be exactly the same between tier1 and tier2 or else the profile
-	/// counts will not be able to be applied.
+	/// It must stay identical between tier1 and tier2, because a difference in
+	/// the CFG breaks the counter indices the profile is keyed on.
 	llvm::FunctionPassManager buildCommonFunctionSimplificationPipeline ();
 	llvm::ModulePassManager buildCommonModuleSimplificationPipeline ();
 

@@ -264,8 +264,9 @@ MethodLLVMEmitter::pass_context_to (llvm::Function *callee, std::vector<llvm::Va
 		return false;
 
 	/*
-	 * Only this body's own declaration ever carries the parameter, so this is a
-	 * shared method calling itself and the context to hand on is the one it was
+	 * A callee's declaration carries the parameter only when this body's own
+	 * call to it shares this instantiation's context (calls_through_context
+	 * ()). Either way, the context to hand on is the one this body was
 	 * entered with.
 	 */
 	args.push_back (rgctx);

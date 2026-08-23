@@ -26,9 +26,10 @@ void
 write_context_stub (char *at, void *context, void *target)
 {
 	/*
-	 * %r10 is MONO_ARCH_RGCTX_REG, and it is what LLVM pins a `nest` parameter
-	 * to. That is how the shared body declares the context it is entered
-	 * with. A thunk in front of this one leaves the register alone.
+	 * %r10 is MONO_ARCH_RGCTX_REG, the register a `nest` parameter is pinned to
+	 * (method-to-llvm/call.cpp has the mechanism). That is how the shared body
+	 * declares the context it is entered with. A thunk in front of this one
+	 * leaves the register alone.
 	 */
 	static const uint8_t movabs_r10[] = { 0x49, 0xBA };
 	int64_t displacement = (int64_t) ((char *) target - (at + context_stub_size));

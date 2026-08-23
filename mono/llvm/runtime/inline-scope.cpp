@@ -34,7 +34,7 @@ may_fold (MonoDomain *domain, MonoMethod *callee)
 		return false;
 
 	// A dynamic method is freed on its own. A copy of its body folded into a
-	// caller will outlive the data its constants point at.
+	// caller would outlive the data its constants point at.
 	if (callee->dynamic)
 		return false;
 
@@ -202,7 +202,7 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 	if (!materialized) {
 		consumeError (materialized.takeError ());
 
-		// A failed translation leaves whatever it got as far as behind. Take
+		// A failed translation leaves whatever it built so far behind. Take
 		// that back off, or the caller calls a body with no ret.
 		(*target)->deleteBody ();
 		return nullptr;
@@ -213,8 +213,8 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 	/*
 	 * Recorded because the body exists rather than because a fold happened: the
 	 * fold is the pipeline's decision, and this is not where it is taken. What
-	 * it costs when the body is stripped again is one de-promotion of the root
-	 * that nothing needed.
+	 * it costs when the body is stripped again is one wasted de-promotion of
+	 * the root.
 	 */
 	if (Expected<MonoDomainMethod *> record = domain_method_get (domain, callee))
 		(*record)->note_folded_into (scope.root);

@@ -29,15 +29,14 @@ struct Compiled {
 };
 
 /// Records that a piece of code, and the record registered for it, belong to
-/// a method - see TranslationTarget::remember.
+/// a method. Every compile passes through here, or freeing the method leaves
+/// that compile's code and record behind for good.
 using RememberFn = llvm::function_ref<void (const CompiledMethod &, MonoJitInfo *)>;
 
 /// Run as a given domain for as long as this is alive.
 ///
-/// Translation resolves everything per-domain against the domain the code will
-/// run as, so the thread has to be that domain while it happens. The restore
-/// has to survive every way out of the scope, which is why it is a guard
-/// rather than a call on each return path.
+/// The restore has to survive every way out of the scope, which is why it is
+/// a guard rather than a call on each return path.
 class DomainScope {
 public:
 	explicit DomainScope (MonoDomain *domain);
@@ -66,9 +65,7 @@ struct TranslationTarget {
 	/// Publish a callee and return the record its stub was carved on.
 	llvm::function_ref<llvm::Expected<MonoDomainMethod *> (MonoMethod *)> publish_callee;
 
-	/// Records that a piece of code, and the record registered for it, belong
-	/// to this method. Every compile passes through here, or freeing the
-	/// method leaves that compile's code and record behind for good.
+	/// Runs after a compile publishes; see RememberFn.
 	RememberFn remember;
 
 	/// Decide what a failed translation means. A metadata failure is something
@@ -89,9 +86,9 @@ struct TranslationTarget {
 /// accessor, mini's own code for a method not implemented in IL, and otherwise a
 /// translation of its IL.
 ///
-/// This is where the profiler's compilation of a method begins. Every path
-/// out of it raises exactly one end, so a consumer pairing the two never
-/// carries an open span for the rest of the process.
+/// This raises the profiler's jit_begin, and jit_failed when no body gets
+/// published. It raises no end on success: a non-null *published is what
+/// tells the caller to raise jit_done once the method can be looked up.
 llvm::Expected<Compiled> translate_and_compile (const TranslationTarget &target,
                                                 MonoMethod *method,
                                                 MonoJitInfo **published);

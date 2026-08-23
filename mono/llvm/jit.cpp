@@ -73,8 +73,8 @@ thread_local uint64_t g_object_handed = 0;
 enum class VerifyLevel {
 	/// Nothing is checked.
 	off,
-	/// The translator's output, every pass written here, and the module
-	/// codegen is handed.
+	/// The translator's output, the module after each pass is_mono_pass ()
+	/// names, and the module codegen is handed.
 	mono,
 	/// The above plus every stock pass in the optimization pipeline.
 	each,
@@ -148,8 +148,9 @@ verify_or_die (const Function &f, StringRef when)
 		                  diagnostics);
 }
 
-/// The passes this backend writes, by the name the pass instrumentation reports
-/// them under. A break introduced by one of these is a bug here.
+/// The passes VerifyLevel::mono checks after, by the name the pass
+/// instrumentation reports them under. A new pass added elsewhere in this
+/// backend is not checked here until its name is added too.
 bool
 is_mono_pass (StringRef pass)
 {
@@ -877,7 +878,7 @@ tier1_profiling_enabled ()
  * no such fallback. Where the code lands is what keeps every reference inside
  * PCRel32 range - see jitlink-memory.cpp.
  *
- * CodeGenOptLevel::None is the tier-0 choice on purpose. It selects FastISel,
+ * CodeGenOptLevel::None is the tier-1 choice on purpose. It selects FastISel,
  * which is the cheap instruction selection this tier wants. The easy wins come
  * from the O1 IR pipeline, not from the optimizing selector. FastISel falls
  * back to SelectionDAG per block for constructs it does not cover, which costs
@@ -1327,10 +1328,11 @@ MonoJit::create (CodeArena *arena)
 		return std::move (err);
 
 	/*
-	 * Intel syntax for what MONO_LLVM_JIT_ASM prints, which is the syntax the
-	 * Intel manuals and a debugger's disassembly here use. The option reaches
-	 * the MCAsmInfo, which the instruction printer, the `.intel_syntax noprefix`
-	 * directive and register printing all read, so the whole dump agrees.
+	 * Intel syntax for what MONO_JIT_DUMP prints at tier1-asm or tier2-asm,
+	 * which is the syntax the Intel manuals and a debugger's disassembly here
+	 * use. The option reaches the MCAsmInfo, which the instruction printer,
+	 * the `.intel_syntax noprefix` directive and register printing all read,
+	 * so the whole dump agrees.
 	 *
 	 * It has to run before the first TargetMachine, because MCAsmInfo reads the
 	 * option in its constructor and every TargetMachine builds one. The object a

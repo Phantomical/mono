@@ -45,7 +45,7 @@ using LazyCompile = llvm::unique_function<void *()>;
 class LazyCallbacks {
 public:
 	/// Build the pool over the host's re-entry ABI. A trampoline that fires
-	/// with no compile behind it lands at ON_ERROR, which cannot return.
+	/// with no compile behind it lands at on_error, which cannot return.
 	static llvm::Expected<std::unique_ptr<LazyCallbacks>> create (void *on_error);
 
 	~LazyCallbacks ();
@@ -53,15 +53,15 @@ public:
 	LazyCallbacks (const LazyCallbacks &) = delete;
 	LazyCallbacks &operator= (const LazyCallbacks &) = delete;
 
-	/// Reserve a trampoline that runs COMPILE on its first call and continues
+	/// Reserve a trampoline that runs compile on its first call and continues
 	/// into the address it returns, and hand back its address.
 	///
 	/// Threads that arrive together all land on the same address. Each of them
-	/// can run COMPILE to get there, so COMPILE must be safe to run again and
+	/// can run compile to get there, so compile must be safe to run again and
 	/// to run on more than one thread at once.
 	llvm::Expected<void *> reserve (LazyCompile compile);
 
-	/// Give TRAMPOLINE back, for a later reserve () to hand out again, and drop
+	/// Give trampoline back, for a later reserve () to hand out again, and drop
 	/// the compile behind it. An address this never handed out is ignored.
 	///
 	/// The caller has proved nothing can reach whatever pointed at it: the next
@@ -77,7 +77,7 @@ private:
 		std::atomic<void *> landing { nullptr };
 	};
 
-	/// Run the compile TRAMPOLINE stands for. Called on whichever thread
+	/// Run the compile trampoline stands for. Called on whichever thread
 	/// entered the stub, from the resolver.
 	void *fire (llvm::orc::ExecutorAddr trampoline);
 

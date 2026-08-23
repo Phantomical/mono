@@ -206,7 +206,6 @@ MethodLLVMEmitter::emit_prefix (int opcode, uint64_t operand)
 		prefixes.readonly_ = true;
 		return llvm::Error::success ();
 	case MONO_CEE_NO_:
-		/* Permission to skip fault checks, never an obligation. */
 		return llvm::Error::success ();
 	default:
 		llvm::report_fatal_error ("emit_prefix: not a prefix opcode");
@@ -228,8 +227,8 @@ MethodLLVMEmitter::access_alignment (MonoType *location)
 /// LLVM takes an atomic load or store of a scalar whose size is a whole power-of-two
 /// number of bytes. A scalar is an integer, a pointer or a floating point value.
 /// Anything the machine cannot do in one instruction lowers into a call into the
-/// atomic runtime library, which nothing here defines. So the access must also fit
-/// the target's atomic width and be aligned to at least its own size.
+/// atomic runtime library, and this backend does not link one in. So the access
+/// must also fit the target's atomic width and be aligned to at least its own size.
 bool
 MethodLLVMEmitter::can_access_atomically (llvm::Type *type, llvm::Align align)
 {

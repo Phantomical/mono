@@ -2,7 +2,6 @@
  * \file
  * \brief The interface mono's C runtime compiles methods through.
  *
- * This is the whole surface the rest of mono sees of the LLVM-only backend.
  * The runtime asks for a method's code and gets back an address to call.
  */
 
@@ -28,7 +27,7 @@ typedef struct _MonoJitInfo MonoJitInfo;
 /// consume the options queued by mono_llvm_jit_add_option ().
 void mono_llvm_jit_init (void);
 
-/// Compiles a method and returns the address to call it at.
+/// Compiles a method and returns its function pointer.
 ///
 /// The code goes into the given domain's linker. The address is a stub, and
 /// it stays the same for the life of the process however often the method is
@@ -37,15 +36,11 @@ void mono_llvm_jit_init (void);
 /// Returns NULL and sets the error if the method cannot be compiled.
 void *mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *domain, MonoError *error);
 
-/// Returns the address to call a method at, without compiling it.
+/// Returns the function pointer for this method, without compiling it.
 ///
-/// This is the same stub mono_llvm_jit_compile_method () returns, so the two
-/// agree whichever asked first. The body behind the stub is compiled by the
-/// first call that arrives through it.
-///
-/// A caller that only wants the address gets it at the price of a symbol and a
-/// stub. A caller that needs the code to exist, or that needs a refusal to
-/// come back as an error it can raise, has to compile instead.
+/// This allocates a stub if not already created. If you need the method to be
+/// compiled immediately use mono_llvm_jit_compile_method (), otherwise the
+/// method will be compiled when it is first called.
 ///
 /// Returns NULL and sets the error if the method cannot be published.
 void *mono_llvm_jit_stub_for (MonoMethod *method, MonoDomain *domain, MonoError *error);
@@ -91,8 +86,8 @@ void mono_llvm_jit_free_method (MonoMethod *method);
 /// mono_jit_info_table_find () to get that record.
 void *mono_llvm_jit_find_body (MonoDomain *domain, MonoMethod *method);
 
-/// Calls visit with the jit info of every live body of a method, oldest
-/// first.
+/// Calls visit with the jit info of every live body a method has in a
+/// domain, oldest first.
 ///
 /// A method keeps the bodies it was compiled into before, and a thread can
 /// still be running in one of them. Anything that has to hold wherever the
@@ -119,8 +114,8 @@ void mono_llvm_jit_add_option (const char *opt);
 /// interpreter starts at all.
 mono_bool mono_llvm_jit_tier0_enabled (void);
 
-/// How many calls a method takes at tier 0 before it should be asked for as
-/// tier 1, or zero if it never promotes.
+/// How many calls a method takes at tier 0 before it is asked for as tier 1,
+/// or zero if it never promotes.
 int32_t mono_llvm_jit_tier0_calls (MonoMethod *method);
 
 /// Asks for a method to be compiled at the given tier, replacing whatever tier
@@ -151,7 +146,7 @@ mono_bool mono_llvm_jit_promote_now (MonoMethod *method, MonoDomain *domain, uin
 ///
 /// Whichever engine enters a method first is the one that has to call this. A
 /// method the interpreter reaches on its own is never asked for through
-/// mono_llvm_jit_compile_method (), so nothing else gets the chance to decide
+/// mono_llvm_jit_compile_method (), so only an explicit call to this decides
 /// whether its body can run. A passing verdict is cached, so a method both
 /// engines enter is verified once.
 ///

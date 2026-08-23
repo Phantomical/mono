@@ -4,8 +4,8 @@
  *
  * A wrapper is IL the runtime writes, not IL a compiler emits from source. It
  * says things ordinary CIL cannot say: call this icall, push this MonoClass,
- * read the flag that says a thread has been asked to stop. These opcodes
- * live in mono's own opcode space behind MONO_CUSTOM_PREFIX.
+ * read one of the runtime's own thread-locals. These opcodes live in mono's
+ * own opcode space behind MONO_CUSTOM_PREFIX.
  *
  * This backend is JIT-only, so most of these opcodes are simple to translate.
  * Mini has to record a runtime address as a patch for a later stage to fill
@@ -49,7 +49,7 @@ MethodLLVMEmitter::address_symbol (const std::string &name, void *address)
 	return extern_symbol (name);
 }
 
-/*
+/**
  * A save_lmf wrapper links its frame onto the thread's LMF chain. This chain
  * is how a stack walk that starts in native code finds its way back to
  * managed frames. The walker reads the caller ip off the stack the LMF
@@ -222,7 +222,6 @@ MethodLLVMEmitter::emit_mono_ldptr (MonoIrBuilder &builder, uint32_t token)
 		return llvm::Error::success ();
 	}
 
-	// The symbol name comes from this slot and the wrapper that owns it.
 	char *owner = mono_method_full_name (method, TRUE);
 	std::string name = identity_symbol (
 		std::string ("mono_wrapper_ptr_") + owner + "_" + std::to_string (token), method);
@@ -240,7 +239,7 @@ MethodLLVMEmitter::emit_mono_ldptr (MonoIrBuilder &builder, uint32_t token)
  * which domain to attach the thread to. It cannot ask the thread: an
  * unattached thread has no answer to give, which is why the wrapper attaches
  * it in the first place. The domain is fixed once the wrapper compiles, so
- * this bakes in the same constant mini folds in.
+ * this bakes it in as a constant.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_lddomain (MonoIrBuilder &builder)
@@ -259,11 +258,10 @@ MethodLLVMEmitter::emit_mono_lddomain (MonoIrBuilder &builder)
  * III.F0.20  mono_get_sp - push a marker for where this frame's stack is
  *
  * The GC-safe transition helpers take a `gpointer *stackdata`. They read it
- * only as an approximation of the stack pointer at the call. The runtime
- * measures the frame against it. If the size does not add up, it aborts.
- * Nothing else looks at the value. Any address in this frame will do, so a
- * pointer-sized slot of its own is the cheapest one to hand out. Mini
- * creates a local and pushes its address the same way.
+ * only as an approximation of the stack pointer at the call. The runtime's
+ * size check is the value's only reader: it measures the frame against it
+ * and aborts when the size does not add up. Any address in this frame will
+ * do, so a pointer-sized slot of its own is the cheapest one to hand out.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_get_sp (MonoIrBuilder &builder)
@@ -321,9 +319,7 @@ MethodLLVMEmitter::emit_mono_objaddr (MonoIrBuilder &builder)
  * and no arguments to pass, only the allocation.
  *
  * The vtable is the compiling domain's, the same constant every other
- * allocation here resolves. Mini reaches the same vtable by handing the
- * domain and the class to ves_icall_object_new, which looks it up again at
- * run time.
+ * allocation here resolves.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_newobj (MonoIrBuilder &builder, uint32_t token)

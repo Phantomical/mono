@@ -92,7 +92,7 @@ struct Owned {
 
 /// What this engine keeps for one method in one domain, hung off that method's
 /// MonoDomainMethod record. The record owns the thunk, the name, the tier and
-/// the bodies; this is what the engine needs beside them.
+/// the bodies. This is what the engine needs beside them.
 struct MonoBackend::MethodState {
 	/// What this method's compiles put somewhere it has to be taken back out
 	/// of.
@@ -113,7 +113,6 @@ struct MonoBackend::MethodState {
 };
 
 struct MonoBackend::DomainState {
-	/// The actual domain we are tracking.
 	MonoDomain *domain;
 
 	/// The code memory we allocate the actual functions and thunks out of. It
@@ -121,7 +120,6 @@ struct MonoBackend::DomainState {
 	/// after them.
 	CodeArena code;
 
-	/// The MonoJit that is used to compile methods.
 	std::unique_ptr<MonoJit> jit;
 
 	/// The re-entry trampolines a published-but-uncompiled thunk points at.
@@ -187,7 +185,7 @@ struct MonoBackend::DomainState {
 		return state;
 	}
 
-	/// Undefine everything \p dm was published as and hand its blocks and
+	/// Undefines everything \p dm was published as and hands its blocks and
 	/// trampolines back.
 	void retire (MonoDomainMethod &dm);
 };
@@ -1077,9 +1075,11 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 }
 
 /*
- * Runs on a mutator thread inside the interpreter, so it hands everything it
- * can to the compile queue. Nothing waits for the result, and a compile that
- * fails once it is running leaves the method at the tier it is at.
+ * Runs on a mutator thread that just used up a promotion counter - the
+ * interpreter's for tier 0, a tier-1 body's own instrumentation for tier 2 -
+ * so it hands everything it can to the compile queue. Nothing waits for the
+ * result, and a compile that fails once it is running leaves the method at
+ * the tier it is at.
  */
 bool
 MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier tier)
@@ -1112,7 +1112,7 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier
 	 * Two shapes are queued one to a piece of work rather than batched.
 	 *
 	 * A tier-2 compile is laid out by its own method's counts, so it has no
-	 * module to share; and it is asked for by a method that is already hot,
+	 * module to share. It is also asked for by a method that is already hot,
 	 * which is the worst thing to make wait behind a batch of others.
 	 *
 	 * A dynamic method is the one thing that gets freed, and drop () has to
@@ -1375,12 +1375,12 @@ MonoBackend::body_of (MonoDomain *domain, MonoMethod *method)
 	std::optional<MonoMethodBody> body = dm->body ();
 
 	/*
-	 * An interpreted method is answered for as if it had none. What it has is
-	 * the entry thunk, which every interpreted method shares - so handing it
-	 * back names no method in particular, and callers take it for a body: they
-	 * look its jit info up by address, and the interpreter reads it as "this
-	 * has native code now" and starts calling it through the native boundary
-	 * instead of interpreting it.
+	 * An interpreted method gets null here, as if it had no body. What it has
+	 * is the entry thunk, which every interpreted method shares, so handing it
+	 * back names no method in particular. A caller takes it for a body: it
+	 * looks up the jit info by address. The interpreter reads that as "this
+	 * has native code now" and starts calling through the native boundary
+	 * instead of interpreting the method.
 	 */
 	if (!body || body->tier == MonoTier::interp)
 		return nullptr;
@@ -1452,12 +1452,13 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 		return published.takeError ();
 
 	/*
-	 * Compiled here rather than on the first call through the thunk. Two reasons,
-	 * and the second is not an optimisation: a refusal can come back through
-	 * MonoError and be raised by the runtime, which knows how to throw from
-	 * where it stands; and the caller may hand the address to native code that
-	 * calls it from a thread mono has never seen, where there is no domain to
-	 * compile against and no thread info to read one from.
+	 * Compiled here rather than on the first call through the thunk, for two
+	 * reasons. The first: a refusal can come back through MonoError and be
+	 * raised by the runtime, which knows how to throw from where it stands.
+	 * The second, and this one is not an optimisation. The caller may hand
+	 * the address to native code that calls it from a thread mono has never
+	 * seen. There is no domain there to compile against, and no thread info
+	 * to read one from.
 	 */
 	if (llvm::Error err = entry_point (**state, **published).takeError ())
 		return std::move (err);

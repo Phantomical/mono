@@ -118,9 +118,10 @@ CompileQueue::stop ()
 		std::thread::id self = std::this_thread::get_id ();
 
 		/*
-		 * Only the std::thread comes out. The entries stay: a detached worker
-		 * still names its own by index once it is out of Worker::start (), and
-		 * stopping_ keeps any more from being added behind it.
+		 * Only the std::thread comes out. Thread's own entry stays where it
+		 * is: a detached worker still names its own by index once it is out
+		 * of Worker::start (), and stopping_ is already set above, so
+		 * nothing grows threads_ behind it.
 		 */
 		for (Thread &worker : threads_) {
 			/* Already joined or detached by an earlier stop (). Both this and
@@ -225,7 +226,7 @@ CompileQueue::run (size_t index)
 
 		/*
 		 * Stopping wins over what is left queued. Whoever asked for the stop
-		 * is on their way out and the work was for them; a queued compile
+		 * is on their way out and the work was for them. A queued compile
 		 * that never runs costs nothing, since nothing is waiting for one.
 		 */
 		if (stopping_)

@@ -60,7 +60,8 @@ public:
 
 	/// Releases everything associated with a MonoMethod.
 	///
-	/// Calling this while the method is still in use will lead to UB.
+	/// Calling this while a thread is still executing the method can free the
+	/// memory that thread is running in.
 	static void release_method (MonoMethod *method);
 
 	/// Stops all background compilation. Blocks until any in-progress work is
@@ -77,10 +78,10 @@ public:
 	/// the tier running it.
 	///
 	/// Returns as soon as the work is queued, never once it is done.
-	/// Answering false means the work was refused and nothing retries it. A
+	/// Returning false means the work was refused and nothing retries it. A
 	/// domain on its way out takes nothing new, and neither does an engine
-	/// that does not exist yet. A caller that counts calls towards a
-	/// promotion has to count again.
+	/// already taken apart. A caller that counts calls towards a promotion
+	/// has to count again.
 	static bool request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier tier);
 
 	/// Compiles \p method at \p tier in \p domain on the calling thread, and
@@ -112,17 +113,17 @@ public:
 	static void *unbox_entry_of (MonoMethod *method);
 
 public:
-	/// Compiles \p method within \p domain, and returns its function pointer,
-	/// or an error otherwise.
+	/// Compiles \p method within \p domain, and returns its function pointer.
 	llvm::Expected<void *> compile (MonoMethod *method, MonoDomain *domain);
 
-	/// Returns the address \p method is called at in \p domain, without
+	/// Returns the function pointer for \p method in \p domain, without
 	/// compiling it.
 	///
-	/// The body behind the stub is compiled by the first call that arrives
-	/// through it. A method native code enters has an address of its own,
-	/// handed back by compile () instead: this function is never asked for
-	/// one.
+	/// This allocates a stub if not already created. If you need the method
+	/// compiled immediately use compile () instead, otherwise it is compiled
+	/// when first called. A method native code enters has an address of its
+	/// own, handed back by compile () instead: this function is never asked
+	/// for one.
 	llvm::Expected<void *> stub_for (MonoMethod *method, MonoDomain *domain);
 
 private:
@@ -161,7 +162,7 @@ private:
 	/// has not been compiled yet. This is what the stub in front of it is
 	/// redirected to on the first call through it.
 	///
-	/// With allow_tier0 false the answer is a compiled body. The interpreter
+	/// With allow_tier0 false, this returns a compiled body. The interpreter
 	/// is not offered the method, and any interpreter entry it already has
 	/// is compiled over. Pass false if you cannot set the register the
 	/// interpreter reads its method from.
@@ -171,9 +172,13 @@ private:
 	/// Points \p dm's entry at the body \p shared compiles to, compiling that
 	/// body if this domain has not yet.
 	///
-	/// Fails with a SharingRefusal when the translator does not share the
-	/// method. \p dm is then left untouched, which is the caller's signal to
-	/// compile it against its own instantiation.
+	/// Fails with a SharingRefusal unless the shared body fails verification,
+	/// which comes back as that failure instead. The SharingRefusal cases:
+	/// another thread already holds the claim to compile the shared body,
+	/// this thread's own compile of it fails, or that compile succeeds and
+	/// the record still shows no body right after. \p dm is then left
+	/// untouched on a SharingRefusal, which is the caller's signal to compile
+	/// it against its own instantiation.
 	llvm::Expected<Compiled> enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 	                                            MonoMethod *shared, MonoTier tier);
 
@@ -204,7 +209,7 @@ private:
 	///
 	/// Every method in \p dms is compiled at the one tier given. The results
 	/// line up with \p dms. A member that a shared body can serve leaves the
-	/// batch and is answered from that body instead. The interpreter is
+	/// batch, and its result comes from that body instead. The interpreter is
 	/// offered none of them - compile_body () decides that before it gets
 	/// here, and promotion has already settled it.
 	std::vector<llvm::Expected<Compiled>>

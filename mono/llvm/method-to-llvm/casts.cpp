@@ -105,10 +105,11 @@ namespace mono {
  *
  * `mono_class_is_assignable_from_general ()` (`mono/metadata/class.c`) ends at
  * that call, and each branch above it either agrees or governs a shape refused
- * here. An interface reads the interface bitmap, an array and a delegate have
- * variance, a marshal-by-ref target goes to
- * `mono_object_handle_isinst_mbyref ()`, and a pointer, a nullable and a
- * generic argument each have a rule of their own.
+ * here: an interface reads the interface bitmap, an array and a delegate have
+ * variance, and a pointer, a nullable and a generic argument each have a rule
+ * of their own. A marshal-by-ref target never reaches that function at all;
+ * the runtime answers it with `mono_object_handle_isinst_mbyref ()` instead,
+ * so this refuses it too.
  *
  * The caller refuses a context-dependent class as well, because the test
  * compares against the class and against its depth as constants, and a shared
@@ -167,7 +168,7 @@ interface_test_applies (MonoClass *klass)
  * Emits the inline half of a cast: branches to yes when the object's class has
  * klass among its supertypes, and to otherwise when this cannot tell.
  *
- * Goes on emitting into no block. The caller owns both successors.
+ * Leaves yes and otherwise unterminated. The caller fills in both.
  */
 void
 MethodLLVMEmitter::emit_subtype_test (MonoIrBuilder &builder, MonoClass *klass,
@@ -227,7 +228,7 @@ MethodLLVMEmitter::emit_subtype_test (MonoIrBuilder &builder, MonoClass *klass,
  * object's vtable has the interface among the ones it implements, and to
  * otherwise when this cannot tell.
  *
- * Goes on emitting into no block. The caller owns both successors.
+ * Leaves yes and otherwise unterminated. The caller fills in both.
  *
  * This is `MONO_VTABLE_IMPLEMENTS_INTERFACE ()` (`class-internals.h`) as IR.
  * The vtable carries the bitmap and the bound both, so the object's vtable is

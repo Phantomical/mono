@@ -50,7 +50,7 @@ public:
 	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);
 };
 
-/// Answers an error naming an inline copy the module still defines.
+/// Returns an error naming an inline copy the module still defines.
 llvm::Error inline_copies_stripped (const llvm::Module &m);
 
 } // namespace mono

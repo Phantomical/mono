@@ -71,8 +71,8 @@ ProfileInliner::materialize (Function &decl, Module &into)
 {
 	uint32_t limit = costed_inline_il_limit ();
 
-	// A breakpoint is armed on a method, and a folded copy carries none of the
-	// method's sequence points.
+	// A folded copy carries no sequence points of its own; see
+	// materialize_trivial_callees ().
 	if (limit == 0 || scope_.budget == 0
 	    || mini_get_debug_options ()->gen_sdb_seq_points)
 		return nullptr;
@@ -94,8 +94,8 @@ ProfileInliner::materialize (Function &decl, Module &into)
 		return nullptr;
 	}
 
-	// A clause-bearing body folded into a caller needs its clauses merged into
-	// the caller's table, which is work of its own.
+	// A clause-bearing body needs its clauses merged into the caller's table;
+	// see materialize_trivial_callees ().
 	if (header->num_clauses != 0 || header->code_size > limit)
 		return nullptr;
 
@@ -116,10 +116,9 @@ ProfileInliner::materialize (Function &decl, Module &into)
 	                             types_, scope_);
 
 	/*
-	 * A candidate on a path the root never runs must not decide what the root
-	 * compiles to, so a body whose own callees will not resolve is dropped
-	 * whole. The module it was built in goes with it, which is what leaves the
-	 * root naming only what the compile had already resolved.
+	 * The module the candidate was built in goes with it when it is dropped,
+	 * which is what leaves the root naming only what the compile had already
+	 * resolved.
 	 */
 	if (Error err = bind_and_resolve (into, resolved)) {
 		consumeError (std::move (err));

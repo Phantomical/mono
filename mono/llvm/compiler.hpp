@@ -18,9 +18,9 @@ namespace mono {
 /// tables the runtime reads back are written into the object next to the code
 /// they describe.
 ///
-/// Codegen runs against the calling thread's host_target_machine (), so the
-/// compiler carries no mutable cross-call state and stays safe under concurrent
-/// compiles.
+/// Codegen runs against the calling thread's own TargetMachine - host_target_machine ()
+/// or tier2_target_machine () - so the compiler carries no mutable cross-call state
+/// and stays safe under concurrent compiles.
 class MethodObjectCompiler : public llvm::orc::IRCompileLayer::IRCompiler {
 public:
 	/// Takes only the mangling options from jtmb. The target itself is the

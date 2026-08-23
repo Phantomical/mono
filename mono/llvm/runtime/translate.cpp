@@ -151,19 +151,12 @@ translate_and_compile (const TranslationTarget &target, MonoMethod *method,
 		return Compiled { code };
 	}
 
-	/*
-	 * The profiler's compilation of the method begins here. Exactly one end
-	 * follows every begin, so a consumer pairing the two never carries an open
-	 * span for the rest of the process. A method whose metadata fails to load
-	 * gets a stand-in body that raises instead of a translation, and that is a
-	 * failed compile however it is served. The successful end is raised by the
-	 * caller, once the method can be looked up - a non-null published record is
-	 * what says one is owed.
-	 */
 	MONO_PROFILER_RAISE (jit_begin, (method));
 
 	Expected<Compiled> code = translate_body (target, method, published);
 
+	// A metadata failure recovered into a raising stand-in still has no
+	// jinfo, so it counts as failed here too.
 	if (!code || *published == nullptr) {
 		*published = nullptr;
 		MONO_PROFILER_RAISE (jit_failed, (method));
@@ -190,8 +183,8 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	 * Translation itself resolves everything per-domain against target.domain
 	 * (resolve_externals (), ldstr through cfg->domain), never against the
 	 * thread's current domain. Any new translate-time mono_domain_get () is a
-	 * cross-domain bug of the kind the dispatcher exists to prevent. The stub
-	 * lambdas keep the two equal.
+	 * cross-domain bug of the kind the dispatcher exists to prevent.
+	 * DomainScope, entered by the caller, keeps the two equal.
 	 */
 	g_assert (mono_domain_get () == target.domain);
 
@@ -241,7 +234,6 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	materialize_trivial_callees (*module, target.domain, method, **function,
 	                             externals, types, inlining);
 
-	/* Before the entry name is read: the body's own declaration is one of these. */
 	if (Error err = bind_symbols (*module))
 		return target.recover (std::move (err));
 

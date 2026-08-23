@@ -66,7 +66,7 @@ mono_llvm_seq_point_nop (void)
 {
 }
 
-/*
+/**
  * Read the symbol file's sequence-point offsets for this method.
  *
  * A sequence point marks where a source statement begins, and the symbol
@@ -214,11 +214,13 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 	llvm::Value *armed = builder.CreateICmpNE (
 		any, llvm::ConstantInt::get (i64, 0), "sp.armed");
 
-	// The trap block is cold, but it stays where it is emitted rather than going
-	// to the end with create_cold_block (). The runtime answers for an address
-	// with the sequence point recorded at or before it, so a marker that moves
-	// away from the code it belongs to answers for a statement somewhere else.
-	// The stepper then reports the wrong method.
+	/*
+	 * The trap block is cold, but it stays where it is emitted rather than
+	 * going to the end with create_cold_block (). The runtime answers for an
+	 * address with the sequence point recorded at or before it, so a marker
+	 * that moves away from the code it belongs to answers for a statement
+	 * somewhere else. The stepper then reports the wrong method.
+	 */
 	llvm::BasicBlock *trap =
 		llvm::BasicBlock::Create (context (), "sp.trap", function);
 	llvm::BasicBlock *cont =
@@ -280,7 +282,7 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 	return recorded;
 }
 
-/*
+/**
  * Whether this method's after-call sequence points take part in the
  * nested-call tagging below. The interpreter answers the same question with:
  *
@@ -302,7 +304,7 @@ tags_nested_calls (MonoMethod *method)
 	return !(method->flags & METHOD_IMPL_ATTRIBUTE_NATIVE);
 }
 
-/*
+/**
  * Emit the sequence point that belongs after the call just translated, if the
  * offset it lands on does not already get one.
  *
@@ -357,7 +359,7 @@ MethodLLVMEmitter::emit_after_call_seq_point (MonoIrBuilder &builder, bool nests
 	                                        MONO_SEQ_POINT_FLAG_NONEMPTY_STACK);
 }
 
-/*
+/**
  * Work out which sequence points can execute immediately after each sequence
  * point in this body.
  *

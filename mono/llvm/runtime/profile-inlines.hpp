@@ -39,10 +39,10 @@ public:
 	/// scope must already name the root. externals, types and module_symbols are
 	/// the compile's own, and all three have to outlive this.
 	///
-	/// types is shared with the module the root was translated into, and has to
-	/// be: a named struct type belongs to the LLVMContext rather than to one
-	/// module, so a candidate built against a cache of its own would name a
-	/// second type of the same shape and the link would keep both.
+	/// types is shared with the module the root was translated into. A named
+	/// struct type belongs to the LLVMContext rather than to one module, so a
+	/// candidate built against a cache of its own would name a second type of
+	/// the same shape, and the link would keep both.
 	ProfileInliner (const TranslationTarget &target,
 	                std::vector<ExternalSymbol> &externals, ModuleTypes &types,
 	                InlineScope &scope,

@@ -39,11 +39,13 @@ verification_subject (MonoMethod *method)
 	return method;
 }
 
-/// Whether the SkipVerification attribute on method's assembly counts.
+/// Whether the SkipVerification attribute on method's assembly lets method
+/// skip verification.
 ///
-/// The attribute counts only outside the GAC and outside corlib. The exclusion
-/// stops an assembly put into the GAC from claiming the attribute and getting
-/// its unverifiable IL accepted.
+/// A wrapper other than a dynamic method never counts. Otherwise the
+/// attribute counts unless the assembly is in the GAC or is corlib. The
+/// exclusion stops an assembly put into the GAC from claiming the attribute
+/// and getting its unverifiable IL accepted.
 bool
 assembly_can_skip_verification (MonoMethod *method)
 {

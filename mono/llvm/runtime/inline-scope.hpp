@@ -91,8 +91,8 @@ bool loses_its_frame_safely (MonoMethod *method, MonoMethodHeader *header);
 ///
 /// The body is built under a name of its own rather than over the declaration
 /// the caller calls, so the module can hold the method's own body beside it and
-/// a caller that folded nothing keeps its call. Move the sites that are to reach
-/// it onto the returned function.
+/// a caller that folded nothing keeps its call. The caller moves the sites
+/// meant to reach it onto the returned function.
 ///
 /// Returns null when the translation failed, and the sites then call the
 /// published entry as they did before, which is what StripInlineCopiesPass makes

@@ -43,8 +43,8 @@ disassemble_one (MonoMethod *method, size_t il_offset)
 	return text;
 }
 
-/// If the method's body cannot be read, this returns 0. Otherwise it returns
-/// how many locals the method declares.
+/// Returns how many locals the method declares, or 0 if its body cannot be
+/// read.
 uint32_t
 local_count (MonoMethod *method)
 {
@@ -70,10 +70,11 @@ MethodLLVMEmitter::in_wrapper () const
 	return method->wrapper_type != MONO_WRAPPER_NONE;
 }
 
-// Slot 0 of the table holds the entry count, not an entry. An index of 0, or
-// an index past the count, is one the wrapper never filled in. Treat it as a
-// malformed body, not as data to read past the end of the array.
-// mono_mb_add_data () hands out indices starting at 1.
+/// Whether index names one of the wrapper's stored data items.
+///
+/// Slot 0 of the table holds the entry count, not an entry. mono_mb_add_data ()
+/// hands out indices starting at 1, so an index of 0, or one past the count, is
+/// one the wrapper never filled in.
 bool
 MethodLLVMEmitter::has_wrapper_data (uint32_t index) const
 {
@@ -174,17 +175,19 @@ MethodLLVMEmitter::unsupported_il (const llvm::Twine &what)
 	return runtime_error (error);
 }
 
-// Three kinds of methods skip the accessibility check.
-//
-// A method marked skip_visibility got that permission from whoever emitted it.
-// Reflection.Emit hands it out, and the runtime's own marshalling builders take
-// it for themselves.
-//
-// A wrapper's body belongs to the runtime, not to an image author, so it can
-// reach whatever the thing it wraps is made of.
-//
-// A corlib-internal assembly is one of the runtime's own halves of corlib, and
-// those are written against each other's private members on purpose.
+/**
+ * Three kinds of methods skip the accessibility check.
+ *
+ * A method marked skip_visibility got that permission from whoever emitted it.
+ * Reflection.Emit hands it out, and the runtime's own marshalling builders take
+ * it for themselves.
+ *
+ * A wrapper's body belongs to the runtime, not to an image author, so it can
+ * reach whatever the thing it wraps is made of.
+ *
+ * A corlib-internal assembly is one of the runtime's own halves of corlib, and
+ * those are written against each other's private members on purpose.
+ */
 bool
 MethodLLVMEmitter::checks_accessibility () const
 {
@@ -216,7 +219,7 @@ MethodLLVMEmitter::field_access_failure (MonoClassField *field)
 	return runtime_error (error);
 }
 
-/// Refuse a method this one cannot reach. Emit a throw in place of the call.
+/// Emits a throw of MethodAccessException in place of a call to callee.
 ///
 /// Unlike a field, only the instruction is refused. Emission continues into a
 /// block nothing branches to, so the stack keeps its shape. A path through the
@@ -237,8 +240,8 @@ MethodLLVMEmitter::emit_method_access_failure (MonoIrBuilder &builder, MonoMetho
 	return llvm::Error::success ();
 }
 
-/// The current instruction wants needed more operand bytes than remain in
-/// the method body.
+/// The current instruction has fewer operand bytes left in the method body
+/// than it needs.
 llvm::Error
 MethodLLVMEmitter::truncated_il (size_t needed)
 {

@@ -30,7 +30,7 @@ recorded_name (const InstrProfCntrInstBase &inc, const Function &f)
 	return getIRPGOFuncName (f);
 }
 
-/// Whether the lowering wrote \p global rather than the translator.
+/// Whether the profiling machinery wrote \p global, not the translator.
 bool
 is_profile_global (const GlobalVariable &global)
 {
@@ -58,8 +58,9 @@ is_counter_address (const Value *address)
 /// The load \p store reads its counter back through, or null when \p store is
 /// not the last step of a read-add-write on a counter.
 ///
-/// The lowering writes each unpromoted increment as that group of three, and no
-/// pass between it and this one breaks a group up.
+/// That is the shape InstrProfilingLoweringPass leaves an increment in
+/// whenever InstrProfOptions::Atomic is off, and no pass between it and this
+/// one breaks a group up.
 LoadInst *
 counter_update_load (StoreInst &store)
 {
@@ -173,7 +174,7 @@ ProfileLocalizePass::run (Module &m, ModuleAnalysisManager &)
 {
 	for (GlobalVariable &global : m.globals ()) {
 		// Private linkage on a declaration is invalid IR, so a profile global
-		// with no definition keeps the linkage the lowering gave it.
+		// with no definition keeps its existing linkage.
 		if (!is_profile_global (global) || global.isDeclaration ())
 			continue;
 
@@ -188,13 +189,11 @@ namespace {
 
 using llvm::IPVK_Last;
 
-/*
- * The per-function record the instrumentation lowering writes into
- * `__llvm_prf_data`. It is built from LLVM's own field-list macro, so its
- * layout matches the LLVM version this links against, not a copy made here.
- * llvm/ProfileData/InstrProfData.inc documents the pattern. IntPtrT is ours
- * to name, and it holds a signed distance.
- */
+// The per-function record the instrumentation lowering writes into
+// `__llvm_prf_data`. It is built from LLVM's own field-list macro, so its
+// layout matches the LLVM version this links against, not a copy made here.
+// llvm/ProfileData/InstrProfData.inc documents the pattern. IntPtrT is ours
+// to name, and it holds a signed distance.
 typedef intptr_t IntPtrT;
 
 struct alignas (INSTR_PROF_DATA_ALIGNMENT) ProfileDataRecord {

@@ -1,7 +1,6 @@
 /**
  * \file
- * \brief MonoFinallyRangePass, the machine-level recovery of finally-body PC
- * ranges.
+ * \brief The machine-level recovery of finally-body PC ranges.
  */
 
 #ifndef MONO_LLVM_PASSES_FINALLY_RANGE_HPP

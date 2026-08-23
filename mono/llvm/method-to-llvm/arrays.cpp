@@ -166,10 +166,6 @@ MethodLLVMEmitter::array_length (MonoIrBuilder &builder, StackValue array)
 }
 
 /// Where element index of array lives, after checking that the element exists.
-///
-/// The bounds test is a single unsigned comparison. A negative index read as
-/// unsigned becomes enormous, so one `uge` check rejects both ends at once.
-/// That is why the index is zero-extended here instead of sign-extended.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::element_address (MonoIrBuilder &builder, StackValue array, StackValue index,
                                     MonoType *element)
@@ -189,6 +185,8 @@ MethodLLVMEmitter::element_address (MonoIrBuilder &builder, StackValue array, St
 
 	if (at->getType ()->isPointerTy ())
 		at = builder.CreatePtrToInt (at, native);
+	// A negative index read as unsigned becomes enormous. Zero-extending it here
+	// lets one `uge` check reject both a negative and an out-of-range index at once.
 	at = builder.CreateZExtOrTrunc (at, native);
 
 	emit_cond_exception (
@@ -205,7 +203,7 @@ MethodLLVMEmitter::element_address (MonoIrBuilder &builder, StackValue array, St
 	                          builder.CreateMul (at, llvm::ConstantInt::get (native, size)));
 }
 
-/// Throw ArrayTypeMismatchException unless array is exactly an instance of array_class.
+/// Throws ArrayTypeMismatchException unless array is exactly an instance of array_class.
 ///
 /// The check compares vtables for exact equality, not by assignability.
 /// Covariance lets a string[] arrive where an object[] is expected. An

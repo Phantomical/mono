@@ -16,9 +16,10 @@ namespace mono {
 
 /// Whether method's body still has to go through the IL verifier.
 ///
-/// False whenever verification was not asked for, which is the default. It is
-/// also false once a method has passed. The verdict is cached on the metadata,
-/// so a method compiled twice is verified at most once.
+/// False whenever verification was not asked for, which is the default, or
+/// once a method has passed. Only a pass is cached on the metadata. A method
+/// that passes needs no later check, and a method that fails is verified
+/// again on every later request.
 bool needs_verification (MonoMethod *method);
 
 /// Puts method's body through the IL verifier, if verification was asked for

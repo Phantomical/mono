@@ -45,7 +45,7 @@ llvm::Error with_dump_stream (DumpPoint point, llvm::StringRef name,
 void set_dump_name (llvm::Function &function, llvm::StringRef name);
 
 /// The dump name \ref set_dump_name recorded, or the function's own symbol when
-/// it carries none. A thrower, a dispatcher and an entry thunk carry none.
+/// it carries none. A dispatcher carries none.
 std::string dump_name_of (const llvm::Function &function);
 
 /// Whether a function is one of the methods its module was built to publish,

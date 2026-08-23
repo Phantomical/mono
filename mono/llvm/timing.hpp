@@ -14,6 +14,7 @@ namespace timing {
 /// The phases a compile is broken into. They nest, so each is reported with
 /// both the time spent inside it and the time spent inside it but not inside
 /// any phase below it - the second is the one to read.
+///
 /// Publishing a method's own stubs is only inside `compile` when it happened on
 /// the way to a caller's - that is, under `resolve`. A method the runtime asks
 /// for by name has its stubs published before any of this starts, and that is

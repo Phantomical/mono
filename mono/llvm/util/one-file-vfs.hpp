@@ -25,7 +25,7 @@ private:
 	std::shared_ptr<llvm::MemoryBuffer> fallback;
 	llvm::SmallVector<std::shared_ptr<llvm::MemoryBuffer>, 4> buffers;
 
-	/// The contents every path currently answers with.
+	/// Returns the content every path currently reads.
 	const std::shared_ptr<llvm::MemoryBuffer> &current () const
 	{
 		return buffers.empty () ? fallback : buffers.back ();

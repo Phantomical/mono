@@ -595,7 +595,7 @@ create_mono_entry_thunk (Module &m, StringRef name, Function *target, Value *thr
 	FunctionType *natural = hidden != nullptr
 	                                ? natural_prototype (target->getFunctionType (), hidden)
 	                                : target->getFunctionType ();
-	/* Natural argument I's parameter on the target, which is what carries its attributes. */
+	/* Natural argument i's parameter on the target, which is what carries its attributes. */
 	auto target_param = [&] (unsigned i) {
 		return target_attrs.getParamAttrs (natural_parameter_index (i, target));
 	};
@@ -650,9 +650,8 @@ create_mono_entry_thunk (Module &m, StringRef name, Function *target, Value *thr
 		                                      : AttributeSet (),
 		attrs));
 	/*
-	 * Every frame needs a description mono's unwinder can walk through. An
-	 * exception thrown below the call unwinds through this frame on its way
-	 * back to whoever entered here.
+	 * This frame needs unwind info like any other: an exception thrown below
+	 * the call unwinds through it on its way back to whoever entered here.
 	 */
 	thunk->setUWTableKind (UWTableKind::Default);
 

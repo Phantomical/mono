@@ -3,20 +3,18 @@
  * \brief The wire format of the side tables the compiler writes into a method's
  * object, and the reader that takes one back apart.
  *
- * Four sections, all target-neutral and code-relative:
+ * Five sections, all target-neutral and code-relative:
  *
- * `.mono_lsda` is the clause table - the tiered backend's format, verbatim, so
- * its reader (mono_lsda.cpp) parses ours too. See mono_lsda.hpp
- * for the layout.
+ * `.mono_lsda` is the clause table. See mono_lsda.hpp for the layout and
+ * mono_lsda.cpp for the reader.
  *
  * `.mono_guards` is what the thread-abort guard needs about the finally handler
  * bodies: which PCs each occupies, so a stack walk can tell a frame is inside
  * one, and where in that frame the guard byte sits. Its own section rather than
  * more `.mono_lsda` entries because the partitions differ - one record per
- * surviving copy of a body against one clause entry per invoke range - and
- * because the clause table's format is shared with a backend that recovers the
- * same facts elsewhere. Same block-per-function shape as `.mono_unwind` below,
- * and `code` in a record means the function the block names.
+ * surviving copy of a body against one clause entry per invoke range. Same
+ * block-per-function shape as `.mono_unwind` below, and `code` in a record
+ * means the function the block names.
  *
  *   Header (16 bytes, little-endian):
  *     u32 magic   = 0x4d475244 ('MGRD')

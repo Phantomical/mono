@@ -26,12 +26,10 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-/*
- * LLVM declares options of its own for most of these, and reads them from
- * inside its lowering pass. The names here therefore carry a prefix: both sets
- * are registered in one process, and a second registration under a name the
- * first took is an error at startup.
- */
+// LLVM declares options of its own for most of these, and reads them from
+// inside its lowering pass. The names here therefore carry a prefix. Both
+// sets are registered in one process, and a second registration under a
+// name the first took is an error at startup.
 
 cl::opt<bool> promotion_enabled ("mono-counter-promotion", cl::init (PromotionPolicy ().enabled),
                                  cl::Hidden,
@@ -41,25 +39,22 @@ cl::opt<unsigned> max_per_loop ("mono-max-counter-promotions-per-loop",
                                 cl::init (PromotionPolicy ().max_per_loop), cl::Hidden,
                                 cl::desc ("Counters one loop may promote"));
 
-/*
- * LLVM stops at three. A `for` with three early returns already has four
- * exiting blocks, so at that setting most loops a method is written with by
- * hand keep their per-turn writes. What eight admits is a write-back on each
- * further exit, and one exit is taken per pass through the loop whatever the
- * count. So the code at the exits is what holds eight down, not the time spent
- * in them.
- */
+// LLVM stops at three. A `for` with three early returns already has four
+// exiting blocks, so at that setting most hand-written loops keep their
+// per-turn writes. What eight admits is a write-back on each further exit,
+// and one exit is taken per pass through the loop whatever the count. So
+// the code at the exits is what holds eight down, not the time spent in
+// them.
 cl::opt<unsigned> max_exiting ("mono-speculative-counter-promotion-max-exiting",
                                cl::init (PromotionPolicy ().max_exiting), cl::Hidden,
                                cl::desc ("Exiting blocks past which a loop is left alone"));
 
-/*
- * LLVM refuses such a loop, so that a profile read in the middle of a long one
- * does not under-report it. Almost every loop a C# method ends with can be left
- * through a return, so the refusal costs most of what promotion is worth here.
- * A read that comes early loses only the turns the threads now in the loop
- * took, and entry count is what takes a body to tier 2.
- */
+// LLVM refuses such a loop, so that a profile read in the middle of a long
+// one does not under-report it. Almost every loop a C# method ends with
+// can be left through a return, so the refusal costs most of what
+// promotion is worth here. A read that comes early loses only the turns
+// the threads now in the loop took. Entry count is what takes a body to
+// tier 2.
 cl::opt<bool> skip_ret_exit_block ("mono-skip-ret-exit-block",
                                    cl::init (PromotionPolicy ().skip_ret_exit_block), cl::Hidden,
                                    cl::desc ("Leave a loop alone when a return can leave it"));
@@ -109,7 +104,7 @@ is_promotion_possible (const Loop &loop, ArrayRef<BasicBlock *> exits)
 unsigned max_promotions_in (const PromotionPolicy &policy, Loop &loop, LoopInfo &li,
                             const Pending &pending);
 
-/// Returns how many counters \p loop may promote.
+/// Returns how many counters \p loop can promote.
 unsigned
 promotion_budget (const PromotionPolicy &policy, Loop &loop, LoopInfo &li, const Pending &pending,
                   ArrayRef<BasicBlock *> exits)
@@ -129,12 +124,10 @@ promotion_budget (const PromotionPolicy &policy, Loop &loop, LoopInfo &li, const
 	if (policy.speculative_promotion_to_loop)
 		return policy.max_per_loop;
 
-	/*
-	 * Each write-back this loop leaves in an enclosing loop is a candidate
-	 * that loop then has to hold a register for. Take what it has already
-	 * promised away from what this loop may spend, so a nest does not commit
-	 * more registers than any one of its loops would.
-	 */
+	// Each write-back this loop leaves in an enclosing loop is a candidate
+	// that loop then has to hold a register for. Take what it has already
+	// promised away from what this loop can spend. That keeps a nest from
+	// committing more registers than any one of its loops would.
 	unsigned budget = policy.max_per_loop;
 
 	for (BasicBlock *exit : exits) {
@@ -221,11 +214,9 @@ CounterPromoter::run ()
 	if (budget == 0)
 		return false;
 
-	/*
-	 * Move the groups out of the map first. Promoting writes back into the
-	 * entry for whichever loop an exit lands in, and growing the map moves
-	 * what a reference into it names.
-	 */
+	// Move the groups out of the map first. Promoting writes back into the
+	// entry for whichever loop an exit lands in, and growing the map moves
+	// what a reference into it names.
 	Groups groups = std::move (pending_[&loop_]);
 
 	pending_.erase (&loop_);
@@ -260,12 +251,12 @@ CounterPromoter::promote (uint64_t index, const Group &sites)
 	Value *counters = first->getArgOperand (2);
 	Value *slot = first->getArgOperand (3);
 
-	/*
-	 * The accumulator is a stack slot, which PromoteMemToReg turns into phis
-	 * once every loop is done. LLVM uses an SSAUpdater instead, which has to
-	 * be given each available value up front; a chain where every value is the
-	 * one before it plus a step is what memory states directly.
-	 */
+	// The accumulator is a stack slot, which PromoteMemToReg turns into phis
+	// once every loop is done. LLVM's own instrumentation lowering builds
+	// the same chain with an SSAUpdater instead, which needs every value
+	// available up front. A stack slot needs no such bookkeeping: each
+	// store is the last value plus a step, the way a memory location
+	// already works.
 	BasicBlock &entry = f.getEntryBlock ();
 	IRBuilder<> at_entry (&entry, entry.getFirstInsertionPt ());
 	AllocaInst *accumulator = at_entry.CreateAlloca (i64, nullptr, "pgocount.promoted");

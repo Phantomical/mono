@@ -6,11 +6,11 @@
 
 namespace mono {
 
-/// Returns the address on top of the stack as an LLVM pointer, after a null check.
+/// Returns the operand as an LLVM pointer, after a null check.
 ///
-/// The stack slot can hold a managed pointer or a native int. An object reference
-/// is not a dereferenceable address. If the stack holds one, this function refuses
-/// it instead of reinterpreting it as a pointer.
+/// The operand can hold a managed pointer or a native int. An object
+/// reference is not a dereferenceable address. If the operand holds one,
+/// this function refuses it instead of reinterpreting it as a pointer.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::indirect_address (MonoIrBuilder &builder, StackValue address)
 {
@@ -402,8 +402,8 @@ MethodLLVMEmitter::emit_cpobj (MonoIrBuilder &builder, uint32_t token)
 	MonoClass *klass = mono_class_from_mono_type_internal (*type);
 
 	if (mini_type_is_reference (*type)) {
-		// Here the reference itself moves. This has the same effect as
-		// ldind.ref followed by stind.ref.
+		// Here the reference itself moves, so this loads it and stores it
+		// through the write barrier.
 		llvm::Value *value =
 			builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0), *src,
 		                                   llvm::Align (TARGET_SIZEOF_VOID_P));
@@ -481,8 +481,7 @@ MethodLLVMEmitter::emit_initobj (MonoIrBuilder &builder, uint32_t token)
 
 	pop_stack (1);
 
-	// Zeroing never creates a reference for the collector to miss. Both shapes
-	// store directly: null for a reference, zero bytes for a value type.
+	// Zeroing never creates a reference for the collector to miss.
 	if (mini_type_is_reference (*type)) {
 		llvm::PointerType *ptr = llvm::PointerType::get (context (), 0);
 

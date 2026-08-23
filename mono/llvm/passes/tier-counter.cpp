@@ -19,7 +19,7 @@ namespace {
  *                 promote (method);
  *
  * The plain load in front keeps the atomic off the path a body takes once it
- * has been counted. That is every call but the first few.
+ * has been counted. That is every call once the threshold is used up.
  */
 void
 emit_counter (Function &f, uint32_t threshold, Constant *method)
@@ -46,13 +46,13 @@ emit_counter (Function &f, uint32_t threshold, Constant *method)
 	/*
 	 * After the frame and in front of the work. A static alloca has to stay in
 	 * the entry block to be a stack slot, so the check goes behind the last of
-	 * them, and everything else carries on in the block split off here.
+	 * them. Everything else carries on in the block split off here.
 	 *
 	 * The rest has to move even though it costs a block. Simplification runs
 	 * ahead of this pass, so by now the entry block can hold the whole body.
 	 * Leaving that in place puts the check between a musttail call and the ret
-	 * it has to keep, which codegen refuses with "failed to perform tail call
-	 * elimination on a call site marked musttail".
+	 * it has to keep. Codegen then refuses it with "failed to perform tail
+	 * call elimination on a call site marked musttail".
 	 */
 	BasicBlock::iterator split = entry.getFirstNonPHIIt ();
 
@@ -87,9 +87,9 @@ emit_counter (Function &f, uint32_t threshold, Constant *method)
 	CallInst *ask_call = at_ask.CreateCall (promote, { method });
 
 	// The body runs after the request, so this call has to come back. LLVM
-	// marks a call that reads none of the caller's frame as one that can become
-	// a jump, and a reader of that mark cannot tell it from a tail call the
-	// method really made.
+	// marks a call that reads none of the caller's frame as one that can
+	// become a jump. A reader of that mark cannot tell it from a tail call
+	// the method really made.
 	ask_call->setTailCallKind (CallInst::TCK_NoTail);
 
 	at_ask.CreateBr (body);
@@ -108,6 +108,8 @@ TierCounterPass::run (Module &m, ModuleAnalysisManager &)
 
 		uint32_t threshold = 0;
 
+		// Zero is a real value tier2_threshold () can return, not a parse
+		// failure. It asks for no automatic check, so this skips it too.
 		if (f.getFnAttribute (tier_counter_attribute)
 		            .getValueAsString ()
 		            .getAsInteger (10, threshold)

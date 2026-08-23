@@ -73,7 +73,7 @@ void **rethrow_trampoline_slot ();
 
 /* -- Unwinding and dispatch ----------------------------------------------- */
 
-/// Can a stack walk rebuild \p hw_reg for the frame it is looking at?
+/// Whether a stack walk can rebuild \p hw_reg for the frame it is looking at.
 ///
 /// True for the stack pointer and for the callee-saved registers the unwind
 /// info restores. A caller-saved register's value is long gone by the time
@@ -81,7 +81,7 @@ void **rethrow_trampoline_slot ();
 bool reg_is_recoverable (int hw_reg);
 
 /// Reads the exception a filter is entered with, out of the register where
-/// the runtime's dispatcher leaves it.
+/// the unwinder leaves it.
 llvm::Value *emit_entered_exception (llvm::IRBuilderBase &b);
 
 /* -- The LMF a wrapper links ---------------------------------------------- */
@@ -153,8 +153,8 @@ llvm::Expected<InterpEntryLayout> plan_interp_entry (llvm::Function *shape,
                                                      MonoMethodSignature *sig);
 
 /// Returns the code an interpreted method's stub is pointed at, entered with
-/// the MonoMethod * in the key register. It registers with the runtime on
-/// first call, so a stack walk can cross it.
+/// the MonoMethod * in a register the stub set up. It registers with the
+/// runtime on first call, so a stack walk can cross it.
 void *interp_entry_thunk ();
 
 } // namespace mono::arch

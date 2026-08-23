@@ -98,11 +98,11 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	MonoClass *klass = (*target)->klass;
 
 	/*
-	 * The runtime implements a delegate's constructor. It builds an invoke
-	 * trampoline from the Invoke signature and has no way to report one that
-	 * will not load. It crashes on a null signature instead. A delegate
-	 * whose Invoke method names a missing type fails to load. That refusal
-	 * belongs here, so the call raises a TypeLoadException instead of crashing.
+	 * The runtime builds a delegate's invoke trampoline from Invoke's
+	 * signature, and crashes instead of reporting an error when Invoke is
+	 * missing or its signature will not resolve - which happens when Invoke
+	 * names a missing type. Checking here turns that crash into a
+	 * TypeLoadException before the call runs.
 	 */
 	if (m_class_get_parent (klass) == mono_defaults.multicastdelegate_class) {
 		ERROR_DECL (invoke_error);
@@ -122,7 +122,6 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 			return runtime_error (invoke_error);
 	}
 
-	// Multi-dimensional arrays and non-zero-based arrays use newobj, not newarr.
 	if (m_class_get_rank (klass) != 0)
 		return emit_array_newobj (builder, *target, sig);
 
@@ -194,9 +193,8 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 	/*
 	 * A string's length is not known before its constructor runs, so nothing
-	 * can allocate it in advance. Its constructor builds the string instead of
-	 * filling in an instance. There is nothing to allocate
-	 * here. The object arrives from the call.
+	 * can allocate it in advance. Its constructor builds and returns the
+	 * string itself, so this code allocates nothing here.
 	 */
 	if ((*target)->string_ctor) {
 		llvm::Expected<llvm::Value *> created =
@@ -300,7 +298,7 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 namespace {
 
-/// Marks callee as the GC allocation it is.
+/// Adds the NoAlias return attribute a GC allocator needs.
 llvm::FunctionCallee
 mark_gc_allocator (llvm::FunctionCallee callee)
 {

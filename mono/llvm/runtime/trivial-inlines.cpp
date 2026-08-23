@@ -143,11 +143,6 @@ enters_a_method (MonoOpcodeEnum op)
 
 /// Whether a branch goes to the instruction behind it, which is a fallthrough
 /// written out.
-///
-/// A C# compiler ends a method that returns a value with `stloc.0`, a branch
-/// to the next instruction, then `ldloc.0` and `ret`. Reading that pattern as
-/// a straight line is what lets shape_of recognize an ordinary getter or
-/// forwarder.
 bool
 branches_to_the_next (const unsigned char *code, MonoOpcodeEnum op, size_t operand)
 {
@@ -229,6 +224,11 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 			if (shape.forwards_to == nullptr)
 				return std::nullopt;
 		} else if (!computes_a_value (op)
+		           // A C# compiler ends a value-returning method with
+		           // stloc.0, a branch to the next instruction, ldloc.0,
+		           // then ret. Letting that one branch through as a
+		           // fallthrough keeps such a getter or forwarder on one
+		           // line.
 		           && !branches_to_the_next (code, op, operand)) {
 			return std::nullopt;
 		}
@@ -240,23 +240,17 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 	return std::nullopt;
 }
 
-/*
- * Whether target, or something it hands the call straight on to, can read the
- * frame it was called from.
- *
- * Such a method has to see the frame of the body that called it, and folding
- * that body in hands it the caller's frame instead. GetCurrentMethod then
- * returns the wrong method, GetCallingAssembly and the StackFrame constructor
- * the wrong assembly and the wrong frame. Two marks say a method does this:
- * NoInlining, which is what a managed one carries, and having no IL at all,
- * because every stack walk the runtime offers is an icall and a body with no IL
- * can be any of them. The second mark takes in far more than it has to, and a
- * fold declined costs the caller nothing. The exception is a math icall: the
- * front end answers it with arithmetic, so the site makes no call at all.
- *
- * A forwarder stands in for what it forwards to, so the walk follows the chain
- * until it reaches a body that keeps a frame of its own.
- */
+/// Whether target, or something it forwards to in turn, can read the frame it
+/// was called from.
+///
+/// Checks the same two marks loses_its_frame_safely () gates on
+/// (inline-scope.hpp): NoInlining, and having no IL at all. Refusing on the
+/// second mark takes in far more than it has to, and a fold declined costs
+/// the caller nothing. A math icall is the one body with no IL that answers
+/// no, because the front end leaves no call at the site.
+///
+/// A forwarder stands in for what it forwards to, so the walk follows the
+/// chain until it reaches a body that keeps a frame of its own.
 bool
 may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
 {
@@ -305,7 +299,7 @@ may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
 	return true;
 }
 
-/// Moves onto to the calls caller makes to from.
+/// Moves the calls \p caller makes to \p from onto \p to.
 ///
 /// A copy belongs to the one compile that asked for it. Another body in the
 /// module keeps the declaration and reaches the published entry, until its own

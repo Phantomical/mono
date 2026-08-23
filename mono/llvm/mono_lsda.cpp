@@ -27,9 +27,9 @@
  * object, concatenated, and the function address is what says which block is
  * whose. A batched compile puts several methods in one object.
  *
- * Nothing here depends on LLVM, and native_code is only ever used for address
- * arithmetic. That is what lets the unit tests drive this against a made-up
- * base address.
+ * This reader has no LLVM dependency. native_code is only ever used for
+ * address arithmetic, which is what lets the unit tests drive it against a
+ * made-up base address.
  */
 
 #include "config.h"
@@ -339,7 +339,7 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 	out.reserve (dispatch.size ());
 	ranges.reserve (dispatch.size ());
 
-	// Ordering is load-bearing. A chain publishes innermost-first, so the
+	// This order is required. A chain publishes innermost-first, so the
 	// runtime's flat first-match walk sees the innermost clause before its
 	// enclosers. An intervening finally then runs before an enclosing catch is
 	// entered. Sibling catches share a range and a pad, so the earlier-declared

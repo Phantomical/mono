@@ -17,7 +17,7 @@ class TargetMachine;
 
 namespace mono {
 
-/// What the inliner asks the engine for.
+/// The interface the engine implements so the pass can ask about a candidate.
 ///
 /// The pass reads IR and a profile. Two questions need managed metadata to
 /// answer: whether a method can be folded at all, and what its body is. Both go
@@ -29,9 +29,10 @@ public:
 	/// The body to weigh at a site calling \p decl, translated into \p into and
 	/// marked as a copy.
 	///
-	/// into holds nothing else, and the returned function is named as decl is.
-	/// The caller links it over decl once it is in the shape the cost model
-	/// reads, so the site still needs no rewriting.
+	/// into can hold more than the returned function - a candidate brings its
+	/// own trivial callees in beside it. The returned function need not share
+	/// decl's name either: the caller reconciles any leftover declaration once
+	/// the body is linked in, so the site still needs no rewriting of its own.
 	///
 	/// Null means the site keeps its call. The engine refuses the method, its
 	/// metadata will not load, or the compile has spent the translation it is

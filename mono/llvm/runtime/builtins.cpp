@@ -102,9 +102,8 @@ get_runtime_builtins (std::vector<MonoBuiltin> &builtins)
 		{"mono_llvm_load_error_exception", (void *) &mono_llvm_load_error_exception},
 
 		/*
-		 * The personality routine a landing pad names. Generated code never
-		 * calls it. The unwinder does, on the way through a frame that has a
-		 * handler.
+		 * The personality routine a landing pad names. See jit_personality ()
+		 * above.
 		 */
 		{"mono_personality", (void *) &jit_personality},
 

@@ -96,8 +96,8 @@ MethodLLVMEmitter::emit_ldc_i8 (MonoIrBuilder &builder, int64_t value)
 // the exact value across, with no type pun in between.
 //
 // Each constant keeps the width it was written at. The CLI has one float type, F, but
-// nothing here needs to widen ldc.r4 to double. binary-numeric.cpp already widens to
-// double when an R4 value and an R8 value meet in an operation.
+// emit_ldc_r4 does not widen its result to double. binary-numeric.cpp already widens
+// to double when an R4 value and an R8 value meet in an operation.
 llvm::Error
 MethodLLVMEmitter::emit_ldc_r4 (MonoIrBuilder &builder, uint32_t bits)
 {
@@ -236,10 +236,10 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 	// symbol the engine resolves.
 	//
 	// The compiler interns it here, rather than at run time, to match what the
-	// interpreter does for the same instruction. mono/interp/transform.c also calls
-	// mono_ldstr_checked () at this point, when it transforms a non-wrapper
-	// method. Both rest on the same guarantee. An interned string is rooted and
-	// never moves, so its address can outlive the compile.
+	// interpreter does for the same instruction. mono/interp/transform/transform.cpp
+	// also calls mono_ldstr_checked () at this point, when it transforms a
+	// non-wrapper method. Both rest on the same guarantee. An interned string is
+	// rooted and never moves, so its address can outlive the compile.
 	//
 	// The runtime interns the string into the domain the code compiles for, not
 	// into the thread's current domain. The root holds only while that domain
@@ -531,10 +531,11 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 
 		address = *named;
 	} else {
-		// mono_ldtoken_checked () only ever returns one of the three handle
-		// kinds above. It reports anything else as a bad image before this
-		// code runs, so this arm is unreachable unless the runtime adds a new
-		// kind.
+		// mono_ldtoken_checked () never returns another one for a plain
+		// method, and reports anything else as a bad image before this code
+		// runs. A wrapper's slot holds whatever object the matching Emit ()
+		// call wrote. Nothing checks that it was paired with ldtoken, so a
+		// dynamic method that mismatches the two can still reach this arm.
 		return invalid_il ("ldtoken produced an unknown handle kind");
 	}
 

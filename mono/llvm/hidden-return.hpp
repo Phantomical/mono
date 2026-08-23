@@ -18,9 +18,9 @@
  * The pointer sits *behind* the first argument, at parameter 1, and takes
  * parameter 0 only when the signature has no argument at all. That is what
  * leaves the receiver in the first argument register, where the runtime's
- * trampolines insist on finding it - mono_arch_get_this_arg_from_call and the
- * unbox trampoline both read it straight out of ARG_REG1. Arity is only the
- * mechanism. The invariant behind it is that every signature something
+ * trampolines insist on finding it. mono_arch_get_this_arg_from_call () and
+ * the unbox trampoline both read it straight out of AMD64_ARG_REG1. Arity is
+ * only the mechanism. The invariant behind it is that every signature something
  * recovers a receiver from has that receiver as its first argument, and a
  * receiver is always integer-class.
  *
@@ -54,8 +54,8 @@ namespace mono {
 
 namespace detail {
 
-/// The return registers of one file, and how many of them an aggregate's
-/// leaves have claimed so far.
+/// The return registers of one register file, and how many of them an
+/// aggregate's leaves have claimed so far.
 struct ReturnRegisters {
 	static constexpr unsigned integer_count = 3; ///< RAX, RDX, RCX
 	static constexpr unsigned sse_count = 4;     ///< XMM0 - XMM3
@@ -74,9 +74,9 @@ struct ReturnRegisters {
 ///
 /// LLVM flattens an aggregate return into its scalar leaves and gives each leaf
 /// a register of its own, so what decides the demotion is how many leaves there
-/// are and which file each rides in - not the aggregate's size. Padding counts:
-/// the flattening is over the IR type, and that is where the translator spelled
-/// the padding out.
+/// are and which register file each rides in - not the aggregate's size.
+/// Padding counts: the flattening is over the IR type, and that is where the
+/// translator spelled the padding out.
 inline void
 count_return_registers (llvm::Type *t, ReturnRegisters &use)
 {

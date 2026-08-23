@@ -173,7 +173,7 @@ struct LayoutField {
 	llvm::Type *type;
 };
 
-/*
+/**
  * The bytes from at to size, appended to body as the continuation of last.
  *
  * A gap at the end of a value type is not padding. A C# `fixed` buffer is a
@@ -219,7 +219,7 @@ fill_tail (llvm::LLVMContext &ctx, std::vector<llvm::Type *> &body,
 		body.push_back (llvm::ArrayType::get (llvm::Type::getInt8Ty (ctx), gap));
 }
 
-/*
+/**
  * Lays fields into type's body as a packed struct that spells out the real
  * layout. Each field sits at the offset it was laid out at, and
  * padding_type () fills the gaps between them.
@@ -426,7 +426,7 @@ MethodLLVMEmitter::convert_type (MonoType *t, bool native)
 	}
 }
 
-/*
+/**
  * Whether a value of type t rides the evaluation stack as the address of a
  * frame slot holding it, instead of as an SSA value.
  *
@@ -472,7 +472,7 @@ MethodLLVMEmitter::vtype_size (MonoType *t, bool native)
 	return mono_class_value_size (klass, NULL);
 }
 
-/*
+/**
  * A value type converts to a packed struct that spells out its real layout
  * - see set_packed_body (), which describes that shape.
  *
@@ -727,8 +727,8 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig, bool nati
 {
 	/*
 	 * A vararg signature that is also a native signature is C varargs, a
-	 * different convention from the runtime's cookie convention. Nothing
-	 * here expresses it.
+	 * different convention from the runtime's cookie convention. This
+	 * converter does not express it.
 	 */
 	if (sig->call_convention == MONO_CALL_VARARG && native)
 		return conversion_error ("a native vararg signature is C varargs");
@@ -911,20 +911,20 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 	 * untranslated IR directly.
 	 *
 	 * The name skips the signature, the expensive half of printing a
-	 * method, because the signature buys nothing here. The pointer inside
-	 * identity_symbol () already makes the name unique, and a dump shows
-	 * the declaration's own type right beside it.
+	 * method, because printing it would add nothing useful: identity_symbol ()
+	 * already makes the name unique, and a dump shows the declaration's own
+	 * type right beside it.
 	 */
 	char *printed = mono_method_full_name (method, FALSE);
 	std::string full_name = identity_symbol (printed, method);
 
 	g_free (printed);
 
-	// A batched module defines several methods, and a call to one of the others
-	// must reach its published entry rather than the body next door: a direct
-	// call is off the thunk, so a later detour or promotion of that method never
-	// reaches it. A name of its own is what keeps the declaration from finding
-	// the definition, the way code_address_symbol () keeps ldftn off it.
+	// A batched module defines several methods. A call to one of the others must
+	// reach its published entry rather than the body next door: a direct call is
+	// off the thunk, so a later detour or promotion of that method never reaches
+	// it. A name of its own is what keeps the declaration from finding the
+	// definition, the way code_address_symbol () keeps ldftn off it.
 	if (method != this->method && llvm::is_contained (siblings, method))
 		full_name += "$thunk";
 

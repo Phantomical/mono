@@ -29,7 +29,7 @@ namespace mono {
 /// of the method's.
 enum class CodeKind {
 	/// A translation of the method's IL: its body, one of its filter bodies,
-	/// or the stand-in that raises the error from a failed metadata load.
+	/// or the stand-in that raises a deferred compile failure.
 	Body,
 	/// A calling-convention adapter around the body - an entry thunk - holding
 	/// none of the method's IL.
@@ -58,7 +58,8 @@ llvm::Expected<GSList *> transcode_unwind (const std::vector<UnwindRecord> &reco
 ///        dies with that domain. It is therefore never the thread's current
 ///        domain, which mid-unload managed code runs with set elsewhere.
 /// \param header the method's IL header, or null for code that has no clauses
-///        of its own: an entry thunk, or a filter body.
+///        of its own: an entry thunk or a filter body. It is also null for
+///        the stand-in that raises a deferred compile failure.
 /// \param compiled the compiled object. Its code member selects which of the
 ///        object's functions is registered. Code that shares a module with the
 ///        body it enters names its own range, and leaves the tables it has no

@@ -237,17 +237,15 @@ private:
 		bool native = false;
 	};
 
-	/*
-	 * A block the IL branches to, and the evaluation stack it is entered holding.
-	 *
-	 * Values that are live across a branch go through memory, not through phis
-	 * this translator builds itself. The arguments and the locals already work
-	 * this way, so mem2reg already turns this function's stores into SSA.
-	 * Spilling needs to know only how deep the stack is at a join, never what
-	 * value sits on it. Building phis directly needs the types up front. That
-	 * needs a whole dataflow pass over the method before the translator emits
-	 * a single instruction.
-	 */
+	/// A block the IL branches to, and the evaluation stack it is entered holding.
+	///
+	/// Values that are live across a branch go through memory, not through phis
+	/// this translator builds itself. The arguments and the locals already work
+	/// this way, so mem2reg already turns this function's stores into SSA.
+	/// Spilling needs to know only how deep the stack is at a join, never what
+	/// value sits on it. Building phis directly needs the types up front. That
+	/// needs a whole dataflow pass over the method before the translator emits
+	/// a single instruction.
 	struct Block {
 		llvm::BasicBlock *block = nullptr;
 		std::vector<Slot> entry;
@@ -285,38 +283,32 @@ private:
 	/// have built, so that all of them name a value type the same way.
 	ModuleTypes own_types;
 	ModuleTypes &types;
-	/*
-	 * What an exception clause needs on the LLVM side.
-	 *
-	 * A finally block is entered from several places and must carry on
-	 * differently for each. Which one is in progress is written to
-	 * `resume_at` before entry, and each endfinally in the block reads it
-	 * back through its own switch. Index 0 means the block was entered by
-	 * unwinding. There, the finally must resume the unwind rather than jump
-	 * anywhere else in this method.
-	 *
-	 * A handler can have more than one endfinally, and any of them can be
-	 * the one reached. So each gets its own switch, and every switch gets
-	 * the same set of cases.
-	 */
+	/// What an exception clause needs on the LLVM side.
+	///
+	/// A finally block is entered from several places and must carry on
+	/// differently for each. Which one is in progress is written to
+	/// `resume_at` before entry, and each endfinally in the block reads it
+	/// back through its own switch. Index 0 means the block was entered by
+	/// unwinding. There, the finally must resume the unwind rather than jump
+	/// anywhere else in this method.
+	///
+	/// A handler can have more than one endfinally, and any of them can be
+	/// the one reached. So each gets its own switch, and every switch gets
+	/// the same set of cases.
 	struct Clause {
 		llvm::BasicBlock *pad = nullptr;
 		llvm::AllocaInst *resume_at = nullptr;
-		/*
-		 * The byte another thread's abort request flags a running finally through,
-		 * so that the abort lands after the handler instead of inside it. Written
-		 * from outside this thread, hence read volatile. See
-		 * emit_finally_abort_check.
-		 */
+		/// The byte another thread's abort request flags a running finally through,
+		/// so that the abort lands after the handler instead of inside it. Written
+		/// from outside this thread, hence read volatile. See
+		/// emit_finally_abort_check.
 		llvm::AllocaInst *abort_guard = nullptr;
 		std::vector<llvm::SwitchInst *> resume;
 		std::vector<std::pair<uint32_t, llvm::BasicBlock *>> continuations;
-		/*
-		 * The exception a catch or filter handler was entered with, as loaded at
-		 * the handler's entry. rethrow reaches for it long after the body has
-		 * taken the stack apart. A handler is only enterable at its start, so the
-		 * entry value dominates every use.
-		 */
+		/// The exception a catch or filter handler was entered with, as loaded at
+		/// the handler's entry. rethrow reaches for it long after the body has
+		/// taken the stack apart. A handler is only enterable at its start, so the
+		/// entry value dominates every use.
 		llvm::Value *caught = nullptr;
 	};
 
@@ -495,7 +487,7 @@ private:
 
 public:
 	/// shared_types is the struct-type cache of the module. Emitters that write
-	/// into one module must be given one and the same cache; the emitter keeps
+	/// into one module must be given one and the same cache. The emitter keeps
 	/// its own only when it has the module to itself.
 	MethodLLVMEmitter (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
 	                   std::vector<ExternalSymbol> *externals = nullptr,
@@ -1120,10 +1112,10 @@ llvm::Attribute::AttrKind integer_extension (MonoType *t);
 /// with this one the first time an operand kind is added.
 std::optional<size_t> il_operand_size (MonoOpcodeEnum opcode);
 
-/// Whether method's code comes from somewhere other than IL - an icall, a
-/// pinvoke, or a method the runtime implements itself. What stands behind
-/// its symbol is then whatever mini compiles for it, never this backend's
-/// fastcc code.
+/// Whether method has no IL body of its own to translate: an icall, a
+/// pinvoke declaration, or a method the runtime implements itself. A
+/// wrapper is never one of these, even when it wraps such a method,
+/// because it always carries IL of its own.
 bool implemented_outside_il (MonoMethod *method);
 
 /// Whether this method is implemented entirely by the backend, with its

@@ -8,8 +8,8 @@
  *
  * LLVM does the same thing inside its instrumentation lowering, over the loads
  * and stores that lowering writes. This one works on the increment intrinsics,
- * in front of it. That is what lets a counter be atomic and promoted at once:
- * the write-back is an increment intrinsic of its own, so the lowering still
+ * in front of it. That is what lets a counter be atomic and promoted at once.
+ * The write-back is an increment intrinsic of its own, so the lowering still
  * decides how it is written.
  */
 
@@ -43,19 +43,19 @@ struct PromotionPolicy {
 	/// If true, we skip loops that contain function exits.
 	bool skip_ret_exit_block = false;
 
-	/// Allow promoting a counter out of a nested loop even if there isn't
+	/// Allow promoting a counter out of a nested loop even if there is not
 	/// capacity for it in the parent loop.
 	bool speculative_promotion_to_loop = false;
 
-	/// Once a counter is promoted out of a nested loop can it then continue
-	/// to be promoted out of parent loops?
+	/// Whether a counter already promoted out of a nested loop can also be
+	/// promoted out of the loops around it.
 	bool iterative = true;
 
 	/// Returns the policy the command line describes.
 	static PromotionPolicy from_command_line ();
 };
 
-/// Hoist counter updates out of loops.
+/// Hoists counter updates out of loops.
 ///
 /// Must run after `PGOInstrumentationGen` and `LoopSimplifyPass`, and before
 /// `InstrProfilingLoweringPass`.

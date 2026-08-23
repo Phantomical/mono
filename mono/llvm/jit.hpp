@@ -224,8 +224,6 @@ public:
 	static void add_option (llvm::StringRef opt);
 
 	/// Build the JIT for the host, carving its code out of the given arena.
-	///
-	/// Every module added to it goes through the tier-0 IR pipeline.
 	static llvm::Expected<std::unique_ptr<MonoJit>>
 	create (CodeArena *arena);
 
@@ -270,8 +268,11 @@ public:
 	              llvm::ArrayRef<std::pair<llvm::StringRef, void *>> module_symbols = {},
 	              llvm::ArrayRef<ProfileCounters> layout = {});
 
-	/// Release the dylibs: their code, their side tables, and the memory both
-	/// were linked into. Later compiles can reuse that memory.
+	/// Release the dylibs: their code, their side tables, and the ORC
+	/// bookkeeping for them.
+	///
+	/// The reserved bytes stay reserved - CodeArena frees only the whole
+	/// arena, so this does not give a later compile memory to reuse.
 	///
 	/// The caller proves the code dead - nothing executing in it, nothing about
 	/// to call into it. Any stub still pointing at it must already be undefined.
@@ -283,11 +284,11 @@ public:
 	/// Every module goes through this before compile (): it is what lowers the
 	/// translator's symbolic calls and puts the body into this backend's
 	/// calling convention. The profile is a tier-2 input and build_profile ()
-	/// writes it; an empty one still compiles at tier 2, only with nothing to
+	/// writes it. An empty one still compiles at tier 2, only with nothing to
 	/// lay the code out by.
 	///
-	/// Returns nothing when the module was not instrumented, which is every
-	/// tier-2 module and every tier-1 module compiled with tier 2 turned off.
+	/// Returns nothing when the module was not instrumented: every tier-2
+	/// module, and a tier-1 module compiled with MONO_LLVM_JIT_TIER1_PGO off.
 	///
 	/// inliner, when given, is what tier 2 asks for the callee bodies it folds
 	/// in. Without one the module is compiled with every call it arrived with

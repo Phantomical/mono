@@ -127,8 +127,7 @@ MonoPipelineTuningOptions::forTier1 ()
 MonoPipelineTuningOptions
 MonoPipelineTuningOptions::forTier2 ()
 {
-	// LLVM's defaults throughout: tier 2 builds at O3, which is the level they
-	// describe.
+	// LLVM's defaults throughout: they already match tier 2's O3.
 	return MonoPipelineTuningOptions ();
 }
 
@@ -165,8 +164,8 @@ MonoPassBuilder::buildCommonFunctionSimplificationPipeline ()
 {
 	auto optLevel = llvm::OptimizationLevel::O1;
 
-	// This is mostly intended to mirror LLVM's existing O1 pass. It runs before
-	// PGO instrumentation is added/applied, so it needs to be identical between
+	// This mirrors LLVM's O1 function simplification pipeline. It runs before
+	// PGO instrumentation is added or used, so it must stay identical between
 	// tier1 and tier2.
 
 	llvm::FunctionPassManager FPM;
@@ -176,7 +175,7 @@ MonoPassBuilder::buildCommonFunctionSimplificationPipeline ()
 
 	// Early cleanup
 
-	// Lower llvm.expect to metadata before attempting t ransforms.
+	// Lower llvm.expect to metadata before attempting transforms.
 	FPM.addPass (llvm::LowerExpectIntrinsicPass ());
 
 	// The rest is the O1 function optimization pipeline, see
@@ -225,7 +224,7 @@ MonoPassBuilder::buildCommonFunctionSimplificationPipeline ()
 	FPM.addPass (llvm::InstCombinePass ());
 	invokePeepholeEPCallbacks (FPM, optLevel);
 
-	// We explicitly don't include this because we do not emit coroutine intrinsics
+	// Left out: this backend does not emit coroutine intrinsics.
 	// FPM.addPass(llvm::CoroElidePass());
 
 	invokeScalarOptimizerLateEPCallbacks (FPM, optLevel);
@@ -334,15 +333,15 @@ MonoPassBuilder::buildTier1Pipeline ()
 	if (PTO.EnablePGO)
 		MPM.addPass (buildPgoInstrumentationPipeline ());
 
-	// This needs to happen after PGO instrumentation so that counts can carry
-	// over to tier2, which doesn't have the tiering counter.
+	// This must happen after PGO instrumentation so that counts can carry
+	// over to tier2, which does not have the tiering counter.
 	if (PTO.EnablePromotion)
 		MPM.addPass (mono::TierCounterPass ());
 
 	// Clean up dominated class initialization checks
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
 
-	// Ensure that tail calls don't get tail-merged into a block.
+	// Make sure that tail calls do not get merged into one block.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RestoreTailPositionPass ()));
 	MPM.addPass (arch::MonoAbiPass ());
 
@@ -444,9 +443,10 @@ MonoPassBuilder::buildTier2FunctionSimplificationPipeline ()
 	// from. Value profiling is off, so there are none to read.
 
 	/*
-	 * LLVM reads this flag off PGOOpt, which a builder of our own never sets,
-	 * and it would then leave the entry count behind when it turns a recursion
-	 * into a loop. We are an instrumented profile and use whatever PGOOpt says.
+	 * LLVM reads this flag off PGOOpt, which a builder of our own never sets.
+	 * Left unset, TailCallElimPass would leave a converted recursion's entry
+	 * count stale. This pipeline always runs after PGOInstrumentationUse, so
+	 * it passes true directly instead.
 	 */
 	FPM.addPass (llvm::TailCallElimPass (/* UpdateFunctionEntryCount = */ true));
 	FPM.addPass (
@@ -507,7 +507,7 @@ MonoPassBuilder::buildTier2FunctionSimplificationPipeline ()
 	                    /* AllowSpeculation = */ true),
 		/*UseMemorySSA=*/true));
 
-	// We explicitly don't include this because we do not emit coroutine intrinsics
+	// Left out: this backend does not emit coroutine intrinsics.
 	// FPM.addPass(llvm::CoroElidePass());
 
 	invokeScalarOptimizerLateEPCallbacks (FPM, optLevel);

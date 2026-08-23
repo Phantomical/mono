@@ -435,9 +435,8 @@ MethodLLVMEmitter::emit_unbox (MonoIrBuilder &builder, uint32_t token)
 
 	// A boxed nullable is a plain T, or null, so there is no Nullable<T>
 	// inside the object whose address this can compute. The helper builds the
-	// value instead. A value class on the evaluation stack is already the
-	// address of a frame slot, so the pointer pushed here is that slot.
-	// III.4.32 does not require unbox to point into the object.
+	// value instead, and spill_to_temporary () hands back its address either
+	// way. III.4.32 does not require unbox to point into the object.
 	if (mono_class_is_nullable (klass)) {
 		if (llvm::Error error =
 		            call_nullable_helper (builder, klass, nullable_unbox_helper (klass)))

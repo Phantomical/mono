@@ -50,10 +50,6 @@ resume_unwind_decl (llvm::Module *module)
 } // namespace
 
 /// The innermost clause whose try region covers at, or -1 if nothing protects it.
-///
-/// Clauses arrive innermost-first within one nest. Overlapping regions from separate
-/// nests do not order themselves, so the shortest try region wins instead of the
-/// first.
 int
 MethodLLVMEmitter::innermost_try (size_t at) const
 {
@@ -73,6 +69,12 @@ MethodLLVMEmitter::innermost_try (size_t at) const
 
 		if (!MONO_OFFSET_IN_CLAUSE (clause, at))
 			continue;
+
+		/*
+		 * Clause index order is innermost-first only within one chain of
+		 * nested try regions. Two chains that both cover at do not order by
+		 * index, so this compares try_len instead to find the innermost one.
+		 */
 		if (found < 0 || clause->try_len < clauses[found].try_len)
 			found = static_cast<int> (i);
 	}
@@ -100,12 +102,12 @@ MethodLLVMEmitter::innermost_handler (size_t at) const
 
 /// Whether clause j's try region strictly encloses clause c's.
 ///
-/// The test looks only at the try regions' own extents. Handler placement says
-/// nothing about nesting. Siblings, which share an identical try region, are
-/// excluded: they share one pad and route as a group, not by nesting.
+/// The test compares try regions only, and ignores handler placement. A sibling
+/// pair, whose try regions are identical, is excluded.
 static bool
 clause_encloses (const MonoExceptionClause *c, const MonoExceptionClause *j)
 {
+	// Siblings share one landing pad and route as a group, not by nesting.
 	bool siblings = c->try_offset == j->try_offset && c->try_len == j->try_len;
 
 	return !siblings && c->try_offset >= j->try_offset
@@ -164,9 +166,12 @@ MethodLLVMEmitter::covering_chain (uint32_t clause) const
 llvm::Constant *
 MethodLLVMEmitter::clause_marker (uint32_t clause)
 {
-	// Named for the method as well as the clause. The globals are shared with
-	// the filter emitters, which see the same clauses; a module holding a batch
-	// of methods holds several clause 0s, and they do not agree on the kind.
+	/*
+	 * Named for the method as well as the clause. The globals are shared with
+	 * the filter emitters, which see the same clauses. A module that holds a
+	 * batch of methods holds several clause 0s, and they do not agree on the
+	 * kind.
+	 */
 	std::string name =
 		identity_symbol ("mono_eh_clause_" + std::to_string (clause), method);
 
@@ -249,10 +254,6 @@ MethodLLVMEmitter::handler_entry (uint32_t clause, llvm::Value *exc)
 /// The catch operands name every clause the switch can route to, so the object's
 /// exception table carries the whole chain for each call site. That also keeps
 /// every handler reachable and alive through optimization.
-///
-/// A handler is entered holding what the runtime puts there: a catch gets the
-/// exception, and a finally or fault gets nothing. emit () records those entry
-/// stacks up front, so this only fills the slot in.
 llvm::BasicBlock *
 MethodLLVMEmitter::landing_pad (uint32_t clause)
 {
@@ -348,12 +349,9 @@ MethodLLVMEmitter::emit_resume_exit (MonoIrBuilder &builder, uint32_t clause)
 
 /// Record how the clause's handler is entered, before jumping to it.
 ///
-/// The id continuation is what its endfinally switches on. Zero means an entry by
-/// unwinding, which carries on by resuming that unwind.
-///
-/// The abort guard is cleared here rather than at the top of the body. From the
-/// body's first instruction on, the byte belongs to the runtime, and another thread
-/// can write it while this one runs there.
+/// \param continuation  what the handler's endfinally switches on. Zero means the
+///                      handler was entered by unwinding, which resumes that unwind
+///                      when it ends.
 void
 MethodLLVMEmitter::enter_finally (MonoIrBuilder &builder, uint32_t clause,
                                   uint32_t continuation)
@@ -361,6 +359,10 @@ MethodLLVMEmitter::enter_finally (MonoIrBuilder &builder, uint32_t clause,
 	Clause &state = clause_state[clause];
 
 	builder.CreateStore (builder.getInt32 (continuation), state.resume_at);
+
+	// Cleared here, not at the top of the body. From the body's first
+	// instruction on, the byte belongs to the runtime, and another thread can
+	// write it while this one runs there.
 	builder.CreateStore (builder.getInt8 (0), state.abort_guard);
 }
 
@@ -565,9 +567,9 @@ MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCa
 /*
  * III.F0.1F  mono_rethrow - throw an exception again without disturbing its trace
  *
- * Unlike CIL rethrow this names the exception rather than taking the one the
- * handler was entered with, so a wrapper can rethrow what it caught after doing
- * something else in between.
+ * Unlike CIL rethrow, this names the exception instead of taking the one the
+ * handler was entered with. A wrapper can then rethrow what it caught, after
+ * doing something else in between.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_rethrow (MonoIrBuilder &builder)
@@ -887,11 +889,8 @@ MethodLLVMEmitter::emit_endfilter (MonoIrBuilder &builder)
 		return invalid_il (llvm::Twine ("endfilter is not defined for operand type ")
 		                   + describe (value.type, type));
 
-	/*
-	 * A filter runs during the search pass, before anything has unwound. It hands
-	 * its answer back to the runtime by returning it, not by branching anywhere in
-	 * this method.
-	 */
+	// A filter answers by returning its value, not by branching anywhere in
+	// this method.
 	pop_stack (stack.size ());
 	builder.CreateRet (value.value);
 	return llvm::Error::success ();

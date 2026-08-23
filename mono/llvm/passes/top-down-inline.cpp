@@ -127,7 +127,7 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 
 	/*
 	 * The mark comes off for the run below and goes back on once the body is
-	 * across. The preparation ends in StripInlineCopiesPass, which takes the
+	 * across. The preparation runs StripInlineCopiesPass, which takes the
 	 * body off everything wearing the mark, and here the copy is what the
 	 * module is about rather than a spare beside a caller.
 	 *

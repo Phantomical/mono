@@ -41,8 +41,8 @@ std::string stub_symbol (MonoMethod *method);
 /// dump, a profile and a stack trace can say which method it is.
 std::string interop_symbol (MonoMethod *method);
 
-/// Give every declaration in a module that names another method's code the
-/// symbol this engine publishes that method under.
+/// Renames every declaration in a module that names another method's code to
+/// the symbol this engine publishes that method under.
 ///
 /// The translator marks each such declaration with the MonoMethod and leaves
 /// the naming alone, so this is the only place the two sides meet.

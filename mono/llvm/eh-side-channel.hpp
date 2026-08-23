@@ -6,9 +6,11 @@
  * MonoEHGatherPass (passes/eh-gather.cpp) and MonoFinallyRangePass
  * (passes/finally-range.cpp) emit nothing. They run inside the object-emission
  * pipeline, read the target-neutral machine IR, and fill in the structs below.
- * SideTableEmitPass (compiler.cpp) then joins the two halves by function name
- * and writes `.mono_lsda`. The channel is a stack local of one compile threaded
- * into the passes, so nothing here is shared between concurrent compiles.
+ * SideTableEmitPass (compiler.cpp) then writes each struct to a section of its
+ * own: `.mono_lsda` for the clauses, `.mono_guards` for the finally bodies.
+ * Both sections key their blocks by function name. The channel is a stack
+ * local of one compile threaded into the passes, so it is not shared between
+ * concurrent compiles.
  *
  * The MCSymbol* fields are the very symbols the AsmPrinter emits into .text.
  * They are kept as symbols because that is what turns them into
@@ -97,8 +99,9 @@ struct MonoEHFinallyBody {
 
 /// The finally body ranges MonoFinallyRangePass found in one MachineFunction.
 struct MonoEHFinallyFunction {
-	/// MF.getName (), matched against MonoEHFunctionClauses::function to write
-	/// both into one record.
+	/// MF.getName (). SideTableEmitPass keys `.mono_guards` blocks by this
+	/// name, the same way it keys `.mono_lsda` blocks by
+	/// MonoEHFunctionClauses::function.
 	std::string function;
 	std::vector<MonoEHFinallyBody> bodies;
 };
@@ -108,8 +111,8 @@ struct MonoEHFinallyFunction {
  * no landing pads leaves this empty, so the gather pass is inert.
  *
  * finally_functions is a separate list because a different pass fills it, at a
- * different point in the pipeline. The two are joined by function name when the
- * section is written.
+ * different point in the pipeline. Both lists key their entries by function
+ * name, and SideTableEmitPass writes each to a section of its own.
  */
 struct MonoEHSideChannel {
 	std::vector<MonoEHFunctionClauses> functions;

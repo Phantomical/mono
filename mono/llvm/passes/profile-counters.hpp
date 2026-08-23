@@ -21,7 +21,8 @@
 
 namespace mono {
 
-/// One instrumented function's counter array.
+/// The name, hash and counter count the IR carries for one instrumented
+/// function.
 struct ProfileSite {
 	/// The function this counts, by the name it carries in the IR.
 	std::string function;
@@ -52,9 +53,9 @@ struct ProfileArray {
 /// Reads a linked object's `__llvm_prf_data` records.
 ///
 /// Each record says where its own function's counters landed, so a module
-/// holding several instrumented functions gives one entry each. Returns nothing
-/// when the section is not a whole number of records - what a disagreement with
-/// LLVM about the record layout looks like from here.
+/// holding several instrumented functions gives one entry each. Returns
+/// nothing when the section is not a whole number of records. That is what a
+/// disagreement with LLVM about the record layout looks like from here.
 std::vector<ProfileArray> read_profile_arrays (const uint8_t *data, size_t size);
 
 /// The value `__llvm_prf_data` records a function's name under.
@@ -89,22 +90,23 @@ public:
 ///
 /// Run behind the lowering. Threads share a body's counters, so a counter
 /// written as a load and a store loses a count when two threads reach the same
-/// block together. The lowering writes a counter that way only where promotion
-/// can take it. What is left over is a counter on a straight line, or one in a
-/// loop that promotion refused.
+/// block together. Only InstrProfOptions::Atomic decides which one the
+/// lowering picks, for a promoted write-back and an untouched counter alike.
+/// This tree turns that flag on, so the lowering never leaves this pass
+/// anything to convert.
 class ProfileAtomicPass : public llvm::PassInfoMixin<ProfileAtomicPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);
 };
 
-/// Makes every global the lowering wrote local to the module.
+/// Makes every global the profiling machinery wrote local to the module.
 ///
-/// Run behind the lowering. That earlier pass marks some of them external and
-/// comdat, for a static linker to merge and a profile runtime to find at
-/// process exit. Here the counters are read straight out of the running
-/// code, so the JIT never looks them up by name. Left visible, they are
-/// symbols the JIT promises from the IR and then links with flags that do
-/// not match.
+/// Run behind the lowering. The profiling machinery marks some of these
+/// globals external and comdat, for a static linker to merge and a profile
+/// runtime to find at process exit. Here the counters are read straight out
+/// of the running code, so the JIT never looks them up by name. Left
+/// visible, they are symbols the JIT promises from the IR and then links
+/// with flags that do not match.
 class ProfileLocalizePass : public llvm::PassInfoMixin<ProfileLocalizePass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);

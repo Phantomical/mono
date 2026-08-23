@@ -10,10 +10,9 @@
  * offsets as label differences the writer folds at layout. So the recipe is
  * restated here, faithfully, with those two additions.
  *
- * The gather pass is shared with the tiered backend (passes/eh-gather.cpp),
- * as is the `.mono_lsda` format its reader parses. The `.mono_unwind` section is this backend's own: the CFI
- * program LLVM tracked for the function, recorded at the MC layer where it is
- * still target-neutral semantics rather than DWARF bytes.
+ * The gather pass (passes/eh-gather.cpp) fills in the `.mono_lsda` format;
+ * mono_lsda.cpp is its reader. `.mono_unwind` is written straight from here
+ * rather than by a separate pass. sidetables.hpp has the format.
  */
 
 /*
@@ -382,7 +381,7 @@ transcribe_cfi (const MCCFIInstruction &i)
 }
 
 /**
- * Writes both side tables at doFinalization, which the legacy pass manager runs
+ * Writes the side tables at doFinalization, which the legacy pass manager runs
  * in reverse pass order. Added after the AsmPrinter, this runs once every
  * function has been emitted but before the printer's own finalization closes
  * the streamer and writes the object.
@@ -440,10 +439,10 @@ public:
 
 private:
 	/**
-	 * `.mono_lsda`, in the tiered backend's v3 format (mono_lsda.hpp), whose
-	 * reader parses it back at load. One block per clause-bearing function,
-	 * each naming where that function was linked, so an object holding a batch
-	 * of methods keeps each method's geometry apart.
+	 * `.mono_lsda`, in the v3 format mono_lsda.hpp declares and mono_lsda.cpp
+	 * reads back at load. One block per clause-bearing function, each naming
+	 * where that function was linked, so an object holding a batch of methods
+	 * keeps each method's geometry apart.
 	 */
 	void emit_clause_table ()
 	{

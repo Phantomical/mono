@@ -8,15 +8,9 @@ namespace mono {
 
 namespace {
 
-/// Returns the shift amount, resized to type's width and masked into its range.
+/// Returns amount widened or narrowed to match type.
 ///
-/// An LLVM shift needs both operands in one type. Table III.6 pairs an int32 or native
-/// int amount with any of the three shiftable value types. One operand always changes
-/// width to match the other.
-///
-/// The mask keeps the result defined. If the shift amount reaches the operand's width,
-/// the spec leaves the result unspecified. LLVM treats that case as poison instead, and
-/// poison can affect code far from where it happened.
+/// The shift amount is taken modulo type's width.
 llvm::Value *
 shift_amount (llvm::IRBuilder<> &builder, llvm::Value *amount, llvm::Type *type)
 {
@@ -33,6 +27,8 @@ shift_amount (llvm::IRBuilder<> &builder, llvm::Value *amount, llvm::Type *type)
 	else if (from < bits)
 		value = builder.CreateZExt (value, type);
 
+	// ECMA-335 leaves an over-wide shift unspecified. LLVM makes it poison, so
+	// the amount is masked instead of passed through.
 	return builder.CreateAnd (value, llvm::ConstantInt::get (type, bits - 1));
 }
 

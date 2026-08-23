@@ -167,8 +167,7 @@ MethodLLVMEmitter::build_sig_cookie (MonoIrBuilder &builder, MonoMethodSignature
 	return buffer;
 }
 
-/// Coerces value to something that can go where a call signature asks for
-/// destination.
+/// Coerces value to the type destination requires as a call argument.
 ///
 /// A call argument accepts a mismatch that coerce_to_location () refuses for a
 /// store: an int32, or a pointer, where the parameter is int64. This backend
@@ -311,21 +310,12 @@ MethodLLVMEmitter::interface_callee (MonoIrBuilder &builder, llvm::Value *receiv
 /// Whether a call to target must dispatch through the delegate it is made on,
 /// instead of through a vtable slot.
 ///
-/// A delegate's Invoke has no body for anyone to compile. The runtime picks an
-/// implementation for each delegate object instead of a vtable slot. A single-target
-/// delegate gets an arch stub that shuffles the receiver and jumps through
-/// method_ptr. A multicast or open-instance delegate gets the compiled
-/// delegate-invoke wrapper instead, because method_ptr cannot express that shape.
-/// The runtime stores the choice in the object's invoke_impl field. Reading that
-/// field is what limits mono_delegate_trampoline to one firing per delegate, not
-/// one per call.
-///
-/// Every delegate carries this field, whatever engine runs its target.
-/// mono_delegate_ctor () fills it in with the delegate trampoline before anything
-/// else can see the object. The interpreter builds its own delegates through that
-/// same function. Once the trampoline has fired, invoke_impl holds whatever the
-/// runtime hands out for the target. For an interpreted target, that is the entry
-/// into the interpreter, reached through the stub like any other.
+/// A delegate's Invoke has no body for anyone to compile, so the runtime picks
+/// an implementation per delegate object instead of using a vtable slot, and
+/// stores the choice in invoke_impl. mono_delegate_ctor () fills that field in
+/// with the delegate trampoline before anything else can see the object, so the
+/// field is never garbage. delegate_invoke_callee () reads it, and that read is
+/// what limits the trampoline to one firing per delegate, not one per call.
 static bool
 dispatches_through_invoke_impl (MonoMethod *target)
 {
@@ -333,8 +323,8 @@ dispatches_through_invoke_impl (MonoMethod *target)
 	       && std::string_view (target->name) == "Invoke";
 }
 
-/// Loads the implementation the runtime settled on for receiver, a delegate, or
-/// target's vtable slot until it has one.
+/// Loads the implementation the runtime settled on for receiver, a delegate,
+/// falling back to target's vtable slot before invoke_impl is set.
 ///
 /// That slot holds the same delegate trampoline that fills invoke_impl in. A
 /// delegate whose field is still unset therefore dispatches correctly through it.
@@ -375,12 +365,10 @@ keep_alive (llvm::IRBuilderBase &builder, llvm::Value *value)
 llvm::Constant *
 MethodLLVMEmitter::method_symbol (MonoMethod *target)
 {
-	/*
-	 * A shared body's own MonoMethod is the shared one, and naming that is
-	 * right: it is the method that is running. Any other open method stands for
-	 * a different MonoMethod in each instantiation, so a site that has not been
-	 * given method_operand () refuses here.
-	 */
+	// A shared body's own MonoMethod is the shared one, and naming that is
+	// right: it is the method that is running. Any other open method stands for
+	// a different MonoMethod in each instantiation, so a site that has not been
+	// given method_operand () refuses here.
 	if (target != method && depends_on_context (target))
 		cannot_share ("a reference to an open method");
 
@@ -399,8 +387,8 @@ MethodLLVMEmitter::method_symbol (MonoMethod *target)
 /// wrapper that enters the monitor, calls the body, and exits through a finally.
 /// The flagged method itself is always the body. Every reference this front end
 /// resolves while it compiles must name the wrapper. That includes a direct
-/// callee and an escaping code address. Nothing between here and the code will
-/// substitute the wrapper later.
+/// callee and an escaping code address. No later step in this backend
+/// substitutes the wrapper.
 ///
 /// A dispatched call site must not ask this. The receiver's vtable slot already
 /// holds the wrapper, put there by the runtime, and the IMT key must stay the
@@ -996,9 +984,8 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
-/// Refuses a call the image must never have contained. It does not fail the
-/// translation. Instead it compiles the method with a throw in the call's place,
-/// so a body reached some other way still runs.
+/// Emits a throw in place of a call the image must never have contained.
+/// Translation continues normally, so a body reached some other way still runs.
 ///
 /// The call site is left holding a result nothing can read, since control does
 /// not come back from the throw, and the instructions after it are translated
@@ -1360,7 +1347,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 
 		// Boxing a nullable yields a boxed T, or null: the box opcode's rule
 		// holds here too. It is what makes the receiver's type observable as
-		// T, and a receiver without a value throw.
+		// T, and a receiver without a value throws.
 		llvm::Expected<llvm::Value *> boxed =
 			mono_class_is_nullable (constrained)
 				? box_nullable (builder, constrained, { value, vtype })
@@ -1608,12 +1595,10 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		}
 	}
 
-	/*
-	 * A dispatched site has already found the instantiation's own code, through
-	 * the receiver. A direct one has not: the callee this body named is open,
-	 * and each instantiation compiles it for itself, so the entry to call comes
-	 * out of the context like any other piece of metadata.
-	 */
+	// A dispatched site has already found the instantiation's own code, through
+	// the receiver. A direct one has not: the callee this body named is open,
+	// and each instantiation compiles it for itself, so the entry to call comes
+	// out of the context like any other piece of metadata.
 	if (!through_slot && pass_context_to (*declaration, *args))
 		keyed = true;
 
