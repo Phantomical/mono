@@ -102,6 +102,28 @@ class InterpStackGcRoot
 		     + b8.a.b + b9.b.c + ba.c.d + bb.d.e + bc.e.f + bd.f.g + be.g.h + bf.h.a;
 	}
 
+	/*
+	 * Mint a second payload the same way, so that the native words the first one left
+	 * behind name this one instead.
+	 *
+	 * The payload reaches native code twice on its way into Drop (): the allocator
+	 * makes it, and the weak handle records it. Both leave words that name it in
+	 * frames the collector reads later. That scan covers dead frames as well as live
+	 * ones, because it runs from the collector's own frame to the base of the stack.
+	 * An interpreted method writes the interpreter's value stack alone, which is the
+	 * half Wipe () clears. So no other method this phase runs reaches these words, and
+	 * one of them keeps the dropped payload alive for the rest of the run. A compiled
+	 * Scrub () does write the native stack, which is why the compiled arm never
+	 * needed this.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void Decoy ()
+	{
+		Payload q = new Payload ();
+
+		GC.KeepAlive (new WeakReference (q));
+	}
+
 	/* Mint one of the same shape in a frame that is popped before anything collects. */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static void Drop ()
@@ -111,6 +133,7 @@ class InterpStackGcRoot
 		dropped = new WeakReference (p);
 		p = null;
 		Wipe ();
+		Decoy ();
 	}
 
 	static int Check (Payload live)
