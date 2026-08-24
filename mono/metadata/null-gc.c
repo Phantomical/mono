@@ -523,6 +523,12 @@ mono_gc_card_table_nursery_check (void)
 	return TRUE;
 }
 
+volatile gboolean *
+mono_gc_get_concurrent_collection_flag (void)
+{
+	return NULL;
+}
+
 void*
 mono_gc_get_nursery (int *shift_bits, size_t *size)
 {

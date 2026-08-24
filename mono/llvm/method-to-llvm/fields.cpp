@@ -33,6 +33,7 @@ struct WriteBarrierLayout {
 	char *nursery_start = nullptr;
 	int nursery_bits = 0;
 	bool value_decides = false;
+	volatile gboolean *concurrent_flag = nullptr;
 };
 
 /// Reads the collector's card table and nursery bounds, once for the process.
@@ -69,6 +70,12 @@ write_barrier_layout ()
 		// This is the split mono_gc_get_specific_write_barrier () keeps two
 		// wrappers for.
 		read.value_decides = mono_gc_card_table_nursery_check ();
+
+		// Such a collector marks those cards only while a collection runs, and
+		// this flag is what says so.
+		if (!read.value_decides)
+			read.concurrent_flag = mono_gc_get_concurrent_collection_flag ();
+
 		return read;
 	}();
 
@@ -114,30 +121,68 @@ MethodLLVMEmitter::emit_reference_store (MonoIrBuilder &builder, llvm::Value *ad
 	builder.CreateAlignedStore (value, address, align);
 
 	llvm::Value *target = builder.CreatePtrToInt (address, word);
-	llvm::Value *mark = builder.CreateICmpNE (
+	llvm::Value *target_is_old = builder.CreateICmpNE (
 		builder.CreateLShr (target, gc.nursery_bits), nursery, "wb_target_is_old");
 
 	/*
-	 * The wrapper reads the destination back here, because its caller made the
-	 * store. We test the value we stored instead. A thread that puts a different
-	 * reference there marks the card with its own barrier, so the card is marked
-	 * either way.
+	 * The collector reads the card under an old destination that names a young
+	 * object. While a concurrent collection runs, it reads the card under every
+	 * old destination:
 	 *
-	 * Both tests are shifts and compares on values already in registers, so one
-	 * branch carries them both.
+	 *     mark = target_is_old && (value_is_young || concurrent_collection)
+	 *
+	 * The wrapper reads the destination back for the value test, because its
+	 * caller made the store. We test the value we stored instead. A thread that
+	 * puts a different reference there marks the card with its own barrier, so the
+	 * card is marked either way.
 	 */
-	if (gc.value_decides) {
+	auto value_is_young = [&] {
 		llvm::Value *stored =
 			builder.CreateLShr (builder.CreatePtrToInt (value, word), gc.nursery_bits);
 
-		mark = builder.CreateAnd (
-			mark, builder.CreateICmpEQ (stored, nursery, "wb_value_is_young"));
-	}
+		return builder.CreateICmpEQ (stored, nursery, "wb_value_is_young");
+	};
 
 	llvm::BasicBlock *card = llvm::BasicBlock::Create (context (), "wb_mark", function);
 	llvm::BasicBlock *done = llvm::BasicBlock::Create (context (), "wb_done", function);
 
-	builder.CreateCondBr (mark, card, done);
+	if (gc.value_decides) {
+		// A collector that collects nothing concurrently drops the last term. The
+		// two tests that are left are shifts and compares on values already in
+		// registers, so one branch carries them both.
+		builder.CreateCondBr (builder.CreateAnd (target_is_old, value_is_young ()),
+		                      card, done);
+	} else if (gc.concurrent_flag != nullptr) {
+		llvm::Type *flag_type = builder.getIntNTy (sizeof (gboolean) * 8);
+		llvm::BasicBlock *old_target =
+			llvm::BasicBlock::Create (context (), "wb_target_old", function);
+
+		builder.CreateCondBr (target_is_old, old_target, done);
+		builder.SetInsertPoint (old_target);
+
+		/*
+		 * The load is volatile, which keeps it inside its loop and behind the
+		 * store. The collector sets the flag with the world stopped, so a load in
+		 * front of the store can read false while the collection starts. The store
+		 * then lands with no card in an object the marker already read.
+		 */
+		llvm::Value *flag = builder.CreateIntToPtr (
+			llvm::ConstantInt::get (word,
+			                        reinterpret_cast<uintptr_t> (gc.concurrent_flag)),
+			llvm::PointerType::get (context (), 0));
+		llvm::Value *concurrent = builder.CreateICmpNE (
+			builder.CreateAlignedLoad (flag_type, flag, llvm::Align (sizeof (gboolean)),
+			                           true, "wb_concurrent"),
+			llvm::ConstantInt::get (flag_type, 0));
+
+		builder.CreateCondBr (builder.CreateOr (value_is_young (), concurrent), card,
+		                      done);
+	} else {
+		// A collector that keeps no flag can run a concurrent collection at any
+		// moment, so every old destination gets a card.
+		builder.CreateCondBr (target_is_old, card, done);
+	}
+
 	builder.SetInsertPoint (card);
 
 	llvm::Value *index = builder.CreateLShr (target, gc.card_bits);

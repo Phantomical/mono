@@ -499,6 +499,26 @@ TEST_F (TranslatorTest, StoringAReferenceMarksItsOwnCard)
 	EXPECT_GE (statics.count ("wb_mark"), 1u);
 }
 
+// A concurrent major collector wants a card under every old destination, and only
+// while it runs. The mark therefore sits behind a read of the collector's own flag
+// as well as behind the value test, which is what keeps an old-to-old store off
+// the card table for the rest of the program.
+TEST_F (TranslatorTest, AConcurrentCollectorsFlagDecidesAtRuntime)
+{
+	volatile gboolean *flag = mono_gc_get_concurrent_collection_flag ();
+
+	if (mono_gc_card_table_nursery_check () || flag == nullptr)
+		GTEST_SKIP () << "this collector collects nothing concurrently";
+
+	const Translation &field = translate ("fields", "Fields:SetRef");
+	std::string address = std::to_string (reinterpret_cast<uintptr_t> (flag));
+
+	ASSERT_NE (field.function, nullptr) << field.error;
+	EXPECT_EQ (field.count ("load volatile i32, ptr inttoptr (i64 " + address), 1u)
+		<< field.text ();
+	EXPECT_GE (field.count ("wb_value_is_young"), 1u) << field.text ();
+}
+
 // A struct with a reference inside cannot be stored as bytes: the copy has to go
 // through the collector so the destination's cards get marked. A struct without
 // references keeps the plain store.

@@ -3003,6 +3003,17 @@ mono_gc_card_table_nursery_check (void)
 	return !sgen_get_major_collector ()->is_concurrent;
 }
 
+volatile gboolean *
+mono_gc_get_concurrent_collection_flag (void)
+{
+#ifndef DISABLE_SGEN_MAJOR_MARKSWEEP_CONC
+	return &sgen_concurrent_collection_in_progress;
+#else
+	// sgen-gc.h makes the flag a constant here, and no collector sets it.
+	return NULL;
+#endif
+}
+
 /* Negative value to remove */
 void
 mono_gc_add_memory_pressure (gint64 value)

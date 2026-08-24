@@ -462,6 +462,20 @@ _mono_sgen_suite(sgen-bridge3-ms-conc-par-simple-par-512k-tarjan-bridge _sgen_br
 _mono_sgen_suite(sgen-bridge3-ms-conc-par-simple-par-32m-tarjan-bridge _sgen_bridge3
                  "--gc=sgen --gc-debug=bridge=3Bridge --gc-params=major=marksweep-conc-par,minor=simple-par,nursery-size=32m,bridge-implementation=tarjan")
 
+# A store from one old object to another marks its card only while a concurrent
+# collection runs. The code that decides has no other exerciser.
+#
+# Under mod-union-consistency-check the collector reports a card the store
+# missed, at the next collection and by the object it belongs to. Without the
+# option the same miss is a payload the collection frees, and the program then
+# reads a wrong value on the runs where the timing lands that way.
+#
+# One program rather than the whole list, because the check walks the heap at
+# every collection.
+mono_runtime_suite(sgen-wbarrier-mod-union LABEL sgen GC sgen TESTS sgen-wbarrier.exe
+                   RUNTIME_ARGS "--gc=sgen --gc-debug=mod-union-consistency-check --gc-params=major=marksweep-conc,minor=simple"
+                   TIMEOUT 900 PROCESSORS 4)
+
 # One-off suites. These are not test-runner corpora: each is a single program
 # whose exit code or output is the result.
 # NATIVE is for the ones that do not run managed code on the runtime being

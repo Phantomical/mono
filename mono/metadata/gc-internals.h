@@ -357,6 +357,22 @@ guint8* mono_gc_get_target_card_table (int *shift_bits, target_mgreg_t *card_mas
 gboolean mono_gc_card_table_nursery_check (void);
 
 /*
+ * The GC sets this flag while a concurrent collection runs, and a backend that
+ * marks cards inline reads it. A store into an object outside the nursery must
+ * mark its card while the flag is set, whatever the value is.
+ *
+ * The address does not change after the GC starts, so compiled code can hold it.
+ *
+ * The GC sets and clears the flag with the world stopped. A read that stays
+ * behind the store is therefore enough: a collection that starts after the read
+ * starts after the store too, and its marker reads what the store wrote.
+ *
+ * Returns NULL when the GC keeps no such flag.
+ */
+/* G_EXTERN_C: the LLVM backend's write-barrier lowering reads this from C++. */
+G_EXTERN_C volatile gboolean *mono_gc_get_concurrent_collection_flag (void);
+
+/*
  * The GC's dirty-page bitmap, for a backend that wants to mark it inline rather
  * than call the barrier: one bit per page, and the bit for an address is
  *
