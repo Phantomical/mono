@@ -920,6 +920,81 @@ TEST_F (JitProfile, AThrowThisBodyCatchesGetsNoWriteBackOfItsOwn)
 
 	EXPECT_FALSE (isa<InvokeInst> (terminator));
 }
+
+/// A callee that comes back and can unwind. It carries neither nounwind nor
+/// noreturn, so TierCounterPass sends it to the pad.
+FunctionCallee
+unwinding_callee_decl (Module &m)
+{
+	return m.getOrInsertFunction ("mono_test_may_unwind",
+	                              Type::getVoidTy (m.getContext ()));
+}
+
+TEST_F (JitProfile, ALoopChargesItsTurnsWhenACalleeUnwindsThroughTheFrame)
+{
+	OwnedModule m;
+	m.context = std::make_unique<LLVMContext> ();
+	m.module = std::make_unique<Module> ("jit.tier-unwind", *m.context);
+
+	LLVMContext &ctx = *m.context;
+	Function *fn = build_looping_function (*m.module, ctx, "looping_and_calling", "1000");
+
+	// Inside the loop, so an exception that leaves the frame from here takes the
+	// turns made before it with it.
+	BasicBlock *head = nullptr;
+
+	for (BasicBlock &block : *fn)
+		if (block.getName () == "head")
+			head = &block;
+
+	ASSERT_NE (head, nullptr);
+	IRBuilder<> (head, head->getFirstInsertionPt ())
+		.CreateCall (unwinding_callee_decl (*m.module));
+
+	ASSERT_FALSE (verifyFunction (*fn, &errs ()));
+
+	MonoJit::optimize (*m.module, JitTier::tier1);
+
+	ASSERT_FALSE (verifyFunction (*fn, &errs ()));
+
+	/*
+	 * Three write-backs: the entry's constant, the ret, and the pad. The pad is
+	 * the only one an exception that unwinds out of the frame reaches, and the
+	 * turns are what it charges.
+	 */
+	SmallVector<AtomicRMWInst *, 4> found = write_backs (*fn);
+
+	ASSERT_EQ (found.size (), 3u);
+
+	AtomicRMWInst *at_pad = nullptr;
+
+	for (AtomicRMWInst *rmw : found) {
+		BasicBlock *landing = rmw->getParent ();
+
+		// The check splits the block the pad started as, so the landing pad
+		// instruction sits in a block the write-back's block is reached from.
+		for (BasicBlock *pred : predecessors (landing))
+			if (pred->isLandingPad ())
+				landing = pred;
+		if (landing->isLandingPad ())
+			at_pad = rmw;
+	}
+
+	ASSERT_NE (at_pad, nullptr) << "no write-back is reached from a landing pad, "
+	                               "so an exception that unwinds through this "
+	                               "frame charges none of the turns";
+	EXPECT_FALSE (isa<Constant> (at_pad->getValOperand ()))
+		<< "the pad charges a number this pass knew, so it is charging the "
+		   "constant rather than the turns the loop made";
+
+	bool invokes = false;
+
+	for (Instruction &i : instructions (*fn))
+		invokes |= isa<InvokeInst> (&i);
+
+	EXPECT_TRUE (invokes) << "the call never became an invoke, so nothing routes "
+	                         "an unwind to the pad";
+}
 } // namespace
 } // namespace test
 } // namespace mono

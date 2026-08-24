@@ -21,10 +21,12 @@ using System.Threading;
  * offset of the call site it was folded at, and the same helper called for real
  * reports an offset into its own body.
  *
- * Unwinder () is the third way out of a body. It reaches no ret and throws
- * nothing itself: every call leaves through the exception of a callee, which
- * finds no clause here and unwinds through the frame. The exits carry the
- * accumulator, so a body of this shape promotes on what its entry charges.
+ * Unwinder () and UnwinderLoop () are the third way out of a body. They reach no
+ * ret and throw nothing themselves: every call leaves through the exception of a
+ * callee, which finds no clause here and unwinds through the frame. Unwinder ()
+ * takes enough calls to promote on what its entry charges. UnwinderLoop () takes
+ * far too few for that and spends the rest of its counter in a long loop, so only
+ * the turns it made before the exception can take it to tier 2.
  *
  * The suite registers this source twice. MONO_LLVM_JIT_TIER2_THRESHOLD is a
  * number one arm reaches and is zero in the other, which turns automatic
@@ -72,6 +74,17 @@ static class Program {
 	 */
 	const int unwind_turns = 4;
 	const int unwind_calls = 4000;
+
+	/*
+	 * Turns of the loop in UnwinderLoop (), and calls of it. Sixty-four calls
+	 * charge about three hundred thousand at the entry, which is well short of the
+	 * ten million the suite sets. The loop carries the rest, and its turns reach
+	 * the counter only through the pad the counter's fault clause names as its
+	 * handler: the throw that ends each call unwinds out of the frame past every
+	 * other write-back.
+	 */
+	const int unwind_loop_turns = 100000;
+	const int unwind_loop_calls = 64;
 
 	/* Whether Probe () had a frame in the last trace, and where its code was. */
 	static bool saw_probe, probe_runs_inside_kernel;
@@ -189,9 +202,9 @@ static class Program {
 	 * Probe () throws on every call, and no clause here catches it, so the ret
 	 * below is dead at run time.
 	 *
-	 * The loop is what puts this body on the accumulator path, which charges the
-	 * counter at the exits of the body. No exit of that kind is ever reached, so
-	 * what the entry charges is the whole of what this body spends.
+	 * The loop puts this body on the accumulator path. Only the pad charges it,
+	 * because no call reaches the ret, and four turns are far less than what the
+	 * entry charges. So this case promotes on the calls.
 	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int Unwinder (int n)
@@ -202,6 +215,27 @@ static class Program {
 			total += i * 3 + (i & 7);
 
 		Probe ("unwind", total >= 0);
+		return total;
+	}
+
+	/*
+	 * Unwinder () with the call moved inside the loop, and with too few calls of it
+	 * to promote.
+	 *
+	 * Probe () is called from inside the loop, and throws on the last turn. That
+	 * keeps the site as hot as the loop, which is what the cost model reads to fold
+	 * it, and it still leaves the frame through a callee's exception.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int UnwinderLoop (int n)
+	{
+		int total = 0;
+
+		for (int i = 0; i < n; ++i) {
+			total += i * 3 + (i & 7);
+			Probe ("unwind loop", i == n - 1);
+		}
+
 		return total;
 	}
 
@@ -246,6 +280,24 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			saw_probe = true;
 			probe_runs_inside_kernel = RunsInsideKernel (e, "Unwinder");
+		}
+
+		if (!saw_probe)
+			throw new Exception ("Probe () has no frame in the trace");
+
+		return probe_runs_inside_kernel;
+	}
+
+	/* The same reading for UnwinderLoop (), and for the same reason. */
+	static bool ObserveUnwinderLoop ()
+	{
+		saw_probe = probe_runs_inside_kernel = false;
+
+		try {
+			UnwinderLoop (unwind_loop_turns);
+		} catch (InvalidOperationException e) {
+			saw_probe = true;
+			probe_runs_inside_kernel = RunsInsideKernel (e, "UnwinderLoop");
 		}
 
 		if (!saw_probe)
@@ -378,6 +430,44 @@ static class Program {
 		return folded;
 	}
 
+	/// Puts UnwinderLoop () at tier 1, spends its counter in loop turns, and
+	/// answers whether it folded.
+	static bool RunUnwinderLoop ()
+	{
+		MethodInfo unwinder = typeof (Program).GetMethod ("UnwinderLoop",
+			BindingFlags.Static | BindingFlags.NonPublic);
+
+		if (!Mono.Tiering.MonoTier.PromoteNow (unwinder.MethodHandle.Value, tier1)) {
+			Console.WriteLine ("FAIL: UnwinderLoop () would not compile at tier 1");
+			++fails;
+			return false;
+		}
+
+		Check (!ObserveUnwinderLoop (), "the helper has a body of its own before tier 2");
+
+		bool came_back = false;
+
+		for (int i = 0; i < unwind_loop_calls; ++i) {
+			try {
+				UnwinderLoop (unwind_loop_turns);
+				came_back = true;
+			} catch (InvalidOperationException) {
+			}
+		}
+
+		Check (!came_back, "the kernel leaves only through the exception");
+
+		bool folded = false;
+
+		for (int i = 0; i < 100 && !folded; ++i) {
+			folded = ObserveUnwinderLoop ();
+			if (!folded)
+				Thread.Sleep (10);
+		}
+
+		return folded;
+	}
+
 	public static int Main ()
 	{
 		string threshold = Environment.GetEnvironmentVariable (
@@ -388,6 +478,7 @@ static class Program {
 		bool light_folded = Run ("LightKernel", false, light);
 		bool tiny_folded = RunTiny ();
 		bool unwinder_folded = RunUnwinder ();
+		bool unwinder_loop_folded = RunUnwinderLoop ();
 
 		if (want_tier2) {
 			Check (heavy_folded, "the work a body does takes it to tier 2");
@@ -395,14 +486,19 @@ static class Program {
 			// alone never reaches. Tiny () does almost nothing in a call and
 			// promotes on the number of them.
 			Check (tiny_folded, "the calls a body takes take it to tier 2");
-			// A callee's exception that unwinds through the frame reaches no
-			// write-back, so a body that leaves only that way promotes on what
-			// its entry charges and on nothing else.
+			// A body that leaves only through a callee's exception. What its
+			// entry charges is enough here, and the calls are what spend it.
 			Check (unwinder_folded, "a body that always unwinds still reaches tier 2");
+			// The same shape with too few calls to promote on the entry. Only
+			// the pad the counter's fault clause names as its handler charges
+			// the turns of the loop, so this is what asserts the pad runs.
+			Check (unwinder_loop_folded,
+			       "an unwinding body is charged the turns its loop made");
 		} else {
 			Check (!heavy_folded, "and no counter promotes a body while the threshold is zero");
 			Check (!tiny_folded, "and neither does a body that only takes calls");
 			Check (!unwinder_folded, "and neither does a body that always unwinds");
+			Check (!unwinder_loop_folded, "and neither does one whose loop is what it spends");
 		}
 
 		/*

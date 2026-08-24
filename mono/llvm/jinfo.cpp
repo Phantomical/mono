@@ -551,20 +551,29 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	 * clause-bearing method means the gather declined it, so nothing is
 	 * published: a partial table dispatches wrongly rather than failing. A
 	 * null header registers clauseless code (an interop thunk).
+	 *
+	 * A method whose IL declared no clause can still carry a block, because
+	 * TierCounterPass (passes/tier-counter.cpp) gives a body with a loop and an
+	 * unwinding call a fault clause of its own. An absent block is what most
+	 * methods have, and it says the body has no such pad rather than that the
+	 * gather refused.
 	 */
 	std::vector<MonoJitExceptionInfo> clauses;
 
-	if (header != nullptr && header->num_clauses > 0) {
-		std::vector<MonoLsdaEntry> entries;
+	std::vector<MonoLsdaEntry> entries;
+	bool described = header != nullptr
+	                 && parse_mono_lsda (compiled.clause_table,
+	                                     compiled.clause_table_size, compiled.code,
+	                                     entries);
 
-		if (!parse_mono_lsda (compiled.clause_table, compiled.clause_table_size,
-		                      compiled.code, entries)) {
-			g_free (encoded);
-			return createStringError (inconvertibleErrorCode (),
-			                          "the compiled object carries no usable "
-			                          "clause table");
-		}
+	if (header != nullptr && !described && header->num_clauses > 0) {
+		g_free (encoded);
+		return createStringError (inconvertibleErrorCode (),
+		                          "the compiled object carries no usable "
+		                          "clause table");
+	}
 
+	if (described) {
 		Expected<std::vector<MonoFinallyGuard>> guards = parse_guards (
 			compiled.guard_table, compiled.guard_table_size, compiled.code,
 			code_size);

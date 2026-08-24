@@ -1,21 +1,28 @@
 #include "tier-counter.hpp"
 
+#include "../mono_lsda_format.hpp"
+
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
+#include <llvm/Transforms/Utils/Local.h>
 #include <llvm/Transforms/Utils/PromoteMemToReg.h>
 
 #include <cstdint>
 #include <iterator>
+#include <string>
 
 using namespace llvm;
 
@@ -43,11 +50,15 @@ namespace {
  *
  * The entry charges the constant rather than the exits, because a body has a
  * third way out. A callee's exception can unwind through the frame while no
- * clause here catches it, and no instruction in the body marks that point. Such
- * an exit reaches no write-back: a body that leaves that way often under-counts,
- * and one that leaves only that way promotes on nothing. The entry is the one
- * point every call runs, so what it charges survives an exit of any kind. The
- * turns the loops made before the exception are still lost.
+ * clause here catches it, and no instruction in the body marks that point. The
+ * entry is the one point every call runs, so what it charges survives an exit of
+ * any kind.
+ *
+ * The accumulator needs an exit of its own there, and that is the pad below. A
+ * body with a loop and a call that can unwind gets a fault clause over the whole
+ * of it. Its handler charges the turns, then calls mono_llvm_resume_unwind ().
+ * Each call that can unwind becomes an invoke on to that pad, which is what makes
+ * the clause table cover it.
  *
  * A call of a body no loop has any weight in costs the constant and no more, so
  * such a body carries no accumulator and no write-back. That is most methods.
@@ -117,7 +128,7 @@ write_back_point (ReturnInst *ret)
 /// counter again when the ret is reached.
 ///
 /// A callee's exception that unwinds through this frame reaches none of these
-/// points, so the turns of a loop that runs before it are lost.
+/// points. emit_unwind_pad () is where that exit charges instead.
 void
 collect_write_backs (Function &f, SmallVectorImpl<Instruction *> &points)
 {
@@ -280,6 +291,105 @@ emit_write_back (Instruction *at, AllocaInst *slot, GlobalVariable *counter,
 	emit_check (at, cost, counter, promote, method);
 }
 
+/// Collects the calls an exception can leave the frame through.
+///
+/// A call that already unwinds to a pad of the method's own is an invoke by now,
+/// and a clause there decides what happens. This takes the plain calls, which are
+/// the ones nothing in the body protects.
+///
+/// A tail call is left alone. An invoke is never a tail call, and the arch
+/// lowering behind this pass reads the mark to keep the jump the IL asked for. A
+/// noreturn call is left alone as well: it has already left the frame for good,
+/// and collect_write_backs () charges in front of it.
+void
+collect_unwinding_calls (Function &f, SmallVectorImpl<CallInst *> &calls)
+{
+	for (Instruction &i : instructions (f)) {
+		auto *call = dyn_cast<CallInst> (&i);
+
+		if (call == nullptr || isa<IntrinsicInst> (call))
+			continue;
+		if (call->doesNotThrow () || call->doesNotReturn () || call->isInlineAsm ())
+			continue;
+
+		CallInst::TailCallKind kind = call->getTailCallKind ();
+
+		if (kind == CallInst::TCK_Tail || kind == CallInst::TCK_MustTail)
+			continue;
+
+		calls.push_back (call);
+	}
+}
+
+/// Makes the global that stands for the pad's clause in the exception tables.
+///
+/// eh-gather.cpp reads the kind word back and mono_lsda.cpp publishes one fault
+/// clause over the whole body from it, so the clause index is unused.
+GlobalVariable *
+unwind_marker (Function &f)
+{
+	Module &m = *f.getParent ();
+	Type *i32 = Type::getInt32Ty (m.getContext ());
+	StructType *pair = StructType::get (i32, i32);
+	std::string name = ("mono_tier_unwind_" + f.getName ()).str ();
+
+	if (GlobalVariable *existing = m.getNamedGlobal (name))
+		return existing;
+
+	Constant *value = ConstantStruct::get (
+		pair, { ConstantInt::get (i32, 0),
+	                ConstantInt::get (i32, MONO_LSDA_KIND_TIER_UNWIND) });
+
+	return new GlobalVariable (m, pair, /*isConstant=*/true,
+	                           GlobalValue::PrivateLinkage, value, name);
+}
+
+/// Builds the pad a callee's exception reaches on its way through this frame,
+/// and answers with it. The caller then sends each unwinding call to it.
+///
+/// The pad charges the turns the loops made, then calls mono_llvm_resume_unwind
+/// (), the way any LLVM fault handler entered by unwinding does.
+BasicBlock *
+emit_unwind_pad (Function &f, AllocaInst *slot, GlobalVariable *counter,
+                 FunctionCallee promote, Constant *method)
+{
+	Module &m = *f.getParent ();
+	LLVMContext &ctx = f.getContext ();
+
+	// The verifier refuses a landingpad in a function with no personality. A
+	// method whose IL declared a clause was given the same one in
+	// method-to-llvm.cpp.
+	if (!f.hasPersonalityFn ())
+		f.setPersonalityFn (cast<Constant> (
+			m.getOrInsertFunction (
+				 "mono_personality",
+				 FunctionType::get (Type::getInt32Ty (ctx), true))
+				.getCallee ()));
+
+	BasicBlock *pad = BasicBlock::Create (ctx, "tier_unwind", &f);
+	IRBuilder<> at_pad (pad);
+	LandingPadInst *caught = at_pad.CreateLandingPad (
+		StructType::get (PointerType::get (ctx, 0), at_pad.getInt32Ty ()), 1);
+
+	caught->addClause (unwind_marker (f));
+
+	FunctionCallee resume = m.getOrInsertFunction (
+		"mono_llvm_resume_unwind", FunctionType::get (Type::getVoidTy (ctx), false));
+
+	if (auto *fn = dyn_cast<Function> (resume.getCallee ()))
+		fn->setDoesNotReturn ();
+
+	CallInst *back = at_pad.CreateCall (resume);
+
+	at_pad.CreateUnreachable ();
+
+	// In front of the resume, so the check runs while the frame is still the
+	// one that spent the turns. The split it makes leaves the landing pad
+	// where it is, which is the first instruction of the block.
+	emit_write_back (back, slot, counter, promote, method);
+	return pad;
+}
+
 /// Takes the cost that does not depend on a loop off the counter, after the frame.
 ///
 /// A static alloca has to stay in the entry block to be a stack slot, so the
@@ -344,23 +454,25 @@ instrument (Function &f, uint64_t threshold, uint64_t entry_weight, Constant *me
 	uint64_t constant = sum > INT64_MAX ? INT64_MAX : sum;
 
 	SmallVector<Instruction *, 8> points;
+	SmallVector<CallInst *, 16> unwinding;
 
 	collect_write_backs (f, points);
+	collect_unwinding_calls (f, unwinding);
 
 	GlobalVariable *counter = make_counter (m, threshold, "mono_tier_cost");
 
 	/*
 	 * A call of a body with no weight in any loop costs the constant and no
-	 * more. A body nothing leaves through a ret or a throw of its own has
-	 * nowhere to write a running total back from, and the constant is the most
-	 * it can be charged. Either way the entry charges the whole cost, so the
-	 * body carries no accumulator.
+	 * more. A body that leaves through none of the three ways out has nowhere to
+	 * write a running total back from, and the constant is the most it can be
+	 * charged. Either way the entry charges the whole cost, so the body carries
+	 * no accumulator.
 	 *
 	 * The entry block holds no loop header, because it has no predecessor and so
 	 * lies on no cycle. So the split the check makes there leaves every header
 	 * in place.
 	 */
-	if (per_loop.empty () || points.empty ()) {
+	if (per_loop.empty () || (points.empty () && unwinding.empty ())) {
 		emit_entry_check (f, constant, counter, promote, method);
 		return;
 	}
@@ -369,6 +481,15 @@ instrument (Function &f, uint64_t threshold, uint64_t entry_weight, Constant *me
 
 	for (Instruction *at : points)
 		emit_write_back (at, slot, counter, promote, method);
+
+	if (!unwinding.empty ()) {
+		BasicBlock *pad = emit_unwind_pad (f, slot, counter, promote, method);
+
+		// The calls were read off before any of the above, so what the
+		// write-backs and the pad added is not turned into an invoke here.
+		for (CallInst *call : unwinding)
+			changeToInvokeAndSplitBasicBlock (call, pad);
+	}
 
 	// After the accumulator, because the slot has to stay in the entry block for
 	// PromoteMemToReg and this check is what splits that block.

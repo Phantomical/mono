@@ -283,13 +283,48 @@ record_resume_pad (const MonoLsdaEntry &e, const MonoExceptionClause *clauses,
 		(gpointer) MINI_ADDR_TO_FTNPTR (native_code + e.handler_off);
 }
 
+/*
+ * Appends the fault clause the tier counter's pad is the handler of, if the
+ * section named one. Its try range is the whole body, so an exception that
+ * unwinds out of the frame from any point reaches it.
+ *
+ * The section carries one entry per invoke range that unwinds to the pad, and
+ * they all name the same pad. One clause covers the lot.
+ *
+ * The clause index is past the IL clauses, where handler_il_offset () reads it as
+ * no clause of the method's and answers -1. It goes last, so a clause the IL
+ * declared is dispatched first. The counter charges after a finally of the
+ * method's own has run, and never in front of a catch that takes the exception.
+ */
+static void
+append_tier_unwind (std::uint32_t handler_off, bool present, int num_clauses,
+                    const std::uint8_t *native_code, std::uint32_t code_len,
+                    std::vector<MonoJitExceptionInfo> &out)
+{
+	if (!present)
+		return;
+
+	MonoJitExceptionInfo ei;
+	memset (&ei, 0, sizeof (ei));
+	ei.flags = MONO_EXCEPTION_CLAUSE_FAULT;
+	ei.clause_index = num_clauses;
+	ei.try_start = (gpointer) native_code;
+	ei.try_end = (gpointer) (native_code + code_len);
+	ei.handler_start = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + handler_off);
+
+	out.push_back (ei);
+}
+
 static bool
 build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
                        const MonoExceptionClause *clauses, int num_clauses,
                        const std::uint8_t *native_code, std::uint32_t code_len,
-                       std::vector<MonoJitExceptionInfo> &out)
+                       std::vector<MonoJitExceptionInfo> &out,
+                       std::uint32_t &tier_unwind_off, bool &tier_unwind)
 {
 	out.clear ();
+	tier_unwind_off = 0;
+	tier_unwind = false;
 
 	// An empty list here means every protected call was optimized to one that
 	// cannot unwind, not that the section is missing. A method whose gather
@@ -333,6 +368,14 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 			return false;
 		if (e.handler_off >= code_len)
 			return false;
+
+		// Before the assert below: this pad names no IL clause, and a method
+		// whose IL declared none fails it.
+		if (e.kind == MONO_LSDA_KIND_TIER_UNWIND) {
+			tier_unwind_off = e.handler_off;
+			tier_unwind = true;
+			continue;
+		}
 
 		// clause_index came from cfg->header->clauses[] in the same compile that
 		// num_clauses comes from. Out of range means our own object round-trip
@@ -455,10 +498,15 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
                std::vector<MonoJitExceptionInfo> &out,
                const std::vector<MonoFinallyGuard> &guards)
 {
-	if (!build_ex_info_entries (entries, clauses, num_clauses, native_code, code_len, out))
+	std::uint32_t tier_unwind_off = 0;
+	bool tier_unwind = false;
+
+	if (!build_ex_info_entries (entries, clauses, num_clauses, native_code, code_len, out,
+	                            tier_unwind_off, tier_unwind))
 		return false;
 
 	append_finally_guards (guards, clauses, num_clauses, native_code, code_len, out);
+	append_tier_unwind (tier_unwind_off, tier_unwind, num_clauses, native_code, code_len, out);
 	return true;
 }
 

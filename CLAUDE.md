@@ -320,10 +320,12 @@ and the note says which split:
   `MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT` on top, so one counter reaches a body that is hot and
   a body that is heavy. Every body takes a constant off at its entry: the blocks no loop
   holds, plus the entry weight. A body with a loop adds the turns up in a register on top,
-  one add per loop header, and takes that total off at each exit. So a callee's exception
-  that unwinds through a frame loses the turns and keeps the constant. A body entered once
-  that never returns keeps the constant as well, and no more: the rest needs OSR, which
-  does not exist here. Zero leaves a body instrumented and
+  one add per loop header, and takes that total off at each exit. The exits are three: a
+  ret, a throw of the body's own, and the pad the body's own fault clause names as its
+  handler, which is what charges a callee's exception that unwinds through the frame. A
+  body that neither returns nor unwinds — one entered once that runs forever — keeps the
+  constant and no more: the rest needs OSR, which does not exist here. Zero leaves a body
+  instrumented and
   counting while it never promotes on its own, which is what a test driving the tiers
   through `Mono.Tiering.MonoTier::PromoteNow` wants.
 - `MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT=<n>` — what one call adds to that count, default 5000.
@@ -574,7 +576,11 @@ carries profiling instrumentation, and a body that has spent a hundred million u
 for each instruction it runs and five thousand for each call — is compiled again against
 the counts it gathered, at O3 with an optimizing selector. `TierCounterPass` puts that
 counter in: every body takes a constant off at its entry, and a body with a loop adds the
-turns up in a register on top and takes that total off at each exit.
+turns up in a register on top and takes that total off at each exit. Such a body also gets
+a fault clause over the whole of it, if it calls anything that can unwind. That clause's
+pad charges the turns when a callee's exception unwinds through the frame. Each call that
+can unwind becomes an invoke on to the pad, and `mono_lsda.cpp` reads the set back as one
+clause, so what the runtime holds does not grow with the calls.
 
 Beyond taking a site the IL already settled — non-virtual, `final`, or resolved by
 `constrained.` — the JIT does not devirtualize. If devirtualization does arrive, it is
