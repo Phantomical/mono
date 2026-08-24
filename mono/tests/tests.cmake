@@ -239,6 +239,8 @@ set(MONO_TESTS_CS_SRC
   interp-native-detour.cs
   trivial-inline.cs
   tier2-inline-override.cs
+  tbaa-aliasing.cs
+  tbaa-explicit-overlap.cs
   math-intrinsics.cs
   buffer-copy-intrinsics.cs
   monitor-fast-path.cs
@@ -537,6 +539,7 @@ set(MONO_TESTS_CS_SRC
 
 # Tests written directly in IL, assembled with ilasm.
 set(MONO_TESTS_IL_SRC
+  tbaa-straddle.il
   float-stack-precision.il
   tailcall/2.il
   tailcall/3.il

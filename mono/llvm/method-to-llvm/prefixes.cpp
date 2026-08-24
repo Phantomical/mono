@@ -5,6 +5,8 @@
 #include "mono/metadata/opcodes.h"
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/MDBuilder.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/MathExtras.h>
@@ -242,12 +244,40 @@ MethodLLVMEmitter::can_access_atomically (llvm::Type *type, llvm::Align align)
 	       && bits <= host_max_atomic_bits (*function) && bits <= align.value () * 8;
 }
 
+/// Builds the tag for one managed access, or null for ManagedAccess::untagged.
+///
+/// is_reference selects the leaf, and it must be what mini_type_is_reference ()
+/// says of the slot being read or written.
+///
+/// The leaves are siblings, so LLVM reads a reference access and a scalar one
+/// as disjoint and everything else as may-alias. An untagged access aliases
+/// both, which is what lets this tag one opcode and leave the next alone.
+///
+/// LLVM uniques an MDNode on its operands within the context, so every method
+/// of a batch gets the same tree. The module needs no record of one.
+llvm::MDNode *
+MethodLLVMEmitter::tbaa_tag (ManagedAccess access, bool is_reference)
+{
+	if (access == ManagedAccess::untagged)
+		return nullptr;
+
+	llvm::MDBuilder md (context ());
+	llvm::MDNode *root = md.createTBAARoot ("mono managed memory");
+	const char *name = is_reference ? "mono managed reference" : "mono managed scalar";
+	llvm::MDNode *leaf = md.createTBAANode (name, root);
+
+	return md.createTBAAStructTagNode (leaf, leaf, 0);
+}
+
 llvm::Value *
 MethodLLVMEmitter::emit_memory_load (MonoIrBuilder &builder, llvm::Type *type, llvm::Value *address,
-                                     MonoType *location)
+                                     MonoType *location, ManagedAccess access)
 {
 	llvm::Align align = access_alignment (location);
 	llvm::LoadInst *value = builder.CreateAlignedLoad (type, address, align);
+
+	if (llvm::MDNode *tag = tbaa_tag (access, mini_type_is_reference (location)))
+		value->setMetadata (llvm::LLVMContext::MD_tbaa, tag);
 
 	/*
 	 * A volatile read has acquire semantics (I.12.6.7). Acquire on the load
@@ -274,7 +304,8 @@ MethodLLVMEmitter::emit_memory_load (MonoIrBuilder &builder, llvm::Type *type, l
 /// therefore the address of the bytes to copy rather than the bytes themselves.
 llvm::Error
 MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value,
-                                      llvm::Value *address, MonoType *location)
+                                      llvm::Value *address, MonoType *location,
+                                      ManagedAccess access)
 {
 	llvm::Align align = access_alignment (location);
 	/*
@@ -292,7 +323,7 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 
 	// A reference entering memory the collector tracks marks a card.
 	if (mini_type_is_reference (location)) {
-		emit_reference_store (builder, address, value, align);
+		emit_reference_store (builder, address, value, align, access);
 		return llvm::Error::success ();
 	}
 
@@ -324,6 +355,10 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 	}
 
 	llvm::StoreInst *store = builder.CreateAlignedStore (value, address, align);
+
+	// A reference took the branch above, so anything here is a scalar slot.
+	if (llvm::MDNode *tag = tbaa_tag (access, /*is_reference=*/false))
+		store->setMetadata (llvm::LLVMContext::MD_tbaa, tag);
 
 	if (prefixes.volatile_) {
 		store->setVolatile (true);
@@ -361,7 +396,7 @@ MethodLLVMEmitter::copy_vtype (MonoIrBuilder &builder, llvm::Value *destination,
 
 llvm::Error
 MethodLLVMEmitter::push_from_location (MonoIrBuilder &builder, llvm::Value *address,
-                                       MonoType *t, bool native)
+                                       MonoType *t, bool native, ManagedAccess access)
 {
 	if (!held_in_memory (t)) {
 		llvm::Expected<llvm::Type *> type = convert_type (t, native);
@@ -369,7 +404,7 @@ MethodLLVMEmitter::push_from_location (MonoIrBuilder &builder, llvm::Value *addr
 		if (!type)
 			return type.takeError ();
 
-		llvm::Value *value = emit_memory_load (builder, *type, address, t);
+		llvm::Value *value = emit_memory_load (builder, *type, address, t, access);
 
 		push_stack (widen_to_stack (builder, value, t), stack_slot_type (t), native);
 		return llvm::Error::success ();

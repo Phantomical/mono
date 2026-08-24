@@ -2188,9 +2188,19 @@ mono_class_layout_fields (MonoClass *klass, int base_instance_size, int packing_
 			real_size = MAX (real_size, size + field_offsets [i]);
 		}
 
-		/* check for incorrectly aligned or overlapped by a non-object field */
-#ifdef ENABLE_NETCORE	
-		guint8 *layout_check;	
+		/*
+		 * check for incorrectly aligned or overlapped by a non-object field
+		 *
+		 * ECMA-335 II.10.7: "offsets occupied by an object reference shall
+		 * not overlap with offsets occupied by a built-in value type or a
+		 * part of another object reference". SGen needs the same rule,
+		 * because it reads one reference bitmap for the class: a slot it
+		 * scans as a pointer cannot also hold a float. The LLVM back end
+		 * writes a `!tbaa` tag off the same split (ManagedAccess,
+		 * mono/llvm/method-to-llvm.hpp), so a type that breaks the rule has
+		 * to fail to load rather than reach codegen.
+		 */
+		guint8 *layout_check;
 		if (has_references) {
 			layout_check = g_new0 (guint8, real_size);
 			for (i = 0; i < top && !mono_class_has_failure (klass); i++) {
@@ -2216,7 +2226,6 @@ mono_class_layout_fields (MonoClass *klass, int base_instance_size, int packing_
 			}
 			g_free (layout_check);
 		}
-#endif
 
 		instance_size = MAX (real_size, instance_size);
 		if (!((layout == TYPE_ATTRIBUTE_EXPLICIT_LAYOUT) && explicit_size)) {

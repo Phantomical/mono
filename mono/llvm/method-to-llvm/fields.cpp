@@ -14,6 +14,7 @@
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Type.h>
 #include <cstdint>
 #include <cstdio>
@@ -105,7 +106,8 @@ MethodLLVMEmitter::wbarrier_decl ()
 /// block pointer has to take it again.
 void
 MethodLLVMEmitter::emit_reference_store (MonoIrBuilder &builder, llvm::Value *address,
-                                         llvm::Value *value, llvm::Align align)
+                                         llvm::Value *value, llvm::Align align,
+                                         ManagedAccess access)
 {
 	const WriteBarrierLayout &gc = write_barrier_layout ();
 
@@ -118,7 +120,10 @@ MethodLLVMEmitter::emit_reference_store (MonoIrBuilder &builder, llvm::Value *ad
 	llvm::Value *nursery = llvm::ConstantInt::get (
 		word, reinterpret_cast<uintptr_t> (gc.nursery_start) >> gc.nursery_bits);
 
-	builder.CreateAlignedStore (value, address, align);
+	llvm::StoreInst *store = builder.CreateAlignedStore (value, address, align);
+
+	if (llvm::MDNode *tag = tbaa_tag (access, /*is_reference=*/true))
+		store->setMetadata (llvm::LLVMContext::MD_tbaa, tag);
 
 	llvm::Value *target = builder.CreatePtrToInt (address, word);
 	llvm::Value *target_is_old = builder.CreateICmpNE (
@@ -619,7 +624,8 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 		                                          builder.getInt32 (offset));
 
 		pop_stack (1);
-		return push_from_location (builder, address, ftype);
+		return push_from_location (builder, address, ftype, /*native=*/false,
+		                           ManagedAccess::typed);
 	}
 
 	llvm::Expected<llvm::Value *> address = field_address (builder, object, *field);
@@ -627,7 +633,8 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 		return address.takeError ();
 
 	pop_stack (1);
-	return push_from_location (builder, *address, ftype);
+	return push_from_location (builder, *address, ftype, /*native=*/false,
+	                           ManagedAccess::typed);
 }
 
 /*
@@ -848,7 +855,8 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 		return address.takeError ();
 
 	pop_stack (2);
-	if (llvm::Error stored = emit_memory_store (builder, *value, *address, ftype))
+	if (llvm::Error stored =
+		    emit_memory_store (builder, *value, *address, ftype, ManagedAccess::typed))
 		return stored;
 	return llvm::Error::success ();
 }
@@ -902,7 +910,8 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 	if (!address)
 		return address.takeError ();
 
-	return push_from_location (builder, *address, ftype);
+	return push_from_location (builder, *address, ftype, /*native=*/false,
+	                           ManagedAccess::typed);
 }
 
 /*
@@ -1032,7 +1041,8 @@ MethodLLVMEmitter::emit_stsfld (MonoIrBuilder &builder, uint32_t token)
 		return address.takeError ();
 
 	pop_stack (1);
-	if (llvm::Error stored = emit_memory_store (builder, *value, *address, ftype))
+	if (llvm::Error stored =
+		    emit_memory_store (builder, *value, *address, ftype, ManagedAccess::typed))
 		return stored;
 	return llvm::Error::success ();
 }

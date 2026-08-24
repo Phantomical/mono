@@ -137,6 +137,39 @@ enum StackType { Int32, Int64, NativeInt, Float, ManagedPtr, ObjectRef, Invalid 
 
 constexpr size_t STACK_TYPE_COUNT = ObjectRef + 1;
 
+/// Whether a managed access carries a `!tbaa` tag.
+///
+/// A `!tbaa` tag claims two accesses cannot touch one slot. ECMA-335 has no
+/// strict-aliasing rule at all: I.12.6.1 calls the memory store "simply an
+/// array of bytes", and I.12.6.4 gives only the as-if rule. So a tag has to
+/// rest on what valid CIL cannot express, never on two static types being
+/// different.
+///
+/// Three passages take away the obvious trees. II.10.7 lets `[FieldOffset]`
+/// put two value-typed fields at one offset, so a class for each scalar width
+/// is out. I.8.7.1 makes `array-element-compatible-with` "agnostic with
+/// respect to enumerations and integral signed-ness" and gives array
+/// covariance, so a class for each element type is out. `Unsafe.As<TFrom,TTo>
+/// ()` hands out a reference of one class to another class's storage, which
+/// our class libraries do, so a class for each declaring class is out.
+///
+/// What is left is the split the collector already forces. II.10.7 says
+/// "offsets occupied by an object reference shall not overlap with offsets
+/// occupied by a built-in value type". SGen's reference bitmap needs the same:
+/// a slot it scans as a pointer cannot also hold a `double`.
+/// mono_class_layout_fields () rejects a type that breaks the rule
+/// (mono/metadata/class-init.c).
+enum class ManagedAccess {
+	/// The access gets no tag, so LLVM keeps it aliasing everything. This is
+	/// what every opcode that reaches memory through a raw address takes.
+	/// `Unsafe.As ()`, `MemoryMarshal.Cast ()` and `Span<T>` all arrive that
+	/// way, and each reads one slot under a type its storage does not have.
+	untagged,
+	/// The opcode names the field or the element it reaches, so the location's
+	/// type describes the storage and the slot's leaf follows from it.
+	typed,
+};
+
 /// The type a conv instruction converts to, from the opcode tables in ECMA-335
 /// III.3.27 through III.3.29.
 enum class ConvType {
@@ -635,7 +668,8 @@ private:
 
 	/// Push what a location of type t holds at address, as the CLI tracks it.
 	llvm::Error push_from_location (MonoIrBuilder &builder, llvm::Value *address,
-	                                MonoType *t, bool native = false);
+	                                MonoType *t, bool native = false,
+	                                ManagedAccess access = ManagedAccess::untagged);
 
 	/// Push value, which was produced in t's own LLVM type, as the CLI tracks it.
 	llvm::Error push_produced (MonoIrBuilder &builder, llvm::Value *value, MonoType *t,
@@ -687,9 +721,13 @@ private:
 	llvm::Align access_alignment (MonoType *location);
 	bool can_access_atomically (llvm::Type *type, llvm::Align align);
 	llvm::Value *emit_memory_load (MonoIrBuilder &builder, llvm::Type *type,
-	                               llvm::Value *address, MonoType *location);
+	                               llvm::Value *address, MonoType *location,
+	                               ManagedAccess access = ManagedAccess::untagged);
 	llvm::Error emit_memory_store (MonoIrBuilder &builder, llvm::Value *value,
-	                        llvm::Value *address, MonoType *location);
+	                        llvm::Value *address, MonoType *location,
+	                        ManagedAccess access = ManagedAccess::untagged);
+
+	llvm::MDNode *tbaa_tag (ManagedAccess access, bool is_reference);
 
 	llvm::Expected<Flow> decode_flow (size_t at);
 	llvm::Error find_block_leaders ();
@@ -867,7 +905,8 @@ private:
 
 	llvm::FunctionCallee wbarrier_decl ();
 	void emit_reference_store (MonoIrBuilder &builder, llvm::Value *address,
-	                           llvm::Value *value, llvm::Align align);
+	                           llvm::Value *value, llvm::Align align,
+	                           ManagedAccess access = ManagedAccess::untagged);
 	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static,
 	                                                bool *out_is_static = nullptr);
 	llvm::Constant *extern_symbol (const std::string &name);
