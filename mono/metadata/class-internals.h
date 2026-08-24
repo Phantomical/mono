@@ -1137,9 +1137,6 @@ mono_loader_trylock        (void);
 void
 mono_loader_unlock         (void);
 
-void
-mono_loader_lock_track_ownership (gboolean track);
-
 gboolean
 mono_loader_lock_is_owned_by_self (void);
 

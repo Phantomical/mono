@@ -62,10 +62,9 @@
 static MonoCoopMutex loader_mutex;
 static mono_mutex_t global_loader_data_mutex;
 static gboolean loader_lock_inited;
-static gboolean loader_lock_track_ownership;
 
 /*
- * This TLS variable holds how many times the current thread has acquired the loader 
+ * This TLS variable holds how many times the current thread has acquired the loader
  * lock.
  */
 static MonoNativeTlsKey loader_lock_nest_id;
@@ -87,11 +86,13 @@ mono_loader_init ()
 	if (!inited) {
 		mono_coop_mutex_init_recursive (&loader_mutex);
 		mono_os_mutex_init_recursive (&global_loader_data_mutex);
+
+		/* Before the first lock, because every lock counts itself into it. */
+		mono_native_tls_alloc (&loader_lock_nest_id, NULL);
+
 		loader_lock_inited = TRUE;
 
 		mono_global_loader_cache_init ();
-
-		mono_native_tls_alloc (&loader_lock_nest_id, NULL);
 
 		mono_counters_init ();
 		mono_counters_register ("Inflated signatures size",
@@ -143,9 +144,7 @@ void
 mono_loader_lock (void)
 {
 	mono_locks_coop_acquire (&loader_mutex, LoaderLock);
-	if (G_UNLIKELY (loader_lock_track_ownership)) {
-		mono_native_tls_set_value (loader_lock_nest_id, GUINT_TO_POINTER (GPOINTER_TO_UINT (mono_native_tls_get_value (loader_lock_nest_id)) + 1));
-	}
+	mono_native_tls_set_value (loader_lock_nest_id, GUINT_TO_POINTER (GPOINTER_TO_UINT (mono_native_tls_get_value (loader_lock_nest_id)) + 1));
 }
 
 /**
@@ -162,9 +161,7 @@ mono_loader_trylock (void)
 	if (mono_coop_mutex_trylock (&loader_mutex) != 0)
 		return FALSE;
 	mono_locks_lock_acquired (LoaderLock, &loader_mutex);
-	if (G_UNLIKELY (loader_lock_track_ownership)) {
-		mono_native_tls_set_value (loader_lock_nest_id, GUINT_TO_POINTER (GPOINTER_TO_UINT (mono_native_tls_get_value (loader_lock_nest_id)) + 1));
-	}
+	mono_native_tls_set_value (loader_lock_nest_id, GUINT_TO_POINTER (GPOINTER_TO_UINT (mono_native_tls_get_value (loader_lock_nest_id)) + 1));
 	return TRUE;
 }
 
@@ -175,35 +172,21 @@ void
 mono_loader_unlock (void)
 {
 	mono_locks_coop_release (&loader_mutex, LoaderLock);
-	if (G_UNLIKELY (loader_lock_track_ownership)) {
-		mono_native_tls_set_value (loader_lock_nest_id, GUINT_TO_POINTER (GPOINTER_TO_UINT (mono_native_tls_get_value (loader_lock_nest_id)) - 1));
-	}
+	mono_native_tls_set_value (loader_lock_nest_id, GUINT_TO_POINTER (GPOINTER_TO_UINT (mono_native_tls_get_value (loader_lock_nest_id)) - 1));
 }
 
-/*
- * mono_loader_lock_track_ownership:
- *
- *   Set whenever the runtime should track ownership of the loader lock. If set to TRUE,
- * the mono_loader_lock_is_owned_by_self () can be called to query whenever the current
- * thread owns the loader lock. 
- */
-void
-mono_loader_lock_track_ownership (gboolean track)
-{
-	loader_lock_track_ownership = track;
-}
-
-/*
+/**
  * mono_loader_lock_is_owned_by_self:
  *
- *   Return whenever the current thread owns the loader lock.
- * This is useful to avoid blocking operations while holding the loader lock.
+ * Returns whether the calling thread holds the loader lock.
+ *
+ * This is what a caller asks before it waits for another thread. A compile and
+ * a class load both take this lock. So a thread that waits while it holds the
+ * lock can stop the thread it waits for.
  */
 gboolean
 mono_loader_lock_is_owned_by_self (void)
 {
-	g_assert (loader_lock_track_ownership);
-
 	return GPOINTER_TO_UINT (mono_native_tls_get_value (loader_lock_nest_id)) > 0;
 }
 

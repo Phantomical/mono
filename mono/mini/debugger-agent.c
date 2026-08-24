@@ -1021,9 +1021,6 @@ debugger_agent_init (void)
 
 	transport_init ();
 
-	/* Need to know whenever a thread has acquired the loader mutex */
-	mono_loader_lock_track_ownership (TRUE);
-
 	event_requests = g_ptr_array_new ();
 
 	/* Initialise the mutex for burst operation, regardless of whether burst is ever used */

@@ -1969,12 +1969,21 @@ wait_or_register_method_to_compile (MonoMethod *method, MonoDomain *domain)
 
 		unlock_compilation_data ();
 		return FALSE;
-	} else if (jit_tls->active_jit_methods > 0 || mono_threads_is_current_thread_in_protected_block ()) {
+	} else if (jit_tls->active_jit_methods > 0 || mono_threads_is_current_thread_in_protected_block ()
+	           || mono_loader_lock_is_owned_by_self ()) {
 		//We can't suspend the current thread if it's already JITing a method.
 		//Dependency management is too compilated and we want to get rid of this anyways.
 
 		//We can't suspend the current thread if it's running a protected block (such as a cctor)
 		//We can't rely only on JIT nesting as cctor's can be run from outside the JIT.
+
+		/*
+		 * And we cannot suspend it while it holds the loader lock. The thread we
+		 * wait for takes that lock to compile, so it cannot finish, and we wait
+		 * out the whole timeout. mono_class_proxy_vtable () compiles one method
+		 * for each slot of a transparent proxy's vtable, with the loader lock
+		 * held. So the pair costs a second for each slot, which reads as a hang.
+		 */
 
 		//Finally, he hit a timeout or spurious wakeup. We're better off just giving up and keep recompiling
 		++entry->compilation_count;
