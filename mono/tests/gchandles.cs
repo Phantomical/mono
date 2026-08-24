@@ -2,29 +2,6 @@ using System;
 using System.Threading;
 using System.Runtime.InteropServices;
 
-[StructLayout(LayoutKind.Explicit)]
-internal struct ObjectWrapper {
-	[FieldOffset(0)] object obj;
-	[FieldOffset(0)] IntPtr handle;
-
-	internal static IntPtr Convert (object obj) {
-		ObjectWrapper wrapper = new ObjectWrapper ();
-
-		wrapper.obj = obj;
-
-		return wrapper.handle;
-	}
-	
-	internal static object Convert (IntPtr ptr) 
-	{
-		ObjectWrapper wrapper = new ObjectWrapper ();
-		
-		wrapper.handle = ptr;
-			
-		return wrapper.obj;
-	}
-}
-
 public class Test1
 {
 	public GCHandle self;
@@ -94,10 +71,14 @@ public class Tests
 	static GCHandle handle;
 	static IntPtr original_addr;
 	
+	/*
+	 * The target is an array because AddrOfPinnedObject () answers -1 for an
+	 * auto-layout class, which System.Object is, and the C# side turns that
+	 * into an ArgumentException (mono/metadata/gc.c).
+	 */
 	static void alloc_handle () {
-		var obj = new object ();
-		handle = GCHandle.Alloc (obj, GCHandleType.Pinned);
-		original_addr =  ObjectWrapper.Convert (obj);
+		handle = GCHandle.Alloc (new byte [1], GCHandleType.Pinned);
+		original_addr = handle.AddrOfPinnedObject ();
 	}
 
 	public static int test_0_pinned_handle_pins_target () {
@@ -106,7 +87,7 @@ public class Tests
 		t.Join ();
 		GC.Collect ();
 
-		var newAddr = ObjectWrapper.Convert (handle.Target);
+		var newAddr = handle.AddrOfPinnedObject ();
 
 		return original_addr == newAddr ? 0 : 1;
 	}
