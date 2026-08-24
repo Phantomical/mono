@@ -37,6 +37,8 @@
 #include "passes/eh-gather.hpp"
 #include "passes/finally-range.hpp"
 
+#include <llvm/Analysis/RuntimeLibcallInfo.h>
+#include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/BinaryFormat/ELF.h>
 #include <llvm/CodeGen/AsmPrinter.h>
 #include <llvm/CodeGen/AsmPrinterHandler.h>
@@ -799,6 +801,20 @@ build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &
 	tpc->setDisableVerify (!ir_verification_enabled ());
 	pm->add (tpc);
 	pm->add (mmiwp);
+
+	/*
+	 * Both describe the target to codegen, and the legacy manager builds each
+	 * of them from an empty Triple when nobody adds one. An empty triple has no
+	 * runtime libcalls at all, so PreISelIntrinsicLowering finds no memcpy,
+	 * memmove or memset to call and writes a byte-at-a-time loop in place of
+	 * each one. That measured 2 GB/s against glibc's 55 GB/s on a 64KB copy.
+	 */
+	TargetLibraryInfoImpl tlii (tm.getTargetTriple (), tm.Options.VecLib);
+
+	pm->add (new TargetLibraryInfoWrapperPass (tlii));
+	pm->add (new RuntimeLibraryInfoWrapper (
+		tm.getTargetTriple (), tm.Options.ExceptionModel, tm.Options.FloatABIType,
+		tm.Options.EABIVersion, tm.Options.MCOptions.ABIName, tm.Options.VecLib));
 
 	if (timing::fine ())
 		pm->add (new FunctionMarkPass ());

@@ -12,6 +12,7 @@
 
 #include "dump.hpp"
 #include "jit.hpp"
+#include "mini.h"
 
 #include <llvm/IR/Module.h>
 
@@ -19,6 +20,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 using namespace llvm;
@@ -153,6 +155,20 @@ protected:
 		EXPECT_FALSE (bool ((*jit)->register_symbol (
 			"mono_personality", (void *) &test_personality)));
 
+		/*
+		 * What the engine's own builtins registration gives a compile
+		 * (runtime/builtins.cpp), for the two a body here reaches: the thrower
+		 * behind a null or bounds check, and the copy codegen calls when the
+		 * count is not a constant. Neither is called - nothing here runs the
+		 * code - but the object still has to bind them.
+		 */
+		EXPECT_FALSE (bool ((*jit)->register_symbol (
+			"mono_llvm_throw_corlib_exception",
+			(void *) &mono_llvm_throw_corlib_exception)));
+		EXPECT_FALSE (bool ((*jit)->register_symbol (
+			"memcpy", (void *) static_cast<void *(*) (void *, const void *, size_t)> (
+					  &std::memcpy))));
+
 		// As the runtime compiles: translator output still names the symbolic
 		// calls the mono passes rewrite, so it cannot be linked as it stands.
 		MonoJit::optimize (*t->module, tier);
@@ -254,6 +270,29 @@ TEST_F (AsmDump, LeavesAMethodOfAnotherTierAlone)
 
 	ASSERT_FALSE (entry.empty ());
 	EXPECT_EQ (dump.find ("*** assembly for"), std::string::npos) << dump;
+}
+
+/*
+ * A copy whose count is a runtime value has two lowerings and no third: a call
+ * to memcpy, or an inline loop. PreISelIntrinsicLowering picks the loop when it
+ * finds no libcall for the target, and it asks the RuntimeLibraryInfoWrapper
+ * that build_object_pipeline () adds. Leave that pass out and the legacy manager
+ * builds one from an empty Triple, which has no libcalls at all, so every copy
+ * in every method becomes a byte-at-a-time loop. That measured 2 GB/s against
+ * glibc's 44 on a 64KB copy.
+ *
+ * Blocks:Copy is a cpblk over a count the caller passes, so it is one such copy
+ * and nothing else. The call below is what says the pipeline still describes the
+ * target to codegen.
+ */
+TEST_F (AsmDump, ACopyOfARuntimeLengthCallsTheLibrary)
+{
+	CapturedStdout captured;
+	std::string entry = compile ("blocks", "Blocks:Copy", /*dumped=*/true);
+	std::string dump = captured.text ();
+
+	ASSERT_FALSE (entry.empty ());
+	EXPECT_NE (dump.find ("memcpy"), std::string::npos) << dump;
 }
 
 } // namespace
