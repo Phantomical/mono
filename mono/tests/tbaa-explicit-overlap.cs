@@ -63,16 +63,14 @@ static class Program {
 			Fail ("a legal scalar union read the wrong low word");
 
 		/*
-		 * The two engines wrap the refusal differently: the interpreter
-		 * raises the TypeLoadException itself, while a compiled body reaches
-		 * the type through a field token and gets a BadImageFormatException
-		 * naming it. What II.10.7 asks for is the refusal, so this takes
-		 * either and checks the message says which rule broke.
+		 * Both engines raise the failure mono_class_layout_fields () recorded,
+		 * so this catch stays narrow. Widening it hides an engine that raises
+		 * something else.
 		 */
 		try {
 			TouchOverlapped ();
 			Fail ("a reference overlapping a scalar loaded");
-		} catch (Exception e) when (e is TypeLoadException || e is BadImageFormatException) {
+		} catch (TypeLoadException e) {
 			if (e.Message.IndexOf ("OverlappedReference", StringComparison.Ordinal) < 0)
 				Fail ("the refusal did not name the type: " + e.Message);
 		}
