@@ -456,6 +456,7 @@ method_overrides_preload (const char *path)
 		return false;
 	}
 
+	assembly->runtime_internal = TRUE;
 	return true;
 }
 

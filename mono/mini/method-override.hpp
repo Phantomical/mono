@@ -26,7 +26,8 @@ void method_overrides_init ();
 /// returns whether it loaded.
 ///
 /// This is how an assembly that nothing references gets its overrides read. A
-/// missing file is not an error.
+/// missing file is not an error. The assembly it loads stays out of
+/// AppDomain.GetAssemblies ().
 bool method_overrides_preload (const char *path);
 
 /// Whether any override has been registered.

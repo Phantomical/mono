@@ -1121,9 +1121,7 @@ mono_domain_assembly_foreach (MonoDomain* domain, MonoDomainAssemblyFunc func, v
 	MonoAssembly* assembly;
 	GSList *iter;
 
-	/* Skipping internal assembly builders created by remoting,
-	   as it is done in ves_icall_System_AppDomain_GetAssemblies
-	*/
+	/* Skipping internal assembly builders created by remoting. */
 	mono_domain_assemblies_lock(domain);
 	for (iter = domain->domain_assemblies; iter; iter = iter->next) 
 	{
@@ -2028,7 +2026,7 @@ mono_domain_get_assemblies (MonoDomain *domain, gboolean refonly)
 		gboolean ass_ref_only = mono_asmctx_get_kind (&ass->context) == MONO_ASMCTX_REFONLY;
 		if (refonly != ass_ref_only)
 			continue;
-		if (ass->corlib_internal)
+		if (ass->corlib_internal || ass->runtime_internal)
 			continue;
 		g_ptr_array_add (assemblies, ass);
 	}

@@ -234,6 +234,11 @@ struct _MonoAssembly {
 	guint8 in_gac;
 	guint8 dynamic;
 	guint8 corlib_internal;
+	/*
+	 * The runtime loaded this assembly for itself, not for the program.
+	 * mono_domain_get_assemblies () leaves it out.
+	 */
+	guint8 runtime_internal;
 	MonoAssemblyContext context;
 	guint8 wrap_non_exception_throws;
 	guint8 wrap_non_exception_throws_inited;
