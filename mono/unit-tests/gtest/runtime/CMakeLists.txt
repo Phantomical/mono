@@ -69,12 +69,13 @@ mono_unit_test_cases(test-mono-linked-list-set test-mono-linked-list-set "*")
 # symbols out.
 mono_add_unit_test(test-mono-runtime RUNTIME SOURCES
   harness.cpp test-mono-callspec.cpp test-mono-string.cpp test-path.cpp
-  test-function-pointer.cpp test-detour.cpp)
+  test-function-pointer.cpp test-detour.cpp test-icall.cpp)
 mono_unit_test_cases(test-mono-runtime test-mono-callspec "Callspec.*")
 mono_unit_test_cases(test-mono-runtime test-mono-string   "MonoStringTest.*")
 mono_unit_test_cases(test-mono-runtime test-path          "MonoPath.*")
 mono_unit_test_cases(test-mono-runtime test-function-pointer "FunctionPointer.*")
 mono_unit_test_cases(test-mono-runtime test-detour        "MethodDetour.*")
+mono_unit_test_cases(test-mono-runtime test-icall         "NoWrapperIcall.*")
 
 # One case each, and there cannot be a second. The samples they are built out
 # of run a domain to completion and call mono_jit_cleanup. Nothing in the
@@ -111,12 +112,14 @@ if(MONO_ENABLE_MCS_BUILD)
 
   _mono_test_assembly(callspec.exe "${CMAKE_CURRENT_SOURCE_DIR}/callspec.cs")
   _mono_test_assembly(detour.exe "${CMAKE_CURRENT_SOURCE_DIR}/detour.cs")
+  _mono_test_assembly(icall.exe "${CMAKE_CURRENT_SOURCE_DIR}/icall.cs")
   _mono_test_assembly(test-embed.exe "${CMAKE_SOURCE_DIR}/samples/embed/test.cs")
   _mono_test_assembly(test-embed-invoke-cs.exe "${CMAKE_SOURCE_DIR}/samples/embed/invoke.cs")
 
   add_custom_target(unit-test-assemblies ALL DEPENDS
     "${CMAKE_CURRENT_BINARY_DIR}/callspec.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/detour.exe"
+    "${CMAKE_CURRENT_BINARY_DIR}/icall.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed-invoke-cs.exe")
   mono_tools_runtime_depends(unit-test-assemblies)

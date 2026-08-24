@@ -545,13 +545,17 @@ MethodLLVMEmitter::is_own_this (llvm::Value *value)
 /// Names target's entry as a value: an address to push or to store, rather than
 /// a call target in this module.
 ///
-/// The address is the method's published entry, which is the one every caller
-/// reaches. A pointer taken here stays correct when a later compile replaces
-/// the body.
+/// The address is the method's published entry, so a pointer taken here stays
+/// correct when a later compile replaces the body. A no-wrapper icall is the
+/// one method whose compiled callers do not go through that entry: they name
+/// the C function, which is what the entry jumps to.
 llvm::Expected<llvm::Constant *>
 MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 {
-	if (implemented_outside_il (target))
+	// A no-wrapper icall takes the stub below instead. Its declaration names
+	// the C function, and a pointer that escapes into a delegate needs the jit
+	// info that only a published thunk registers.
+	if (implemented_outside_il (target) && c_entry_of (target) == nullptr)
 		return create_method_decl (target);
 
 	char *printed = mono_method_full_name (target, FALSE);

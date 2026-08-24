@@ -355,8 +355,8 @@ icall_wrapper_target (MonoMethod *method)
 	return mono_marshal_get_native_wrapper (method, TRUE, mono_aot_only);
 }
 
-bool
-entered_in_c (MonoMethod *method)
+void *
+c_entry_of (MonoMethod *method)
 {
 	/*
 	 * The address the runtime publishes for a no-wrapper icall is the
@@ -367,12 +367,19 @@ entered_in_c (MonoMethod *method)
 	 * reads like.
 	 */
 	if ((method->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) == 0)
-		return false;
+		return nullptr;
 
 	guint32 flags = 0;
+	gconstpointer entry =
+		mono_lookup_internal_call_full_with_flags (method, FALSE, &flags);
 
-	mono_lookup_internal_call_full_with_flags (method, FALSE, &flags);
-	return (flags & MONO_ICALL_FLAGS_NO_WRAPPER) != 0;
+	// Only an entry in the icall hash carries this flag, and
+	// add_internal_call_with_flags () writes the address beside it. So the flag
+	// says that the address it came back with is the registered one.
+	if ((flags & MONO_ICALL_FLAGS_NO_WRAPPER) == 0)
+		return nullptr;
+
+	return const_cast<void *> (entry);
 }
 
 void
@@ -895,7 +902,8 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 	if (!type)
 		return type.takeError ();
 
-	bool in_c = entered_in_c (method);
+	void *c_entry = c_entry_of (method);
+	bool in_c = c_entry != nullptr;
 	llvm::Type *hidden = nullptr;
 
 	if (!in_c && returns_by_hidden_pointer ((*type)->getReturnType ())) {
@@ -931,9 +939,17 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 	 * method, because printing it would add nothing useful: identity_symbol ()
 	 * already makes the name unique, and a dump shows the declaration's own
 	 * type right beside it.
+	 *
+	 * A C entry keeps the name it is created with instead, because the engine
+	 * gives that name an address rather than a published entry. The address is
+	 * what the symbol stands for, so it is what makes the name unique.
+	 * MonoJit::register_symbol () refuses a name that already stands for a
+	 * different address, and a name built this way never meets that refusal.
 	 */
 	char *printed = mono_method_full_name (method, FALSE);
-	std::string full_name = identity_symbol (printed, method);
+	std::string full_name =
+		in_c ? identity_symbol (std::string ("mono_icall_") + printed, c_entry)
+		     : identity_symbol (printed, method);
 
 	g_free (printed);
 
@@ -975,12 +991,30 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 		function->getArg (at)->setName ("rgctx");
 	}
 
-	record_external (full_name, ExternalSymbol::Kind::Code, method);
-	mark_method_reference (*function, method);
-
-	if (in_c)
+	if (in_c) {
+		/*
+		 * Straight to the C function. This backend publishes no body for a
+		 * no-wrapper icall, so a thunk in front of one would only add a jump,
+		 * a record and a jit info to every domain that calls it. Nothing can
+		 * redirect the entry afterwards, which is why a detour on such a
+		 * method does not reach a compiled caller.
+		 */
+		record_external (full_name, ExternalSymbol::Kind::Address, c_entry);
 		function->addFnAttr (
 			llvm::Attribute::get (context (), arch::mono_cc_attribute));
+
+		/*
+		 * mono_dangerous_add_internal_call_no_wrapper () takes a function that
+		 * must not throw or raise. No wrapper stands in front of it to push an
+		 * LMF, so mono's unwinder cannot find the last managed frame from
+		 * inside one. A call to it therefore needs no landing pad, and a try
+		 * region whose calls are all like this keeps none (passes/eh-gather.cpp).
+		 */
+		function->setDoesNotThrow ();
+	} else {
+		record_external (full_name, ExternalSymbol::Kind::Code, method);
+		mark_method_reference (*function, method);
+	}
 
 	if (llvm::Attribute::AttrKind ext = integer_extension (sig->ret);
 	    ext != llvm::Attribute::None)

@@ -1207,8 +1207,8 @@ std::optional<MonoJitICallId> monitor_exit_fast_icall (MonoMethod *method,
 /// That agreement is what lets both convert to one function type.
 int vararg_fixed_params (MonoMethodSignature *sig);
 
-/// Whether the address the runtime publishes for method is a C function
-/// this backend did not generate.
+/// The C function the runtime publishes as method's entry, or null when this
+/// backend generates the code that entry reaches.
 ///
 /// A method implemented outside IL declares a pinvoke signature. The loader
 /// sets that flag for every icall and every DllImport. But what stands
@@ -1218,8 +1218,9 @@ int vararg_fixed_params (MonoMethodSignature *sig);
 ///
 /// One exception is an icall registered as needing no wrapper at all, whose
 /// published address really is the C function. So the method, not its
-/// signature, says which convention its entry speaks.
-bool entered_in_c (MonoMethod *method);
+/// signature, says which convention its entry speaks, and a call site can name
+/// that address rather than the method's thunk.
+void *c_entry_of (MonoMethod *method);
 
 /// Translates method's IL into the corresponding LLVM function, within
 /// module.
