@@ -1455,6 +1455,17 @@ std::vector<ProfileCounters>
 MonoJit::optimize (Module &m, JitTier tier, ArrayRef<uint8_t> profile,
                    InlineCandidates *inliner)
 {
+	/*
+	 * A fresh module carries no layout, and every pass that asks about a size or
+	 * an alignment then gets LLVM's own defaults instead of the target's. Those
+	 * name no stack alignment at all, which is what lets a pass align a frame
+	 * object past what the frame gives it: the frame is not realigned, the
+	 * object lands where the alignment does not hold, and the aligned move the
+	 * pass chose faults.
+	 */
+	if (m.getDataLayout ().isDefault ())
+		m.setDataLayout (host_target_machine ().createDataLayout ());
+
 	if (tier == JitTier::tier2) {
 		run_tier2_pipeline (m, profile, inliner);
 		return {};
@@ -1512,7 +1523,9 @@ MonoJit::compile_batch (ThreadSafeModule tsm, ArrayRef<StringRef> entries,
 		                          "a compile was asked for with no entry points");
 
 	// An assertions-on LLVM refuses to codegen a module whose layout disagrees
-	// with the target. A fresh module has no layout at all.
+	// with the target, and a fresh module has no layout at all. This covers the
+	// modules that reach codegen without a pipeline - a thunk, the thrower, the
+	// dispatcher - since MonoJit::optimize () sets it for the rest.
 	tsm.withModuleDo ([&] (Module &m) {
 		if (m.getDataLayout ().isDefault ())
 			m.setDataLayout (jit_->getDataLayout ());
