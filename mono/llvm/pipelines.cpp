@@ -1,6 +1,7 @@
 #include "pipelines.hpp"
 #include "arch/arch.hpp"
 #include "passes/array-address.hpp"
+#include "passes/clamp-frame-align.hpp"
 #include "passes/class-init.hpp"
 #include "passes/inline-copies.hpp"
 #include "passes/lower-builtins.hpp"
@@ -355,6 +356,10 @@ MonoPassBuilder::buildTier1Pipeline ()
 	MPM.addPass (mono::RgctxFetchPass ());
 	MPM.addPass (arch::MonoAbiPass ());
 
+	// Behind the ABI lowering, which makes an alloca of its own for a value the
+	// convention passes in memory.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClampFrameAlignPass ()));
+
 	addAnnotationRemarksPass (MPM);
 
 	return MPM;
@@ -422,6 +427,9 @@ MonoPassBuilder::buildTier2Pipeline ()
 
 	MPM.addPass (mono::RgctxFetchPass ());
 	MPM.addPass (arch::MonoAbiPass ());
+
+	// Behind the ABI lowering, for the reason tier 1 gives.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClampFrameAlignPass ()));
 
 	addAnnotationRemarksPass (MPM);
 
