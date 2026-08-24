@@ -14,7 +14,12 @@
 #include "passes/lower-builtins.hpp"
 #include "passes/tier-counter.hpp"
 
+#include <llvm/ADT/SmallPtrSet.h>
+#include <llvm/Analysis/LoopInfo.h>
+#include <llvm/IR/Dominators.h>
+#include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -564,6 +569,331 @@ TEST_F (JitProfile, EachInstrumentedFunctionGetsItsOwnCounters)
 
 	EXPECT_EQ (a.counters[0], 7u);
 	EXPECT_EQ (b.counters[0], 3u);
+}
+
+/*
+ * Where TierCounterPass puts the work counter. The pass adds up the work a body
+ * does in a register and takes it off the counter at each exit, so two things
+ * about the emission matter as much as the arithmetic: the accumulator reaches
+ * the counter through registers rather than a stack slot, and one add covers a
+ * loop rather than one add covering a block. Tier-1 codegen is FastISel with the
+ * fast register allocator, and no pass behind this one tidies up either mistake.
+ *
+ * The call counter beside it needs no case of its own: the entry check it emits
+ * is one load and one branch, run once, and every managed test in the tree
+ * exercises it.
+ */
+
+/// The declaration a test function throws through.
+FunctionCallee
+thrower_decl (Module &m)
+{
+	LLVMContext &ctx = m.getContext ();
+	FunctionCallee callee = m.getOrInsertFunction (
+		"mono_llvm_throw_exception", Type::getVoidTy (ctx));
+
+	if (auto *fn = dyn_cast<Function> (callee.getCallee ()))
+		fn->setDoesNotReturn ();
+
+	return callee;
+}
+
+/// Gives fn the attributes that ask for a counter, and defines the handle.
+///
+/// TierCounterPass looks the handle up by name and leaves the body alone when it
+/// finds nothing, so the module has to hold one.
+void
+ask_for_a_counter (Module &m, Function *fn, StringRef threshold)
+{
+	std::string handle = (fn->getName () + ".handle").str ();
+
+	// The work counter only, because these cases are about where its write-backs
+	// land. A call counter beside it would put a check in the entry block and
+	// take an atomic off a global these cases then have to tell apart.
+	fn->addFnAttr (tier_counter_attribute, "0");
+	fn->addFnAttr (tier_cost_attribute, threshold);
+	fn->addFnAttr (tier_handle_attribute, handle);
+	new GlobalVariable (m, Type::getInt32Ty (m.getContext ()), /*isConstant=*/true,
+	                    GlobalValue::PrivateLinkage,
+	                    ConstantInt::get (Type::getInt32Ty (m.getContext ()), 0), handle);
+}
+
+/// The write-backs in f, which are the atomic subtractions from its cost counter.
+SmallVector<AtomicRMWInst *, 4>
+write_backs (Function &f)
+{
+	GlobalVariable *counter = f.getParent ()->getNamedGlobal ("mono_tier_cost");
+	SmallVector<AtomicRMWInst *, 4> found;
+
+	if (counter == nullptr)
+		return found;
+
+	for (Instruction &i : instructions (f))
+		if (auto *rmw = dyn_cast<AtomicRMWInst> (&i))
+			if (rmw->getPointerOperand () == counter)
+				found.push_back (rmw);
+
+	return found;
+}
+
+/// What a walk back from a write-back's cost finds.
+struct CostChain {
+	/// The accumulation points, and the one add that folds in the constant for
+	/// the blocks outside every loop.
+	unsigned adds = 0;
+	/// True when the accumulator still reaches the write-back from memory,
+	/// which means PromoteMemToReg never ran over the stack slot.
+	bool from_memory = false;
+};
+
+/// Walks back from a cost value through the arithmetic that built it.
+void
+walk_cost (Value *v, SmallPtrSetImpl<Value *> &seen, CostChain &chain)
+{
+	if (v == nullptr || isa<Constant> (v) || !seen.insert (v).second)
+		return;
+
+	if (auto *phi = dyn_cast<PHINode> (v)) {
+		for (Value *in : phi->incoming_values ())
+			walk_cost (in, seen, chain);
+
+		return;
+	}
+
+	if (auto *op = dyn_cast<BinaryOperator> (v);
+	    op != nullptr && op->getOpcode () == Instruction::Add) {
+		chain.adds++;
+		walk_cost (op->getOperand (0), seen, chain);
+		walk_cost (op->getOperand (1), seen, chain);
+		return;
+	}
+
+	if (isa<LoadInst> (v))
+		chain.from_memory = true;
+}
+
+CostChain
+cost_chain (AtomicRMWInst *write_back)
+{
+	SmallPtrSet<Value *, 16> seen;
+	CostChain chain;
+
+	walk_cost (write_back->getValOperand (), seen, chain);
+	return chain;
+}
+
+/// The loops in f, counted the way TierCounterPass counts them.
+unsigned
+loop_count (Function &f)
+{
+	DominatorTree dt (f);
+	LoopInfo li (dt);
+
+	return li.getLoopsInPreorder ().size ();
+}
+
+/// i64 f(i32 n), one loop whose body has two arms, then a ret.
+///
+/// Each arm holds a volatile store of its own, to an address of its own.
+/// SimplifyCFG will neither speculate such a store into the block above nor sink
+/// two of them into one block, so the loop keeps four blocks. A placement that
+/// went per block would then be plain in the count below.
+Function *
+build_looping_function (Module &m, LLVMContext &ctx, StringRef name, StringRef threshold)
+{
+	Type *i32 = Type::getInt32Ty (ctx);
+	Type *i64 = Type::getInt64Ty (ctx);
+	Function *fn = Function::Create (FunctionType::get (i64, { i32 }, false),
+	                                 Function::ExternalLinkage, name, &m);
+
+	ask_for_a_counter (m, fn, threshold);
+
+	BasicBlock *entry = BasicBlock::Create (ctx, "entry", fn);
+	BasicBlock *head = BasicBlock::Create (ctx, "head", fn);
+	BasicBlock *odd = BasicBlock::Create (ctx, "odd", fn);
+	BasicBlock *even = BasicBlock::Create (ctx, "even", fn);
+	BasicBlock *latch = BasicBlock::Create (ctx, "latch", fn);
+	BasicBlock *exit = BasicBlock::Create (ctx, "exit", fn);
+
+	Value *n = fn->getArg (0);
+	IRBuilder<> b (entry);
+	AllocaInst *result = b.CreateAlloca (i64, nullptr, "result");
+	AllocaInst *mark_odd = b.CreateAlloca (i64, nullptr, "mark_odd");
+	AllocaInst *mark_even = b.CreateAlloca (i64, nullptr, "mark_even");
+
+	b.CreateStore (ConstantInt::get (i64, 0), result);
+	b.CreateCondBr (b.CreateICmpSGT (n, ConstantInt::get (i32, 0)), head, exit);
+
+	b.SetInsertPoint (head);
+
+	PHINode *i = b.CreatePHI (i32, 2, "i");
+	Value *bit = b.CreateAnd (i, ConstantInt::get (i32, 1));
+
+	b.CreateCondBr (b.CreateICmpNE (bit, ConstantInt::get (i32, 0)), odd, even);
+
+	b.SetInsertPoint (odd);
+	b.CreateStore (ConstantInt::get (i64, 1), mark_odd, /*isVolatile=*/true);
+	b.CreateBr (latch);
+
+	b.SetInsertPoint (even);
+	b.CreateStore (ConstantInt::get (i64, 2), mark_even, /*isVolatile=*/true);
+	b.CreateBr (latch);
+
+	b.SetInsertPoint (latch);
+
+	Value *next = b.CreateAdd (i, ConstantInt::get (i32, 1), "next");
+
+	b.CreateStore (b.CreateSExt (next, i64), result, /*isVolatile=*/true);
+	b.CreateCondBr (b.CreateICmpSLT (next, n), head, exit);
+
+	i->addIncoming (ConstantInt::get (i32, 0), entry);
+	i->addIncoming (next, latch);
+
+	b.SetInsertPoint (exit);
+	b.CreateRet (b.CreateLoad (i64, result, /*isVolatile=*/true));
+
+	EXPECT_FALSE (verifyFunction (*fn, &errs ()));
+	return fn;
+}
+
+TEST_F (JitProfile, TheCostCounterStaysInRegistersAndCountsPerLoop)
+{
+	OwnedModule m;
+	m.context = std::make_unique<LLVMContext> ();
+	m.module = std::make_unique<Module> ("jit.tier-cost", *m.context);
+
+	Function *fn = build_looping_function (*m.module, *m.context, "looping", "1000");
+
+	MonoJit::optimize (*m.module, JitTier::tier1);
+
+	ASSERT_FALSE (verifyFunction (*fn, &errs ()));
+
+	// One ret, so one write-back, and none of the entry check the counter used
+	// to carry.
+	SmallVector<AtomicRMWInst *, 4> found = write_backs (*fn);
+	ASSERT_EQ (found.size (), 1u);
+	EXPECT_NE (found.front ()->getParent (), &fn->getEntryBlock ());
+
+	CostChain chain = cost_chain (found.front ());
+
+	EXPECT_FALSE (chain.from_memory)
+		<< "the accumulator reaches the counter from a stack slot, so the "
+		   "promotion to registers did not happen";
+
+	// One add for each loop, and one more that folds in the constant for the
+	// blocks no loop holds. More than that means the placement went per block,
+	// which is what FastISel and the fast register allocator make expensive.
+	unsigned loops = loop_count (*fn);
+
+	ASSERT_GT (loops, 0u) << "the simplification pipeline removed the loop, so "
+	                         "this case no longer measures the placement";
+	EXPECT_GE (chain.adds, 1u);
+	EXPECT_LE (chain.adds, loops + 1)
+		<< "found " << chain.adds << " accumulation adds for " << loops
+		<< " loops, so the pass is no longer placing one for each loop";
+}
+
+TEST_F (JitProfile, AnUnprotectedThrowWritesTheCountBack)
+{
+	OwnedModule m;
+	m.context = std::make_unique<LLVMContext> ();
+	m.module = std::make_unique<Module> ("jit.tier-throw", *m.context);
+
+	LLVMContext &ctx = *m.context;
+	Function *fn = Function::Create (
+		FunctionType::get (Type::getVoidTy (ctx), {}, false),
+		Function::ExternalLinkage, "only_throws", m.module.get ());
+
+	ask_for_a_counter (*m.module, fn, "1000");
+
+	IRBuilder<> b (BasicBlock::Create (ctx, "entry", fn));
+
+	b.CreateCall (thrower_decl (*m.module));
+	b.CreateUnreachable ();
+
+	ASSERT_FALSE (verifyFunction (*fn, &errs ()));
+
+	MonoJit::optimize (*m.module, JitTier::tier1);
+
+	ASSERT_FALSE (verifyFunction (*fn, &errs ()));
+
+	// Nothing in this body protects the site, so the exception leaves the frame
+	// for good and the work it did has to reach the counter here.
+	EXPECT_EQ (write_backs (*fn).size (), 1u);
+}
+
+TEST_F (JitProfile, AThrowThisBodyCatchesGetsNoWriteBackOfItsOwn)
+{
+	OwnedModule m;
+	m.context = std::make_unique<LLVMContext> ();
+	m.module = std::make_unique<Module> ("jit.tier-invoke", *m.context);
+
+	LLVMContext &ctx = *m.context;
+	Type *i32 = Type::getInt32Ty (ctx);
+	Function *fn = Function::Create (FunctionType::get (i32, { i32 }, false),
+	                                 Function::ExternalLinkage, "catches_itself",
+	                                 m.module.get ());
+
+	ask_for_a_counter (*m.module, fn, "1000");
+	fn->setPersonalityFn (cast<Constant> (
+		m.module
+			->getOrInsertFunction ("mono_personality",
+	                                       FunctionType::get (i32, {}, true))
+			.getCallee ()));
+
+	BasicBlock *entry = BasicBlock::Create (ctx, "entry", fn);
+	BasicBlock *gone = BasicBlock::Create (ctx, "gone", fn);
+	BasicBlock *pad = BasicBlock::Create (ctx, "pad", fn);
+	BasicBlock *exit = BasicBlock::Create (ctx, "exit", fn);
+
+	IRBuilder<> b (entry);
+	AllocaInst *slot = b.CreateAlloca (i32, nullptr, "slot");
+
+	b.CreateStore (ConstantInt::get (i32, 0), slot, /*isVolatile=*/true);
+	b.CreateInvoke (thrower_decl (*m.module), gone, pad);
+
+	b.SetInsertPoint (gone);
+	b.CreateUnreachable ();
+
+	b.SetInsertPoint (pad);
+
+	LandingPadInst *caught =
+		b.CreateLandingPad (StructType::get (PointerType::get (ctx, 0), i32), 0);
+
+	caught->setCleanup (true);
+	b.CreateStore (ConstantInt::get (i32, 1), slot, /*isVolatile=*/true);
+	b.CreateBr (exit);
+
+	b.SetInsertPoint (exit);
+	b.CreateRet (b.CreateLoad (i32, slot, /*isVolatile=*/true));
+
+	ASSERT_FALSE (verifyFunction (*fn, &errs ()));
+
+	MonoJit::optimize (*m.module, JitTier::tier1);
+
+	ASSERT_FALSE (verifyFunction (*fn, &errs ()));
+
+	/*
+	 * One write-back, at the ret. The invoke has not left the frame, because
+	 * this body holds the pad it lands on, so a write-back in front of it would
+	 * take the same work off the counter again when the ret is reached.
+	 */
+	bool invokes = false;
+
+	for (Instruction &i : instructions (*fn))
+		invokes |= isa<InvokeInst> (&i);
+
+	ASSERT_TRUE (invokes) << "the simplification pipeline turned the invoke into "
+	                         "a call, so this case no longer has the arm it is "
+	                         "about";
+
+	SmallVector<AtomicRMWInst *, 4> found = write_backs (*fn);
+
+	ASSERT_EQ (found.size (), 1u);
+
+	Instruction *terminator = found.front ()->getParent ()->getTerminator ();
+
+	EXPECT_FALSE (isa<InvokeInst> (terminator));
 }
 } // namespace
 } // namespace test

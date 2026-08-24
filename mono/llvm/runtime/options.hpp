@@ -109,10 +109,23 @@ bool inline_write_barrier ();
 
 /// How many calls a tier-1 body takes before it asks to be compiled again.
 ///
-/// Zero for a body that never asks, which leaves it instrumented and counting
-/// while something else decides when it promotes.
+/// Zero for a body that never asks on a count of any kind, which leaves it
+/// instrumented and counting while something else decides when it promotes. That
+/// is what turns tier2_cost_threshold () off as well.
 /// MONO_LLVM_JIT_TIER2_THRESHOLD moves it, and the default is twenty thousand.
-uint32_t tier2_threshold ();
+uint64_t tier2_threshold ();
+
+/// How much work a tier-1 body does before it asks to be compiled again.
+///
+/// One unit is one instruction that emits code, counted as the body runs it, so
+/// the turns of a loop reach this threshold where a count of calls does not. A
+/// body promotes on whichever of the two counters runs out first. The counter is
+/// signed and this answer never goes past INT64_MAX.
+///
+/// Zero leaves the body counting calls alone.
+/// MONO_LLVM_JIT_TIER2_COST_THRESHOLD moves it, and the default is a hundred
+/// million.
+uint64_t tier2_cost_threshold ();
 
 /// The largest callee, in IL bytes, a compile folds into its caller before any
 /// cost model has looked at it.

@@ -53,8 +53,9 @@ cl::opt<unsigned> max_exiting ("mono-speculative-counter-promotion-max-exiting",
 // one does not under-report it. Almost every loop a C# method ends with
 // can be left through a return, so the refusal costs most of what
 // promotion is worth here. A read that comes early loses only the turns
-// the threads now in the loop took. Entry count is what takes a body to
-// tier 2.
+// the threads now in the loop took, and it does not move the promotion:
+// the counter that takes a body to tier 2 is its own and never reads
+// these (tier-counter.hpp).
 cl::opt<bool> skip_ret_exit_block ("mono-skip-ret-exit-block",
                                    cl::init (PromotionPolicy ().skip_ret_exit_block), cl::Hidden,
                                    cl::desc ("Leave a loop alone when a return can leave it"));

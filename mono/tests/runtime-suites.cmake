@@ -578,6 +578,17 @@ _mono_exe_list(_tier2_costed ${MONO_TESTS_TIER2_COSTED_SRC})
 mono_runtime_suite(runtime-tier2-costed TESTS ${_tier2_costed}
                    ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0")
 
+# The work counter, which promotes a body the entry counter never reaches. The
+# threshold is named here rather than left at its default, so the kernel spends
+# it in the calls the test makes instead of in a run long enough to measure.
+# The second arm turns the work counter off and the same source then asserts
+# that the body stays where it is, which is this test's negative control.
+_mono_exe_list(_tier2_cost_trigger ${MONO_TESTS_TIER2_COST_TRIGGER_SRC})
+mono_runtime_suite(runtime-tier2-cost-trigger TESTS ${_tier2_cost_trigger}
+                   ENV "MONO_LLVM_JIT_TIER2_COST_THRESHOLD=10000000")
+mono_runtime_suite(runtime-tier2-cost-trigger-off TESTS ${_tier2_cost_trigger}
+                   ENV "MONO_LLVM_JIT_TIER2_COST_THRESHOLD=0")
+
 # MONO_ENV_OPTIONS has to reach the runtime before it parses its own argv.
 foreach(_gc IN LISTS _mono_gcs)
   _mono_gc_env(_gc_env "${_gc}")

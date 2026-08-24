@@ -333,14 +333,25 @@ MonoPassBuilder::buildTier1Pipeline ()
 	if (PTO.EnablePGO)
 		MPM.addPass (buildPgoInstrumentationPipeline ());
 
-	// This must happen after PGO instrumentation so that counts can carry
-	// over to tier2, which does not have the tiering counter.
-	if (PTO.EnablePromotion)
-		MPM.addPass (mono::TierCounterPass ());
-
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RgctxDedupPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RestoreTailPositionPass ()));
+
+	/*
+	 * Behind the PGO instrumentation, so that the counts carry over to tier 2,
+	 * which has no tiering counter of its own. The counters' blocks are then
+	 * outside the CFG the instrumentation hashed.
+	 *
+	 * Behind RestoreTailPositionPass as well, because the work counter writes
+	 * back at each exit. A write-back in front of the ret that pass looks for
+	 * hides the shape it repairs, and the tail call is lost.
+	 *
+	 * Behind RgctxDedupPass for the weights. That pass takes fetches out, and a
+	 * weight read in front of it counts instructions the body never runs.
+	 */
+	if (PTO.EnablePromotion)
+		MPM.addPass (mono::TierCounterPass ());
+
 	MPM.addPass (mono::RgctxFetchPass ());
 	MPM.addPass (arch::MonoAbiPass ());
 

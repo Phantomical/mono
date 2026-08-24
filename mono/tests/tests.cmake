@@ -968,6 +968,13 @@ set(MONO_TESTS_TIER2_COSTED_SRC
   tier2-inline-cost.cs
 )
 
+# The counter that promotes a body on the work it does. It runs twice, with the
+# work threshold set and with it zero, and reads the variable to know which arm
+# it is in.
+set(MONO_TESTS_TIER2_COST_TRIGGER_SRC
+  tier2-cost-trigger.cs
+)
+
 # The tailcall suite, including the corpus imported from coreclr.
 set(MONO_TESTS_TAILCALL_CS_SRC
   tailcall/coreclr/JIT/CodeGenBringUpTests/RecursiveTailCall.cs

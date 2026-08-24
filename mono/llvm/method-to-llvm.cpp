@@ -671,8 +671,9 @@ MethodLLVMEmitter::reload_stack (MonoIrBuilder &builder, const Block &block)
 		            slot.type, slot.native);
 }
 
-/// Put the attributes on this function that ask for a tier-2 promotion counter:
-/// the threshold to count down from, and a symbol naming the record to promote.
+/// Put the attributes on this function that ask for the tier-2 promotion
+/// counters: a threshold for each of them to count down from, and a symbol
+/// naming the record to promote.
 ///
 /// No counter is emitted here. TierCounterPass writes it behind the profile
 /// instrumentation (passes/tier-counter.hpp), and these attributes are what
@@ -700,6 +701,7 @@ MethodLLVMEmitter::mark_for_tier2_instrumentation ()
 
 	address_symbol (handle, *record);
 	function->addFnAttr (tier_counter_attribute, std::to_string (tier2_threshold ()));
+	function->addFnAttr (tier_cost_attribute, std::to_string (tier2_cost_threshold ()));
 	function->addFnAttr (tier_handle_attribute, handle);
 }
 
