@@ -585,12 +585,13 @@ function(_mono_xunit_lister out profile)
     set(_cmd "${CMAKE_COMMAND}" -E env ${_env} ${_csc})
   endif()
   get_property(_p GLOBAL PROPERTY MONO_MANAGED_PROVIDER_${profile}/mscorlib)
+  _mono_reference_dep(_cordep ${profile} mscorlib "${_pdir}/mscorlib.dll")
   add_custom_command(
     OUTPUT "${_exe}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${_pdir}/tests"
     COMMAND ${_cmd} /nologo /noconfig -nostdlib
             "-r:${_pdir}/mscorlib.dll" "-out:${_exe}" "${_src}"
-    DEPENDS "${_src}" ${_p} "${_pdir}/mscorlib.dll" ${_rt}
+    DEPENDS "${_src}" ${_p} "${_cordep}" ${_rt}
     COMMENT "CSC [${profile}] xunit-lister.exe"
     VERBATIM)
   add_custom_target(mcs-${profile}-xunit-lister DEPENDS "${_exe}")
@@ -615,12 +616,13 @@ function(_mono_remote_executor out profile)
     set(_cmd "${CMAKE_COMMAND}" -E env ${_env} ${_csc})
   endif()
   get_property(_p GLOBAL PROPERTY MONO_MANAGED_PROVIDER_${profile}/mscorlib)
+  _mono_reference_dep(_cordep ${profile} mscorlib "${_pdir}/mscorlib.dll")
   add_custom_command(
     OUTPUT "${_exe}"
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${_pdir}/tests"
     COMMAND ${_cmd} /nologo /noconfig -nostdlib
             "-r:${_pdir}/mscorlib.dll" "-out:${_exe}" "${_src}"
-    DEPENDS "${_src}" ${_p} "${_pdir}/mscorlib.dll" ${_rt}
+    DEPENDS "${_src}" ${_p} "${_cordep}" ${_rt}
     COMMENT "CSC [${profile}] RemoteExecutorConsoleApp.exe"
     VERBATIM)
   add_custom_target(mcs-${profile}-remote-executor DEPENDS "${_exe}")
@@ -667,13 +669,15 @@ function(_mono_add_managed_test kind profile dir target assembly stem sources_fi
   # TEST_LIB_REFS: it compiles against that library's surface, so anything the
   # library exposes has to be resolvable here too.
   set(_refflags "-r:${_pdir}/${assembly}" ${T_LIB_REFFLAGS})
-  set(_refdeps "${target}" "${_pdir}/${assembly}")
+  _mono_reference_dep(_libdep ${profile} "${_astem}" "${_pdir}/${assembly}")
+  set(_refdeps "${target}" "${_libdep}")
   set(_refs ${T_REFS} ${MONO_PROFILE_${profile}_DEFAULT_REFERENCES})
   foreach(_r IN LISTS _refs)
     list(APPEND _refflags "-r:${_pdir}/${_r}.dll")
     get_property(_p GLOBAL PROPERTY MONO_MANAGED_PROVIDER_${profile}/${_r})
     if(_p)
-      list(APPEND _refdeps "${_p}" "${_pdir}/${_r}.dll")
+      _mono_reference_dep(_rdep ${profile} "${_r}" "${_pdir}/${_r}.dll")
+      list(APPEND _refdeps "${_p}" "${_rdep}")
     endif()
   endforeach()
 

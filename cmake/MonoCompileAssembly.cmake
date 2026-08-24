@@ -123,10 +123,26 @@ get_filename_component(_outdir "${MCS_OUTPUT}" DIRECTORY)
 get_filename_component(_builddir "${MCS_BUILD_OUTPUT}" DIRECTORY)
 file(MAKE_DIRECTORY "${_outdir}" "${_builddir}")
 
+# csc rewrites its outputs whatever they held before, so the reference assembly
+# goes to a scratch name.  The copy consumers depend on is published below.
+set(_refout "")
+if(MCS_REFOUT)
+  get_filename_component(_refdir "${MCS_REFOUT}" DIRECTORY)
+  file(MAKE_DIRECTORY "${_refdir}")
+  set(_refout "-refout:${MCS_REFOUT}.tmp")
+endif()
+
 _mono_run("csc"
-  COMMAND ${MCS_CSC} ${MCS_CSC_FLAGS} "-out:${MCS_BUILD_OUTPUT}"
+  COMMAND ${MCS_CSC} ${MCS_CSC_FLAGS} "-out:${MCS_BUILD_OUTPUT}" ${_refout}
           ${MCS_BUILT_SOURCES} "@${MCS_RESPONSE}"
   ENVIRONMENT ${MCS_CSC_ENV})
+
+# The unchanged mtime this leaves behind is what keeps a consumer clean.  The
+# REFERENCE_ASSEMBLY block in MonoManaged.cmake has the rest of the mechanism
+# and what the file describes.
+if(MCS_REFOUT)
+  file(COPY_FILE "${MCS_REFOUT}.tmp" "${MCS_REFOUT}" ONLY_IF_DIFFERENT)
+endif()
 
 # 4. Post-processing
 #

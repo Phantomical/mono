@@ -234,11 +234,11 @@ set(MONO_MANAGED_FIELDS
     XTEST_REFS XTEST_FLAGS
     TEST_CONFIG_GLOBAL TEST_CONFIG_RUNTIME
     PROGRAM NO_SIGN NO_INSTALL NO_DEBUG INTERMEDIATE NO_DEFAULT_REFERENCES NO_TEST
-    XTEST_REMOTE_EXECUTOR)
+    XTEST_REMOTE_EXECUTOR REFERENCE_ASSEMBLY)
 
 function(mono_declare_managed)
   cmake_parse_arguments(A
-    "PROGRAM;NO_SIGN;NO_INSTALL;NO_DEBUG;INTERMEDIATE;NO_DEFAULT_REFERENCES;NO_TEST;XTEST_REMOTE_EXECUTOR"
+    "PROGRAM;NO_SIGN;NO_INSTALL;NO_DEBUG;INTERMEDIATE;NO_DEFAULT_REFERENCES;NO_TEST;XTEST_REMOTE_EXECUTOR;REFERENCE_ASSEMBLY"
     "NAME;OUTPUT_NAME;SUBDIR;KEYFILE;SNK;PACKAGE;INSTALL_DIR;TARGET_NET_REFERENCE;SOURCES_FILE;TEST_CONFIG_GLOBAL;TEST_CONFIG_RUNTIME"
     "PROFILES;REFS;API_BIN_REFS;FLAGS;BUILT_SOURCES;DEPENDS;RESOURCES;STRING_REPLACER_FLAGS;ENV;SOURCES;RESX;RESGEN_FLAGS;RESOURCE_DEFS;TEST_REFS;TEST_FLAGS;TEST_RESOURCES;TEST_EXCLUDES;TEST_RUNNER_FILES;XTEST_REFS;XTEST_FLAGS"
     ${ARGN})
@@ -402,6 +402,35 @@ function(_mono_target_name out profile subdir name)
   endif()
 endfunction()
 
+# Reference assemblies
+#
+# A declaration marked REFERENCE_ASSEMBLY makes csc write one under deps/ref/
+# beside the real assembly, and everything that references it takes its build
+# dependency on that file instead.  Nothing passes it to -r:, so assembly
+# identity and signing are what they always were: the file exists to decide
+# whether a consumer recompiles.
+#
+# csc writes it from the metadata surface alone, so an edit to a method body
+# leaves it identical and no consumer recompiles.  Everything a caller can
+# compile against still moves it: a const value, an enum member, a default
+# argument, an attribute argument, a struct field, and an internal that
+# InternalsVisibleTo exposes.  cil-stringreplacer runs after csc and rewrites
+# bodies, so what it splices in is outside that surface.
+#
+# corlib carries the mark because every other compile in the tree references it,
+# so its one file edge decides whether the whole class library recompiles.
+#
+# Returns the file a reference contributes as a build dependency: the reference
+# assembly where the referenced one has one, and `fallback` for the rest.
+function(_mono_reference_dep out profile name fallback)
+  get_property(_refasm GLOBAL PROPERTY MONO_MANAGED_REFASM_${profile}/${name})
+  if(_refasm)
+    set(${out} "${_refasm}" PARENT_SCOPE)
+  else()
+    set(${out} "${fallback}" PARENT_SCOPE)
+  endif()
+endfunction()
+
 # Registers the install-time gacutil call for one assembly.  LIBRARY_PACKAGE
 # defaults to the profile's framework version and `none` means GAC only, with
 # no symlink under lib/mono/<package>.
@@ -455,6 +484,7 @@ function(mono_managed_materialize)
     get_property(_outname GLOBAL PROPERTY ${_id}_OUTPUT_NAME)
     get_property(_subdir  GLOBAL PROPERTY ${_id}_SUBDIR)
     get_property(_profs   GLOBAL PROPERTY ${_id}_PROFILES)
+    get_property(_refasm  GLOBAL PROPERTY ${_id}_REFERENCE_ASSEMBLY)
     # Keyed on the file that lands in the profile directory, not on the
     # declaration's name: LIB_REFS spells the output, and Microsoft.Build.Tasks
     # ships as Microsoft.Build.Tasks.v4.0.dll.
@@ -476,6 +506,10 @@ function(mono_managed_materialize)
           "Two declarations produce ${_stem} in profile ${_p}: ${_existing} and ${_t}")
       endif()
       set_property(GLOBAL PROPERTY MONO_MANAGED_PROVIDER_${_key} "${_t}")
+      if(_refasm)
+        set_property(GLOBAL PROPERTY MONO_MANAGED_REFASM_${_key}
+                     "${MONO_MANAGED_DEPSDIR}/ref/${_key}.dll")
+      endif()
     endforeach()
   endforeach()
 
@@ -547,6 +581,16 @@ macro(_mono_materialize_profile _profile)
   _mono_target_name(_target ${_profile} "${A_SUBDIR}" "${A_NAME}")
   _mono_stem(_stem "${A_NAME}")
 
+  # Empty unless this declaration is marked REFERENCE_ASSEMBLY.  Read back under
+  # the key pass 1 registered it with, so the two spellings cannot drift.
+  _mono_stem(_outstem "${_outname}")
+  if(A_SUBDIR)
+    get_property(_refout GLOBAL PROPERTY
+                 MONO_MANAGED_REFASM_${_prof}/${A_SUBDIR}/${_outstem})
+  else()
+    get_property(_refout GLOBAL PROPERTY MONO_MANAGED_REFASM_${_prof}/${_outstem})
+  endif()
+
   # -- references ----------------------------------------------------------
   # Two resolution modes coexist.  Most references point at what this build
   # just produced; API_BIN_REFS and TARGET_NET_REFERENCE point at the
@@ -603,10 +647,11 @@ macro(_mono_materialize_profile _profile)
     list(APPEND _refflags "-r:${_alias}${_reffile}")
     get_property(_provider GLOBAL PROPERTY MONO_MANAGED_PROVIDER_${_refprofile}/${_refname})
     if(_provider)
-      # Both the target and the file.  A DEPENDS on a target name alone is an
+      # Both the target and a file.  A DEPENDS on a target name alone is an
       # order-only edge in Ninja: it would sequence the two compiles but never
       # recompile this assembly when the one it references changes.
-      list(APPEND _refdeps "${_provider}" "${_reffile}")
+      _mono_reference_dep(_refdep ${_refprofile} "${_refname}" "${_reffile}")
+      list(APPEND _refdeps "${_provider}" "${_refdep}")
     endif()
   endforeach()
 
@@ -862,6 +907,7 @@ macro(_mono_materialize_profile _profile)
 set(MCS_SOURCE_DIR    [==[@A_DIR@]==])
 set(MCS_OUTPUT        [==[@_out@]==])
 set(MCS_BUILD_OUTPUT  [==[@_build_out@]==])
+set(MCS_REFOUT        [==[@_refout@]==])
 set(MCS_DEPFILE       [==[@_depfile@]==])
 set(MCS_RESPONSE      [==[@_response@]==])
 set(MCS_SOURCES_INPUTS [==[@_sources_inputs@]==])
@@ -882,8 +928,13 @@ set(MCS_STRING_REPLACER       [==[@_string_replacer@]==])
 set(MCS_STRING_REPLACER_FLAGS [==[@A_STRING_REPLACER_FLAGS@]==])
 ]] @ONLY)
 
+  # The reference assembly is a byproduct rather than an output.  CMake gives
+  # every custom command `restat = 1`, so ninja re-stats both files afterwards
+  # and reads the older mtime the script left on this one.  A consumer of it is
+  # then clean while the assembly beside it is newly written.
   add_custom_command(
     OUTPUT "${_out}"
+    BYPRODUCTS ${_refout}
     COMMAND "${CMAKE_COMMAND}" -D "SETTINGS=${_settings}"
             -P "${CMAKE_SOURCE_DIR}/cmake/MonoCompileAssembly.cmake"
     # Generated sources are not listed here: they are produced in another

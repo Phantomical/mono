@@ -100,6 +100,7 @@ foreach(_p build net_4_x unityjit)
     OUTPUT_NAME mscorlib.dll
     PROFILES    ${_p}
     NO_DEFAULT_REFERENCES
+    REFERENCE_ASSEMBLY
     ${_test}
     FLAGS       ${_flags}
     # The security manager reads its bootstrap database out of this directory
