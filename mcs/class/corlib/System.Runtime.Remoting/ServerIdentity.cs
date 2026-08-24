@@ -117,6 +117,35 @@ namespace System.Runtime.Remoting
 			return objRef;
 		}
 
+		// Attaches serverObject to this identity, and gives back the identity
+		// that holds the object after the call.
+		//
+		// This identity must hold no server object yet. AttachServerObject ()
+		// is the entry for an identity that replaces the object it holds.
+		//
+		// A caller that gets another identity back must register nothing for
+		// this one. A URI in uri_hash and a lease in the lease manager both
+		// outlive this call. An expired lease then disconnects the object from
+		// the identity that holds it.
+		public Identity ClaimServerObject (MarshalByRefObject serverObject, Context context)
+		{
+			_context = context;
+			_serverObject = serverObject;
+
+			if (RemotingServices.IsTransparentProxy (serverObject))
+			{
+				RealProxy rp = RemotingServices.GetRealProxy (serverObject);
+				return rp.ClaimObjectIdentity (this) ?? this;
+			}
+
+			if (_objectType.IsContextful)
+				_envoySink = context.CreateEnvoySink (serverObject);
+
+			// Set the fields above before the object points here. A thread
+			// that finds this identity on the object reads them with no lock.
+			return serverObject.ClaimObjectIdentity (this) ?? this;
+		}
+
 		public void AttachServerObject (MarshalByRefObject serverObject, Context context)
 		{
 			DisposeServerObject();

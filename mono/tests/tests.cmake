@@ -427,6 +427,7 @@ set(MONO_TESTS_CS_SRC
   remoting3.cs
   remoting5.cs
   remoting-objref-race.cs
+  remoting-marshal-identity-race.cs
   appdomain.cs
   appdomain-client.cs
   appdomain-unload.cs

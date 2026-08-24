@@ -329,13 +329,10 @@ namespace System.Runtime.Remoting
 
 			if (RequestedType == null) RequestedType = Obj.GetType ();
 
-			if (ObjURI == null) 
+			if (ObjURI == null)
 			{
 				if (Obj.ObjectIdentity == null)
-				{
-					ObjURI = NewUri();
-					CreateClientActivatedServerIdentity (Obj, RequestedType, ObjURI);
-				}
+					AttachClientActivatedServerIdentity (Obj, RequestedType);
 			}
 			else
 			{
@@ -709,6 +706,20 @@ namespace System.Runtime.Remoting
 			ClientActivatedIdentity identity = new ClientActivatedIdentity (null, objectType);
 			identity.ChannelSink = ChannelServices.CrossContextChannel;
 			return identity;
+		}
+
+		// Gives realObject a client-activated identity under a fresh URI. Does
+		// nothing when the object holds an identity already.
+		static void AttachClientActivatedServerIdentity (MarshalByRefObject realObject, Type objectType)
+		{
+			ClientActivatedIdentity identity = new ClientActivatedIdentity (NewUri (), objectType);
+
+			// A loser registers nothing: see ServerIdentity.ClaimServerObject ().
+			if (identity.ClaimServerObject (realObject, Context.DefaultContext) != identity)
+				return;
+
+			RegisterServerIdentity (identity);
+			identity.StartTrackingLifetime ((ILease) realObject.InitializeLifetimeService ());
 		}
 
 		internal static ClientActivatedIdentity CreateClientActivatedServerIdentity(MarshalByRefObject realObject, Type objectType, string objectUri)

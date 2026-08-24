@@ -57,6 +57,11 @@ namespace System
 			get { throw new NotSupportedException (); }
 			set { throw new NotSupportedException (); }
 		}
+
+		internal ServerIdentity ClaimObjectIdentity (ServerIdentity identity)
+		{
+			throw new NotSupportedException ();
+		}
 #else
 
 		internal Identity GetObjectIdentity (MarshalByRefObject obj, out bool IsClient)
@@ -78,6 +83,14 @@ namespace System
 		internal ServerIdentity ObjectIdentity {
 			get { return _identity; }
 			set { _identity = value; }
+		}
+
+		// Attaches identity to this object when it holds none, and gives back
+		// the identity that was already there. Null means that this call
+		// attached.
+		internal ServerIdentity ClaimObjectIdentity (ServerIdentity identity)
+		{
+			return Interlocked.CompareExchange (ref _identity, identity, null);
 		}
 #endif
 

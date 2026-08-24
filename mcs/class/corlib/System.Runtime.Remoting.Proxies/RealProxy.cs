@@ -203,6 +203,14 @@ namespace System.Runtime.Remoting.Proxies
 			get { return _objectIdentity; }
 			set { _objectIdentity = value; }
 		}
+
+		// Attaches identity to this proxy when it holds none, and gives back
+		// the identity that was already there. Null means that this call
+		// attached.
+		internal Identity ClaimObjectIdentity (Identity identity)
+		{
+			return Interlocked.CompareExchange (ref _objectIdentity, identity, null);
+		}
 		
 		[MonoTODO]
 		public virtual IntPtr GetCOMIUnknown (bool fIsMarshalled)
