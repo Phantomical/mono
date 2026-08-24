@@ -539,6 +539,18 @@ get_virtual_method_fast (InterpMethod *imethod, MonoVTable *vtable, int offset)
 		return get_virtual_method (imethod, vtable);
 #endif
 
+	/*
+	 * The method table belongs to the receiver's domain, and get_virtual_method ()
+	 * resolves the target in the caller's. Without this branch, a cross-domain
+	 * receiver would keep an entry that the unload of the caller's domain frees.
+	 * A later call from any domain would then enter that freed InterpMethod.
+	 * CADMessageBase.UnmarshalArgument () reaches this branch: it calls
+	 * Type.GetTypeCode () on a Type that belongs to the domain the remoting call
+	 * came from.
+	 */
+	if (vtable->domain != imethod->domain)
+		return get_virtual_method (imethod, vtable);
+
 	g_assertf (method_table_holds_offset (vtable, offset),
 	           "receiver of class %s.%s has no method table slot %d, called from %s:%s",
 	           m_class_get_name_space (vtable->klass), m_class_get_name (vtable->klass), offset,
