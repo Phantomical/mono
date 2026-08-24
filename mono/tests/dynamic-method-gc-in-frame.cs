@@ -1,6 +1,7 @@
 using System;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 /*
  * A frame executing a method's code has to keep that code's allocation alive for as
@@ -19,10 +20,95 @@ using System.Runtime.CompilerServices;
  * depth and shows it really does get collected, because the stack is scanned
  * conservatively and a phase that passed only because some earlier frame's leftover
  * word still pointed at the delegate would prove nothing.
+ *
+ * A control that fails says such a word exists. The failure occurs on about one run in
+ * a hundred on a loaded box. MONO_TEST_GC_TRAP stops that run on SIGTRAP at the point
+ * the control reads its answer, which is where a search for the word starts. Trap ()
+ * describes what the stop keeps.
  */
 class DynamicMethodGcInFrame
 {
 	class Trigger { ~Trigger () { } }
+
+	[DllImport ("libc")]
+	static extern int raise (int sig);
+
+	[DllImport ("libc")]
+	static extern unsafe IntPtr write (int fd, byte *buf, IntPtr count);
+
+	const int SIGTRAP = 5;
+
+	/* Trap () makes as few calls as it can, so it reads this rather than the environment. */
+	static readonly bool trap_armed =
+		Environment.GetEnvironmentVariable ("MONO_TEST_GC_TRAP") != null;
+	static bool trapped;
+
+	/*
+	 * Gives the address a reference points at. A search of a core matches on this value.
+	 *
+	 * MonoTypedRef is { MonoType *type; gpointer value; MonoClass *klass; }, so value is
+	 * the second word. That word addresses the local variable the argument arrived in.
+	 */
+	static unsafe IntPtr AddressOf (object o)
+	{
+		TypedReference tr = __makeref (o);
+
+		return *(IntPtr *) ((IntPtr *) &tr) [1];
+	}
+
+	/*
+	 * Writes the address through write (2). Console allocates and runs deep, and it
+	 * writes over the frames that Trap () keeps.
+	 */
+	static unsafe void ReportAddress (IntPtr addr)
+	{
+		byte *buf = stackalloc byte [64];
+		ulong v = (ulong) addr.ToInt64 ();
+		int n = 0, shift = 60;
+
+		foreach (char c in "pinned object at 0x")
+			buf [n++] = (byte) c;
+
+		while (shift > 0 && ((v >> shift) & 0xf) == 0)
+			shift -= 4;
+		for (; shift >= 0; shift -= 4)
+			buf [n++] = (byte) "0123456789abcdef" [(int) ((v >> shift) & 0xf)];
+
+		buf [n++] = (byte) '\n';
+		write (2, buf, (IntPtr) n);
+	}
+
+	/*
+	 * Stops the run where a failure occurs. A debugger attached to the run breaks here,
+	 * and a run with no debugger writes a core. mono installs no SIGTRAP handler, so
+	 * neither the break nor the core goes through the crash reporter.
+	 *
+	 * A search of the core for the reported address must cover every mapped segment
+	 * rather than the standing frames. A collection scans from its own frame to the base
+	 * of the stack. The word that kept the object is therefore above where that scan
+	 * started, and below the stack pointer as it is now. It sits in a frame which has
+	 * since returned, and one caught run had it 832 bytes down. Any call made from here
+	 * writes over that word, so write (2) reports the address and the stop follows at
+	 * once.
+	 *
+	 * seen names the object the caller expected to be gone. A null seen says the failure
+	 * is the opposite one: an object went away. That case has no address to report, so
+	 * the stop keeps the stack alone.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void Trap (WeakReference seen)
+	{
+		if (!trap_armed || trapped)
+			return;
+
+		trapped = true;
+
+		object survivor = seen == null ? null : seen.Target;
+
+		if (survivor != null)
+			ReportAddress (AddressOf (survivor));
+		raise (SIGTRAP);
+	}
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static void Collect ()
@@ -107,7 +193,11 @@ class DynamicMethodGcInFrame
 	static bool StandNested ()
 	{
 		Collect ();
-		return outer_seen.IsAlive || inner_seen.IsAlive;
+		if (!outer_seen.IsAlive && !inner_seen.IsAlive)
+			return false;
+
+		Trap (outer_seen.IsAlive ? outer_seen : inner_seen);
+		return true;
 	}
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
@@ -175,6 +265,8 @@ class DynamicMethodGcInFrame
 		if (d == null) {
 			Collect ();
 			watched_alive = watched != null && watched.IsAlive;
+			if (watched_alive)
+				Trap (watched);
 			return;
 		}
 		if (d () != 5150)
@@ -258,8 +350,12 @@ class DynamicMethodGcInFrame
 
 		if (code == 0)
 			code = Deep ();
-		if (code != 0)
+		if (code != 0) {
 			Console.WriteLine (Explain (code));
+
+			/* The controls stop where their evidence is. The other codes arrive here. */
+			Trap (null);
+		}
 		return code;
 	}
 }
