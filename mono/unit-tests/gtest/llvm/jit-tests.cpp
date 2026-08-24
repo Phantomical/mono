@@ -573,15 +573,15 @@ TEST_F (JitProfile, EachInstrumentedFunctionGetsItsOwnCounters)
 
 /*
  * Where TierCounterPass puts the counter in a body that has a loop. The pass adds
- * the turns up in a register and takes the total off at each exit, so two things
+ * the turns up in a register and takes that total off at each exit, so two things
  * about the emission matter as much as the arithmetic: the accumulator reaches
  * the counter through registers rather than a stack slot, and one add covers a
  * loop rather than one add covering a block. Tier-1 codegen is FastISel with the
  * fast register allocator, and no pass behind this one tidies up either mistake.
  *
- * A body with no loop needs no case of its own. It spends a constant, so the
- * check goes at the entry and is one load and one branch, and every managed test
- * in the tree exercises it.
+ * The blocks no loop holds are charged at the entry instead, in this body and in
+ * a body with no loop at all. That charge is one load and one branch, and every
+ * managed test in the tree exercises it.
  *
  * These cases set the entry weight to zero, so a count below is the work alone.
  */
@@ -770,27 +770,50 @@ TEST_F (JitProfile, TheCostCounterStaysInRegistersAndCountsPerLoop)
 
 	ASSERT_FALSE (verifyFunction (*fn, &errs ()));
 
-	// One ret, so one write-back, and none of the entry check the counter used
-	// to carry.
+	/*
+	 * Two write-backs, and what each of them charges tells them apart. The entry
+	 * charges the blocks no loop holds, which this pass knows as a number. The
+	 * one ret charges what the loops added, which only the run knows.
+	 */
 	SmallVector<AtomicRMWInst *, 4> found = write_backs (*fn);
-	ASSERT_EQ (found.size (), 1u);
-	EXPECT_NE (found.front ()->getParent (), &fn->getEntryBlock ());
+	ASSERT_EQ (found.size (), 2u);
 
-	CostChain chain = cost_chain (found.front ());
+	AtomicRMWInst *at_entry = nullptr;
+	AtomicRMWInst *at_exit = nullptr;
+
+	for (AtomicRMWInst *rmw : found) {
+		if (isa<Constant> (rmw->getValOperand ()))
+			at_entry = rmw;
+		else
+			at_exit = rmw;
+	}
+
+	// The entry is the one point a call always reaches. A callee's exception that
+	// unwinds through this frame reaches no ret, so a body without this charge
+	// spends nothing however often it is called.
+	ASSERT_NE (at_entry, nullptr) << "no write-back charges a constant, so the "
+	                                 "blocks outside every loop are charged at an "
+	                                 "exit the exception can take away";
+	ASSERT_NE (at_exit, nullptr);
+	EXPECT_TRUE (fn->getEntryBlock ().getTerminator ()->getSuccessor (0)
+	             == at_entry->getParent ())
+		<< "the constant is charged somewhere the entry block does not branch to";
+
+	CostChain chain = cost_chain (at_exit);
 
 	EXPECT_FALSE (chain.from_memory)
 		<< "the accumulator reaches the counter from a stack slot, so the "
 		   "promotion to registers did not happen";
 
-	// One add for each loop, and one more that folds in the constant for the
-	// blocks no loop holds. More than that means the placement went per block,
-	// which is what FastISel and the fast register allocator make expensive.
+	// One add for each loop, and no more. More than that means the placement went
+	// per block, which is what FastISel and the fast register allocator make
+	// expensive.
 	unsigned loops = loop_count (*fn);
 
 	ASSERT_GT (loops, 0u) << "the simplification pipeline removed the loop, so "
 	                         "this case no longer measures the placement";
 	EXPECT_GE (chain.adds, 1u);
-	EXPECT_LE (chain.adds, loops + 1)
+	EXPECT_LE (chain.adds, loops)
 		<< "found " << chain.adds << " accumulation adds for " << loops
 		<< " loops, so the pass is no longer placing one for each loop";
 }

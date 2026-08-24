@@ -27,9 +27,10 @@ namespace {
  * out. One unit is one instruction that emits code, and a call costs the entry
  * weight on top. The body adds up the turns of its loops in a register:
  *
+ *         cost -= constant                    in the entry block
  *         acc = 0                             in the entry block
  *         acc += weight (loop)                in each loop header
- *         cost -= acc + constant              at each exit
+ *         cost -= acc                         at each exit
  *
  * The constant is the weight of the blocks no loop holds, plus the entry weight.
  * So one counter reaches a body that is hot and a body that is heavy, which a
@@ -40,11 +41,19 @@ namespace {
  * SharpChess is full of those, property getters called millions of times, and
  * they are the methods whose promotion pays there.
  *
+ * The entry charges the constant rather than the exits, because a body has a
+ * third way out. A callee's exception can unwind through the frame while no
+ * clause here catches it, and no instruction in the body marks that point. Such
+ * an exit reaches no write-back: a body that leaves that way often under-counts,
+ * and one that leaves only that way promotes on nothing. The entry is the one
+ * point every call runs, so what it charges survives an exit of any kind. The
+ * turns the loops made before the exception are still lost.
+ *
  * A call of a body no loop has any weight in costs the constant and no more, so
- * the whole cost is known here and the check goes at the entry with no
- * accumulator behind it. That is most methods. Leaving the write-backs in them is
- * expensive: pystone under IronPython reads +8.9% of CPU with a write-back in
- * every body against -1.1% with them in the bodies that have a loop.
+ * such a body carries no accumulator and no write-back. That is most methods.
+ * Leaving the write-backs in them is expensive: pystone under IronPython reads
+ * +8.9% of CPU with a write-back in every body against -1.1% with them in the
+ * bodies that have a loop.
  *
  * Placement is per loop rather than per block, because no pass behind this one
  * tidies up what it writes, and tier-1 codegen is FastISel with the fast register
@@ -107,10 +116,8 @@ write_back_point (ReturnInst *ret)
 /// left the frame. A write-back in front of one takes the same work off the
 /// counter again when the ret is reached.
 ///
-/// A call is lost when the exception of a callee unwinds through this frame, and
-/// the work of that call with it. No instruction in the frame marks that point.
-/// So a body that leaves only that way promotes on nothing, where a counter at
-/// the entry would have counted the call.
+/// A callee's exception that unwinds through this frame reaches none of these
+/// points, so the turns of a loop that runs before it are lost.
 void
 collect_write_backs (Function &f, SmallVectorImpl<Instruction *> &points)
 {
@@ -255,23 +262,25 @@ emit_check (Instruction *at, Value *cost, GlobalVariable *counter,
 	at_ask.CreateBr (done);
 }
 
-/// Takes this exit's share of what the body spent off the counter.
+/// Takes the turns this exit's loops made off the counter.
+///
+/// The entry has charged the rest, so an exit a loop never ran before charges
+/// nothing here.
 void
-emit_write_back (Instruction *at, AllocaInst *slot, uint64_t constant,
-                 GlobalVariable *counter, FunctionCallee promote, Constant *method)
+emit_write_back (Instruction *at, AllocaInst *slot, GlobalVariable *counter,
+                 FunctionCallee promote, Constant *method)
 {
 	Type *i64 = Type::getInt64Ty (at->getContext ());
 
 	// In front of at, so the split inside emit_check () leaves the value where
 	// it dominates the blocks that read it.
 	IRBuilder<> at_point (at);
-	Value *cost = at_point.CreateAdd (at_point.CreateLoad (i64, slot, "tier_acc"),
-	                                  ConstantInt::get (i64, constant), "tier_cost");
+	Value *cost = at_point.CreateLoad (i64, slot, "tier_cost");
 
 	emit_check (at, cost, counter, promote, method);
 }
 
-/// Takes the whole cost of a call off the counter, after the frame.
+/// Takes the cost that does not depend on a loop off the counter, after the frame.
 ///
 /// A static alloca has to stay in the entry block to be a stack slot, so the
 /// check goes behind the last of them. Everything else carries on in the block
@@ -344,8 +353,8 @@ instrument (Function &f, uint64_t threshold, uint64_t entry_weight, Constant *me
 	 * A call of a body with no weight in any loop costs the constant and no
 	 * more. A body nothing leaves through a ret or a throw of its own has
 	 * nowhere to write a running total back from, and the constant is the most
-	 * it can be charged. Either way the whole cost is known here, so the entry
-	 * takes it and the body carries no accumulator.
+	 * it can be charged. Either way the entry charges the whole cost, so the
+	 * body carries no accumulator.
 	 *
 	 * The entry block holds no loop header, because it has no predecessor and so
 	 * lies on no cycle. So the split the check makes there leaves every header
@@ -359,7 +368,11 @@ instrument (Function &f, uint64_t threshold, uint64_t entry_weight, Constant *me
 	AllocaInst *slot = emit_accumulator (f, li, per_loop);
 
 	for (Instruction *at : points)
-		emit_write_back (at, slot, constant, counter, promote, method);
+		emit_write_back (at, slot, counter, promote, method);
+
+	// After the accumulator, because the slot has to stay in the entry block for
+	// PromoteMemToReg and this check is what splits that block.
+	emit_entry_check (f, constant, counter, promote, method);
 
 	// A check splits a block, so the tree above no longer describes f.
 	DominatorTree split (f);

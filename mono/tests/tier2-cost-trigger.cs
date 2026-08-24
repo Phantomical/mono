@@ -21,6 +21,11 @@ using System.Threading;
  * offset of the call site it was folded at, and the same helper called for real
  * reports an offset into its own body.
  *
+ * Unwinder () is the third way out of a body. It reaches no ret and throws
+ * nothing itself: every call leaves through the exception of a callee, which
+ * finds no clause here and unwinds through the frame. The exits carry the
+ * accumulator, so a body of this shape promotes on what its entry charges.
+ *
  * The suite registers this source twice. MONO_LLVM_JIT_TIER2_THRESHOLD is a
  * number one arm reaches and is zero in the other, which turns automatic
  * promotion off. The test reads the variable and asserts the arm it is in.
@@ -55,6 +60,18 @@ static class Program {
 	 * promotes on its calls where the work in it reaches nothing.
 	 */
 	const int tiny_calls = 4000;
+
+	/*
+	 * Turns of the loop in Unwinder (), and calls of it. The loop is short, so the
+	 * call site behind it keeps a block count near the count of the calls, and the
+	 * cost model reads that site as hot enough to fold.
+	 *
+	 * A call charges the entry weight and the blocks no loop holds, which is a
+	 * little past five thousand. Four thousand calls take that past the same ten
+	 * million.
+	 */
+	const int unwind_turns = 4;
+	const int unwind_calls = 4000;
 
 	/* Whether Probe () had a frame in the last trace, and where its code was. */
 	static bool saw_probe, probe_runs_inside_kernel;
@@ -167,6 +184,27 @@ static class Program {
 		return x * 3 + 1;
 	}
 
+	/*
+	 * A body that leaves its frame only through the exception of a callee.
+	 * Probe () throws on every call, and no clause here catches it, so the ret
+	 * below is dead at run time.
+	 *
+	 * The loop is what puts this body on the accumulator path, which charges the
+	 * counter at the exits of the body. No exit of that kind is ever reached, so
+	 * what the entry charges is the whole of what this body spends.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int Unwinder (int n)
+	{
+		int total = 0;
+
+		for (int i = 0; i < n; ++i)
+			total += i * 3 + (i & 7);
+
+		Probe ("unwind", total >= 0);
+		return total;
+	}
+
 	/* One call that throws, and what its trace said about the tier. */
 	static bool Observe (bool is_heavy)
 	{
@@ -188,6 +226,27 @@ static class Program {
 	{
 		saw_probe = probe_runs_inside_kernel = false;
 		Tiny (-1);
+
+		if (!saw_probe)
+			throw new Exception ("Probe () has no frame in the trace");
+
+		return probe_runs_inside_kernel;
+	}
+
+	/*
+	 * The same reading for Unwinder (). The catch is here rather than in the
+	 * kernel, because a clause in the kernel is what this case has to be without.
+	 */
+	static bool ObserveUnwinder ()
+	{
+		saw_probe = probe_runs_inside_kernel = false;
+
+		try {
+			Unwinder (unwind_turns);
+		} catch (InvalidOperationException e) {
+			saw_probe = true;
+			probe_runs_inside_kernel = RunsInsideKernel (e, "Unwinder");
+		}
 
 		if (!saw_probe)
 			throw new Exception ("Probe () has no frame in the trace");
@@ -281,6 +340,44 @@ static class Program {
 		return folded;
 	}
 
+	/// Puts Unwinder () at tier 1, spends its counter in calls, and answers whether
+	/// it folded.
+	static bool RunUnwinder ()
+	{
+		MethodInfo unwinder = typeof (Program).GetMethod ("Unwinder",
+			BindingFlags.Static | BindingFlags.NonPublic);
+
+		if (!Mono.Tiering.MonoTier.PromoteNow (unwinder.MethodHandle.Value, tier1)) {
+			Console.WriteLine ("FAIL: Unwinder () would not compile at tier 1");
+			++fails;
+			return false;
+		}
+
+		Check (!ObserveUnwinder (), "the helper has a body of its own before tier 2");
+
+		bool came_back = false;
+
+		for (int i = 0; i < unwind_calls; ++i) {
+			try {
+				Unwinder (unwind_turns);
+				came_back = true;
+			} catch (InvalidOperationException) {
+			}
+		}
+
+		Check (!came_back, "the kernel leaves only through the exception");
+
+		bool folded = false;
+
+		for (int i = 0; i < 100 && !folded; ++i) {
+			folded = ObserveUnwinder ();
+			if (!folded)
+				Thread.Sleep (10);
+		}
+
+		return folded;
+	}
+
 	public static int Main ()
 	{
 		string threshold = Environment.GetEnvironmentVariable (
@@ -290,6 +387,7 @@ static class Program {
 		bool heavy_folded = Run ("HeavyKernel", true, heavy);
 		bool light_folded = Run ("LightKernel", false, light);
 		bool tiny_folded = RunTiny ();
+		bool unwinder_folded = RunUnwinder ();
 
 		if (want_tier2) {
 			Check (heavy_folded, "the work a body does takes it to tier 2");
@@ -297,9 +395,14 @@ static class Program {
 			// alone never reaches. Tiny () does almost nothing in a call and
 			// promotes on the number of them.
 			Check (tiny_folded, "the calls a body takes take it to tier 2");
+			// A callee's exception that unwinds through the frame reaches no
+			// write-back, so a body that leaves only that way promotes on what
+			// its entry charges and on nothing else.
+			Check (unwinder_folded, "a body that always unwinds still reaches tier 2");
 		} else {
 			Check (!heavy_folded, "and no counter promotes a body while the threshold is zero");
 			Check (!tiny_folded, "and neither does a body that only takes calls");
+			Check (!unwinder_folded, "and neither does a body that always unwinds");
 		}
 
 		/*

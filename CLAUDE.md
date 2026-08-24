@@ -318,10 +318,12 @@ and the note says which split:
 - `MONO_LLVM_JIT_TIER2_THRESHOLD=<n>` — what a tier-1 body spends before it asks for tier
   2, default 100000000. One unit is one instruction that emits code, and a call costs
   `MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT` on top, so one counter reaches a body that is hot and
-  a body that is heavy. A body with a loop adds the turns up in a register, one add per
-  loop header, and takes the total off at each exit; a body with no loop spends a constant,
-  which its entry takes off instead. A body entered once that never returns reaches
-  neither: that needs OSR, which does not exist here. Zero leaves a body instrumented and
+  a body that is heavy. Every body takes a constant off at its entry: the blocks no loop
+  holds, plus the entry weight. A body with a loop adds the turns up in a register on top,
+  one add per loop header, and takes that total off at each exit. So a callee's exception
+  that unwinds through a frame loses the turns and keeps the constant. A body entered once
+  that never returns keeps the constant as well, and no more: the rest needs OSR, which
+  does not exist here. Zero leaves a body instrumented and
   counting while it never promotes on its own, which is what a test driving the tiers
   through `Mono.Tiering.MonoTier::PromoteNow` wants.
 - `MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT=<n>` — what one call adds to that count, default 5000.
@@ -571,8 +573,8 @@ costs a large fraction of compile time.
 carries profiling instrumentation, and a body that has spent a hundred million units — one
 for each instruction it runs and five thousand for each call — is compiled again against
 the counts it gathered, at O3 with an optimizing selector. `TierCounterPass` puts that
-counter in: a body with a loop adds the turns up in a register and takes the total off at
-each exit, and a body with no loop spends a constant its entry takes off.
+counter in: every body takes a constant off at its entry, and a body with a loop adds the
+turns up in a register on top and takes that total off at each exit.
 
 Beyond taking a site the IL already settled — non-virtual, `final`, or resolved by
 `constrained.` — the JIT does not devirtualize. If devirtualization does arrive, it is
