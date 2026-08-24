@@ -159,8 +159,8 @@ resolver_description ()
 /*
  * The rules the resolver's frame has to produce. Read them against the code in
  * arch/amd64/lazy-entry.cpp: 0x00 is its first instruction, 0x04 is where its
- * body starts, 0xa4 is the `ret`, 0xa5 is the first instruction of the throw
- * path and 0xb3 is where that path has the caller's frame back.
+ * body starts, 0xa0 is the `ret`, 0xa1 is the first instruction of the throw
+ * path and 0xaf is where that path has the caller's frame back.
  */
 TEST (PerfEhFrame, ResolverDeclaresTheCallersFrame)
 {
@@ -184,19 +184,19 @@ TEST (PerfEhFrame, ResolverDeclaresTheCallersFrame)
 	/* The body, which is all of the compile. */
 	expect_cfa (*table, 0x04, dwarf_rbp, 0x18);
 	expect_cfa (*table, 0x61, dwarf_rbp, 0x18);
-	expect_cfa (*table, 0xa3, dwarf_rbp, 0x18);
+	expect_cfa (*table, 0x9f, dwarf_rbp, 0x18);
 	EXPECT_EQ (saved_at (*table, 0x61, dwarf_rbp), -0x18);
 
 	/* After popq %rbp the frame is the caller's again. */
-	expect_cfa (*table, 0xa4, dwarf_rsp, 0x10);
-	EXPECT_EQ (saved_at (*table, 0xa4, dwarf_rbp), std::nullopt);
+	expect_cfa (*table, 0xa0, dwarf_rsp, 0x10);
+	EXPECT_EQ (saved_at (*table, 0xa0, dwarf_rbp), std::nullopt);
 
 	/* The throw path is entered by a jump, so it restates the body's rules. */
-	expect_cfa (*table, 0xa5, dwarf_rbp, 0x18);
-	EXPECT_EQ (saved_at (*table, 0xa5, dwarf_rbp), -0x18);
+	expect_cfa (*table, 0xa1, dwarf_rbp, 0x18);
+	EXPECT_EQ (saved_at (*table, 0xa1, dwarf_rbp), -0x18);
 
-	expect_cfa (*table, 0xb3, dwarf_rsp, 0x08);
-	EXPECT_EQ (saved_at (*table, 0xb3, dwarf_rbp), std::nullopt);
+	expect_cfa (*table, 0xaf, dwarf_rsp, 0x08);
+	EXPECT_EQ (saved_at (*table, 0xaf, dwarf_rbp), std::nullopt);
 }
 
 /*

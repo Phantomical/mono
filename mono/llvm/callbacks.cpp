@@ -22,10 +22,16 @@ LazyCallbacks::create (void *on_error)
 	std::unique_ptr<LazyCallbacks> self (new LazyCallbacks (on_error));
 	LazyCallbacks *raw = self.get ();
 
+	/*
+	 * The resolver passes the frame it spilled the call on rather than the
+	 * trampoline ORC would pass, so the first argument is not the trampoline
+	 * id its name says. fire () reads the trampoline back out of the frame.
+	 */
 	auto pool = LocalTrampolinePool<arch::LazyEntryABI>::Create (
-		[raw] (ExecutorAddr trampoline,
+		[raw] (ExecutorAddr frame,
 		       TrampolinePool::NotifyLandingResolvedFunction resolved) {
-			resolved (ExecutorAddr::fromPtr (raw->fire (trampoline)));
+			resolved (ExecutorAddr::fromPtr (
+				raw->fire (frame.toPtr<const arch::LazyEntryFrame *> ())));
 		});
 	if (!pool)
 		return pool.takeError ();
@@ -87,8 +93,9 @@ LazyCallbacks::rearm (void *trampoline)
 }
 
 void *
-LazyCallbacks::fire (ExecutorAddr trampoline)
+LazyCallbacks::fire (const arch::LazyEntryFrame *frame)
 {
+	ExecutorAddr trampoline = ExecutorAddr::fromPtr (arch::trampoline_of (frame));
 	std::shared_ptr<Callback> callback;
 	{
 		std::lock_guard<std::mutex> lock (mutex_);

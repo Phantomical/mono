@@ -142,9 +142,56 @@ struct InterpEntryPoint {
 constexpr size_t context_stub_size = 15;
 constexpr size_t context_stub_align = 16;
 
+/// What the re-entry resolver spilled, which is the whole state of the call it
+/// interrupted. The resolver hands a pointer to this to its callback.
+///
+/// A managed `call` pushed the return address, the stub jumped to a trampoline,
+/// and the trampoline called the resolver. So the four words above the
+/// registers name that call: which trampoline it came through, and where in the
+/// caller it came from.
+struct LazyEntryFrame {
+	void *r15;
+	void *r14;
+	void *r13;
+	void *r12;
+	/// What a method's thunk writes to say which method the call asked for.
+	void *r11;
+	/// MONO_ARCH_IMT_REG and MONO_ARCH_RGCTX_REG together: the key an IMT
+	/// thunk or a generic-virtual trampoline was entered with, or the context
+	/// a shared body reads.
+	void *r10;
+	void *r9;
+	void *r8;
+	void *rdi;
+	void *rsi;
+	void *rdx;
+	void *rcx;
+	void *rbx;
+	void *rax;
+
+	/// The caller's frame pointer, untouched since the call.
+	void *caller_fp;
+	/// Where the trampoline's own call returns to.
+	void *trampoline_ret;
+	/// Where the managed call came from.
+	void *caller_ip;
+	/// The caller's stack pointer.
+	void *caller_sp;
+};
+
+/// The trampoline the call in \p frame arrived through.
+///
+/// ORC's trampoline is one call instruction, so its return address is six
+/// bytes past where it starts. That address is what LazyCallbacks keys on.
+inline void *
+trampoline_of (const LazyEntryFrame *frame)
+{
+	return (char *) frame->trampoline_ret - 6;
+}
+
 /// ORC's re-entry ABI, resolving through a mono lazy-entry frame.
 struct LazyEntryABI : public llvm::orc::OrcX86_64_SysV {
-	static constexpr unsigned ResolverCodeSize = 0xc2;
+	static constexpr unsigned ResolverCodeSize = 0xbe;
 
 	static void writeResolverCode (char *resolver_mem,
 	                               llvm::orc::ExecutorAddr resolver_addr,

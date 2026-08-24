@@ -6,6 +6,8 @@
 #ifndef MONO_LLVM_CALLBACKS_HPP
 #define MONO_LLVM_CALLBACKS_HPP
 
+#include "arch/arch.hpp"
+
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/FunctionExtras.h>
 #include <llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h>
@@ -98,9 +100,9 @@ private:
 		std::mutex latch;
 	};
 
-	/// Run the compile trampoline stands for. Called on whichever thread
-	/// entered the stub, from the resolver.
-	void *fire (llvm::orc::ExecutorAddr trampoline);
+	/// Run the compile the call in \p frame arrived through. Called on
+	/// whichever thread entered the stub, from the resolver.
+	void *fire (const arch::LazyEntryFrame *frame);
 
 	void *on_error_;
 

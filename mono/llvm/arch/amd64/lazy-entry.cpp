@@ -62,31 +62,34 @@ lazy_resolver_frame ()
 		{ 0x04, MONO_UNWIND_OP_DEF_CFA_REGISTER, fp, 0 },
 
 		/* popq %rbp, so %rbp is the caller's again and the CFA moves back. */
-		{ 0xa4, MONO_UNWIND_OP_DEF_CFA, sp, 0x10 },
-		{ 0xa4, MONO_UNWIND_OP_SAME_VALUE, fp, 0 },
+		{ 0xa0, MONO_UNWIND_OP_DEF_CFA, sp, 0x10 },
+		{ 0xa0, MONO_UNWIND_OP_SAME_VALUE, fp, 0 },
 
 		/* The throw path. A jump arrives here, so it needs the body's rules
 		 * again rather than the ones the line above leaves. */
-		{ 0xa5, MONO_UNWIND_OP_DEF_CFA, fp, 0x18 },
-		{ 0xa5, MONO_UNWIND_OP_OFFSET, fp, -0x18 },
+		{ 0xa1, MONO_UNWIND_OP_DEF_CFA, fp, 0x18 },
+		{ 0xa1, MONO_UNWIND_OP_OFFSET, fp, -0x18 },
 
 		/* The stack is cut back to the caller's return address, and %rbp is
 		 * the caller's. */
-		{ 0xb3, MONO_UNWIND_OP_DEF_CFA, sp, 0x08 },
-		{ 0xb3, MONO_UNWIND_OP_SAME_VALUE, fp, 0 },
+		{ 0xaf, MONO_UNWIND_OP_DEF_CFA, sp, 0x08 },
+		{ 0xaf, MONO_UNWIND_OP_SAME_VALUE, fp, 0 },
 	};
 }
 
 /*
  * ORC's OrcX86_64_SysV::writeResolverCode () with the lazy-entry frame added:
  * everything from `subq $0x20, %rsp` to the `callq` after it, the second half
- * of the leave sequence, and the throw path at the end. The rest is theirs
- * instruction for instruction, so the two can be diffed.
+ * of the leave sequence, and the throw path at the end. The re-entry argument
+ * differs as well - ORC passes the trampoline, and this passes the frame, which
+ * the callback reads the trampoline back out of along with the call's
+ * registers. The rest is theirs instruction for instruction.
  *
  * The frame the resolver is entered on is what the whole thing is built
  * around. A managed `call` pushed the return address, the stub jumped to a
  * trampoline, and the trampoline called here, so once %rbp is pushed:
  *
+ *      -0x70(%rbp) the spilled registers, %r15 lowest - arch::LazyEntryFrame
  *      0x00(%rbp)  the caller's %rbp, untouched since the call
  *      0x08(%rbp)  the trampoline's return address - which trampoline this is
  *      0x10(%rbp)  the caller's return address - where the call came from
@@ -144,59 +147,58 @@ LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
 		// 0x46: JIT re-entry ctx addr.
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 
-		0x48, 0x8b, 0x75, 0x08,                   // 0x4e: movq      8(%rbp), %rsi
-		0x48, 0x83, 0xee, 0x06,                   // 0x52: subq      $6, %rsi
-		0x48, 0xb8,                               // 0x56: movabsq   <REntry>, %rax
+		0x48, 0x8d, 0x75, 0x90,                   // 0x4e: leaq      -0x70(%rbp), %rsi
+		0x48, 0xb8,                               // 0x52: movabsq   <REntry>, %rax
 
-		// 0x58: JIT re-entry fn addr.
+		// 0x54: JIT re-entry fn addr.
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 
-		0xff, 0xd0,                               // 0x60: callq     *%rax
-		0x48, 0x89, 0x45, 0x08,                   // 0x62: movq      %rax, 8(%rbp)
-		0x48, 0x89, 0xe7,                         // 0x66: movq      %rsp, %rdi
-		0x48, 0xb8,                               // 0x69: movabsq   <leave>, %rax
+		0xff, 0xd0,                               // 0x5c: callq     *%rax
+		0x48, 0x89, 0x45, 0x08,                   // 0x5e: movq      %rax, 8(%rbp)
+		0x48, 0x89, 0xe7,                         // 0x62: movq      %rsp, %rdi
+		0x48, 0xb8,                               // 0x65: movabsq   <leave>, %rax
 
-		// 0x6b: lazy_frame_leave ().
+		// 0x67: lazy_frame_leave ().
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 
-		0xff, 0xd0,                               // 0x73: callq     *%rax
-		0x48, 0x81, 0xc4, 0x20, 0x00, 0x00, 0x00, // 0x75: addq      $0x20, %rsp
-		0x48, 0x85, 0xc0,                         // 0x7c: testq     %rax, %rax
-		0x75, 0x24,                               // 0x7f: jne       throw
+		0xff, 0xd0,                               // 0x6f: callq     *%rax
+		0x48, 0x81, 0xc4, 0x20, 0x00, 0x00, 0x00, // 0x71: addq      $0x20, %rsp
+		0x48, 0x85, 0xc0,                         // 0x78: testq     %rax, %rax
+		0x75, 0x24,                               // 0x7b: jne       throw
 
-		0x48, 0x0f, 0xae, 0x0c, 0x24,             // 0x81: fxrstor64 (%rsp)
-		0x48, 0x81, 0xc4, 0x08, 0x02, 0x00, 0x00, // 0x86: addq      $0x208, %rsp
-		0x41, 0x5f,                               // 0x8d: popq      %r15
-		0x41, 0x5e,                               // 0x8f: popq      %r14
-		0x41, 0x5d,                               // 0x91: popq      %r13
-		0x41, 0x5c,                               // 0x93: popq      %r12
-		0x41, 0x5b,                               // 0x95: popq      %r11
-		0x41, 0x5a,                               // 0x97: popq      %r10
-		0x41, 0x59,                               // 0x99: popq      %r9
-		0x41, 0x58,                               // 0x9b: popq      %r8
-		0x5f,                                     // 0x9d: popq      %rdi
-		0x5e,                                     // 0x9e: popq      %rsi
-		0x5a,                                     // 0x9f: popq      %rdx
-		0x59,                                     // 0xa0: popq      %rcx
-		0x5b,                                     // 0xa1: popq      %rbx
-		0x58,                                     // 0xa2: popq      %rax
-		0x5d,                                     // 0xa3: popq      %rbp
-		0xc3,                                     // 0xa4: retq
+		0x48, 0x0f, 0xae, 0x0c, 0x24,             // 0x7d: fxrstor64 (%rsp)
+		0x48, 0x81, 0xc4, 0x08, 0x02, 0x00, 0x00, // 0x82: addq      $0x208, %rsp
+		0x41, 0x5f,                               // 0x89: popq      %r15
+		0x41, 0x5e,                               // 0x8b: popq      %r14
+		0x41, 0x5d,                               // 0x8d: popq      %r13
+		0x41, 0x5c,                               // 0x8f: popq      %r12
+		0x41, 0x5b,                               // 0x91: popq      %r11
+		0x41, 0x5a,                               // 0x93: popq      %r10
+		0x41, 0x59,                               // 0x95: popq      %r9
+		0x41, 0x58,                               // 0x97: popq      %r8
+		0x5f,                                     // 0x99: popq      %rdi
+		0x5e,                                     // 0x9a: popq      %rsi
+		0x5a,                                     // 0x9b: popq      %rdx
+		0x59,                                     // 0x9c: popq      %rcx
+		0x5b,                                     // 0x9d: popq      %rbx
+		0x58,                                     // 0x9e: popq      %rax
+		0x5d,                                     // 0x9f: popq      %rbp
+		0xc3,                                     // 0xa0: retq
 
 		// throw: the exception is in %rax and the callee-saved registers are
 		// already the caller's, so all that is left is to cut the stack back
 		// to the call and enter the throw trampoline in the caller's place.
-		0x48, 0x89, 0xc7,                         // 0xa5: movq      %rax, %rdi
-		0x4c, 0x8b, 0x5d, 0x00,                   // 0xa8: movq      (%rbp), %r11
-		0x48, 0x8d, 0x65, 0x10,                   // 0xac: leaq      0x10(%rbp), %rsp
-		0x4c, 0x89, 0xdd,                         // 0xb0: movq      %r11, %rbp
-		0x48, 0xb8,                               // 0xb3: movabsq   <slot>, %rax
+		0x48, 0x89, 0xc7,                         // 0xa1: movq      %rax, %rdi
+		0x4c, 0x8b, 0x5d, 0x00,                   // 0xa4: movq      (%rbp), %r11
+		0x48, 0x8d, 0x65, 0x10,                   // 0xa8: leaq      0x10(%rbp), %rsp
+		0x4c, 0x89, 0xdd,                         // 0xac: movq      %r11, %rbp
+		0x48, 0xb8,                               // 0xaf: movabsq   <slot>, %rax
 
-		// 0xb5: where the rethrow trampoline's address is kept.
+		// 0xb1: where the rethrow trampoline's address is kept.
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 
-		0x48, 0x8b, 0x00,                         // 0xbd: movq      (%rax), %rax
-		0xff, 0xe0,                               // 0xc0: jmpq      *%rax
+		0x48, 0x8b, 0x00,                         // 0xb9: movq      (%rax), %rax
+		0xff, 0xe0,                               // 0xbc: jmpq      *%rax
 	};
 
 	static_assert (sizeof (resolver_code) == ResolverCodeSize,
@@ -204,9 +206,9 @@ LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
 
 	const unsigned enter_fn_offset = 0x3a;
 	const unsigned reentry_ctx_offset = 0x46;
-	const unsigned reentry_fn_offset = 0x58;
-	const unsigned leave_fn_offset = 0x6b;
-	const unsigned rethrow_slot_offset = 0xb5;
+	const unsigned reentry_fn_offset = 0x54;
+	const unsigned leave_fn_offset = 0x67;
+	const unsigned rethrow_slot_offset = 0xb1;
 
 	void (*enter_fn) (void *, uint64_t, uint64_t) = &lazy_frame_enter;
 	void *(*leave_fn) (void *) = &lazy_frame_leave;
