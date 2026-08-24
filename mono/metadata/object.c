@@ -9307,8 +9307,20 @@ mono_load_remote_field_new_checked (MonoObject *this_obj, MonoClass *klass, Mono
 	/* MonoType *type = m_class_get_byval_arg (klass); */
 
 	gpointer args [ ] = { &klass, &field };
+	MonoObject *exc = NULL;
 
-	return mono_runtime_invoke_checked (tp_load, this_obj, args, error);
+	/* The proxy raises where it refuses the load. Catch that here, because this
+	 * function reports a failure through error. An exception let out instead
+	 * unwinds past the caller, which is what raises it at the site of the load. */
+	MonoObject *res = mono_runtime_try_invoke (tp_load, this_obj, args, &exc, error);
+	return_val_if_nok (error, NULL);
+
+	if (exc) {
+		mono_error_set_exception_instance (error, (MonoException *) exc);
+		return NULL;
+	}
+
+	return res;
 }
 
 /**
@@ -9420,9 +9432,18 @@ mono_store_remote_field_new_checked (MonoObject *this_obj, MonoClass *klass, Mon
 	MONO_STATIC_POINTER_INIT_END (MonoMethod, tp_store)
 
 	gpointer args [ ] = { &klass, &field, arg };
+	MonoObject *exc = NULL;
 
-	mono_runtime_invoke_checked (tp_store, this_obj, args, error);
-	return is_ok (error);
+	/* See the load above: the store reports a refusal through error as well. */
+	mono_runtime_try_invoke (tp_store, this_obj, args, &exc, error);
+	return_val_if_nok (error, FALSE);
+
+	if (exc) {
+		mono_error_set_exception_instance (error, (MonoException *) exc);
+		return FALSE;
+	}
+
+	return TRUE;
 }
 #endif
 

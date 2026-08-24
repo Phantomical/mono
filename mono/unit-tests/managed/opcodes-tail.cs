@@ -376,12 +376,12 @@ public class OpcodesTail {
 		}
 	}
 
-	// A read raises out of the opcode's own MonoError, so it lands in the catch
-	// here. A store instead reaches the managed TransparentProxy.StoreRemoteField
-	// through mono_runtime_invoke_checked (), and that unwind passes the
-	// interpreted frame. The catch never runs, and neither does a finally put in
-	// its place. The exception is therefore gone before MINT_STRMFLD and
-	// MINT_STRMFLD_VT can see an error, so their THROW_EX stays uncovered.
+	// The store reaches the managed TransparentProxy.StoreRemoteField, which
+	// raises where the proxy refuses. mono_store_remote_field_new_checked ()
+	// catches that and reports it in its MonoError, so MINT_STRMFLD and
+	// MINT_STRMFLD_VT raise it at their own site and this catch runs. An
+	// exception let out of the invoke instead unwinds past the interpreted frame
+	// and leaves the try.
 
 	public static int test_1_proxy_write_that_fails ()
 	{

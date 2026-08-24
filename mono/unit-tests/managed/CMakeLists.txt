@@ -188,11 +188,7 @@ mono_corpus_link(interp-tests.dll MODULES ${_modules})
 list(APPEND _assemblies "${CMAKE_CURRENT_BINARY_DIR}/interp-tests.dll")
 
 # Expected failures
-set(MONO_INTERP_TESTS_XFAIL
-  # A store to a remote field goes through managed code, and the exception it
-  # raises is lost crossing the interpreted frame back.
-  "OpcodesTail:test_1_proxy_write_that_fails"
-  "OpcodesTail:test_1_proxy_write_vt_that_fails")
+set(MONO_INTERP_TESTS_XFAIL)
 
 set(MONO_INTERP_TESTS_JIT_XFAIL
   # ECMA-335 Table III.9 fills a native unsigned int with zeroes, where the
