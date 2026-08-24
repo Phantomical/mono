@@ -4443,6 +4443,7 @@ register_icalls (void)
 	register_icall_with_wrapper (mono_monitor_enter_v4_internal, mono_icall_sig_void_obj_ptr);
 	register_icall_no_wrapper (mono_monitor_enter_fast, mono_icall_sig_int_obj);
 	register_icall_no_wrapper (mono_monitor_enter_v4_fast, mono_icall_sig_int_obj_ptr);
+	register_icall_no_wrapper (mono_monitor_exit_fast, mono_icall_sig_int_obj);
 
 #ifdef TARGET_IOS
 	register_icall (pthread_getspecific, mono_icall_sig_ptr_ptr, TRUE);

@@ -122,6 +122,10 @@ ICALL_EXTERN_C
 guint32
 mono_monitor_enter_v4_fast (MonoObject *obj, MonoBoolean *lock_taken);
 
+ICALL_EXTERN_C
+guint32
+mono_monitor_exit_fast (MonoObject *obj);
+
 MonoGCHandle
 mono_monitor_get_object_monitor_gchandle (MonoObject *object);
 

@@ -4,22 +4,30 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 
 /*
- * Monitor.Enter, which the compiled tiers answer with a call to the fast helper
- * and the call the site named on the edge the helper did not take.
+ * Monitor.Enter and Monitor.Exit, which the compiled tiers answer with a call
+ * to a fast helper and the call the site named on the edge the helper did not
+ * take.
  *
  * Every case runs at each of the three tiers, because only the compiled ones
- * have the helper in front and a difference between them is the fault this
- * test is for. The helper answers an uncontended lock and refuses everything
- * else, so each case below picks which of the two edges runs:
+ * have a helper in front and a difference between them is the fault this test
+ * is for. Each helper answers an uncontended lock and refuses everything else,
+ * so each case below picks which of the two edges runs:
  *
  * - Enter and Exit, and the same pair a second time around a lock this thread
  *   already holds, take the helper's edge.
  * - A lock another thread holds, a null object and a lockTaken that is already
  *   true take the call.
+ * - For Exit, a nested lock, an inflated lock and a lock this thread does not
+ *   own take the call as well.
  *
- * The lockTaken cases are the ones worth having. The helper writes that flag
- * itself, so an arm that takes the wrong edge leaves a lock held with the flag
- * false, and the finally block of a `lock` then never exits it.
+ * The lockTaken cases are the ones worth having on the Enter side. The helper
+ * writes that flag itself, so an arm that takes the wrong edge leaves a lock
+ * held with the flag false, and the finally block of a `lock` then never exits
+ * it.
+ *
+ * ExitOtherThreadsLock is the one on the Exit side. A helper that answered it
+ * would release a lock the calling thread does not hold, and the thread that
+ * does hold it then finds the lock word already free.
  */
 
 namespace Mono.Tiering {
@@ -158,6 +166,85 @@ static class Program {
 		return !Monitor.IsEntered (gate);
 	}
 
+	/// Whether Exit on a null object throws what the argument is owed.
+	static bool ExitNull ()
+	{
+		try {
+			Monitor.Exit (null);
+		} catch (ArgumentNullException) {
+			return true;
+		}
+
+		return false;
+	}
+
+	/// Whether Exit refuses a lock another thread holds. The helper reads the
+	/// owner out of the lock word, so an arm that answers this case frees a
+	/// lock the worker below still believes it holds.
+	static bool ExitOtherThreadsLock (object gate)
+	{
+		var held = new ManualResetEventSlim ();
+		var release = new ManualResetEventSlim ();
+		bool workerOk = false;
+		var worker = new Thread (() => {
+			lock (gate) {
+				held.Set ();
+				release.Wait ();
+				workerOk = Monitor.IsEntered (gate);
+			}
+		});
+
+		worker.Start ();
+		held.Wait ();
+
+		bool threw = false;
+
+		try {
+			Monitor.Exit (gate);
+		} catch (SynchronizationLockException) {
+			threw = true;
+		}
+
+		release.Set ();
+		worker.Join ();
+
+		return threw && workerOk && !Monitor.IsEntered (gate);
+	}
+
+	/// Whether a nest count comes down one Exit at a time. The helper answers
+	/// the last of the two and refuses the first, which still holds the lock.
+	static bool ExitNested (object gate)
+	{
+		Monitor.Enter (gate);
+		Monitor.Enter (gate);
+
+		Monitor.Exit (gate);
+
+		if (!Monitor.IsEntered (gate))
+			return false;
+
+		Monitor.Exit (gate);
+
+		return !Monitor.IsEntered (gate);
+	}
+
+	/// Whether an inflated lock exits, which is the case the helper refuses.
+	///
+	/// A hash of an object whose lock this thread holds moves the lock into a
+	/// MonoThreadsSync structure. The object is this method's own, because an
+	/// inflated lock stays inflated and would decide the edge every later case
+	/// takes.
+	static bool ExitInflated ()
+	{
+		object gate = new object ();
+
+		Monitor.Enter (gate);
+		gate.GetHashCode ();
+		Monitor.Exit (gate);
+
+		return !Monitor.IsEntered (gate);
+	}
+
 	static void RunAll (string tier)
 	{
 		object gate = new object ();
@@ -168,6 +255,10 @@ static class Program {
 		Check (tier + ": EnterNull", EnterNull ());
 		Check (tier + ": EnterAlreadyTaken", EnterAlreadyTaken (gate));
 		Check (tier + ": EnterContended", EnterContended (gate));
+		Check (tier + ": ExitNull", ExitNull ());
+		Check (tier + ": ExitOtherThreadsLock", ExitOtherThreadsLock (gate));
+		Check (tier + ": ExitNested", ExitNested (gate));
+		Check (tier + ": ExitInflated", ExitInflated ());
 
 		// The lock is nobody's once every case above has finished.
 		Check (tier + ": the gate is free", !Monitor.IsEntered (gate));
@@ -176,6 +267,7 @@ static class Program {
 	static readonly string[] cases = {
 		"EnterAndExit", "EnterTwice", "EnterAndExitV1",
 		"EnterNull", "EnterAlreadyTaken", "EnterContended",
+		"ExitNull", "ExitOtherThreadsLock", "ExitNested", "ExitInflated",
 	};
 
 	static bool Promote (int tier)
@@ -211,9 +303,9 @@ static class Program {
 
 		/*
 		 * Counts for the tier-2 compile to lay the bodies out against.
-		 * EnterContended is left out: it starts two threads per call, and the
-		 * edge it exercises is the one the fast helper declines rather than
-		 * the one the counts are about.
+		 * EnterContended and ExitOtherThreadsLock are left out: each starts a
+		 * thread per call, and the edge they exercise is the one the fast
+		 * helper declines rather than the one the counts are about.
 		 */
 		object warm = new object ();
 
@@ -223,6 +315,9 @@ static class Program {
 			EnterAndExitV1 (warm);
 			EnterNull ();
 			EnterAlreadyTaken (warm);
+			ExitNull ();
+			ExitNested (warm);
+			ExitInflated ();
 		}
 
 		if (!Promote (3))

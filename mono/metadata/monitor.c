@@ -1117,6 +1117,41 @@ mono_monitor_exit_internal (MonoObject *obj)
 		mono_monitor_exit_flat (obj, lw);
 }
 
+/*
+ * Releases a flat lock that this thread holds once, and returns whether it did.
+ *
+ * Called from JITted code so we return guint32 instead of gboolean. It answers
+ * FALSE for every other case and sets no pending exception, so a caller that
+ * gets FALSE must go on to mono_monitor_exit_internal (). That one raises what
+ * a null object and a lock this thread does not own are owed.
+ */
+guint32
+mono_monitor_exit_fast (MonoObject *obj)
+{
+	LockWord lw, new_lw, tmp_lw;
+
+	if (G_UNLIKELY (!obj))
+		return FALSE;
+
+	lw.sync = obj->synchronisation;
+
+	/* lock_word_is_flat () is true of a free lock word too, and the owner field
+	 * of one reads 0. Small id 0 belongs to a thread, so that thread reads a free
+	 * lock word as its own without this test. */
+	if (!lock_word_is_flat (lw) || lock_word_is_free (lw) || lock_word_is_nested (lw))
+		return FALSE;
+
+	if (lock_word_get_owner (lw) != mono_thread_info_get_small_id ())
+		return FALSE;
+
+	new_lw.lock_word = 0;
+	tmp_lw.sync = (MonoThreadsSync *)mono_atomic_cas_ptr ((gpointer*)&obj->synchronisation, new_lw.sync, lw.sync);
+
+	/* Another thread inflated the lock between the read and the store. The lock
+	 * is still ours, and mono_monitor_exit_inflated () is what releases it. */
+	return tmp_lw.sync == lw.sync;
+}
+
 void
 mono_monitor_exit_icall (MonoObjectHandle obj, MonoError* error)
 {

@@ -995,8 +995,8 @@ private:
 	                            MonoMethodSignature *sig);
 	llvm::Error emit_buffer_copy (MonoIrBuilder &builder, const BufferCopy &copy,
 	                              MonoMethodSignature *sig);
-	llvm::Error emit_monitor_enter (MonoIrBuilder &builder, MonoMethod *callee_method,
-	                                MonoMethodSignature *sig, MonoJitICallId helper);
+	llvm::Error emit_monitor_fast_path (MonoIrBuilder &builder, MonoMethod *callee_method,
+	                                    MonoMethodSignature *sig, MonoJitICallId helper);
 
 	llvm::Expected<llvm::Value *> indirect_address (MonoIrBuilder &builder,
 	                                                StackValue address);
@@ -1193,6 +1193,11 @@ std::optional<BufferCopy> buffer_copy_for (MonoMethod *method, MonoMethodSignatu
 /// against.
 std::optional<MonoJitICallId> monitor_enter_fast_icall (MonoMethod *method,
                                                         MonoMethodSignature *sig);
+
+/// The fast helper that answers a call to method, or nothing when method is not
+/// Monitor.Exit. sig is the signature the call site was written against.
+std::optional<MonoJitICallId> monitor_exit_fast_icall (MonoMethod *method,
+                                                       MonoMethodSignature *sig);
 
 /// The number of sig's parameters that are ordinary ones, which for a vararg
 /// signature means the fixed part ahead of the sentinel.
