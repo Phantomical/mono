@@ -636,9 +636,16 @@ its own, and a stack walk over its frame finds nothing.
 **A detour or an override reaches a folded copy through the record.** A copy sits under
 no thunk, so redirecting the method's entry misses it. Each method's record names the
 methods that folded it in (`note_folded_into ()`), and `install_detour ()` takes each of
-those back to the tier it ran at before and bars it from tier 2 for good.
-`mono/tests/tier2-inline-override.cs` holds both arms. A thread already inside such a
-body stays there, because no on-stack replacement exists here.
+those entries back to the lazy resolver it started at, so the next call compiles the
+method again and `may_fold ()` keeps the copy out. Both compiled tiers run the pre-pass,
+so an earlier body is no safer than the newest one — that is why the entry goes back past
+all of them rather than down one tier. `mono/tests/tier2-inline-override.cs` holds both
+arms. A thread already inside such a body stays there, because no on-stack replacement
+exists here.
+
+A compile that spans the replacement is refused rather than published: the record counts
+the replacements (`folds_epoch ()`) and a body stamped with an older count never takes the
+entry. `entry_point ()` then compiles the method again.
 
 `may_fold ()` refuses a clause-bearing callee outright. Lifting that needs the clause
 indices rebased into a combined array and each landing pad's dispatch rebuilt.

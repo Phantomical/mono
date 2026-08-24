@@ -24,9 +24,9 @@ class TrampolinePool;
 
 namespace mono {
 
-/// What a lazy stub runs the first time it is called: produces the address to
-/// continue into. It cannot fail - whoever handed it over has already decided
-/// where a failed compile lands.
+/// What a lazy stub runs: produces the address to continue into. It cannot
+/// fail - whoever handed it over has already decided where a failed compile
+/// lands.
 using LazyCompile = llvm::unique_function<void *()>;
 
 /// The re-entry trampolines lazy stubs point at, and the compile behind each.
@@ -53,12 +53,14 @@ public:
 	LazyCallbacks (const LazyCallbacks &) = delete;
 	LazyCallbacks &operator= (const LazyCallbacks &) = delete;
 
-	/// Reserve a trampoline that runs compile on its first call and continues
-	/// into the address it returns, and hand back its address.
+	/// Reserve a trampoline that runs compile and continues into the address it
+	/// returns, and hand back its address.
 	///
-	/// Threads that arrive together all land on the same address. Each of them
-	/// can run compile to get there, so compile must be safe to run again and
-	/// to run on more than one thread at once.
+	/// A later call answers with that address rather than running compile
+	/// again, until rearm () takes the answer away. Threads that arrive
+	/// together all land on the same address, and each of them can run compile
+	/// to get there, so compile must be safe to run again and to run on more
+	/// than one thread at once.
 	llvm::Expected<void *> reserve (LazyCompile compile);
 
 	/// Give trampoline back, for a later reserve () to hand out again, and drop
@@ -68,6 +70,17 @@ public:
 	/// stub to be published may be given the very same trampoline.
 	void release (void *trampoline);
 
+	/// Make the next call through trampoline run its compile again, instead of
+	/// answering with where an earlier call landed. An address this never
+	/// handed out is ignored.
+	///
+	/// A compile that is running now loses its answer too, and that thread runs
+	/// it again.
+	///
+	/// Point the stub at the trampoline after this rather than before. A call
+	/// that arrives between the two gets the answer this removes.
+	void rearm (void *trampoline);
+
 private:
 	LazyCallbacks (void *on_error) : on_error_ (on_error) {}
 
@@ -75,6 +88,14 @@ private:
 	struct Callback {
 		LazyCompile compile;
 		std::atomic<void *> landing { nullptr };
+
+		/// How many times this trampoline has been re-armed. A compile reads
+		/// it before it starts and gives up its answer if it has moved since.
+		std::atomic<uint32_t> epoch { 0 };
+
+		/// Held over the test of epoch and the store of landing together, so
+		/// a re-arm cannot land between the two.
+		std::mutex latch;
 	};
 
 	/// Run the compile trampoline stands for. Called on whichever thread

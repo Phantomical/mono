@@ -125,9 +125,21 @@ public:
 	/// higher tier - or a detour - already owns. A refused publication leaves
 	/// the entry as it was, so a caller must not redirect anything itself.
 	///
-	/// Tier 2 is refused outright once drop_folded_bodies () has run, which is
-	/// what stops a compile already in flight from putting a stale copy back.
-	bool publish (MonoTier tier, void *code);
+	/// Pass \p epoch for a body a compile produced: the value folds_epoch ()
+	/// gave when that compile started. Such a body is refused whatever its tier
+	/// once the epoch has moved, since a method it holds a copy of has been
+	/// replaced. Leave it out for code that folds nothing in.
+	bool publish (MonoTier tier, void *code, std::optional<uint32_t> epoch = std::nullopt);
+
+	/// Counts the times a method this one folded in has been replaced.
+	///
+	/// Read this before a compile translates the method, and hand it back to
+	/// publish (). A compile that spans a replacement built its body from IL
+	/// that is gone.
+	uint32_t folds_epoch () const { return folds_epoch_.load (std::memory_order_acquire); }
+
+	/// Whether the interpreter is closed to this method.
+	bool past_tier0 () const { return past_tier0_.load (std::memory_order_acquire); }
 
 	/// Asks for the method to be run by the next tier up.
 	///
@@ -158,13 +170,13 @@ public:
 	/// reach it. This is how a detour finds the bodies it has to take down.
 	void note_folded_into (MonoMethod *root);
 
-	/// Takes the entry of every method that folded a copy of this one in back to
-	/// the newest body below tier 2, and bars them from tier 2 for good.
+	/// Takes the entry of every method that folded a copy of this one in back
+	/// to its lazy resolver. The next call to one of them compiles it again,
+	/// and may_fold () keeps the copy out that time.
 	///
 	/// A thread already inside such a body stays there, since there is no
 	/// on-stack replacement here. So this decides what later calls enter rather
-	/// than what is executing. The bar is what keeps which body runs from
-	/// depending on how a patcher and a compile worker interleaved.
+	/// than what is executing.
 	void drop_folded_bodies ();
 
 	/// The method standing in for this one, or null while none does.
@@ -241,11 +253,12 @@ public:
 	/// goes.
 	void attach_body (MonoTier tier, void *code, MonoJitInfo *jinfo);
 
-	/// The body the entry names, or nothing while none has been compiled.
+	/// The body the entry names, or nothing while none does.
 	///
 	/// Answered by value. A compile on another thread can supersede the body
 	/// between the read and the use, and the caller wants what was current when
-	/// it asked.
+	/// it asked. A method whose entry went back to its lazy resolver has no such
+	/// body, however many it has run.
 	std::optional<MonoMethodBody> body () const;
 
 	/// Calls \p visit with every body the method has, oldest first, with the
@@ -288,13 +301,13 @@ private:
 
 	/// The methods whose compiled bodies hold a copy of this one's.
 	llvm::SmallVector<MonoMethod *, 2> folded_into_;
-	/// Whether a body of this method folded in a method that has since been
-	/// replaced, which is what bars tier 2.
-	std::atomic<bool> folds_stale_ { false };
+	/// How many methods this one holds a copy of have been replaced.
+	std::atomic<uint32_t> folds_epoch_ { 0 };
+	std::atomic<bool> past_tier0_ { false };
 
-	/// Puts the entry back on the newest body below tier 2, and returns whether
-	/// there was one to go back to.
-	bool unwind_to_earlier_tier ();
+	/// Takes the entry back to the lazy resolver, so the next call compiles the
+	/// method again.
+	void unwind_folded_body ();
 
 	std::atomic<MonoTier> tier_ { MonoTier::none };
 	/* The highest tier anything has asked for, which is what keeps two counters

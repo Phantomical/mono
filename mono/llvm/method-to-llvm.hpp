@@ -60,6 +60,27 @@ private:
 	std::string what_;
 };
 
+/// A body built from a method that was replaced while it compiled.
+///
+/// This is not a compile failure. The method's entry is back on its lazy
+/// resolver. Compiling it again gives a body without the copy, so a caller that
+/// gets one has somewhere to go.
+class StaleFold : public llvm::ErrorInfo<StaleFold> {
+public:
+	static char ID;
+
+	explicit StaleFold (std::string what) : what_ (std::move (what)) {}
+
+	void log (llvm::raw_ostream &os) const override { os << what_; }
+	std::error_code convertToErrorCode () const override
+	{
+		return llvm::inconvertibleErrorCode ();
+	}
+
+private:
+	std::string what_;
+};
+
 /// For each sequence point a body emitted, the sequence points control can
 /// reach from it without passing another one - all as IL offsets. The soft
 /// debugger single-steps by breakpointing a point's successors, so this is the

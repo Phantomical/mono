@@ -76,8 +76,7 @@ may_fold (MonoDomain *domain, MonoMethod *callee)
 	 * IL this would copy: native code behind a detour, or the replacement behind
 	 * an override installed through the icall, which the table above does not
 	 * hold. Both cover a compile that starts after the install. A copy that
-	 * already stands is drop_folded_bodies ()'s to take down, and it reaches
-	 * only the ones a tier-2 body holds.
+	 * already stands is drop_folded_bodies ()'s to take down.
 	 *
 	 * Last because it takes the domain's table lock, and every test above reads
 	 * a field.

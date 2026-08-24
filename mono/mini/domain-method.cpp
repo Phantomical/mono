@@ -62,16 +62,16 @@ table_of (MonoDomain *domain)
 } // namespace
 
 bool
-MonoDomainMethod::publish (MonoTier tier, void *code)
+MonoDomainMethod::publish (MonoTier tier, void *code, std::optional<uint32_t> epoch)
 {
 	std::lock_guard<std::mutex> held (lock_);
 
 	if (tier < tier_.load (std::memory_order_relaxed))
 		return false;
 
-	// A tier-2 compile that started before a method it folded in was replaced
-	// carries a copy of the body that is gone.
-	if (tier == MonoTier::tier2 && folds_stale_.load (std::memory_order_relaxed))
+	// A compile that started before a method it folded in was replaced carries
+	// a copy of the body that is gone.
+	if (epoch && *epoch != folds_epoch_.load (std::memory_order_relaxed))
 		return false;
 
 	thunk.redirect (code);
@@ -149,7 +149,7 @@ MonoDomainMethod::body () const
 {
 	std::lock_guard<std::mutex> held (lock_);
 
-	if (bodies_.empty ())
+	if (bodies_.empty () || bodies_.back ().state != BodyState::current)
 		return std::nullopt;
 	return bodies_.back ();
 }
@@ -210,7 +210,7 @@ MonoDomainMethod::install_detour (void *target)
 	publish (MonoTier::detoured, target);
 
 	/*
-	 * A tier-2 body that folded this method in holds a copy of it that sits
+	 * A compiled body that folded this method in holds a copy of it that sits
 	 * under no thunk, so the redirect above misses it. Outside publish () for
 	 * the same reason the interpreter's callback is: this reaches other records
 	 * through the domain's table, whose lock is outside a record's.
@@ -236,31 +236,47 @@ MonoDomainMethod::note_folded_into (MonoMethod *root)
 		folded_into_.push_back (root);
 }
 
-bool
-MonoDomainMethod::unwind_to_earlier_tier ()
+void
+MonoDomainMethod::unwind_folded_body ()
 {
 	std::lock_guard<std::mutex> held (lock_);
 
-	folds_stale_.store (true, std::memory_order_release);
+	// Before every return below: a compile reads the epoch as it starts and
+	// publishes only while it has not moved.
+	folds_epoch_.fetch_add (1, std::memory_order_acq_rel);
 
-	if (tier_.load (std::memory_order_relaxed) != MonoTier::tier2)
-		return false;
+	// Nothing outranks a detour, and the native code behind one holds no copy
+	// of anything.
+	if (tier_.load (std::memory_order_relaxed) == MonoTier::detoured)
+		return;
 
-	const MonoMethodBody *earlier = nullptr;
+	// attach_entry () gives every published record a lazy entry, so this is one
+	// that failed to publish.
+	if (trampoline == nullptr)
+		return;
 
-	// The last of the highest tier below this one. Superseded code is never
-	// reclaimed, so a body the entry moved off is still there to move back to.
-	for (const MonoMethodBody &body : bodies_)
-		if (body.tier < MonoTier::tier2
-		    && (earlier == nullptr || body.tier >= earlier->tier))
-			earlier = &body;
+	/*
+	 * Every compiled body can hold the copy, since the shape-test pre-pass runs
+	 * at both compiled tiers. So the entry goes back past all of them rather
+	 * than to the newest body below the tier it is at.
+	 */
+	for (MonoMethodBody &body : bodies_)
+		body.state = BodyState::superseded;
 
-	if (earlier == nullptr)
-		return false;
+	/* The rearm before the redirect, on the terms that call states. */
+	mono_llvm_jit_rearm_trampoline (domain, trampoline);
+	thunk.redirect (trampoline);
 
-	thunk.redirect (earlier->code);
-	tier_.store (earlier->tier, std::memory_order_release);
-	return true;
+	tier_.store (MonoTier::none, std::memory_order_release);
+	/* So that the next threshold of calls asks for tier 1 again. */
+	requested_.store (MonoTier::none, std::memory_order_release);
+
+	/*
+	 * Tier 0 is closed to the method from here. It ran compiled, so the call
+	 * counter that promotes it out of the interpreter is spent, and nothing
+	 * re-arms one.
+	 */
+	past_tier0_.store (true, std::memory_order_release);
 }
 
 void
@@ -276,7 +292,7 @@ MonoDomainMethod::drop_folded_bodies ()
 
 	for (MonoMethod *root : roots)
 		if (MonoDomainMethod *dm = domain_method_find (domain, root))
-			dm->unwind_to_earlier_tier ();
+			dm->unwind_folded_body ();
 }
 
 /*

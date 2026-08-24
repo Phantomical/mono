@@ -129,6 +129,13 @@ int32_t mono_llvm_jit_tier0_calls (MonoMethod *method);
 mono_bool mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domain,
                                            uint8_t tier);
 
+/// Makes the next call through a lazy re-entry trampoline compile its method
+/// again, rather than continue into the code an earlier call left there.
+///
+/// Redirect the entry at the trampoline after this rather than before. A call
+/// that arrives between the two reaches the code this takes away.
+void mono_llvm_jit_rearm_trampoline (MonoDomain *domain, void *trampoline);
+
 /// Compiles a method at a tier and points its entry at the result, on the
 /// calling thread. The tier is a MonoTier.
 ///

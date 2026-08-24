@@ -166,6 +166,12 @@ mono_llvm_jit_promote_now (MonoMethod *method, MonoDomain *domain, uint8_t tier)
 	return mono::MonoBackend::promote_now (method, domain, (mono::MonoTier) tier);
 }
 
+void
+mono_llvm_jit_rearm_trampoline (MonoDomain *domain, void *trampoline)
+{
+	mono::MonoBackend::rearm_trampoline (domain, trampoline);
+}
+
 
 mono_bool
 mono_llvm_jit_verify_method (MonoMethod *method, MonoError *error)

@@ -3,15 +3,16 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
- * A method replaced after tier 2 folded a copy of it into a caller.
+ * A method replaced after a caller folded a copy of it in.
  *
  * The copy sits under no thunk, so pointing the method's entry at the
  * replacement does not reach it: the caller would go on running the body it was
  * compiled with. Each method's record names the callers that folded it in, and
- * an override takes their entries back to the tier they ran at before.
+ * an override takes their entries back to the lazy resolver they started at.
  *
  * Both inliners are covered. Small () is a shape the pre-pass takes without
- * weighing it, and Branchy () is one only the cost model behind it can.
+ * weighing it, so both compiled tiers hold a copy of it. Branchy () is one only
+ * the cost model behind it can take, so tier 2 alone does.
  */
 
 namespace Mono.Overrides {

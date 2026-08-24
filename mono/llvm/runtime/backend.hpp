@@ -65,6 +65,10 @@ public:
 
 	static bool promote_now (MonoMethod *method, MonoDomain *domain, MonoTier tier);
 
+	/// Makes the next call through \p trampoline run its compile again, on the
+	/// terms LazyCallbacks::rearm () states.
+	static void rearm_trampoline (MonoDomain *domain, void *trampoline);
+
 	/// Returns the profile counters \p dm's tier-1 body counts into.
 	///
 	/// std::nullopt covers a method the backend never compiled and one
@@ -123,6 +127,9 @@ private:
 	/// is not offered the method, and any interpreter entry it already has
 	/// is compiled over. Pass false if you cannot set the register the
 	/// interpreter reads its method from.
+	///
+	/// Compiles the method again when one it folded in was replaced while it
+	/// compiled.
 	llvm::Expected<void *> entry_point (DomainState &domain, MonoDomainMethod &dm,
 	                                    bool allow_tier0 = true);
 
@@ -162,7 +169,9 @@ private:
 	///
 	/// With allow_tier0 the interpreter is offered the method first.
 	/// Promotion passes false, which is what makes it a compile rather than
-	/// a second trip through the tier the method is already running at.
+	/// a second trip through the tier the method is already running at. A
+	/// method whose entry has been taken off a compiled body is compiled
+	/// whatever this says: its tier-0 call counter is spent.
 	///
 	/// With for_sharing, \p dm is the record of a shared method and a failure
 	/// comes back as a SharingRefusal rather than as a body that raises it.

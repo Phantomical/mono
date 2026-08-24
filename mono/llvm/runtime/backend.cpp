@@ -64,6 +64,8 @@ lazy_compile_failed ()
 
 } // namespace
 
+char StaleFold::ID = 0;
+
 MonoBackend *MonoBackend::instance = nullptr;
 
 /// The process that built the backend, and the only one allowed to take it
@@ -582,18 +584,28 @@ MonoBackend::body_for_current_domain (MonoMethod *method)
 llvm::Expected<void *>
 MonoBackend::entry_point (DomainState &domain, MonoDomainMethod &dm, bool allow_tier0)
 {
-	std::optional<MonoMethodBody> ready = dm.body ();
+	for (;;) {
+		std::optional<MonoMethodBody> ready = dm.body ();
 
-	if (ready && !recompiling (dm.method)
-	    && (allow_tier0 || ready->code != arch::interp_entry_thunk ()))
-		return ready->code;
+		if (ready && !recompiling (dm.method)
+		    && (allow_tier0 || ready->code != arch::interp_entry_thunk ()))
+			return ready->code;
 
-	llvm::Expected<Compiled> code = compile_body (domain, dm, allow_tier0, MonoTier::tier1);
+		llvm::Expected<Compiled> code =
+			compile_body (domain, dm, allow_tier0, MonoTier::tier1);
 
-	if (!code)
-		return code.takeError ();
+		if (code)
+			return code->body;
 
-	return code->body;
+		/*
+		 * Refused rather than not built. The replacement is installed by now,
+		 * so the next translation folds nothing stale in and the loop ends.
+		 */
+		if (!code.errorIsA<StaleFold> ())
+			return code.takeError ();
+
+		llvm::consumeError (code.takeError ());
+	}
 }
 
 /*
@@ -803,7 +815,7 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
 	 * being resolved and start its compile again below itself, with nothing to
 	 * stop it. Publishing first means such a call lands on the entry instead.
 	 */
-	if (allow_tier0 && runs_at_tier0 (method)) {
+	if (allow_tier0 && !dm.past_tier0 () && runs_at_tier0 (method)) {
 		llvm::Expected<Compiled> entries = interp_entries (domain, dm);
 
 		if (!entries) {
@@ -838,6 +850,11 @@ namespace {
 /// and the storage a TranslationTarget's function_refs point into.
 struct Member {
 	MonoDomainMethod *dm;
+
+	/// What MonoDomainMethod::folds_epoch () gave before the translation. The
+	/// publication is refused when it has moved since.
+	uint32_t folds_epoch = 0;
+
 	std::vector<uint8_t> profile;
 	std::function<llvm::Expected<MonoDomainMethod *> (MonoMethod *)> publish_callee;
 	std::function<void (const CompiledMethod &, MonoJitInfo *)> note;
@@ -954,6 +971,7 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 		auto member = std::make_unique<Member> ();
 
 		member->dm = dm;
+		member->folds_epoch = dm->folds_epoch ();
 		member->publish_callee = [this, &domain] (MonoMethod *callee) {
 			return publish (domain, callee);
 		};
@@ -1059,7 +1077,19 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 			                                  jinfo_get_method (result.published),
 			                                  result.published);
 
-		dms[i]->publish (tier, result.code->body);
+		/*
+		 * A method this body folded in was replaced while it compiled, so the
+		 * body holds a copy of IL that is gone. The record has taken the entry
+		 * back to its lazy resolver already, and the body is left where it is:
+		 * no caller can reach code that was never published.
+		 */
+		if (!dms[i]->publish (tier, result.code->body, members[k]->folds_epoch)
+		    && dms[i]->folds_epoch () != members[k]->folds_epoch) {
+			compiled.push_back (llvm::make_error<StaleFold> (
+				"a method the body folded in was replaced while it compiled"));
+			continue;
+		}
+
 		dms[i]->attach_body (tier, result.code->body, result.code->jinfo);
 
 		/*
@@ -1196,11 +1226,20 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier
 			return;
 
 		for (llvm::Expected<Compiled> &body :
-		     self->compile_bodies (*owner, records, MonoTier::tier1))
-			if (!body)
-				llvm::logAllUnhandledErrors (
-					body.takeError (), llvm::errs (),
-					"mono: could not promote a method: ");
+		     self->compile_bodies (*owner, records, MonoTier::tier1)) {
+			if (body)
+				continue;
+
+			/* Not a failed promotion. The method's entry is on its lazy
+			 * resolver and the next call compiles it again. */
+			if (body.errorIsA<StaleFold> ()) {
+				llvm::consumeError (body.takeError ());
+				continue;
+			}
+
+			llvm::logAllUnhandledErrors (body.takeError (), llvm::errs (),
+			                             "mono: could not promote a method: ");
+		}
 	});
 }
 
@@ -1283,6 +1322,26 @@ MonoBackend::stop_compilation ()
 		return;
 
 	instance->queue_.stop ();
+}
+
+void
+MonoBackend::rearm_trampoline (MonoDomain *domain, void *trampoline)
+{
+	if (!instance)
+		return;
+
+	/*
+	 * The lock spans the rearm rather than a lookup of the callbacks:
+	 * releasing a domain takes its callbacks apart, and the trampoline belongs
+	 * to that domain.
+	 */
+	MONO_LOCK (instance->mutex_)
+	{
+		auto it = instance->domains_.find (domain);
+
+		if (it != instance->domains_.end ())
+			it->second->callbacks->rearm (trampoline);
+	}
 }
 
 void
