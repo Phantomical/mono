@@ -7,6 +7,7 @@
 #include "passes/lower-builtins.hpp"
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
+#include "passes/protected-null-checks.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "passes/rgctx-dedup.hpp"
 #include "passes/rgctx-fetch.hpp"
@@ -353,6 +354,9 @@ MonoPassBuilder::buildTier1Pipeline ()
 	if (PTO.EnablePromotion)
 		MPM.addPass (mono::TierCounterPass ());
 
+	// Behind the fold, which is what carries a callee's tags into the method.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ProtectedNullChecksPass ()));
+
 	MPM.addPass (mono::RgctxFetchPass ());
 	MPM.addPass (arch::MonoAbiPass ());
 
@@ -420,6 +424,10 @@ MonoPassBuilder::buildTier2Pipeline ()
 	// the common pipeline left standing.
 	FPM.addPass (mono::ClassInitPass ());
 	FPM.addPass (mono::RgctxDedupPass ());
+
+	// Behind both inliners, which are what carry a callee's tags into the
+	// method.
+	FPM.addPass (mono::ProtectedNullChecksPass ());
 
 	// Last, because what it repairs is the pipeline's own doing.
 	FPM.addPass (mono::RestoreTailPositionPass ());

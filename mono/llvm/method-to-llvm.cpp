@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
 #include "domain-method.hpp"
+#include "passes/protected-null-checks.hpp"
 #include "passes/tier-counter.hpp"
 #include "runtime/options.hpp"
 #include "runtime-error.hpp"
@@ -1883,21 +1884,25 @@ MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *con
 /// not.
 ///
 /// The branch carries the !make.implicit tag LLVM's ImplicitNullChecks pass looks for.
-/// That pass is off by default in this JIT. `--llvm-opt=-enable-implicit-null-checks`
-/// turns it on. When it runs, it folds the test into whichever faulting memory
-/// operation follows in the not-taken block. It also records the fault address in a
-/// fault map, so the check costs nothing until it fires.
+/// MonoJit::create () turns that pass on, and it then folds the test into whichever
+/// faulting memory operation follows in the not-taken block, so the check costs nothing
+/// until it fires.
 ///
 /// That fold only works in the shape emitted here: a dereference in the not-taken arm,
 /// on the pointer that was tested. The pass declines and leaves the branch alone when
 /// the field offset is too far into the page for the hardware to trap on it.
+///
+/// The tag goes on every check. ProtectedNullChecksPass takes it back off a
+/// method that has EH clauses, where a fold changes which clause the exception
+/// reaches.
 void
 MethodLLVMEmitter::emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer)
 {
 	llvm::BranchInst *branch = emit_cond_exception (builder, builder.CreateIsNull (pointer),
 	                                                "NullReferenceException");
 
-	branch->setMetadata ("make.implicit", llvm::MDNode::get (context (), {}));
+	branch->setMetadata (make_implicit_metadata,
+	                     llvm::MDNode::get (context (), {}));
 }
 
 llvm::Error

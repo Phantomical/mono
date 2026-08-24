@@ -243,6 +243,7 @@ set(MONO_TESTS_CS_SRC
   tbaa-explicit-overlap.cs
   math-intrinsics.cs
   buffer-copy-intrinsics.cs
+  implicit-null-checks.cs
   monitor-fast-path.cs
   array-shape-intrinsics.cs
   override-basic.cs

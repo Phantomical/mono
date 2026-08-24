@@ -19,6 +19,7 @@
 #include "passes/class-init.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/profile-counters.hpp"
+#include "passes/protected-null-checks.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "passes/top-down-inline.hpp"
 #include "timing.hpp"
@@ -154,7 +155,9 @@ bool
 is_mono_pass (StringRef pass)
 {
 	return pass == ArrayAddressPass::name () || pass == ClassInitPass::name ()
-	       || pass == LowerBuiltinsPass::name () || pass == RestoreTailPositionPass::name ()
+	       || pass == LowerBuiltinsPass::name ()
+	       || pass == ProtectedNullChecksPass::name ()
+	       || pass == RestoreTailPositionPass::name ()
 	       || pass == arch::MonoAbiPass::name ();
 }
 
@@ -1345,6 +1348,25 @@ MonoJit::create (CodeArena *arena)
 	// Allow lowering memcpy to `rep movsb` when the target supports it.
 	default_option ("x86-use-fsrm-for-memcpy", true);
 
+	/*
+	 * Fold a null check into the memory operation behind it. The translator
+	 * marks every check with !make.implicit, and the pass rewrites a marked
+	 * test and branch into a faulting access, so the check costs nothing
+	 * until it fires. The win is tier 2: a tier-1 body puts its profile
+	 * counter, an atomicrmw, at the top of the not-taken block, and the pass
+	 * declines an ordered memory operation between the test and the
+	 * dereference.
+	 *
+	 * LLVM expects the runtime to read __llvm_faultmaps for the handler of a
+	 * faulting access. Mono instead turns a SIGSEGV inside a compiled body
+	 * into a NullReferenceException from the faulting instruction, which
+	 * lands in the same clause. That holds while the fault address stays in
+	 * the page above null, which is what mono_is_addr_implicit_null_check ()
+	 * (mono/mini/mini-runtime.c) accepts. The pass also folds an access below
+	 * the checked pointer, and the translator emits none: it dereferences a
+	 * checked pointer at a non-negative offset only.
+	 */
+	default_option ("enable-implicit-null-checks", true);
 
 	LLJITBuilder builder;
 	builder.setJITTargetMachineBuilder (host_target_machine_builder ());
