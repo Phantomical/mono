@@ -235,9 +235,9 @@ emit_check (Instruction *at, Value *cost, GlobalVariable *counter,
 
 	IRBuilder<> at_block (&block);
 
-	// The alignment is written out because the module has no layout of its own
-	// yet: MonoJit::compile_batch () sets one after the pipeline has run, and
-	// LLVM's default layout gives i64 an ABI alignment of 4.
+	// The alignment is what make_counter () gives the global. This load and the
+	// subtraction below each name one because the builder takes it, and an i64
+	// atomic needs its natural alignment to stay a lock instruction.
 	Value *left = at_block.CreateAlignedLoad (i64, counter, Align (8), "tier_left");
 
 	at_block.CreateCondBr (at_block.CreateICmpSGT (left, zero), count, done);
