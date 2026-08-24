@@ -42,15 +42,6 @@ is_profile_global (const GlobalVariable &global)
 	       || name.starts_with (getInstrProfBitmapVarPrefix ());
 }
 
-bool
-is_counter_address (const Value *address)
-{
-	const auto *global = dyn_cast<GlobalVariable> (getUnderlyingObject (address));
-
-	return global != nullptr
-	       && global->getName ().starts_with (getInstrProfCountersVarPrefix ());
-}
-
 /// The load \p store reads its counter back through, or null when \p store is
 /// not the last step of a read-add-write on a counter.
 ///
@@ -80,6 +71,15 @@ counter_update_load (StoreInst &store)
 }
 
 } // namespace
+
+bool
+is_counter_address (const Value *address)
+{
+	const auto *global = dyn_cast<GlobalVariable> (getUnderlyingObject (address));
+
+	return global != nullptr
+	       && global->getName ().starts_with (getInstrProfCountersVarPrefix ());
+}
 
 PreservedAnalyses
 ProfileAtomicPass::run (Module &m, ModuleAnalysisManager &)

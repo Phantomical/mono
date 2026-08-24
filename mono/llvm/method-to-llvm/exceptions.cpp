@@ -154,6 +154,43 @@ MethodLLVMEmitter::covering_chain (uint32_t clause) const
 	return chain;
 }
 
+/**
+ * Records each IL clause's try region on the function, as `!mono.clauses`.
+ *
+ * The gather grows each invoke's protected range over the code around it whose
+ * IL offset lies in the same try region (eh-gather.cpp), so it needs every
+ * region, in IL offsets, however the code was laid out. A clause whose landing
+ * pad no longer survives is in the list too: without it the gather reads the
+ * code of an inner try as belonging to the try around it.
+ *
+ * Each operand is one clause, as `{i32 index, i32 flags, i32 try_offset, i32
+ * try_len}`.
+ */
+void
+MethodLLVMEmitter::emit_clause_geometry ()
+{
+	llvm::Type *i32 = llvm::Type::getInt32Ty (context ());
+	std::vector<llvm::Metadata *> geometry;
+
+	geometry.reserve (num_clauses);
+	for (uint32_t i = 0; i < num_clauses; ++i) {
+		const MonoExceptionClause &clause = clauses[i];
+		llvm::Metadata *words[] = {
+			llvm::ConstantAsMetadata::get (llvm::ConstantInt::get (i32, i)),
+			llvm::ConstantAsMetadata::get (
+				llvm::ConstantInt::get (i32, clause.flags)),
+			llvm::ConstantAsMetadata::get (
+				llvm::ConstantInt::get (i32, clause.try_offset)),
+			llvm::ConstantAsMetadata::get (
+				llvm::ConstantInt::get (i32, clause.try_len)),
+		};
+
+		geometry.push_back (llvm::MDNode::get (context (), words));
+	}
+
+	function->setMetadata ("mono.clauses", llvm::MDNode::get (context (), geometry));
+}
+
 /// The global that stands for the clause in the exception tables.
 ///
 /// A landing pad's catch operands point into the object's type table, which is the
@@ -219,6 +256,15 @@ MethodLLVMEmitter::handler_entry (uint32_t clause, llvm::Value *exc)
 		create_cold_block (llvm::Twine ("enter_clause") + llvm::Twine (clause));
 	MonoIrBuilder prep (enter);
 
+	/*
+	 * This code has left the try region and is inside the handler, so it takes
+	 * the handler's IL offset. The gather picks each range's clause off the IL
+	 * offset in effect at the code in it (eh-gather.cpp). The try's offset here
+	 * puts the handler inside the clause that dispatched to it, and a throw in
+	 * the handler then reaches that same clause again, and keeps reaching it.
+	 */
+	il_debug_set_location (il_scope, &prep, info->handler_offset);
+
 	if (info->flags == MONO_EXCEPTION_CLAUSE_FINALLY) {
 		enter_finally (prep, clause, entered_by_unwinding);
 	} else if (info->flags != MONO_EXCEPTION_CLAUSE_FAULT
@@ -257,6 +303,11 @@ MethodLLVMEmitter::landing_pad (uint32_t clause)
 	state.pad = create_cold_block (llvm::Twine ("pad") + llvm::Twine (clause));
 
 	MonoIrBuilder pad (state.pad);
+
+	// The pad has left the try region too. handler_entry () says what an offset
+	// inside the region would cost.
+	il_debug_set_location (il_scope, &pad, clauses[clause].handler_offset);
+
 	llvm::Type *exception = llvm::PointerType::get (context (), 0);
 	std::vector<uint32_t> chain = covering_chain (clause);
 	llvm::LandingPadInst *caught = pad.CreateLandingPad (

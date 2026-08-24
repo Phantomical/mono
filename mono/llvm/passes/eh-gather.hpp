@@ -40,13 +40,6 @@ public:
 		return "Mono EH clause gather";
 	}
 
-	/* Read-only: never disturb anything the AsmPrinter will emit. */
-	void getAnalysisUsage (llvm::AnalysisUsage &au) const override
-	{
-		au.setPreservesAll ();
-		llvm::MachineFunctionPass::getAnalysisUsage (au);
-	}
-
 	bool runOnMachineFunction (llvm::MachineFunction &mf) override;
 
 private:

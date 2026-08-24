@@ -18,11 +18,11 @@ using System.Runtime.CompilerServices;
  * the method and reach the caller's catch, which is what says the unwinder
  * reads the faulting instruction as part of the body.
  *
- * A Guarded case faults inside a try, where emit_null_check () keeps the
- * branch: `.mono_lsda` carries a protected range for each invoke, and a folded
- * fault sits outside all of them. Each Guarded case nests an inner try inside
- * an outer one, so a dispatch that misses the clause shows up as the outer
- * catch running. The finally between them runs either way.
+ * A Guarded case faults inside a try. The gather grows each invoke's range over
+ * the code around it whose IL offset lies in the same try region, so the fault
+ * is inside the same range the calls around it are. Each Guarded case nests an
+ * inner try inside an outer one, so a dispatch that misses the clause shows up
+ * as the outer catch running. The finally between them runs either way.
  *
  * Each case runs at tier 0, tier 1 and tier 2 and must answer the same at all
  * three. That is what separates a fold that dispatches wrongly from a
@@ -130,7 +130,32 @@ static class Program {
 		return wide.Last;
 	}
 
-	// The guarded arm. A clause protects the site, so the branch stays.
+	// The guarded arm. A clause protects the site.
+
+	/// Copies a struct out of a null pointer. The backend expands the copy
+	/// inline, so the check folds into the first load of that expansion and the
+	/// fault lands in the middle of it rather than on a dereference of its own.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	unsafe static Result GuardedBlockCopy (Padding64 *source)
+	{
+		Result result = new Result ();
+
+		try {
+			try {
+				Padding64 copy = *source;
+
+				GC.KeepAlive (copy);
+			} catch (NullReferenceException) {
+				result.Where = Caught.Inner;
+			} finally {
+				result.Finally = true;
+			}
+		} catch (Exception) {
+			result.Where = Caught.Outer;
+		}
+
+		return result;
+	}
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static Result GuardedLoadField (Holder holder)
@@ -256,6 +281,7 @@ static class Program {
 		ExpectInner ("GuardedStoreField", tier, GuardedStoreField (null));
 		ExpectInner ("GuardedArrayElement", tier, GuardedArrayElement (null));
 		ExpectInner ("GuardedVirtualCall", tier, GuardedVirtualCall (null));
+		unsafe { ExpectInner ("GuardedBlockCopy", tier, GuardedBlockCopy (null)); }
 
 		// A case that must not throw, so a tier that answers with an
 		// exception everywhere fails here.
@@ -282,13 +308,14 @@ static class Program {
 		GuardedStoreField (null);
 		GuardedArrayElement (null);
 		GuardedVirtualCall (null);
+		unsafe { GuardedBlockCopy (null); }
 	}
 
 	static readonly string[] cases = {
 		"BareLoadField", "BareStoreField", "BareStoreReference",
 		"BareArrayLength", "BareArrayElement", "BareVirtualCall",
 		"BareLoadFarField", "GuardedLoadField", "GuardedStoreField",
-		"GuardedArrayElement", "GuardedVirtualCall",
+		"GuardedArrayElement", "GuardedVirtualCall", "GuardedBlockCopy",
 	};
 
 	static bool Promote (int tier, string tier_name)

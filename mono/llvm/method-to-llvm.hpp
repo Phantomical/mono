@@ -752,6 +752,7 @@ private:
 	std::vector<uint32_t> finally_chain_to (size_t target) const;
 	llvm::Error emit_undeniable_exception_rethrow (MonoIrBuilder &builder);
 	llvm::Error check_delegate_invoke (MonoClass *klass);
+	void emit_clause_geometry ();
 	llvm::Constant *clause_marker (uint32_t clause);
 	llvm::Constant *resume_marker (uint32_t clause);
 	llvm::BasicBlock *handler_entry (uint32_t clause, llvm::Value *exc);

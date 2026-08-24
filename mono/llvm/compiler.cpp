@@ -35,6 +35,7 @@
 
 #include "eh-side-channel.hpp"
 #include "passes/eh-gather.hpp"
+#include "passes/faulting-location.hpp"
 #include "passes/finally-range.hpp"
 
 #include <llvm/Analysis/RuntimeLibcallInfo.h>
@@ -830,9 +831,16 @@ build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &
 	tpc->addMachinePasses ();
 
 	/*
+	 * After the machine passes, which is where ImplicitNullChecks folds a check
+	 * into the dereference and leaves it unattributed, and before the gather and
+	 * the printer, both of which read the locations back.
+	 */
+	pm->add (new MonoFaultingLocationPass ());
+
+	/*
 	 * After the machine passes and before the AsmPrinter, so it sees the final
-	 * landing-pad set. Read-only: a module with no landing pads emits an
-	 * object byte-identical to SimpleCompiler's.
+	 * landing-pad set. It plants a label at each end of every range it
+	 * publishes, so a module with landing pads comes out changed.
 	 */
 	pm->add (new MonoEHGatherPass (&side_channel));
 

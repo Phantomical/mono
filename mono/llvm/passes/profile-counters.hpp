@@ -14,6 +14,7 @@
 
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/IR/Value.h>
 
 #include <cstdint>
 #include <string>
@@ -56,6 +57,10 @@ struct ProfileArray {
 std::vector<ProfileArray> read_profile_arrays (const uint8_t *data, size_t size);
 
 uint64_t profile_name_key (llvm::StringRef name);
+
+/// Whether \p address reaches one of the counter arrays the instrumentation
+/// wrote.
+bool is_counter_address (const llvm::Value *address);
 
 /// Marks every function that will not promote as one to leave uninstrumented.
 ///

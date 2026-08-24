@@ -7,7 +7,7 @@
 #include "passes/lower-builtins.hpp"
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
-#include "passes/protected-null-checks.hpp"
+#include "passes/profile-counter-sink.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "passes/rgctx-dedup.hpp"
 #include "passes/rgctx-fetch.hpp"
@@ -297,6 +297,12 @@ MonoPassBuilder::buildPgoInstrumentationPipeline ()
 	MPM.addPass (llvm::InstrProfilingLoweringPass (llvm::InstrProfOptions{ .Atomic = true }));
 	MPM.addPass (mono::ProfileLocalizePass ());
 
+	/*
+	 * Behind the lowering, which is what leaves a counter update as the ordered
+	 * memory operation a null check cannot fold over.
+	 */
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ProfileCounterSinkPass ()));
+
 	return MPM;
 }
 
@@ -353,9 +359,6 @@ MonoPassBuilder::buildTier1Pipeline ()
 	 */
 	if (PTO.EnablePromotion)
 		MPM.addPass (mono::TierCounterPass ());
-
-	// Behind the fold, which is what carries a callee's tags into the method.
-	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ProtectedNullChecksPass ()));
 
 	MPM.addPass (mono::RgctxFetchPass ());
 	MPM.addPass (arch::MonoAbiPass ());
@@ -424,10 +427,6 @@ MonoPassBuilder::buildTier2Pipeline ()
 	// the common pipeline left standing.
 	FPM.addPass (mono::ClassInitPass ());
 	FPM.addPass (mono::RgctxDedupPass ());
-
-	// Behind both inliners, which are what carry a callee's tags into the
-	// method.
-	FPM.addPass (mono::ProtectedNullChecksPass ());
 
 	// Last, because what it repairs is the pipeline's own doing.
 	FPM.addPass (mono::RestoreTailPositionPass ());

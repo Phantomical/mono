@@ -31,15 +31,16 @@ class MCSymbol;
 
 namespace mono {
 
-/*
- * One (invoke range, catch clause) tuple, as the gather pass sees it. A landing
- * pad carries one (begin, end) pair per invoke that unwinds to it. So a try with
- * N protected calls produces N clauses that share a handler and clause_index and
- * cover disjoint invoke ranges. `.mono_lsda` is thus one entry per invoke range.
+/**
+ * One (protected range, clause) tuple, as the gather pass sees it.
+ *
+ * A range is one invoke's range widened over the code around it that belongs to
+ * the same try region (eh-gather.cpp), and a pad dispatches a whole chain of
+ * clauses, so one range yields one entry per clause in that chain. `.mono_lsda`
+ * is one entry per (range, clause).
  */
 struct MonoEHClause {
-	/// This invoke's try range: a paired LandingPadInfo BeginLabels[i] and
-	/// EndLabels[i].
+	/// The protected range this entry covers.
 	const llvm::MCSymbol *try_begin = nullptr;
 	const llvm::MCSymbol *try_end = nullptr;
 	/// The handler entry: LandingPadInfo LandingPadLabel.
@@ -49,7 +50,8 @@ struct MonoEHClause {
 	/// The clause's IL flags, a MonoExceptionEnum: NONE=0 for catch, FINALLY=2,
 	/// FAULT=4. It rides alongside clause_index in the same type_info_N global,
 	/// and reaches the section's kind column, which is what makes the section
-	/// self-describing.
+	/// self-describing. A marker kind (mono_lsda_format.hpp) instead says the
+	/// pad is something other than a clause's handler.
 	int kind = 0;
 	/// False if the clause_index cannot be recovered safely. Downstream must
 	/// then decline rather than guess.

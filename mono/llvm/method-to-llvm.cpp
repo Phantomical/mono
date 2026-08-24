@@ -1,7 +1,6 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
 #include "domain-method.hpp"
-#include "passes/protected-null-checks.hpp"
 #include "passes/tier-counter.hpp"
 #include "runtime/options.hpp"
 #include "runtime-error.hpp"
@@ -780,6 +779,7 @@ MethodLLVMEmitter::emit ()
 		// This attribute is what MonoEHGatherPass reads to tell a method whose
 		// clauses all got optimized away from a method that never had any.
 		function->addFnAttr ("mono-has-eh-clauses");
+		emit_clause_geometry ();
 	}
 
 	MonoIrBuilder builder (context ());
@@ -1892,16 +1892,17 @@ MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *con
 /// on the pointer that was tested. The pass declines and leaves the branch alone when
 /// the field offset is too far into the page for the hardware to trap on it.
 ///
-/// The tag goes on every check. ProtectedNullChecksPass takes it back off a
-/// method that has EH clauses, where a fold changes which clause the exception
-/// reaches.
+/// The tag goes on every check, inside a try region as well. A folded check raises
+/// its exception from the dereference rather than from the call this emits, and the
+/// gather grows a call's protected range over the code around it in the same try
+/// region (eh-gather.cpp), so the dereference is inside that range too.
 void
 MethodLLVMEmitter::emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer)
 {
 	llvm::BranchInst *branch = emit_cond_exception (builder, builder.CreateIsNull (pointer),
 	                                                "NullReferenceException");
 
-	branch->setMetadata (make_implicit_metadata,
+	branch->setMetadata (llvm::LLVMContext::MD_make_implicit,
 	                     llvm::MDNode::get (context (), {}));
 }
 

@@ -19,7 +19,7 @@
 #include "passes/class-init.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/profile-counters.hpp"
-#include "passes/protected-null-checks.hpp"
+#include "passes/profile-counter-sink.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "passes/top-down-inline.hpp"
 #include "timing.hpp"
@@ -156,7 +156,7 @@ is_mono_pass (StringRef pass)
 {
 	return pass == ArrayAddressPass::name () || pass == ClassInitPass::name ()
 	       || pass == LowerBuiltinsPass::name ()
-	       || pass == ProtectedNullChecksPass::name ()
+	       || pass == ProfileCounterSinkPass::name ()
 	       || pass == RestoreTailPositionPass::name ()
 	       || pass == arch::MonoAbiPass::name ();
 }
@@ -1352,9 +1352,10 @@ MonoJit::create (CodeArena *arena)
 	 * Fold a null check into the memory operation behind it. The translator
 	 * marks every check with !make.implicit, and the pass rewrites a marked
 	 * test and branch into a faulting access, so the check costs nothing
-	 * until it fires. The win is tier 2: a tier-1 body puts its profile
-	 * counter, an atomicrmw, at the top of the not-taken block, and the pass
-	 * declines an ordered memory operation between the test and the
+	 * until it fires. A tier-1 body puts its profile counter, an atomicrmw,
+	 * in the not-taken block, and the pass declines an ordered memory
+	 * operation between the test and the dereference. ProfileCounterSinkPass
+	 * (passes/profile-counter-sink.hpp) moves that counter down past the
 	 * dereference.
 	 *
 	 * LLVM expects the runtime to read __llvm_faultmaps for the handler of a
