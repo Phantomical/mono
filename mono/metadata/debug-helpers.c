@@ -604,7 +604,15 @@ mono_method_desc_search_in_image (MonoMethodDesc *desc, MonoImage *image)
 	}
 
 	if (desc->name_space && desc->klass) {
-		klass = mono_class_try_load_from_name (image, desc->name_space, desc->klass);
+		ERROR_DECL (error);
+
+		/*
+		 * An image the type cannot be loaded from is an image this
+		 * description does not match. A load failure becomes no match rather
+		 * than an error.
+		 */
+		klass = mono_class_from_name_checked (image, desc->name_space, desc->klass, error);
+		mono_error_cleanup (error);
 		if (!klass)
 			return NULL;
 		return mono_method_desc_search_in_class (desc, klass);
