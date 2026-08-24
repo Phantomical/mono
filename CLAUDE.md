@@ -315,24 +315,24 @@ and the note says which split:
 - `MONO_LLVM_JIT_TIER1_THRESHOLD=<n>` — calls at tier 0 before a method is asked for as
   tier 1, default 10. Zero never promotes, which separates a tier-0 entry bug from a
   promotion bug. One promotes on the first call, which puts the switch inside a loop.
-- `MONO_LLVM_JIT_TIER2_THRESHOLD=<n>` — entries of a tier-1 body before it asks for tier
-  2, default 20000. The counter is spent at the top of the body. Zero leaves a body
-  instrumented and counting while it never promotes on its own, which is what a test
-  driving the tiers through `Mono.Tiering.MonoTier::PromoteNow` wants. It turns
-  `MONO_LLVM_JIT_TIER2_COST_THRESHOLD` off as well, so zero means no automatic promotion
-  of any kind.
-- `MONO_LLVM_JIT_TIER2_COST_THRESHOLD=<n>` — work a tier-1 body does before it asks for
-  tier 2, default 100000000. One unit is one instruction that emits code, so the turns of
-  a loop reach this threshold where a count of entries does not, and a method whose time
-  is inside one call promotes. The body adds the work up in a register, one add per loop
-  header, and takes the total off the counter at each exit. A body promotes on whichever
-  of the two counters runs out first, and the two find different methods: the entry
-  counter finds a three-instruction getter called millions of times, and this one finds a
-  kernel called eleven times that never leaves its loop. A body entered once that never
-  returns reaches neither: that needs OSR, which does not exist here. Zero leaves the body
-  counting entries alone, which separates a promotion this counter asked for from one the
-  entry counter did. `passes/tier-counter.hpp` has the emission and `runtime/options.cpp`
-  the workloads the default is set against.
+- `MONO_LLVM_JIT_TIER2_THRESHOLD=<n>` — what a tier-1 body spends before it asks for tier
+  2, default 100000000. One unit is one instruction that emits code, and a call costs
+  `MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT` on top, so one counter reaches a body that is hot and
+  a body that is heavy. A body with a loop adds the turns up in a register, one add per
+  loop header, and takes the total off at each exit; a body with no loop spends a constant,
+  which its entry takes off instead. A body entered once that never returns reaches
+  neither: that needs OSR, which does not exist here. Zero leaves a body instrumented and
+  counting while it never promotes on its own, which is what a test driving the tiers
+  through `Mono.Tiering.MonoTier::PromoteNow` wants.
+- `MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT=<n>` — what one call adds to that count, default 5000.
+  It is the exchange rate between how hot a method is and how much it does, in the same
+  units: a body that does no work promotes after threshold over weight calls, which the
+  defaults put at twenty thousand. The two halves find different methods, and neither one
+  alone finds both — the calls find a three-instruction getter called millions of times,
+  and the work finds a kernel called eleven times that never leaves its loop. Zero counts
+  work alone, which separates a promotion the work asked for from one the calls asked for.
+  `passes/tier-counter.hpp` has the emission and `runtime/options.cpp` the workloads the
+  defaults are set against.
 - `MONO_LLVM_JIT_TIER2=<0|false|empty>` (and its own copy in `jit.cpp`) — turn tier 2
   off. It is on by default, which is what puts profiling instrumentation in every tier-1
   body, so this switch separates a tier-2 bug from a tier-1 one.
@@ -568,11 +568,11 @@ every call still standing leaves the module by symbol. Running the two layers an
 costs a large fraction of compile time.
 
 `run_tier2_pipeline ()` is the other one, and it is on by default. Every tier-1 body
-carries profiling instrumentation, and a body entered twenty thousand times, or one that
-has run a hundred million instructions, is compiled again against the counts it gathered,
-at O3 with an optimizing selector. `TierCounterPass` puts in both counters: the entries
-are spent at the top of the body, and the work is added up in a register and taken off at
-each exit.
+carries profiling instrumentation, and a body that has spent a hundred million units — one
+for each instruction it runs and five thousand for each call — is compiled again against
+the counts it gathered, at O3 with an optimizing selector. `TierCounterPass` puts that
+counter in: a body with a loop adds the turns up in a register and takes the total off at
+each exit, and a body with no loop spends a constant its entry takes off.
 
 Beyond taking a site the IL already settled — non-virtual, `final`, or resolved by
 `constrained.` — the JIT does not devirtualize. If devirtualization does arrive, it is

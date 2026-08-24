@@ -315,8 +315,8 @@ private:
 	void unwind_folded_body ();
 
 	std::atomic<MonoTier> tier_ { MonoTier::none };
-	/* The highest tier anything has asked for, which is what keeps two counters
-	 * running out at once from queueing the same compile twice. */
+	/* The highest tier anything has asked for, which is what keeps two requests
+	 * arriving at once from queueing the same compile twice. */
 	std::atomic<MonoTier> requested_ { MonoTier::none };
 
 	std::atomic<InterpMethod *> interp_method_ { nullptr };

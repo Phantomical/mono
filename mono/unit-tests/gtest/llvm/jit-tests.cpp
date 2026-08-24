@@ -558,7 +558,7 @@ TEST_F (JitProfile, EachInstrumentedFunctionGetsItsOwnCounters)
 	             || b.counters + b.count <= a.counters);
 
 	// The counts themselves: run each a different number of times and read the
-	// entry counter back out of live code memory.
+	// entry block's counter back out of live code memory.
 	auto fn_a = reinterpret_cast<int32_t (*) (int32_t)> (first.entry);
 	auto fn_b = reinterpret_cast<int32_t (*) (int32_t)> (second.entry);
 
@@ -572,16 +572,18 @@ TEST_F (JitProfile, EachInstrumentedFunctionGetsItsOwnCounters)
 }
 
 /*
- * Where TierCounterPass puts the work counter. The pass adds up the work a body
- * does in a register and takes it off the counter at each exit, so two things
+ * Where TierCounterPass puts the counter in a body that has a loop. The pass adds
+ * the turns up in a register and takes the total off at each exit, so two things
  * about the emission matter as much as the arithmetic: the accumulator reaches
  * the counter through registers rather than a stack slot, and one add covers a
  * loop rather than one add covering a block. Tier-1 codegen is FastISel with the
  * fast register allocator, and no pass behind this one tidies up either mistake.
  *
- * The call counter beside it needs no case of its own: the entry check it emits
- * is one load and one branch, run once, and every managed test in the tree
- * exercises it.
+ * A body with no loop needs no case of its own. It spends a constant, so the
+ * check goes at the entry and is one load and one branch, and every managed test
+ * in the tree exercises it.
+ *
+ * These cases set the entry weight to zero, so a count below is the work alone.
  */
 
 /// The declaration a test function throws through.
@@ -607,11 +609,11 @@ ask_for_a_counter (Module &m, Function *fn, StringRef threshold)
 {
 	std::string handle = (fn->getName () + ".handle").str ();
 
-	// The work counter only, because these cases are about where its write-backs
-	// land. A call counter beside it would put a check in the entry block and
-	// take an atomic off a global these cases then have to tell apart.
-	fn->addFnAttr (tier_counter_attribute, "0");
-	fn->addFnAttr (tier_cost_attribute, threshold);
+	// An entry weight of zero, because these cases are about where the write-backs
+	// land and what they charge. A weight would add itself to each of them, which
+	// says nothing about placement and moves every count below.
+	fn->addFnAttr (tier_counter_attribute, threshold);
+	fn->addFnAttr (tier_entry_weight_attribute, "0");
 	fn->addFnAttr (tier_handle_attribute, handle);
 	new GlobalVariable (m, Type::getInt32Ty (m.getContext ()), /*isConstant=*/true,
 	                    GlobalValue::PrivateLinkage,

@@ -36,7 +36,7 @@ mono_personality (int, _Unwind_Action, _Unwind_Exception_Class, struct _Unwind_E
 }
 
 /*
- * What a body's entry counter calls when it runs out.
+ * What a tier-1 body calls when its counter runs out.
  *
  * It takes the record rather than the method because the record pairs the
  * method with the domain the code was compiled for. The calling thread's

@@ -23,31 +23,34 @@ namespace mono {
 namespace {
 
 /*
- * A tier-1 body carries two counters and asks for tier 2 when either runs out.
- * One counts calls, at the entry. The other counts the work the body does, in
- * instructions that emit code, and the body adds that up in a register:
+ * A tier-1 body counts what it spends and asks for tier 2 when the count runs
+ * out. One unit is one instruction that emits code, and a call costs the entry
+ * weight on top. The body adds up the turns of its loops in a register:
  *
- *         calls -= 1                          in the entry block
  *         acc = 0                             in the entry block
  *         acc += weight (loop)                in each loop header
- *         cost -= acc + acyclic_weight        at each exit
+ *         cost -= acc + constant              at each exit
  *
- * Two counters, because each one alone leaves out a population that pays for a
- * tier-2 compile. A count of calls says nothing about how long a method runs, so
- * a method whose time is inside one loop never reaches it: euler keeps
- * Euler.Tunnel:calculateR () at tier 1 for a whole run that way. A count of work
- * says nothing about how often a method is called, so a body of three
- * instructions never reaches it however hot it is. SharpChess is full of those -
- * property getters called millions of times - and they are the methods whose
- * promotion pays there, because tier 2 folds them into their callers.
+ * The constant is the weight of the blocks no loop holds, plus the entry weight.
+ * So one counter reaches a body that is hot and a body that is heavy, which a
+ * count of one kind alone does not. A count of calls says nothing about how long
+ * a method runs, and euler keeps Euler.Tunnel:calculateR () at tier 1 for a whole
+ * run that way. A count of work says nothing about how often a method is called,
+ * and a body of three instructions never reaches one however hot it is:
+ * SharpChess is full of those, property getters called millions of times, and
+ * they are the methods whose promotion pays there.
  *
- * Placement of the work count is per loop rather than per block, because no pass
- * behind this one tidies up what it writes, and tier-1 codegen is FastISel with
- * the fast register allocator. One add for each loop keeps the live range short
- * enough to stay in a register. A loop charges the weight of its own blocks once
- * for each turn, which is exact for a straight-line body and too much for a
- * branchy one. The blocks outside every loop are one constant, charged once for
- * each call.
+ * A call of a body no loop has any weight in costs the constant and no more, so
+ * the whole cost is known here and the check goes at the entry with no
+ * accumulator behind it. That is most methods. Leaving the write-backs in them is
+ * expensive: pystone under IronPython reads +8.9% of CPU with a write-back in
+ * every body against -1.1% with them in the bodies that have a loop.
+ *
+ * Placement is per loop rather than per block, because no pass behind this one
+ * tidies up what it writes, and tier-1 codegen is FastISel with the fast register
+ * allocator. One add for each loop keeps the live range short enough to stay in a
+ * register. A loop charges the weight of its own blocks once for each turn, which
+ * is exact for a straight-line body and too much for a branchy one.
  */
 
 /// Counts the instructions in block that emit code.
@@ -104,8 +107,10 @@ write_back_point (ReturnInst *ret)
 /// left the frame. A write-back in front of one takes the same work off the
 /// counter again when the ret is reached.
 ///
-/// Work is lost when the exception of a callee unwinds through this frame. No
-/// instruction in the frame marks that point.
+/// A call is lost when the exception of a callee unwinds through this frame, and
+/// the work of that call with it. No instruction in the frame marks that point.
+/// So a body that leaves only that way promotes on nothing, where a counter at
+/// the entry would have counted the call.
 void
 collect_write_backs (Function &f, SmallVectorImpl<Instruction *> &points)
 {
@@ -127,22 +132,15 @@ collect_write_backs (Function &f, SmallVectorImpl<Instruction *> &points)
 	}
 }
 
-/// Puts the accumulator in, and answers with the weight of the blocks no loop
-/// holds.
+/// Adds each loop's weight into per_loop, and answers with the weight of the
+/// blocks no loop holds.
 ///
-/// The accumulator is a stack slot, which PromoteMemToReg turns into phis once
-/// the write-backs are in. Each store is the last value plus a step, so a slot
-/// needs none of the bookkeeping an SSAUpdater wants.
-/// ProfileCounterPromoterPass builds its own accumulators the same way.
-///
-/// Null when no loop in f has any weight, and the whole cost is then the
-/// constant.
-AllocaInst *
-emit_accumulator (Function &f, LoopInfo &li, uint64_t &acyclic)
+/// The entry block lies in no loop, because it has no predecessor, so the answer
+/// is never zero.
+uint64_t
+weigh (Function &f, LoopInfo &li, DenseMap<const Loop *, uint64_t> &per_loop)
 {
-	DenseMap<const Loop *, uint64_t> per_loop;
-
-	acyclic = 0;
+	uint64_t acyclic = 0;
 
 	for (BasicBlock &block : f) {
 		uint64_t weight = block_weight (block);
@@ -150,17 +148,27 @@ emit_accumulator (Function &f, LoopInfo &li, uint64_t &acyclic)
 		if (weight == 0)
 			continue;
 
-		// The innermost loop, which is what makes the total the weight of the
-		// blocks one loop holds and its sub-loops do not.
+		// The innermost loop, which is what makes a loop's total the weight of
+		// the blocks it holds and its sub-loops do not.
 		if (const Loop *loop = li.getLoopFor (&block))
 			per_loop[loop] += weight;
 		else
 			acyclic += weight;
 	}
 
-	if (per_loop.empty ())
-		return nullptr;
+	return acyclic;
+}
 
+/// Puts the accumulator in, and adds each loop's weight at its header.
+///
+/// The accumulator is a stack slot, which PromoteMemToReg turns into phis once
+/// the write-backs are in. Each store is the last value plus a step, so a slot
+/// needs none of the bookkeeping an SSAUpdater wants.
+/// ProfileCounterPromoterPass builds its own accumulators the same way.
+AllocaInst *
+emit_accumulator (Function &f, LoopInfo &li,
+                  const DenseMap<const Loop *, uint64_t> &per_loop)
+{
 	Type *i64 = Type::getInt64Ty (f.getContext ());
 	BasicBlock &entry = f.getEntryBlock ();
 	IRBuilder<> at_entry (&entry, entry.getFirstInsertionPt ());
@@ -247,27 +255,23 @@ emit_check (Instruction *at, Value *cost, GlobalVariable *counter,
 	at_ask.CreateBr (done);
 }
 
-/// Takes this exit's share of the work off the cost counter.
+/// Takes this exit's share of what the body spent off the counter.
 void
-emit_write_back (Instruction *at, AllocaInst *slot, uint64_t acyclic,
+emit_write_back (Instruction *at, AllocaInst *slot, uint64_t constant,
                  GlobalVariable *counter, FunctionCallee promote, Constant *method)
 {
 	Type *i64 = Type::getInt64Ty (at->getContext ());
-	Value *cost = ConstantInt::get (i64, acyclic);
 
 	// In front of at, so the split inside emit_check () leaves the value where
 	// it dominates the blocks that read it.
-	if (slot != nullptr) {
-		IRBuilder<> at_point (at);
-		Value *acc = at_point.CreateLoad (i64, slot, "tier_acc");
-
-		cost = acyclic == 0 ? acc : at_point.CreateAdd (acc, cost, "tier_cost");
-	}
+	IRBuilder<> at_point (at);
+	Value *cost = at_point.CreateAdd (at_point.CreateLoad (i64, slot, "tier_acc"),
+	                                  ConstantInt::get (i64, constant), "tier_cost");
 
 	emit_check (at, cost, counter, promote, method);
 }
 
-/// Takes one off the call counter, after the frame and in front of the work.
+/// Takes the whole cost of a call off the counter, after the frame.
 ///
 /// A static alloca has to stay in the entry block to be a stack slot, so the
 /// check goes behind the last of them. Everything else carries on in the block
@@ -279,8 +283,8 @@ emit_write_back (Instruction *at, AllocaInst *slot, uint64_t acyclic,
 /// Codegen then refuses it with "failed to perform tail call elimination on a
 /// call site marked musttail".
 void
-emit_entry_check (Function &f, GlobalVariable *counter, FunctionCallee promote,
-                  Constant *method)
+emit_entry_check (Function &f, uint64_t constant, GlobalVariable *counter,
+                  FunctionCallee promote, Constant *method)
 {
 	BasicBlock &entry = f.getEntryBlock ();
 	BasicBlock::iterator split = entry.getFirstNonPHIIt ();
@@ -289,7 +293,8 @@ emit_entry_check (Function &f, GlobalVariable *counter, FunctionCallee promote,
 		if (isa<AllocaInst> (&i))
 			split = std::next (i.getIterator ());
 
-	emit_check (&*split, ConstantInt::get (Type::getInt64Ty (f.getContext ()), 1),
+	emit_check (&*split,
+	            ConstantInt::get (Type::getInt64Ty (f.getContext ()), constant),
 	            counter, promote, method);
 }
 
@@ -307,21 +312,9 @@ make_counter (Module &m, uint64_t threshold, StringRef name)
 	return counter;
 }
 
-bool
-instrument (Function &f, uint64_t calls, uint64_t work, Constant *method)
+void
+instrument (Function &f, uint64_t threshold, uint64_t entry_weight, Constant *method)
 {
-	SmallVector<Instruction *, 8> points;
-
-	collect_write_backs (f, points);
-
-	// A body nothing leaves through a ret or a throw of its own has nowhere to
-	// write a work count back from, so it counts calls alone.
-	if (points.empty ())
-		work = 0;
-
-	if (calls == 0 && work == 0)
-		return false;
-
 	Module &m = *f.getParent ();
 	LLVMContext &ctx = m.getContext ();
 
@@ -330,58 +323,52 @@ instrument (Function &f, uint64_t calls, uint64_t work, Constant *method)
 		FunctionType::get (Type::getVoidTy (ctx), { PointerType::get (ctx, 0) },
 	                           false));
 
-	/*
-	 * The weights come off the body before this pass writes anything into it, so
-	 * a body does not count the cost of counting. The accumulator goes in next,
-	 * and the call check after it: the check splits the entry block, and the
-	 * entry block holds no loop header, because it has no predecessor and so
-	 * lies on no cycle. So the split leaves every header in place.
-	 */
+	// The weights come off the body before this pass writes anything into it, so
+	// a body does not count the cost of counting.
 	DominatorTree dt (f);
 	LoopInfo li (dt);
-	uint64_t acyclic = 0;
-	AllocaInst *slot = work == 0 ? nullptr : emit_accumulator (f, li, acyclic);
+	DenseMap<const Loop *, uint64_t> per_loop;
+	uint64_t sum = weigh (f, li, per_loop) + entry_weight;
+
+	// The counter is signed. A cost past INT64_MAX reads as a negative number and
+	// the subtraction adds to the counter, so such a body never promotes.
+	uint64_t constant = sum > INT64_MAX ? INT64_MAX : sum;
+
+	SmallVector<Instruction *, 8> points;
+
+	collect_write_backs (f, points);
+
+	GlobalVariable *counter = make_counter (m, threshold, "mono_tier_cost");
 
 	/*
-	 * A body with no loop does at most acyclic units in a call, because a call
-	 * runs a subset of the blocks no loop holds. So it takes at least
-	 * work / acyclic calls to spend the work counter, and where that is the call
-	 * threshold or more the call check always gets there first. The work counter
-	 * is then dead, and taking it out takes the accumulator and every write-back
-	 * with it.
+	 * A call of a body with no weight in any loop costs the constant and no
+	 * more. A body nothing leaves through a ret or a throw of its own has
+	 * nowhere to write a running total back from, and the constant is the most
+	 * it can be charged. Either way the whole cost is known here, so the entry
+	 * takes it and the body carries no accumulator.
 	 *
-	 * This is most methods, and leaving it in is expensive: pystone under
-	 * IronPython reads +8.9% of CPU with the write-backs in every body against
-	 * +0.7% once only the bodies with a loop carry them.
+	 * The entry block holds no loop header, because it has no predecessor and so
+	 * lies on no cycle. So the split the check makes there leaves every header
+	 * in place.
 	 */
-	if (slot == nullptr && calls != 0 && acyclic <= work / calls)
-		work = 0;
-
-	if (calls != 0)
-		emit_entry_check (f, make_counter (m, calls, "mono_tier_calls"), promote,
-		                  method);
-
-	if (work == 0)
-		return true;
-
-	GlobalVariable *counter = make_counter (m, work, "mono_tier_cost");
-
-	for (Instruction *at : points)
-		emit_write_back (at, slot, acyclic, counter, promote, method);
-
-	if (slot != nullptr) {
-		// A check splits a block, so the tree above no longer describes f.
-		DominatorTree split (f);
-		SmallVector<AllocaInst *, 1> slots = { slot };
-
-		PromoteMemToReg (slots, split);
+	if (per_loop.empty () || points.empty ()) {
+		emit_entry_check (f, constant, counter, promote, method);
+		return;
 	}
 
-	return true;
+	AllocaInst *slot = emit_accumulator (f, li, per_loop);
+
+	for (Instruction *at : points)
+		emit_write_back (at, slot, constant, counter, promote, method);
+
+	// A check splits a block, so the tree above no longer describes f.
+	DominatorTree split (f);
+	SmallVector<AllocaInst *, 1> slots = { slot };
+
+	PromoteMemToReg (slots, split);
 }
 
-/// The threshold named by one attribute, or zero for a body that asks for no
-/// check of that kind.
+/// The number one attribute names, or zero where it names none.
 ///
 /// Zero is a real value tier2_threshold () can return rather than a parse
 /// failure, and a value nothing parses answers the same way.
@@ -408,10 +395,9 @@ TierCounterPass::run (Module &m, ModuleAnalysisManager &)
 		if (f.isDeclaration () || !f.hasFnAttribute (tier_counter_attribute))
 			continue;
 
-		uint64_t calls = threshold_from (f, tier_counter_attribute);
-		uint64_t work = threshold_from (f, tier_cost_attribute);
+		uint64_t threshold = threshold_from (f, tier_counter_attribute);
 
-		if (calls == 0 && work == 0)
+		if (threshold == 0)
 			continue;
 
 		// The translator recorded it, so the linker has an address for it. We
@@ -423,7 +409,9 @@ TierCounterPass::run (Module &m, ModuleAnalysisManager &)
 		if (method == nullptr)
 			continue;
 
-		changed |= instrument (f, calls, work, method);
+		instrument (f, threshold, threshold_from (f, tier_entry_weight_attribute),
+		            method);
+		changed = true;
 	}
 
 	return changed ? PreservedAnalyses::none () : PreservedAnalyses::all ();

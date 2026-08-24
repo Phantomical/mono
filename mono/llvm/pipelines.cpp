@@ -342,9 +342,9 @@ MonoPassBuilder::buildTier1Pipeline ()
 	 * which has no tiering counter of its own. The counters' blocks are then
 	 * outside the CFG the instrumentation hashed.
 	 *
-	 * Behind RestoreTailPositionPass as well, because the work counter writes
-	 * back at each exit. A write-back in front of the ret that pass looks for
-	 * hides the shape it repairs, and the tail call is lost.
+	 * Behind RestoreTailPositionPass as well, because a body with a loop writes
+	 * its count back at each exit. A write-back in front of the ret that pass
+	 * looks for hides the shape it repairs, and the tail call is lost.
 	 *
 	 * Behind RgctxDedupPass for the weights. That pass takes fetches out, and a
 	 * weight read in front of it counts instructions the body never runs.

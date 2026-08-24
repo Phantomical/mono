@@ -5,23 +5,25 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 
 /*
- * The counter that takes a body to tier 2 on the work it does rather than on
- * the number of times it is entered.
+ * The work a tier-1 body does, as the half of the tier-2 counter that a count of
+ * calls does not reach.
  *
- * Kernel () is called far fewer times than MONO_LLVM_JIT_TIER2_THRESHOLD, and
- * each call runs a loop long enough to spend the work threshold. A promotion
- * here is therefore the work counter's and no other counter's.
+ * HeavyKernel () and LightKernel () have the same body and take the same number
+ * of calls, far below what the entry weight alone spends. They differ in the
+ * turns of one loop. So the calls each of them charges are equal, and the work
+ * is the only thing that can take one of them to tier 2 and leave the other at
+ * tier 1. That pair is this test's control, and it holds inside one process
+ * rather than across two runs of it.
  *
  * What says the tier-2 body is the one running is the stack trace. Probe () has
  * a branch, so the shape-test pre-pass declines it and only the tier-2 cost
  * model folds it in. A folded body owns no code: its frame reports the native
- * offset of the call site in Kernel () that it was folded at, and the same
- * helper called for real reports an offset into its own body.
+ * offset of the call site it was folded at, and the same helper called for real
+ * reports an offset into its own body.
  *
- * The suite registers this source twice. MONO_LLVM_JIT_TIER2_COST_THRESHOLD
- * names the work threshold in one arm and is zero in the other, which leaves
- * the body counting entries alone. The test reads the variable and asserts the
- * arm it is in, so the second arm is this one's negative control.
+ * The suite registers this source twice. MONO_LLVM_JIT_TIER2_THRESHOLD is a
+ * number one arm reaches and is zero in the other, which turns automatic
+ * promotion off. The test reads the variable and asserts the arm it is in.
  */
 
 namespace Mono.Tiering {
@@ -35,15 +37,24 @@ static class Program {
 	/* MonoTier::tier1, as PromoteNow takes it. */
 	const int tier1 = 2;
 
-	/* Turns of the loop in one call of Kernel (). */
-	const int work = 100000;
+	/* Turns of the loop in one call of each kernel. */
+	const int heavy = 100000;
+	const int light = 10;
 
 	/*
-	 * Calls of Kernel () before the test looks at the tier. Three orders of
-	 * magnitude below the default entry threshold of twenty thousand, so the
-	 * entry counter cannot be what promotes this body.
+	 * Calls each kernel takes before the test looks at the tier. The entry
+	 * weight is five thousand, so both kernels charge about three hundred
+	 * thousand for their calls, and the threshold the suite sets is ten million.
+	 * Neither of them promotes on the calls alone.
 	 */
 	const int calls = 64;
+
+	/*
+	 * Calls of Tiny (), which has no loop and spends about the entry weight in
+	 * each of them. Four thousand takes it past the same ten million, so it
+	 * promotes on its calls where the work in it reaches nothing.
+	 */
+	const int tiny_calls = 4000;
 
 	/* Whether Probe () had a frame in the last trace, and where its code was. */
 	static bool saw_probe, probe_runs_inside_kernel;
@@ -57,15 +68,15 @@ static class Program {
 	}
 
 	/*
-	 * Whether the frame reported for Probe () covers the same code as
-	 * Kernel ()'s.
+	 * Whether the frame reported for Probe () covers the same code as its
+	 * caller's.
 	 *
 	 * A folded body has no code of its own, so the frame built for it reports
-	 * the call site in Kernel () that it was folded at. That is the same native
-	 * offset Kernel ()'s own frame reports. A helper that was really called runs
-	 * in its own body and answers with an offset into that.
+	 * the call site it was folded at. That is the same native offset the caller's
+	 * own frame reports. A helper that was really called runs in its own body and
+	 * answers with an offset into that.
 	 */
-	static bool RunsInsideKernel (Exception e)
+	static bool RunsInsideKernel (Exception e, string kernel)
 	{
 		StackTrace st = new StackTrace (e, false);
 		int in_probe = -1, in_kernel = -2;
@@ -78,28 +89,28 @@ static class Program {
 				continue;
 			if (m.Name == "Probe")
 				in_probe = f.GetNativeOffset ();
-			if (m.Name == "Kernel")
+			if (m.Name == kernel)
 				in_kernel = f.GetNativeOffset ();
 		}
 
 		return in_probe >= 0 && in_probe == in_kernel;
 	}
 
-	static int Kernel (int n, bool throwing)
+	/*
+	 * The two kernels are one body written twice, so that the pair differs in
+	 * the turns of the loop and in nothing else. Neither may fold into the other
+	 * or into Observe (), because a folded kernel counts against its caller.
+	 *
+	 * Probe () is called from inside the loop rather than after it. The cost
+	 * model ranks a call site by the block count the profile gave it, and a site
+	 * beside a loop this long reads cold whatever the loop costs. Inside it the
+	 * site is as hot as the loop.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int HeavyKernel (int n, bool throwing)
 	{
 		int total = 0;
 
-		/*
-		 * The work counter counts the turns of this loop. An entry counter sees
-		 * one call whatever the loop runs, which is the split this test is
-		 * about.
-		 *
-		 * Probe () is called from inside the loop rather than after it. The
-		 * cost model ranks a call site by the block count the profile gave it,
-		 * and a site beside a loop this long reads cold whatever the loop
-		 * costs. Inside it the site is as hot as the loop, which is what leaves
-		 * the fold to the gates and to the size of the body.
-		 */
 		try {
 			for (int i = 0; i < n; ++i) {
 				total += i * 3 + (i & 7);
@@ -108,17 +119,75 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_probe = true;
-			probe_runs_inside_kernel = RunsInsideKernel (e);
+			probe_runs_inside_kernel = RunsInsideKernel (e, "HeavyKernel");
 		}
 
 		return total;
 	}
 
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int LightKernel (int n, bool throwing)
+	{
+		int total = 0;
+
+		try {
+			for (int i = 0; i < n; ++i) {
+				total += i * 3 + (i & 7);
+				Probe ("probe", throwing);
+			}
+		} catch (InvalidOperationException e) {
+			total += e.Message.Length;
+			saw_probe = true;
+			probe_runs_inside_kernel = RunsInsideKernel (e, "LightKernel");
+		}
+
+		return total;
+	}
+
+	/*
+	 * A body with no loop, which spends about the entry weight in a call and
+	 * almost nothing else. It is the shape a count of work alone never reaches,
+	 * and SharpChess is full of it: a property getter of a few instructions,
+	 * called very often, whose tier-2 payoff is being folded into its callers.
+	 *
+	 * Probe () throws only for a negative argument, so the calls that spend the
+	 * counter cost what the body costs and the last one reads the tier.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int Tiny (int x)
+	{
+		try {
+			Probe ("tiny", x < 0);
+		} catch (InvalidOperationException e) {
+			saw_probe = true;
+			probe_runs_inside_kernel = RunsInsideKernel (e, "Tiny");
+			return 0;
+		}
+
+		return x * 3 + 1;
+	}
+
 	/* One call that throws, and what its trace said about the tier. */
-	static bool Observe ()
+	static bool Observe (bool is_heavy)
 	{
 		saw_probe = probe_runs_inside_kernel = false;
-		Kernel (work, true);
+
+		if (is_heavy)
+			HeavyKernel (heavy, true);
+		else
+			LightKernel (light, true);
+
+		if (!saw_probe)
+			throw new Exception ("Probe () has no frame in the trace");
+
+		return probe_runs_inside_kernel;
+	}
+
+	/* The same reading for Tiny (), whose throwing argument is a negative one. */
+	static bool ObserveTiny ()
+	{
+		saw_probe = probe_runs_inside_kernel = false;
+		Tiny (-1);
 
 		if (!saw_probe)
 			throw new Exception ("Probe () has no frame in the trace");
@@ -137,53 +206,109 @@ static class Program {
 		++fails;
 	}
 
-	public static int Main ()
+	/// Puts one kernel at tier 1, then runs it and answers whether it folded.
+	static bool Run (string name, bool is_heavy, int n)
 	{
-		string threshold = Environment.GetEnvironmentVariable (
-			"MONO_LLVM_JIT_TIER2_COST_THRESHOLD");
-		bool want_tier2 = threshold != "0";
-
-		MethodInfo kernel = typeof (Program).GetMethod ("Kernel",
+		MethodInfo kernel = typeof (Program).GetMethod (name,
 			BindingFlags.Static | BindingFlags.NonPublic);
 
 		/*
 		 * Tier 1 first, and asked for rather than waited for: an interpreted
 		 * caller reaches an interpreted callee without the runtime being asked
-		 * for it, so the calls below leave Kernel () where it started. The work
+		 * for it, so the calls below leave the kernel where it started. The
 		 * counter is in the tier-1 body and counts nothing until there is one.
 		 */
 		if (!Mono.Tiering.MonoTier.PromoteNow (kernel.MethodHandle.Value, tier1)) {
-			Console.WriteLine ("FAIL: Kernel () would not compile at tier 1");
-			return 1;
+			Console.WriteLine ("FAIL: {0} () would not compile at tier 1", name);
+			++fails;
+			return false;
 		}
 
-		Check (!Observe (), "the helper has a body of its own before tier 2");
+		Check (!Observe (is_heavy), "the helper has a body of its own before tier 2");
 
-		int want = Kernel (work, false);
+		int want = is_heavy ? HeavyKernel (n, false) : LightKernel (n, false);
 
 		for (int i = 0; i < calls; ++i)
-			Check (Kernel (work, false) == want, "the answer stays the same");
+			Check ((is_heavy ? HeavyKernel (n, false) : LightKernel (n, false)) == want,
+			       "the answer stays the same");
 
 		/*
 		 * The promotion is queued, so the tier-2 body lands on a compile worker
-		 * rather than on this thread. Give it a bounded wait. Each try is
-		 * another call of Kernel (), which keeps the entry count far below the
-		 * entry threshold in both arms.
+		 * rather than on this thread. Give it a bounded wait. Each try is another
+		 * call of the kernel, which keeps the calls it charges far below the
+		 * threshold in both arms.
 		 */
 		bool folded = false;
 
 		for (int i = 0; i < 100 && !folded; ++i) {
-			folded = Observe ();
+			folded = Observe (is_heavy);
 			if (!folded)
 				Thread.Sleep (10);
 		}
 
-		if (want_tier2)
-			Check (folded, "the work a body does takes it to tier 2");
-		else
-			Check (!folded, "and a body counting entries alone stays at tier 1");
+		Check ((is_heavy ? HeavyKernel (n, false) : LightKernel (n, false)) == want,
+		       "the answer at the end is the answer at the start");
 
-		Check (Kernel (work, false) == want, "the answer at the end is the answer at the start");
+		return folded;
+	}
+
+	/// Puts Tiny () at tier 1, spends its counter in calls, and answers whether it
+	/// folded.
+	static bool RunTiny ()
+	{
+		MethodInfo tiny = typeof (Program).GetMethod ("Tiny",
+			BindingFlags.Static | BindingFlags.NonPublic);
+
+		if (!Mono.Tiering.MonoTier.PromoteNow (tiny.MethodHandle.Value, tier1)) {
+			Console.WriteLine ("FAIL: Tiny () would not compile at tier 1");
+			++fails;
+			return false;
+		}
+
+		Check (!ObserveTiny (), "the helper has a body of its own before tier 2");
+
+		for (int i = 0; i < tiny_calls; ++i)
+			Check (Tiny (i) == i * 3 + 1, "the answer stays the same");
+
+		bool folded = false;
+
+		for (int i = 0; i < 100 && !folded; ++i) {
+			folded = ObserveTiny ();
+			if (!folded)
+				Thread.Sleep (10);
+		}
+
+		return folded;
+	}
+
+	public static int Main ()
+	{
+		string threshold = Environment.GetEnvironmentVariable (
+			"MONO_LLVM_JIT_TIER2_THRESHOLD");
+		bool want_tier2 = threshold != "0";
+
+		bool heavy_folded = Run ("HeavyKernel", true, heavy);
+		bool light_folded = Run ("LightKernel", false, light);
+		bool tiny_folded = RunTiny ();
+
+		if (want_tier2) {
+			Check (heavy_folded, "the work a body does takes it to tier 2");
+			// The other half of the counter, and the half a threshold on work
+			// alone never reaches. Tiny () does almost nothing in a call and
+			// promotes on the number of them.
+			Check (tiny_folded, "the calls a body takes take it to tier 2");
+		} else {
+			Check (!heavy_folded, "and no counter promotes a body while the threshold is zero");
+			Check (!tiny_folded, "and neither does a body that only takes calls");
+		}
+
+		/*
+		 * The control, and it holds in both arms. LightKernel () has the body
+		 * HeavyKernel () has and the calls Tiny () does not: sixty-four of them,
+		 * which is three hundred thousand against a threshold of ten million. So
+		 * it reaches the threshold on neither half and stays where it is.
+		 */
+		Check (!light_folded, "a body with too little of either stays at tier 1");
 
 		if (fails != 0)
 			return 1;

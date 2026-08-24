@@ -107,25 +107,27 @@ bool tier2_enabled ();
 /// that marks no cards takes that path whatever this answers.
 bool inline_write_barrier ();
 
-/// How many calls a tier-1 body takes before it asks to be compiled again.
+/// How much a tier-1 body spends before it asks to be compiled again.
+///
+/// One unit is one instruction that emits code, counted as the body runs it. A
+/// call costs tier2_entry_weight () on top, so the turns of a loop and the number
+/// of calls both reach this threshold. The counter is signed and this answer
+/// never goes past INT64_MAX.
 ///
 /// Zero for a body that never asks on a count of any kind, which leaves it
-/// instrumented and counting while something else decides when it promotes. That
-/// is what turns tier2_cost_threshold () off as well.
-/// MONO_LLVM_JIT_TIER2_THRESHOLD moves it, and the default is twenty thousand.
+/// instrumented and counting while something else decides when it promotes.
+/// MONO_LLVM_JIT_TIER2_THRESHOLD moves it, and the default is a hundred million.
 uint64_t tier2_threshold ();
 
-/// How much work a tier-1 body does before it asks to be compiled again.
+/// What one call adds to the count tier2_threshold () bounds.
 ///
-/// One unit is one instruction that emits code, counted as the body runs it, so
-/// the turns of a loop reach this threshold where a count of calls does not. A
-/// body promotes on whichever of the two counters runs out first. The counter is
-/// signed and this answer never goes past INT64_MAX.
+/// It is the exchange rate between how hot a method is and how much it does, in
+/// the same units: a body that does nothing promotes after
+/// tier2_threshold () / tier2_entry_weight () calls. Zero counts work alone,
+/// which separates a promotion the work asked for from one the calls asked for.
 ///
-/// Zero leaves the body counting calls alone.
-/// MONO_LLVM_JIT_TIER2_COST_THRESHOLD moves it, and the default is a hundred
-/// million.
-uint64_t tier2_cost_threshold ();
+/// MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT moves it, and the default is five thousand.
+uint64_t tier2_entry_weight ();
 
 /// The largest callee, in IL bytes, a compile folds into its caller before any
 /// cost model has looked at it.

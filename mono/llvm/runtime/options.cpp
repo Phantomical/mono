@@ -248,80 +248,57 @@ inline_write_barrier ()
 }
 
 /*
- * A tier-1 body promotes on whichever of two counters runs out first, and these
- * are the two thresholds. A tier-2 compile runs the O3 pipeline with an
- * optimizing selector against a tier-1 body that is O1 and FastISel, so a
- * threshold buys a better body with a compile, and the method has to run enough
- * afterwards to pay for it.
+ * A tier-1 body spends one counter and asks for tier 2 when it runs out. The
+ * counter is charged for the work the body does, one unit for each instruction
+ * that emits code, and for each call, at the entry weight below. A tier-2 compile
+ * runs the O3 pipeline with an optimizing selector against a tier-1 body that is
+ * O1 and FastISel, so the threshold buys a better body with a compile, and the
+ * method has to run enough afterwards to pay for it.
  *
- * Neither count alone covers the methods that pay. Both are needed because the
- * two populations do not overlap:
- *
- * Calls. Twenty thousand entries of the tier-1 body, on top of the ten calls at
- * tier 0 that body cost. Five thousand was too eager on both workloads it has
- * been measured against. Roslyn compiling this tree's corlib reads -13% of
- * process CPU at twenty thousand over 8 paired reps, almost all of it compile
- * time it no longer spends, because that workload is full of methods entered a
- * few thousand times and then never again. SharpChess reads -2.5% over 8 reps,
- * and it is the arm that says how far this can go: at two hundred thousand it
- * turns and costs +8.5%, because its hot methods stay at tier 1 for the whole
- * search. Those hot methods are property getters of three instructions, which no
- * count of work reaches however often they run, and tier 2 pays there by folding
- * them into their callers.
+ * Two populations pay for that compile, and the entry weight is what puts both of
+ * them on one counter:
  *
  * Work. A count of calls says nothing about how long a method runs. euler spends
- * 40% of its run inside Euler.Tunnel:calculateR (), which is entered far too few
- * times to reach any call threshold either arm above would accept, and its
- * tier-2 body measures 22% faster than the one stock mono emits. Counting the
- * work a body does reaches it on the turns of its loop instead. A hundred million
- * costs euler -24% of process CPU over 5 paired pairs and takes calculateR () and
- * the rest of the Euler.Tunnel kernel to tier 2, where the call count took none
- * of them.
+ * 40% of its run inside Euler.Tunnel:calculateR (), which is entered eleven
+ * times, and its tier-2 body measures 22% faster than the one stock mono emits.
+ * The turns of its loop reach a threshold on work that no count of calls reaches.
  *
- * The number is large because the work count must not fire where the call count
- * would have got there. By the time a method has taken twenty thousand calls it
- * has done twenty thousand times its per-call work, so a hundred million
- * pre-empts the call count only for a method that does more than about five
- * thousand instructions in a call. That is the loop-bound population this second
- * counter is for.
+ * Calls. A count of work says nothing about how often a method is called, and a
+ * body of three instructions never reaches a threshold on work however hot it is.
+ * SharpChess is full of those, property getters called millions of times, and
+ * tier 2 pays there by folding them into their callers rather than by emitting
+ * them better. A weight for each call is what reaches them.
  *
- * One million puts that figure at fifty, which is most methods. It cost
- * SharpChess +7.3% of CPU and took its promotions from 241 down to 222, because
- * methods reached tier 2 on a profile of one or two calls. Ten million cost
- * pystone under IronPython +4.9%, where a hundred million costs it +2.6%; euler
- * reads the same at both. Each of those arms is paired, alternating, and read on
- * CPU rather than wall.
+ * The defaults put a body that does no work at twenty thousand calls, which is
+ * a hundred million over five thousand. That call figure is the calibrated one:
+ * five thousand was too eager on every workload it was measured against, and at
+ * two hundred thousand SharpChess turns and costs +8.5% of CPU, because its hot
+ * getters then stay at tier 1 for the whole search.
+ *
+ * The threshold is large for the same reason the call figure is. A method that
+ * has taken twenty thousand calls has done twenty thousand times its per-call
+ * work, so a hundred million reaches a loop-bound body first only where that body
+ * does more than about five thousand instructions in a call. A million puts that
+ * figure at fifty, which is most methods: it cost SharpChess +7.3% of CPU and
+ * took its promotions from 241 down to 222, because methods reached tier 2 on a
+ * profile of one or two calls. Ten million cost pystone under IronPython +4.9%,
+ * where a hundred million costs it +2.6%, and euler reads the same at both.
+ *
+ * One counter that adds the two is more eager than two counters that promote on
+ * whichever runs out first, because a body half way through each of them has
+ * spent this one. The two are furthest apart for a body whose per-call work is
+ * the entry weight, and there the merged count promotes in half the calls. At
+ * both ends, a body that does nothing in a call and a body that does very much,
+ * the two agree.
+ *
+ * Every arm quoted here is paired, with the two arms adjacent and the pair order
+ * alternated, and read on CPU rather than wall.
  */
 uint64_t
 tier2_threshold ()
 {
-	static uint64_t calls = [] () -> uint64_t {
+	static uint64_t cost = [] () -> uint64_t {
 		const char *value = g_getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD");
-
-		if (value == nullptr)
-			return 20000;
-
-		int set = atoi (value);
-
-		// Zero is an instrumented body that never promotes on its own, which
-		// is what a test driving the tiers through
-		// Mono.Tiering.MonoTier::PromoteNow wants.
-		return set > 0 ? (uint64_t) set : 0;
-	}();
-
-	return calls;
-}
-
-uint64_t
-tier2_cost_threshold ()
-{
-	static uint64_t work = [] () -> uint64_t {
-		// The call threshold at zero is the switch that turns automatic
-		// promotion off for good, so it turns this half off with it.
-		if (tier2_threshold () == 0)
-			return 0;
-
-		const char *value = g_getenv ("MONO_LLVM_JIT_TIER2_COST_THRESHOLD");
 
 		if (value == nullptr)
 			return 100000000;
@@ -329,6 +306,10 @@ tier2_cost_threshold ()
 		char *end = nullptr;
 		unsigned long long set = strtoull (value, &end, 10);
 
+		// Zero is an instrumented body that never promotes on its own, which
+		// is what a test driving the tiers through
+		// Mono.Tiering.MonoTier::PromoteNow wants. A value nothing parses
+		// answers the same way.
 		if (end == value || set == 0)
 			return 0;
 
@@ -337,7 +318,35 @@ tier2_cost_threshold ()
 		return std::min<unsigned long long> (set, INT64_MAX);
 	}();
 
-	return work;
+	return cost;
+}
+
+uint64_t
+tier2_entry_weight ()
+{
+	static uint64_t weight = [] () -> uint64_t {
+		// The threshold at zero turns automatic promotion off for good, and a
+		// weight with no counter to charge is worth nothing.
+		if (tier2_threshold () == 0)
+			return 0;
+
+		const char *value = g_getenv ("MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT");
+
+		if (value == nullptr)
+			return 5000;
+
+		char *end = nullptr;
+		unsigned long long set = strtoull (value, &end, 10);
+
+		if (end == value)
+			return 0;
+
+		// A weight past the threshold would promote every body on its first
+		// exit, which the threshold itself already expresses.
+		return std::min<unsigned long long> (set, tier2_threshold ());
+	}();
+
+	return weight;
 }
 
 uint32_t

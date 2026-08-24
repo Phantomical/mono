@@ -701,7 +701,8 @@ MethodLLVMEmitter::mark_for_tier2_instrumentation ()
 
 	address_symbol (handle, *record);
 	function->addFnAttr (tier_counter_attribute, std::to_string (tier2_threshold ()));
-	function->addFnAttr (tier_cost_attribute, std::to_string (tier2_cost_threshold ()));
+	function->addFnAttr (tier_entry_weight_attribute,
+	                     std::to_string (tier2_entry_weight ()));
 	function->addFnAttr (tier_handle_attribute, handle);
 }
 

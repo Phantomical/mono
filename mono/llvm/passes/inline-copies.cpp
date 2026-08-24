@@ -18,7 +18,7 @@ mark_inline_copy (Function &copy, StringRef published_name)
 	// The marks select a body for the counters that ask for the next tier.
 	// Those belong to the method's own body, and this is a copy of it.
 	copy.removeFnAttr (tier_counter_attribute);
-	copy.removeFnAttr (tier_cost_attribute);
+	copy.removeFnAttr (tier_entry_weight_attribute);
 	copy.removeFnAttr (tier_handle_attribute);
 
 	// Local linkage is what lets an inliner delete the copy once it has folded

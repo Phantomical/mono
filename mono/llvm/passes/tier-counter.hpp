@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief The two counters that ask for a body to be compiled again.
+ * \brief The counter that asks for a body to be compiled again.
  */
 
 #ifndef MONO_LLVM_PASSES_TIER_COUNTER_HPP
@@ -11,26 +11,25 @@
 
 namespace mono {
 
-/// How many calls the body takes before it asks for the next tier, as a decimal
+/// How much the body spends before it asks for the next tier, as a decimal
 /// string. A function without this attribute gets no counter at all.
 ///
-/// tier2_threshold () (runtime/options.hpp) says what the number is and what
-/// moves it.
+/// The unit is one instruction that emits code. tier2_threshold ()
+/// (runtime/options.hpp) says what the number is and what moves it.
 constexpr llvm::StringRef tier_counter_attribute = "mono-tier-threshold";
 
-/// How much work the body does before it asks for the next tier, as a decimal
-/// string. Absent or zero leaves the body counting calls alone.
+/// What one call adds to that count, as a decimal string. Absent or zero counts
+/// the work the body does and nothing else.
 ///
-/// The unit is one instruction that emits code. tier2_cost_threshold ()
-/// (runtime/options.hpp) says what the number is and what moves it.
-constexpr llvm::StringRef tier_cost_attribute = "mono-tier-cost-threshold";
+/// tier2_entry_weight () (runtime/options.hpp) says what the number is.
+constexpr llvm::StringRef tier_entry_weight_attribute = "mono-tier-entry-weight";
 
 /// Names the symbol the promotion call-out is handed, which resolves to the
 /// MonoDomainMethod record the body was compiled for.
 constexpr llvm::StringRef tier_handle_attribute = "mono-tier-handle";
 
-/// Makes each body that asks for one count its calls and the work it does, and
-/// ask for the next tier when either count runs out.
+/// Makes each body that asks for one count the work it does and the calls it
+/// takes, and ask for the next tier when that count runs out.
 ///
 /// Run this after the profile instrumentation, never before. Running it
 /// first puts the counters' blocks into the CFG the instrumentation hashes.
