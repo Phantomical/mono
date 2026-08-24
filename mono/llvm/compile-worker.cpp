@@ -16,19 +16,6 @@
 
 namespace mono {
 
-namespace {
-
-/// Set for as long as this thread is attached as a compile worker.
-thread_local bool this_is_a_compile_worker = false;
-
-} // namespace
-
-bool
-on_compile_worker ()
-{
-	return this_is_a_compile_worker;
-}
-
 bool
 CompileWorker::start ()
 {
@@ -43,7 +30,6 @@ CompileWorker::start ()
 
 	mono_thread_internal_attach (mono_get_root_domain ());
 	attached_ = true;
-	this_is_a_compile_worker = true;
 
 	MonoInternalThread *internal = mono_thread_internal_current ();
 
@@ -82,8 +68,6 @@ CompileWorker::start ()
 void
 CompileWorker::stop ()
 {
-	this_is_a_compile_worker = false;
-
 	if (!attached_)
 		return;
 

@@ -32,14 +32,6 @@ private:
 	bool attached_ = false;
 };
 
-/// Whether this thread is one of the compile queue's workers.
-///
-/// A worker takes work with no runtime lock held, so it is the one thread that
-/// can wait for another thread's compile. A mutator that waits deadlocks
-/// against the compile it waits for, which takes the loader lock the mutator
-/// itself can already hold. CompileQueue says more about that cycle.
-bool on_compile_worker ();
-
 } // namespace mono
 
 #endif

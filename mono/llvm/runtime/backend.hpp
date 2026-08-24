@@ -116,7 +116,26 @@ private:
 
 	llvm::Error attach_entry (DomainState &domain, MonoDomainMethod &dm);
 
-	llvm::Expected<Compiled> interp_entries (DomainState &domain, MonoDomainMethod &dm);
+	/// Decides which engine runs \p dm and returns the address that engine is
+	/// entered at. This is what the method's thunk is published pointing at.
+	///
+	/// It takes no decision that has to wait for another thread. A method it
+	/// sends to a compiled tier is answered with the compile entry below, so
+	/// every thread that blocks for a body blocks there.
+	void *policy_entry (DomainState &domain, MonoDomainMethod &dm);
+
+	/// Compiles \p dm on the calling thread and returns where the body landed.
+	///
+	/// The one place a thread waits for a method's code. A method that cannot
+	/// be compiled is answered with a body that raises, so this always returns
+	/// somewhere the caller can be sent.
+	void *compile_entry (DomainState &domain, MonoDomainMethod &dm);
+
+	/// Points \p dm's entry at the interpreter and returns it.
+	///
+	/// Fails when the interpreter does not run the method, which is the
+	/// caller's signal to compile it. A failure leaves the entry untouched.
+	llvm::Expected<Compiled> tier0_entry (DomainState &domain, MonoDomainMethod &dm);
 
 	llvm::Expected<void *> dispatcher (DomainState &domain, MonoDomainMethod &dm);
 
@@ -137,16 +156,16 @@ private:
 	/// Points \p dm's entry at the body \p shared compiles to, compiling that
 	/// body if this domain has not yet.
 	///
-	/// Fails with a SharingRefusal unless the shared body fails verification,
-	/// which comes back as that failure instead. The SharingRefusal cases:
-	/// no thread can build the shared body, or a mutator found another thread
-	/// building it. \p dm is then left untouched, which is the caller's signal
-	/// to compile it against its own instantiation.
+	/// Fails with a SharingRefusal when the shared body cannot be built, and
+	/// with that body's own failure when it fails verification. \p dm is left
+	/// untouched either way, which is the caller's signal to compile it
+	/// against its own instantiation. A refusal decides for the life of the
+	/// domain which body this instantiation runs, so a detour on the shared
+	/// form misses it from then on.
 	///
-	/// A refusal decides for the life of the domain which body this
-	/// instantiation runs, so a detour on the shared form misses it from then
-	/// on. Only a compile worker waits for another thread's build; see
-	/// claim_shared_body ().
+	/// Threads that want one shared body at once build it once, the losers
+	/// waiting for the winner. That wait is bounded, so a loser can end up
+	/// building the body beside the winner; see claim_shared_body ().
 	llvm::Expected<Compiled> enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 	                                            MonoMethod *shared, MonoTier tier);
 
@@ -163,23 +182,23 @@ private:
 	enum class SharedClaim {
 		/// This thread holds the claim and must build the body.
 		held,
-		/// Another thread holds the claim and this thread did not wait.
-		taken,
 		/// The thread that held the claim released it. The record shows
 		/// what it left, which can be nothing.
 		done,
+		/// Another thread has held the claim for longer than a compile is
+		/// given. This thread builds the body beside it.
+		expired,
 	};
 
 	/// Takes the claim to build \p owner's shared body.
 	///
 	/// A claim this returns as held must be given back with
-	/// release_shared_body (). Every thread but a compile worker gets taken as
-	/// soon as another thread holds the claim. A worker waits instead, and
-	/// comes back with done or with the claim.
+	/// release_shared_body (). A thread that finds the claim taken waits for
+	/// it and comes back with the claim, with done, or with expired.
 	///
-	/// Take no other lock across this call. It blocks until another thread's
-	/// compile is finished, and that compile takes the domain and loader
-	/// locks.
+	/// The wait is bounded because a thread that arrives here can hold a
+	/// runtime lock the holder's compile goes on to want. Such a pair makes
+	/// progress by the waiter giving up rather than by either of them noticing.
 	SharedClaim claim_shared_body (MonoDomainMethod *owner);
 
 	/// Gives back the claim \p owner is built under and wakes what waits for

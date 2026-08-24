@@ -263,7 +263,13 @@ MonoDomainMethod::unwind_folded_body ()
 	for (MonoMethodBody &body : bodies_)
 		body.state = BodyState::superseded;
 
-	/* The rearm before the redirect, on the terms that call states. */
+	/*
+	 * The rearm before the redirect, on the terms that call states. Both
+	 * trampolines: the entry goes back to the first, which sends a method no
+	 * interpreter runs straight to the second, and a stale answer cached on
+	 * either one is a call that never reaches the compile below.
+	 */
+	mono_llvm_jit_rearm_trampoline (domain, compile_trampoline);
 	mono_llvm_jit_rearm_trampoline (domain, trampoline);
 	thunk.redirect (trampoline);
 

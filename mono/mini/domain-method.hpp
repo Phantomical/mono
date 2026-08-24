@@ -241,6 +241,11 @@ public:
 	/// can be given back once nothing can reach the thunk.
 	void *trampoline = nullptr;
 
+	/// The re-entry trampoline that compiles the method, which the one above
+	/// sends it to when no interpreter runs it. Held for the same reason, and
+	/// rearmed beside it: a call can be on its way here while the entry moves.
+	void *compile_trampoline = nullptr;
+
 	/// The jit-info record the thunk was registered under.
 	MonoJitInfo *jinfo = nullptr;
 

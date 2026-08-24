@@ -36,6 +36,7 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/domain-internals.h"
 #include "mono/utils/mono-threads-api.h"
+#include <chrono>
 #include <condition_variable>
 
 namespace mono {
@@ -281,6 +282,7 @@ MonoBackend::DomainState::retire (MonoDomainMethod &dm)
 	 * address it returned lands on the live target or the trap, never in between.
 	 */
 	callbacks->release (dm.trampoline);
+	callbacks->release (dm.compile_trampoline);
 	dm.take_thunk ().quarantine ();
 
 	if (!engine.owned.dylibs.empty ())
@@ -345,55 +347,27 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 	/* Tier policy is this engine's, so the record is told rather than asked. */
 	dm.tier_calls.store (tier0_calls (method), std::memory_order_relaxed);
 
+	/*
+	 * Two trampolines rather than one, so that deciding and compiling are
+	 * separate calls. The policy one below is what the thunk is published
+	 * pointing at, and it answers without waiting for anything. A method it
+	 * sends to a compiled tier is published at this one instead, so a thread
+	 * that has to wait for a body waits at the top of the thunk it entered
+	 * rather than somewhere down the compile.
+	 */
+	llvm::Expected<void *> compiling = domain.callbacks->reserve (
+		[this, &domain, &dm] () -> void * { return compile_entry (domain, dm); });
+	if (!compiling)
+		return compiling.takeError ();
+
+	dm.compile_trampoline = *compiling;
+
 	llvm::Expected<void *> trampoline = domain.callbacks->reserve (
-		[this, &domain, &dm] () -> void * {
-			/* The thunk follows, so the next call skips the trampoline. */
-			auto answer = [&] (void *code) {
-				dm.publish (MonoTier::none, code);
-				return code;
-			};
-
-			/*
-			 * The thread that fires a thunk is not necessarily running as
-			 * the domain that owns it, so binding here can weld one
-			 * domain's copy into another's code. It goes to a dispatcher
-			 * instead, which picks the body out per call.
-			 */
-			if (!bindable (domain.domain, dm.method)) {
-				llvm::Expected<void *> forward = dispatcher (domain, dm);
-
-				if (forward)
-					return answer (*forward);
-				llvm::logAllUnhandledErrors (forward.takeError (),
-				                             llvm::errs (), "mono: ");
-			}
-
-			llvm::Expected<void *> code = entry_point (domain, dm);
-
-			if (code)
-				return answer (*code);
-
-			/*
-			 * A thunk is the end of the line for a failure: the trampoline
-			 * behind it has already put the call's arguments back, and no
-			 * caller is expecting a miss. So it becomes a body that
-			 * raises, and costs the one method that could not be compiled
-			 * rather than the process.
-			 */
-			auto note = [] (const CompiledMethod &, MonoJitInfo *) {};
-			llvm::Expected<Compiled> raising =
-				raise_on_call (*domain.jit, domain.domain, dm.method, code.takeError (), note);
-
-			if (!raising) {
-				llvm::logAllUnhandledErrors (raising.takeError (),
-				                             llvm::errs (), "mono: ");
-				return (void *) &lazy_compile_failed;
-			}
-
-			return answer (raising->body);
-		});
-	if (!trampoline)
+		[this, &domain, &dm] () -> void * { return policy_entry (domain, dm); });
+	if (!trampoline) {
+		domain.callbacks->release (*compiling);
 		return trampoline.takeError ();
+	}
 
 	dm.name = stub_symbol (method);
 
@@ -401,6 +375,7 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 
 	if (!thunk) {
 		domain.callbacks->release (*trampoline);
+		domain.callbacks->release (*compiling);
 		return thunk.takeError ();
 	}
 
@@ -411,6 +386,97 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 	dm.jinfo = thunk->register_jinfo(dm.name, domain.domain, method);
 
 	return llvm::Error::success ();
+}
+
+void *
+MonoBackend::policy_entry (DomainState &domain, MonoDomainMethod &dm)
+{
+	/*
+	 * A thread reaches this trampoline after the thunk has moved on when it
+	 * read the thunk and the redirect landed behind it.
+	 */
+	std::optional<MonoMethodBody> ready = dm.body ();
+
+	if (ready && !recompiling (dm.method))
+		return ready->code;
+
+	/*
+	 * The thread that fires a thunk is not necessarily running as the domain
+	 * that owns it, so binding here can weld one domain's copy into another's
+	 * code. It goes to a dispatcher instead, which picks the body out per call.
+	 */
+	if (!bindable (domain.domain, dm.method)) {
+		llvm::Expected<void *> forward = dispatcher (domain, dm);
+
+		if (forward) {
+			/* The thunk follows, so the next call skips the trampoline. */
+			dm.publish (MonoTier::none, *forward);
+			return *forward;
+		}
+
+		llvm::logAllUnhandledErrors (forward.takeError (), llvm::errs (), "mono: ");
+	}
+
+	/*
+	 * The entry moves to the compile before the interpreter is offered the
+	 * method, and that order is what makes the offer safe to take here.
+	 * Transforming a method runs its class initializer, and a cctor that calls
+	 * back into this very method would otherwise re-enter the trampoline being
+	 * resolved and take this decision again below itself, with nothing to stop
+	 * it. It reaches the compile instead.
+	 */
+
+	/* A tier above this one already owns the entry, a detour among them. It
+	 * keeps it, and the caller goes through the thunk to reach it. */
+	if (!dm.publish (MonoTier::none, dm.compile_trampoline))
+		return dm.thunk.code ();
+
+	llvm::Expected<Compiled> interpreted = tier0_entry (domain, dm);
+
+	if (interpreted)
+		return interpreted->body;
+
+	llvm::consumeError (interpreted.takeError ());
+	return dm.compile_trampoline;
+}
+
+void *
+MonoBackend::compile_entry (DomainState &domain, MonoDomainMethod &dm)
+{
+	/*
+	 * The entry can have moved on since the policy step published this
+	 * trampoline: it publishes before it offers the method to the interpreter,
+	 * so a thread that read the thunk in between arrives here for a method the
+	 * interpreter now runs.
+	 */
+	std::optional<MonoMethodBody> ready = dm.body ();
+
+	if (ready && !recompiling (dm.method))
+		return ready->code;
+
+	llvm::Expected<void *> code = entry_point (domain, dm, /*allow_tier0=*/false);
+
+	if (code)
+		return *code;
+
+	/*
+	 * A thunk is the end of the line for a failure: the trampoline behind it
+	 * has already put the call's arguments back, and no caller is expecting a
+	 * miss. So it becomes a body that raises, and costs the one method that
+	 * could not be compiled rather than the process.
+	 */
+	auto note = [] (const CompiledMethod &, MonoJitInfo *) {};
+	llvm::Expected<Compiled> raising =
+		raise_on_call (*domain.jit, domain.domain, dm.method, code.takeError (), note);
+
+	if (!raising) {
+		llvm::logAllUnhandledErrors (raising.takeError (), llvm::errs (), "mono: ");
+		return (void *) &lazy_compile_failed;
+	}
+
+	/* The thunk follows, so the next call skips the trampoline. */
+	dm.publish (MonoTier::none, raising->body);
+	return raising->body;
 }
 
 llvm::Error
@@ -475,18 +541,66 @@ MonoBackend::attach_interop (MonoDomainMethod &dm)
 }
 
 llvm::Expected<MonoBackend::Compiled>
-MonoBackend::interp_entries (DomainState &domain, MonoDomainMethod &dm)
+MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 {
 	MonoMethod *method = dm.method;
+
+	if (!runs_at_tier0 (method))
+		return llvm::createStringError (llvm::inconvertibleErrorCode (),
+		                                "tier 0 does not run this method");
+
+	/*
+	 * A method whose entry went back to this trampoline after a fold was
+	 * replaced ran compiled before, so its tier-0 call counter is spent. Sent
+	 * to the interpreter now, it would stay there.
+	 */
+	if (dm.past_tier0 ())
+		return llvm::createStringError (llvm::inconvertibleErrorCode (),
+		                                "the method has left tier 0 already");
+
+	// Transforming the method runs its class initializer, which has to run as
+	// the domain the code is for rather than as whatever the calling thread
+	// happens to be running as.
+	DomainScope entered (domain.domain);
+
+	/*
+	 * Before the interpreter is offered the method, so it gets the same verdict
+	 * whichever tier ends up running it: a body the verifier rejects is one no
+	 * tier may run, and one it accepts is one every tier may. The compile asks
+	 * again, and a second answer costs nothing - the verifier records its
+	 * verdict on the method.
+	 */
+	if (llvm::Error invalid = verify_method (method))
+		return std::move (invalid);
+
 	llvm::Expected<arch::InterpEntryPoint> ready = interp_entry (dm);
 
 	if (!ready)
 		return ready.takeError ();
 
-	void *body = arch::interp_entry_thunk ();
-	Compiled entries { body };
+	ERROR_DECL (transform_error);
 
-	dm.publish (MonoTier::interp, body);
+	if (!mini_get_interp_callbacks ()->transform_method (method, transform_error)) {
+		llvm::Error refused = llvm::createStringError (
+			llvm::inconvertibleErrorCode (),
+			"the interpreter could not transform the method: %s",
+			mono_error_get_message (transform_error));
+
+		mono_error_cleanup (transform_error);
+		return std::move (refused);
+	}
+
+	void *body = arch::interp_entry_thunk ();
+
+	/*
+	 * A tier above this one can have taken the entry while the transform ran:
+	 * a cctor it ran can call back into this very method and reach the compile
+	 * entry, and a detour outranks every tier at any time. Whatever owns the
+	 * entry keeps it, and the caller goes through the thunk to reach it.
+	 */
+	if (!dm.publish (MonoTier::interp, body))
+		return Compiled { dm.thunk.code () };
+
 	dm.attach_body (MonoTier::interp, body, nullptr);
 
 	if (is_jit_trace_enabled ()) {
@@ -500,7 +614,7 @@ MonoBackend::interp_entries (DomainState &domain, MonoDomainMethod &dm)
 		g_free (name);
 	}
 
-	return entries;
+	return Compiled { body };
 }
 
 llvm::Expected<void *>
@@ -644,28 +758,33 @@ shared_form (MonoMethod *method)
 
 /*
  * One thread at a time per shared form. Two instantiations of one generic reach
- * the same record, and two threads that both find it unbuilt would both build
- * it - publishing two bodies for it and defining one method's symbols twice in
- * the one domain's linker.
+ * the same record, and two threads that both find it unbuilt would both compile
+ * it, which is work the second of them need not do.
  *
  * A wait for a claim cannot cycle, because no thread that holds one comes to
  * want a second. The holder compiles the shared method, which is open, and
  * shared_form () refuses an open method, so that nested compile takes no claim.
  *
- * Only a compile worker waits. A compile takes the loader lock, and a mutator
- * that arrives here can already hold it, so a mutator that waits for another
- * thread's compile deadlocks against it. CompileQueue has that cycle in full. A
- * worker takes its work with no runtime lock held and gives back each one it
- * takes, so it holds none here.
+ * It can still wait behind a runtime lock. A compile takes the loader lock, and
+ * a mutator that arrives here can already hold it, so a waiter and a holder can
+ * each be what the other is waiting for. That is what the bound below is for:
+ * the waiter gives up, builds the body itself, and drops the lock the holder
+ * wants on the way out. mini takes the same way out of the same shape, with the
+ * same second - see wait_or_register_method_to_compile ().
  */
+static constexpr std::chrono::milliseconds shared_body_wait { 1000 };
+
 MonoBackend::SharedClaim
 MonoBackend::claim_shared_body (MonoDomainMethod *owner)
 {
 	std::unique_lock<std::mutex> lock (mutex_);
 
+	/* A deadline rather than a duration for each wait: the variable covers
+	 * every record, so an unrelated release restarts a duration. */
+	auto expires = std::chrono::steady_clock::now () + shared_body_wait;
+
 	while (!sharing_.insert (owner).second) {
-		if (!on_compile_worker ())
-			return SharedClaim::taken;
+		std::cv_status waited;
 
 		/*
 		 * A thread parked here reaches no safepoint, so a collection that
@@ -674,11 +793,14 @@ MonoBackend::claim_shared_body (MonoDomainMethod *owner)
 		 * of it.
 		 */
 		MONO_ENTER_GC_SAFE;
-		shared_claims_.wait (lock);
+		waited = shared_claims_.wait_until (lock, expires);
 		MONO_EXIT_GC_SAFE;
 
 		if (sharing_.count (owner) == 0)
 			return SharedClaim::done;
+
+		if (waited == std::cv_status::timeout)
+			return SharedClaim::expired;
 	}
 
 	return SharedClaim::held;
@@ -712,31 +834,30 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 	while (!ready || ready->tier < tier) {
 		SharedClaim claim = claim_shared_body (*owner);
 
-		/*
-		 * A mutator does not wait, and this is where an instantiation loses
-		 * the shared body for the life of the domain: a detour on the shared
-		 * form moves every instantiation but this one.
-		 */
-		if (claim == SharedClaim::taken)
-			return llvm::make_error<SharingRefusal> (
-				"another thread is compiling the shared body");
-
 		if (claim == SharedClaim::done) {
 			// claim_shared_body () decides under mutex_, and a read of
 			// the body takes the record's own lock, so the read is here.
 			ready = (*owner)->body ();
 
-			if (!ready)
-				return llvm::make_error<SharingRefusal> (
-					"the shared body could not be built");
-
 			/* Back to the condition, which ends the loop when the body
-			 * the holder built is at this compile's tier and asks for
-			 * the claim again when it is below it. */
+			 * the holder built is at this compile's tier, and asks for
+			 * the claim again when it is below it or when the holder
+			 * built none. */
 			continue;
 		}
 
-		auto unclaim = llvm::make_scope_exit ([&] { release_shared_body (*owner); });
+		bool holding = claim == SharedClaim::held;
+		auto unclaim = llvm::make_scope_exit ([&] {
+			if (holding)
+				release_shared_body (*owner);
+		});
+
+		if (!holding && is_jit_trace_enabled ())
+			MONO_LOCK (jit_trace_mutex ())
+			{
+				llvm::errs () << "[llvm-jit] building " << (*owner)->name
+					      << " beside another thread's compile of it\n";
+			}
 
 		/* Again, now that we hold the claim: the thread that had it may have
 		 * published the body between our first read and the claim. */
@@ -853,49 +974,17 @@ llvm::Expected<MonoBackend::Compiled>
 MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow_tier0,
                            MonoTier tier, bool for_sharing)
 {
-	MonoMethod *method = dm.method;
+	if (allow_tier0) {
+		llvm::Expected<Compiled> interpreted = tier0_entry (domain, dm);
 
-	// The interpreter is offered the method below, and transforming it runs
-	// its class initializer. That has to run as the domain the code is for.
-	DomainScope entered (domain.domain);
+		if (interpreted)
+			return *interpreted;
 
-	/*
-	 * Before the interpreter is offered the method, so it gets the same verdict
-	 * whichever tier ends up running it: a body the verifier rejects is one no
-	 * tier may run, and one it accepts is one every tier may. compile_bodies ()
-	 * asks again, and a second answer costs nothing - the verifier records its
-	 * verdict on the method.
-	 */
-	if (llvm::Error invalid = verify_method (method))
-		return std::move (invalid);
-
-	/*
-	 * The thunks are pointed at the interpreter before the method is
-	 * transformed, and that order matters: transforming runs the class
-	 * initializer, and this can be running inside a lazy thunk's callback. A
-	 * cctor that calls back into this very method would re-enter the trampoline
-	 * being resolved and start its compile again below itself, with nothing to
-	 * stop it. Publishing first means such a call lands on the entry instead.
-	 */
-	if (allow_tier0 && !dm.past_tier0 () && runs_at_tier0 (method)) {
-		llvm::Expected<Compiled> entries = interp_entries (domain, dm);
-
-		if (!entries) {
-			/*
-			 * Neither the interpreter refusing the method nor this machine's
-			 * entry being unable to carry the call is a failure: the method
-			 * gets compiled like anything else.
-			 */
-			llvm::consumeError (entries.takeError ());
-		} else {
-			ERROR_DECL (transform_error);
-
-			if (mini_get_interp_callbacks ()->transform_method (method,
-			                                                    transform_error))
-				return *entries;
-
-			mono_error_cleanup (transform_error);
-		}
+		/*
+		 * The interpreter refusing the method is not a failure: the method
+		 * gets compiled like anything else.
+		 */
+		llvm::consumeError (interpreted.takeError ());
 	}
 
 	// Sharing is decided below, per member, so this route and promotion get the

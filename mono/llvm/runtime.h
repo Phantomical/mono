@@ -134,6 +134,9 @@ mono_bool mono_llvm_jit_request_promotion (MonoMethod *method, MonoDomain *domai
 ///
 /// Redirect the entry at the trampoline after this rather than before. A call
 /// that arrives between the two reaches the code this takes away.
+///
+/// A record has a trampoline for each of the two steps a first call takes, and
+/// either one can be holding an answer. Rearm both.
 void mono_llvm_jit_rearm_trampoline (MonoDomain *domain, void *trampoline);
 
 /// Compiles a method at a tier and points its entry at the result, on the
