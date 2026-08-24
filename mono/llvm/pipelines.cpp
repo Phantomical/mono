@@ -7,6 +7,7 @@
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
 #include "passes/restore-tail-position.hpp"
+#include "passes/rgctx-fetch.hpp"
 #include "passes/tier-counter.hpp"
 #include "passes/top-down-inline.hpp"
 #include <llvm/IR/PassManager.h>
@@ -338,6 +339,7 @@ MonoPassBuilder::buildTier1Pipeline ()
 
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RestoreTailPositionPass ()));
+	MPM.addPass (mono::RgctxFetchPass ());
 	MPM.addPass (arch::MonoAbiPass ());
 
 	addAnnotationRemarksPass (MPM);
@@ -400,6 +402,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 	FPM.addPass (mono::RestoreTailPositionPass ());
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (std::move (FPM)));
 
+	MPM.addPass (mono::RgctxFetchPass ());
 	MPM.addPass (arch::MonoAbiPass ());
 
 	addAnnotationRemarksPass (MPM);
