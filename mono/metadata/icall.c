@@ -1145,12 +1145,23 @@ ves_icall_System_Array_SetGenericValue_icall (MonoArray **arr, guint32 pos, gpoi
 	}
 }
 
+/*
+ * The two copies below take no null and no negative count: System.Buffer
+ * refuses both in managed code, so a fault here would be a fault in native
+ * code, which the runtime cannot raise a NullReferenceException from.
+ *
+ * The compiled tiers write llvm.memcpy or llvm.memmove in place of a call to
+ * either (mono/llvm/method-to-llvm/buffer.cpp), so only the interpreter
+ * arrives here.
+ */
 void
-#if ENABLE_NETCORE
+ves_icall_System_Runtime_RuntimeImports_Memcpy (guint8 *destination, guint8 *source, size_t byte_count)
+{
+	memcpy (destination, source, byte_count);
+}
+
+void
 ves_icall_System_Runtime_RuntimeImports_Memmove (guint8 *destination, guint8 *source, size_t byte_count)
-#else
-ves_icall_System_Runtime_RuntimeImports_Memmove (guint8 *destination, guint8 *source, guint byte_count)
-#endif
 {
 	mono_gc_memmove_atomic (destination, source, byte_count);
 }
@@ -1166,21 +1177,20 @@ ves_icall_System_Buffer_BulkMoveWithWriteBarrier (guint8 *destination, guint8 *s
 }
 #else
 void
-ves_icall_System_Runtime_RuntimeImports_Memmove_wbarrier (guint8 *destination, guint8 *source, guint len, MonoType *type)
+ves_icall_System_Runtime_RuntimeImports_Memmove_wbarrier (guint8 *destination, guint8 *source, size_t len, MonoType *type)
 {
+	// len counts elements rather than bytes, and both barriers take that count
+	// as a guint, which is the width the netcore entry above narrows it to.
 	if (MONO_TYPE_IS_REFERENCE (type))
-		mono_gc_wbarrier_arrayref_copy_internal (destination, source, len);
+		mono_gc_wbarrier_arrayref_copy_internal (destination, source, (guint) len);
 	else
-		mono_gc_wbarrier_value_copy_internal (destination, source, len, mono_class_from_mono_type_internal (type));
+		mono_gc_wbarrier_value_copy_internal (destination, source, (guint) len,
+		                                      mono_class_from_mono_type_internal (type));
 }
 #endif
 
 void
-#if ENABLE_NETCORE
 ves_icall_System_Runtime_RuntimeImports_ZeroMemory (guint8 *p, size_t byte_length)
-#else
-ves_icall_System_Runtime_RuntimeImports_ZeroMemory (guint8 *p, guint byte_length)
-#endif
 {
 	memset (p, 0, byte_length);
 }
@@ -7557,12 +7567,6 @@ gint32
 ves_icall_System_Buffer_ByteLengthInternal (MonoArrayHandle array, MonoError* error)
 {
 	return mono_array_get_byte_length (array);
-}
-
-void
-ves_icall_System_Buffer_MemcpyInternal (gpointer dest, gconstpointer src, gint32 count)
-{
-	memcpy (dest, src, count);
 }
 
 MonoBoolean

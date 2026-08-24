@@ -1337,8 +1337,8 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (std::optional<MathIntrinsic> math = math_intrinsic_for (callee_method, sig))
 		return emit_math_call (builder, *math, sig);
 
-	// The copy ladder this replaces is managed code, so the site names it
-	// directly and no wrapper stands between the two.
+	// Asked here for the same reason: the wrapper is what the intrinsic
+	// replaces, so the match has to see the icall the IL named.
 	if (std::optional<BufferCopy> copy = buffer_copy_for (callee_method, sig))
 		return emit_buffer_copy (builder, *copy, sig);
 

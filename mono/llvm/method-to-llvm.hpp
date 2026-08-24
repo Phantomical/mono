@@ -218,13 +218,11 @@ struct MathIntrinsic {
 	const char *libm;
 };
 
-/// What a call to a System.Buffer copy method compiles to in place of the call.
+/// What a call to a raw memory copy compiles to in place of the call.
 struct BufferCopy {
 	/// Whether the two ranges can overlap, which is what decides between
 	/// llvm.memmove and llvm.memcpy.
 	bool may_overlap;
-	/// Whether the byte count is a signed type, which a negative value reaches.
-	bool signed_count;
 };
 
 class MethodLLVMEmitter {
@@ -1000,6 +998,9 @@ private:
 
 	llvm::Expected<llvm::Value *> indirect_address (MonoIrBuilder &builder,
 	                                                StackValue address);
+	void emit_inlined_copy (MonoIrBuilder &builder, llvm::Value *dest,
+	                        llvm::Align dest_align, llvm::Value *src,
+	                        llvm::Align src_align, llvm::Value *size);
 	llvm::Error emit_ldind (MonoIrBuilder &builder, MonoType *element);
 	llvm::Error emit_stind (MonoIrBuilder &builder, MonoType *element);
 	llvm::FunctionCallee value_copy_decl ();
@@ -1184,8 +1185,9 @@ MonoMethod *icall_wrapper_target (MonoMethod *method);
 /// arithmetic for it. sig is the signature the call site was written against.
 std::optional<MathIntrinsic> math_intrinsic_for (MonoMethod *method, MonoMethodSignature *sig);
 
-/// The copy a call to method compiles to, or nothing when method is not a
-/// System.Buffer copy. sig is the signature the call site was written against.
+/// The copy a call to method compiles to, or nothing when method is not one of
+/// the RuntimeImports copies. sig is the signature the call site was written
+/// against.
 std::optional<BufferCopy> buffer_copy_for (MonoMethod *method, MonoMethodSignature *sig);
 
 /// The fast helper that answers a call to method, or nothing when method is not

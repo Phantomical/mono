@@ -41,22 +41,27 @@ namespace System.Runtime
 		internal static unsafe void RhZeroMemory (ref byte b, nuint byteLength)
 		{
 			fixed (byte* bytePointer = &b) {
-				ZeroMemory (bytePointer, (uint)byteLength);
+				ZeroMemory (bytePointer, byteLength);
 			}
 		}
 
 		internal static unsafe void RhZeroMemory (IntPtr p, UIntPtr byteLength)
 		{
-			ZeroMemory ((void*)p, (uint) byteLength);
+			ZeroMemory ((void*)p, (nuint) byteLength);
 		}
 
 		[MethodImpl (MethodImplOptions.InternalCall)]
-		static extern unsafe void ZeroMemory (void* p, uint byteLength);
+		static extern unsafe void ZeroMemory (void* p, nuint byteLength);
+
+		// This gets rewritten by tier1/2 to a direct memcpy call
+		[MethodImpl (MethodImplOptions.InternalCall)]
+		internal static extern unsafe void Memcpy (byte* dest, byte* src, nuint len);
+
+		// This gets rewritten by tier1/2 to a direct memmove call
+		[MethodImpl (MethodImplOptions.InternalCall)]
+		internal static extern unsafe void Memmove (byte* dest, byte* src, nuint len);
 
 		[MethodImpl (MethodImplOptions.InternalCall)]
-		internal static extern unsafe void Memmove (byte* dest, byte* src, uint len);
-
-		[MethodImpl (MethodImplOptions.InternalCall)]
-		internal static extern unsafe void Memmove_wbarrier (byte* dest, byte* src, uint len, IntPtr type_handle);
+		internal static extern unsafe void Memmove_wbarrier (byte* dest, byte* src, nuint len, IntPtr type_handle);
 	}
 }

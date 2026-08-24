@@ -230,7 +230,6 @@ HANDLES(ARRAY_13, "SetValueImpl",  ves_icall_System_Array_SetValueImpl, void, 3,
 
 ICALL_TYPE(BUFFER, "System.Buffer", BUFFER_1)
 HANDLES(BUFFER_1, "InternalBlockCopy", ves_icall_System_Buffer_BlockCopyInternal, MonoBoolean, 5, (MonoArray, gint32, MonoArray, gint32, gint32))
-NOHANDLES(ICALL(BUFFER_5, "InternalMemcpy", ves_icall_System_Buffer_MemcpyInternal))
 HANDLES(BUFFER_2, "_ByteLength", ves_icall_System_Buffer_ByteLengthInternal, gint32, 1, (MonoArray))
 
 ICALL_TYPE(CLRCONFIG, "System.CLRConfig", CLRCONFIG_1)
@@ -868,7 +867,8 @@ ICALL_TYPE(REMSER, "System.Runtime.Remoting.RemotingServices", REMSER_0)
 ICALL(REMSER_0, "IsTransparentProxy", ves_icall_IsTransparentProxy)
 #endif
 
-ICALL_TYPE(RUNIMPORT, "System.Runtime.RuntimeImports", RUNIMPORT_1)
+ICALL_TYPE(RUNIMPORT, "System.Runtime.RuntimeImports", RUNIMPORT_0)
+NOHANDLES(ICALL(RUNIMPORT_0, "Memcpy", ves_icall_System_Runtime_RuntimeImports_Memcpy))
 NOHANDLES(ICALL(RUNIMPORT_1, "Memmove", ves_icall_System_Runtime_RuntimeImports_Memmove))
 NOHANDLES(ICALL(RUNIMPORT_2, "Memmove_wbarrier", ves_icall_System_Runtime_RuntimeImports_Memmove_wbarrier))
 NOHANDLES(ICALL(RUNIMPORT_3, "ZeroMemory", ves_icall_System_Runtime_RuntimeImports_ZeroMemory))

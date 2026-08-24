@@ -15,9 +15,6 @@ namespace System
 {
 	partial class Buffer
 	{
-		[MethodImplAttribute(MethodImplOptions.InternalCall)]
-		internal static extern unsafe void InternalMemcpy (byte *dest, byte *src, int count);
-
 		public static int ByteLength (Array array)
 		{
 			// note: the other methods in this class also use ByteLength to test for
@@ -80,190 +77,96 @@ namespace System
 		[CLSCompliantAttribute (false)]
 		public static unsafe void MemoryCopy (void* source, void* destination, long destinationSizeInBytes, long sourceBytesToCopy)
 		{
-			if (sourceBytesToCopy > destinationSizeInBytes) {
-				ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.sourceBytesToCopy);
-			}
+			if (sourceBytesToCopy > destinationSizeInBytes)
+				goto Throw;
+
+			if (sourceBytesToCopy <= 0)
+				return;
+
+#if !BIT64
+			if (sourceBytesToCopy > uint.MaxValue)
+				goto Throw;
+#endif
 
 			var src = (byte*)source;
 			var dst = (byte*)destination;
-			while (sourceBytesToCopy > uint.MaxValue) {
-				Memmove (dst, src, uint.MaxValue);
-				sourceBytesToCopy -= uint.MaxValue;
-				src += uint.MaxValue;
-				dst += uint.MaxValue;
-			}
+			Memmove (dst, src, (nuint) sourceBytesToCopy);
+			return;
 
-			Memmove (dst, src, (uint) sourceBytesToCopy);
+		Throw:
+			ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.sourceBytesToCopy);
 		}
 
 		[CLSCompliantAttribute (false)]
 		public static unsafe void MemoryCopy (void* source, void* destination, ulong destinationSizeInBytes, ulong sourceBytesToCopy)
 		{
-			if (sourceBytesToCopy > destinationSizeInBytes) {
-				ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.sourceBytesToCopy);
-			}
+			if (sourceBytesToCopy > destinationSizeInBytes)
+				goto Throw;
+
+#if !BIT64
+			if (sourceBytesToCopy > uint.MaxValue)
+				goto Throw;
+#endif
 
 			var src = (byte*)source;
 			var dst = (byte*)destination;
-			while (sourceBytesToCopy > uint.MaxValue) {
-				Memmove (dst, src, uint.MaxValue);
-				sourceBytesToCopy -= uint.MaxValue;
-				src += uint.MaxValue;
-				dst += uint.MaxValue;
-			}
-
-			Memmove (dst, src, (uint) sourceBytesToCopy);
-		}
-
-		internal static unsafe void memcpy4 (byte *dest, byte *src, int size) {
-			/*while (size >= 32) {
-				// using long is better than int and slower than double
-				// FIXME: enable this only on correct alignment or on platforms
-				// that can tolerate unaligned reads/writes of doubles
-				((double*)dest) [0] = ((double*)src) [0];
-				((double*)dest) [1] = ((double*)src) [1];
-				((double*)dest) [2] = ((double*)src) [2];
-				((double*)dest) [3] = ((double*)src) [3];
-				dest += 32;
-				src += 32;
-				size -= 32;
-			}*/
-			while (size >= 16) {
-				((int*)dest) [0] = ((int*)src) [0];
-				((int*)dest) [1] = ((int*)src) [1];
-				((int*)dest) [2] = ((int*)src) [2];
-				((int*)dest) [3] = ((int*)src) [3];
-				dest += 16;
-				src += 16;
-				size -= 16;
-			}
-			while (size >= 4) {
-				((int*)dest) [0] = ((int*)src) [0];
-				dest += 4;
-				src += 4;
-				size -= 4;
-			}
-			while (size > 0) {
-				((byte*)dest) [0] = ((byte*)src) [0];
-				dest += 1;
-				src += 1;
-				--size;
-			}
-		}
-		internal static unsafe void memcpy2 (byte *dest, byte *src, int size) {
-			while (size >= 8) {
-				((short*)dest) [0] = ((short*)src) [0];
-				((short*)dest) [1] = ((short*)src) [1];
-				((short*)dest) [2] = ((short*)src) [2];
-				((short*)dest) [3] = ((short*)src) [3];
-				dest += 8;
-				src += 8;
-				size -= 8;
-			}
-			while (size >= 2) {
-				((short*)dest) [0] = ((short*)src) [0];
-				dest += 2;
-				src += 2;
-				size -= 2;
-			}
-			if (size > 0)
-				((byte*)dest) [0] = ((byte*)src) [0];
-		}
-		static unsafe void memcpy1 (byte *dest, byte *src, int size) {
-			while (size >= 8) {
-				((byte*)dest) [0] = ((byte*)src) [0];
-				((byte*)dest) [1] = ((byte*)src) [1];
-				((byte*)dest) [2] = ((byte*)src) [2];
-				((byte*)dest) [3] = ((byte*)src) [3];
-				((byte*)dest) [4] = ((byte*)src) [4];
-				((byte*)dest) [5] = ((byte*)src) [5];
-				((byte*)dest) [6] = ((byte*)src) [6];
-				((byte*)dest) [7] = ((byte*)src) [7];
-				dest += 8;
-				src += 8;
-				size -= 8;
-			}
-			while (size >= 2) {
-				((byte*)dest) [0] = ((byte*)src) [0];
-				((byte*)dest) [1] = ((byte*)src) [1];
-				dest += 2;
-				src += 2;
-				size -= 2;
-			}
-			if (size > 0)
-				((byte*)dest) [0] = ((byte*)src) [0];
-		}
-
-		// The compiled tiers rewrite a call to this into llvm.memcpy
-		// (mono/llvm/method-to-llvm/buffer.cpp), so a site there runs one copy
-		// in place of the ladder below. The interpreter runs the ladder.
-		[MethodImplAttribute(MethodImplOptions.NoInlining)]
-		internal static unsafe void Memcpy (byte *dest, byte *src, int len) {
-			// For bigger lengths, we use the heavily optimized native code
-			if (len > 32) {
-#if UNITY
-				// We need to check if the destination is non-null. We need to do
-				// that in managed code, so at the normal Mono NullReferenceException
-				// handling will work. So attempt to dereference the destination here.
-				// This check is pretty cheap, and will cause a proper managed
-				// exception if the value is null.
-				long dereferencedValue = *dest;
-				System.Threading.Interlocked.Read(ref dereferencedValue);
-#endif
-				InternalMemcpy (dest, src, len);
-				return;
-			}
-			// FIXME: if pointers are not aligned, try to align them
-			// so a faster routine can be used. Handle the case where
-			// the pointers can't be reduced to have the same alignment
-			// (just ignore the issue on x86?)
-			if ((((int)dest | (int)src) & 3) != 0) {
-				if (((int)dest & 1) != 0 && ((int)src & 1) != 0 && len >= 1) {
-					dest [0] = src [0];
-					++dest;
-					++src;
-					--len;
-				}
-				if (((int)dest & 2) != 0 && ((int)src & 2) != 0 && len >= 2) {
-					((short*)dest) [0] = ((short*)src) [0];
-					dest += 2;
-					src += 2;
-					len -= 2;
-				}
-				if ((((int)dest | (int)src) & 1) != 0) {
-					memcpy1 (dest, src, len);
-					return;
-				}
-				if ((((int)dest | (int)src) & 2) != 0) {
-					memcpy2 (dest, src, len);
-					return;
-				}
-			}
-			memcpy4 (dest, src, len);
-		}
-
-		internal static unsafe void Memmove (byte *dest, byte *src, uint len)
-		{
-            if (((nuint)dest - (nuint)src < len) || ((nuint)src - (nuint)dest < len))
-				goto PInvoke;
-			Memcpy (dest, src, (int) len);
+			Memmove (dst, src, (nuint) sourceBytesToCopy);
 			return;
 
-            PInvoke:
-            RuntimeImports.Memmove(dest, src, len);
+		Throw:
+			ThrowHelper.ThrowArgumentOutOfRangeException(ExceptionArgument.sourceBytesToCopy);
+		}
+
+		internal static unsafe void Memcpy (byte *dest, byte *src, int len) {
+			if (len <= 0)
+				return;
+
+			Memcpy(dest, src, (nuint)len);
+		}
+		
+		internal static unsafe void Memcpy (byte* dest, byte* src, nuint len) {
+			if (len <= 0)
+				return;
+
+			// RuntimeImports.Memcpy may be directly replaced with a call to memcpy.
+			// If memcpy dereferences a null pointer the whole process dies, so
+			// we need to explicitly throw the NRE.
+			if (dest == null || src == null)
+				throw new NullReferenceException();
+
+			RuntimeImports.Memcpy(dest, src, (nuint)len);
+		}
+
+#if BIT64
+		internal static unsafe void Memmove (byte* dest, byte* src, uint len) =>
+			Memmove(dest, src, (nuint)len);
+#endif
+
+		internal static unsafe void Memmove (byte *dest, byte *src, nuint len)
+		{
+			if (len <= 0)
+				return;
+
+			// RuntimeImports.Memmove may be directly replaced with a call to memmove.
+			// If memmove dereferences a null pointer the whole process dies, so
+			// we need to explicitly throw the NRE.
+			if (dest == null || src == null)
+				throw new NullReferenceException();
+
+			RuntimeImports.Memmove(dest, src, (nuint)len);
 		}
 
 		internal static void Memmove<T>(ref T destination, ref T source, nuint elementCount)
 		{
-            if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>()) {
-                unsafe {
-                    fixed (byte* pDestination = &Unsafe.As<T, byte>(ref destination), pSource = &Unsafe.As<T, byte>(ref source))
-                        Memmove(pDestination, pSource, (uint)elementCount * (uint)Unsafe.SizeOf<T>());
-                }
+			if (!RuntimeHelpers.IsReferenceOrContainsReferences<T>()) {
+				unsafe {
+					fixed (byte* pDestination = &Unsafe.As<T, byte>(ref destination), pSource = &Unsafe.As<T, byte>(ref source))
+						Memmove(pDestination, pSource, (nuint)elementCount * (nuint)Unsafe.SizeOf<T>());
+				}
 			} else {
-                unsafe {
-                    fixed (byte* pDestination = &Unsafe.As<T, byte>(ref destination), pSource = &Unsafe.As<T, byte>(ref source))
-                        RuntimeImports.Memmove_wbarrier(pDestination, pSource, (uint)elementCount, typeof(T).TypeHandle.Value);
+				unsafe {
+					fixed (byte* pDestination = &Unsafe.As<T, byte>(ref destination), pSource = &Unsafe.As<T, byte>(ref source))
+						RuntimeImports.Memmove_wbarrier(pDestination, pSource, (nuint)elementCount, typeof(T).TypeHandle.Value);
 				}
 			}
 		}

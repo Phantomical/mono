@@ -172,7 +172,6 @@ ICALL_EXPORT void ves_icall_Mono_Runtime_RegisterReportingForNativeLib (const ch
 ICALL_EXPORT void ves_icall_Mono_Runtime_RegisterReportingForAllNativeLibs (void);
 ICALL_EXPORT void ves_icall_System_Array_GetGenericValue_icall (MonoArray**, guint32, gpointer);
 ICALL_EXPORT void ves_icall_System_Array_SetGenericValue_icall (MonoArray**, guint32, gpointer);
-ICALL_EXPORT void ves_icall_System_Buffer_MemcpyInternal (gpointer dest, gconstpointer src, gint32 count);
 ICALL_EXPORT void ves_icall_System_Environment_Exit (int);
 ICALL_EXPORT void ves_icall_System_GCHandle_FreeHandle (MonoGCHandle handle);
 ICALL_EXPORT void ves_icall_System_GC_InternalCollect (int generation);
@@ -184,18 +183,14 @@ ICALL_EXPORT void ves_icall_System_GC_GetGCMemoryInfo (gint64*, gint64*, gint64*
 ICALL_EXPORT void ves_icall_System_IO_LogcatTextWriter_Log (const char*, gint32, const char*);
 #endif
 ICALL_EXPORT void ves_icall_System_NumberFormatter_GetFormatterTables (guint64 const**, gint32 const**, gunichar2 const**, gunichar2 const**, gint64 const**, gint32 const**);
-#if ENABLE_NETCORE
+ICALL_EXPORT void ves_icall_System_Runtime_RuntimeImports_Memcpy (guint8*, guint8*, size_t);
 ICALL_EXPORT void ves_icall_System_Runtime_RuntimeImports_Memmove (guint8*, guint8*, size_t);
+#if ENABLE_NETCORE
 ICALL_EXPORT void ves_icall_System_Buffer_BulkMoveWithWriteBarrier (guint8 *, guint8 *, size_t, MonoType *);
 #else
-ICALL_EXPORT void ves_icall_System_Runtime_RuntimeImports_Memmove (guint8*, guint8*, guint);
-ICALL_EXPORT void ves_icall_System_Runtime_RuntimeImports_Memmove_wbarrier (guint8*, guint8*, guint, MonoType*);
+ICALL_EXPORT void ves_icall_System_Runtime_RuntimeImports_Memmove_wbarrier (guint8*, guint8*, size_t, MonoType*);
 #endif
-#if ENABLE_NETCORE
 ICALL_EXPORT void ves_icall_System_Runtime_RuntimeImports_ZeroMemory (guint8*, size_t);
-#else
-ICALL_EXPORT void ves_icall_System_Runtime_RuntimeImports_ZeroMemory (guint8*, guint);
-#endif
 ICALL_EXPORT void ves_icall_System_Runtime_RuntimeImports_ecvt_s(char*, size_t, double, int, int*, int*);
 
 #if !defined(ENABLE_NETCORE)
