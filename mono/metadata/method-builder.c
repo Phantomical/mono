@@ -22,6 +22,7 @@
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/metadata-internals.h"
 #include "mono/metadata/domain-internals.h"
+#include "mono/utils/mono-once.h"
 #include <string.h>
 #include <errno.h>
 
@@ -55,6 +56,7 @@ static MonoDisHelper marshal_dh = {
 
 static MonoMethodBuilderCallbacks mb_cb;
 static gboolean cb_inited = FALSE;
+static mono_once_t cb_once = MONO_ONCE_INIT;
 
 #ifndef ENABLE_ILGEN
 static MonoMethodBuilder *
@@ -167,13 +169,14 @@ install_noilgen (void)
 static MonoMethodBuilderCallbacks *
 get_mb_cb (void)
 {
-	if (G_UNLIKELY (!cb_inited)) {
+	// A thread that needs a wrapper makes it, so two threads can arrive here at
+	// the same time. mono_once () keeps the second one out of the install,
+	// which asserts that it is first.
 #ifdef ENABLE_ILGEN
-		mono_method_builder_ilgen_init ();
+	mono_once (&cb_once, mono_method_builder_ilgen_init);
 #else
-		install_noilgen ();
+	mono_once (&cb_once, install_noilgen);
 #endif
-	}
 	return &mb_cb;
 }
 

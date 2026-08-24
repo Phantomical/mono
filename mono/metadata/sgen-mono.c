@@ -35,6 +35,7 @@
 #include "utils/mono-logger-internals.h"
 #include "utils/mono-threads-coop.h"
 #include "utils/mono-threads.h"
+#include "utils/mono-once.h"
 #include "metadata/w32handle.h"
 #include "icall-signatures.h"
 #include "mono/utils/mono-tls-inline.h"
@@ -244,6 +245,7 @@ mono_gc_is_critical_method (MonoMethod *method)
 
 static MonoSgenMonoCallbacks sgenmono_cb;
 static gboolean cb_inited = FALSE;
+static mono_once_t cb_once = MONO_ONCE_INIT;
 
 void
 mono_install_sgen_mono_callbacks (MonoSgenMonoCallbacks *cb)
@@ -281,13 +283,14 @@ install_noilgen (void)
 static MonoSgenMonoCallbacks *
 get_sgen_mono_cb (void)
 {
-	if (G_UNLIKELY (!cb_inited)) {
+	// mono_gc_get_specific_write_barrier () makes its wrapper before it takes
+	// LOCK_GC, so two threads can arrive here at the same time. mono_once ()
+	// keeps the second one out of the install, which asserts that it is first.
 #ifdef ENABLE_ILGEN
-		mono_sgen_mono_ilgen_init ();
+	mono_once (&cb_once, mono_sgen_mono_ilgen_init);
 #else
-		install_noilgen ();
+	mono_once (&cb_once, install_noilgen);
 #endif
-	}
 	return &sgenmono_cb;
 }
 

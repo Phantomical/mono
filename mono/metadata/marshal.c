@@ -53,6 +53,7 @@
 #include "mono/metadata/loader-internals.h"
 #include "mono/metadata/sre-internals.h"
 #include "mono/utils/mono-counters.h"
+#include "mono/utils/mono-once.h"
 #include "mono/utils/mono-tls.h"
 #include "mono/utils/mono-memory-model.h"
 #include "mono/utils/atomic.h"
@@ -6610,6 +6611,7 @@ mono_marshal_emit_native_wrapper (MonoImage *image, MonoMethodBuilder *mb, MonoM
 
 static MonoMarshalCallbacks marshal_cb;
 static gboolean cb_inited = FALSE;
+static mono_once_t cb_once = MONO_ONCE_INIT;
 
 void
 mono_install_marshal_callbacks (MonoMarshalCallbacks *cb)
@@ -6623,13 +6625,14 @@ mono_install_marshal_callbacks (MonoMarshalCallbacks *cb)
 static MonoMarshalCallbacks *
 get_marshal_cb (void)
 {
-	if (G_UNLIKELY (!cb_inited)) {
+	// A thread that needs a wrapper makes it, so two threads can arrive here at
+	// the same time. mono_once () keeps the second one out of the install,
+	// which asserts that it is first.
 #ifdef ENABLE_ILGEN
-		mono_marshal_ilgen_init ();
+	mono_once (&cb_once, mono_marshal_ilgen_init);
 #else
-		mono_marshal_noilgen_init ();
+	mono_once (&cb_once, mono_marshal_noilgen_init);
 #endif
-	}
 	return &marshal_cb;
 }
 
