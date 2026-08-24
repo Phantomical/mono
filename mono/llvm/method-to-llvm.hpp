@@ -561,6 +561,12 @@ private:
 	std::vector<llvm::Value *> adapt_to_callee (MonoIrBuilder &builder,
 	                                            llvm::Function *callee,
 	                                            llvm::ArrayRef<llvm::Value *> args);
+	std::vector<llvm::Value *> adapt_to_callee (MonoIrBuilder &builder,
+	                                            llvm::FunctionCallee callee,
+	                                            llvm::ArrayRef<llvm::Value *> args);
+	std::vector<llvm::Value *> adapt_to_callee (MonoIrBuilder &builder,
+	                                            llvm::FunctionType *type, unsigned hidden,
+	                                            llvm::ArrayRef<llvm::Value *> args);
 	llvm::Expected<llvm::FunctionType *> convert_method_signature (MonoMethodSignature *sig,
 	                                                               bool native = false);
 	static void mark_mono_call (llvm::CallBase *call);

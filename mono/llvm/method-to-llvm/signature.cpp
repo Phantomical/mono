@@ -790,11 +790,40 @@ MethodLLVMEmitter::adapt_to_callee (MonoIrBuilder &builder, llvm::Function *call
                                     llvm::ArrayRef<llvm::Value *> args)
 {
 	llvm::FunctionType *type = callee->getFunctionType ();
+	unsigned hidden = hidden_return_type (callee) != nullptr
+	                          ? hidden_return_index (placed_parameter_count (callee))
+	                          : type->getNumParams ();
+
+	return adapt_to_callee (builder, type, hidden, args);
+}
+
+/// args, reshaped to match what callee declares, natural argument i at
+/// parameter i.
+///
+/// A prototype that carries a hidden return pointer needs the Function
+/// overload, which reads the pointer's position off the parameter
+/// attributes. convert_method_signature () builds no such prototype.
+std::vector<llvm::Value *>
+MethodLLVMEmitter::adapt_to_callee (MonoIrBuilder &builder, llvm::FunctionCallee callee,
+                                    llvm::ArrayRef<llvm::Value *> args)
+{
+	llvm::FunctionType *type = callee.getFunctionType ();
+
+	return adapt_to_callee (builder, type, type->getNumParams (), args);
+}
+
+/// args, reshaped to match the parameter types type declares. hidden is where
+/// the hidden return pointer sits, and is past the last parameter when the
+/// prototype has none.
+std::vector<llvm::Value *>
+MethodLLVMEmitter::adapt_to_callee (MonoIrBuilder &builder, llvm::FunctionType *type,
+                                    unsigned hidden, llvm::ArrayRef<llvm::Value *> args)
+{
 	std::vector<llvm::Value *> adapted (args.begin (), args.end ());
 
 	// args are the signature's arguments. The hidden return pointer is not one of them.
 	for (unsigned i = 0; i < adapted.size (); ++i) {
-		unsigned at = natural_parameter_index (i, callee);
+		unsigned at = natural_parameter_index (i, hidden);
 
 		if (at >= type->getNumParams ())
 			break;

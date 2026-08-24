@@ -125,7 +125,11 @@ MethodLLVMEmitter::emit_monitor_fast_path (MonoIrBuilder &builder, MonoMethod *c
 	if (!fast)
 		return fast.takeError ();
 
-	llvm::CallInst *answered = builder.CreateCall (*fast, *args, "monitor_answered");
+	// The helpers are registered under icall signatures, which spell a
+	// pointer parameter as native int. The arguments come off the stack in
+	// the managed signature's terms.
+	llvm::CallInst *answered = builder.CreateCall (
+		*fast, adapt_to_callee (builder, *fast, *args), "monitor_answered");
 
 	// The helper is a C function, so the site takes the C convention. It never
 	// unwinds: a case it does not answer comes back as false. A plain call is
