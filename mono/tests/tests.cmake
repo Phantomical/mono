@@ -423,6 +423,7 @@ set(MONO_TESTS_CS_SRC
   remoting2.cs
   remoting3.cs
   remoting5.cs
+  remoting-objref-race.cs
   appdomain.cs
   appdomain-client.cs
   appdomain-unload.cs

@@ -30,6 +30,7 @@
 //
 
 using System;
+using System.Threading;
 using System.Runtime.Remoting.Messaging;
 using System.Runtime.Remoting.Contexts;
 using System.Runtime.Remoting.Lifetime;
@@ -84,22 +85,36 @@ namespace System.Runtime.Remoting
 
 		public override ObjRef CreateObjRef (Type requestedType)
 		{
-			if (_objRef != null)
+			ObjRef objRef = _objRef;
+
+			if (objRef != null)
 			{
 				// Just update channel info. It may have changed.
-				_objRef.UpdateChannelInfo();
-				return _objRef;
+				objRef.UpdateChannelInfo();
+				return objRef;
 			}
 
 			if (requestedType == null) requestedType = _objectType;
-			_objRef = new ObjRef ();
-			_objRef.TypeInfo = new TypeInfo(requestedType);
-			_objRef.URI = _objectUri;
+
+			// Publish the ObjRef only when it is complete. Several threads
+			// can marshal one object at the same time. A thread that took
+			// _objRef early would get a null TypeInfo, and ObjRef.ServerType
+			// raises a NullReferenceException off that when a domain
+			// unmarshals it.
+			objRef = new ObjRef ();
+			objRef.TypeInfo = new TypeInfo(requestedType);
+			objRef.URI = _objectUri;
 
 			if (_envoySink != null && !(_envoySink is EnvoyTerminatorSink))
-				_objRef.EnvoyInfo = new EnvoyInfo (_envoySink);
+				objRef.EnvoyInfo = new EnvoyInfo (_envoySink);
 
-			return _objRef;
+			ObjRef published = Interlocked.CompareExchange (ref _objRef, objRef, null);
+
+			// One identity hands out one ObjRef.
+			if (published != null)
+				return published;
+
+			return objRef;
 		}
 
 		public void AttachServerObject (MarshalByRefObject serverObject, Context context)
