@@ -21,10 +21,11 @@ using System.Runtime.InteropServices;
  * conservatively and a phase that passed only because some earlier frame's leftover
  * word still pointed at the delegate would prove nothing.
  *
- * A control that fails says such a word exists. The failure occurs on about one run in
- * a hundred on a loaded box. MONO_TEST_GC_TRAP stops that run on SIGTRAP at the point
- * the control reads its answer, which is where a search for the word starts. Trap ()
- * describes what the stop keeps.
+ * A control that fails says such a word exists. Nested () therefore clears both stacks
+ * and drops a decoy before it counts, and says there why that is what works. Deep ()
+ * mints its second copy already, which does the same work. MONO_TEST_GC_TRAP stops a run
+ * that fails anyway. The stop is on SIGTRAP at the point the control reads its answer,
+ * which is where a search for the word starts. Trap () describes what the stop keeps.
  */
 class DynamicMethodGcInFrame
 {
@@ -120,6 +121,43 @@ class DynamicMethodGcInFrame
 		}
 	}
 
+	struct W8 { public long a, b, c, d, e, f, g, h; }
+	struct Block { public W8 a, b, c, d, e, f, g, h; }
+
+	/*
+	 * Wipe () and Scrub () clear the stack below the caller's frame, where minting a
+	 * pair leaves words that name it. They are two methods because they land in
+	 * different engines. Wipe () gets one call for each control, so it stays where the
+	 * minting ran, and its 1024 words of locals clear that stack. Scrub () gets enough
+	 * calls in one run to promote, so the frames it writes are native as well.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static long Wipe ()
+	{
+		Block b0 = new Block (), b1 = new Block (), b2 = new Block (), b3 = new Block ();
+		Block b4 = new Block (), b5 = new Block (), b6 = new Block (), b7 = new Block ();
+		Block b8 = new Block (), b9 = new Block (), ba = new Block (), bb = new Block ();
+		Block bc = new Block (), bd = new Block (), be = new Block (), bf = new Block ();
+
+		return b0.a.a + b1.b.b + b2.c.c + b3.d.d + b4.e.e + b5.f.f + b6.g.g + b7.h.h
+		     + b8.a.b + b9.b.c + ba.c.d + bb.d.e + bc.e.f + bd.f.g + be.g.h + bf.h.a;
+	}
+
+	class Junk { public Junk chain; public long magic; }
+
+	/* A chain of frames that touch only their own allocations. See Wipe () above. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static long Scrub (int depth)
+	{
+		Junk a = new Junk (), b = new Junk ();
+
+		a.chain = b;
+		b.magic = depth;
+		if (depth > 0)
+			b.magic += Scrub (depth - 1);
+		return a.chain.magic & 0xff;
+	}
+
 	/*
 	 * A dynamic method that calls BODY and returns MARK, so that a caller can tell the
 	 * code really ran to the end rather than being replaced by something that returns
@@ -190,13 +228,13 @@ class DynamicMethodGcInFrame
 
 	/* Run at the depth the bodies reach, so the same stretch of stack is in view. */
 	[MethodImpl (MethodImplOptions.NoInlining)]
-	static bool StandNested ()
+	static bool StandNested (WeakReference outer, WeakReference inner)
 	{
 		Collect ();
-		if (!outer_seen.IsAlive && !inner_seen.IsAlive)
+		if (!outer.IsAlive && !inner.IsAlive)
 			return false;
 
-		Trap (outer_seen.IsAlive ? outer_seen : inner_seen);
+		Trap (outer.IsAlive ? outer : inner);
 		return true;
 	}
 
@@ -221,8 +259,30 @@ class DynamicMethodGcInFrame
 	static int Nested ()
 	{
 		MintNested ();
+
+		WeakReference outer = outer_seen, inner = inner_seen;
+
 		outer_slot = inner_slot = null;
-		if (StandNested ())
+
+		/*
+		 * Three steps that take the dropped pair out of the stacks a scan reads. The
+		 * decoy is a second pair, minted and dropped the same way, so a word naming the
+		 * first pair is written again with an address no control asks about. Wipe () and
+		 * Scrub () clear what the decoy's own path does not reach.
+		 *
+		 * Such a word is easy to leave. SGen scans from the collector's own frame to the
+		 * base of the stack, so a frame that has since returned is inside that range.
+		 * One caught run had the word in SGen's own null_link_if_necessary (), which
+		 * un-hides a weak handle's target into a stack slot so that it can mark it.
+		 * Boehm kept the pair in none of 360 runs even without these three lines,
+		 * because it zeroes a block below the stack pointer at each allocation.
+		 */
+		MintNested ();
+		outer_slot = inner_slot = null;
+		Wipe ();
+		Scrub (24);
+
+		if (StandNested (outer, inner))
 			return 1;
 
 		MintNested ();
@@ -310,6 +370,8 @@ class DynamicMethodGcInFrame
 	 * come back alive; an identically shaped one, minted and dropped just before it and
 	 * so occupying the same stretch of stack, has to be gone by the time the bottom is
 	 * reached - otherwise a live frame is not what the first result is measuring.
+	 *
+	 * The running one is minted second, so it is also the decoy the control needs.
 	 */
 	static int Deep ()
 	{
