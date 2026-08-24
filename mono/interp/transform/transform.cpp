@@ -3708,17 +3708,16 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				    && m->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)
 					m = mono_marshal_get_synchronized_wrapper (m);
 
-				if (G_UNLIKELY (*ip == CEE_LDFTN && m->wrapper_type == MONO_WRAPPER_NONE
-				                && mono_method_has_unmanaged_callers_only_attribute (m))) {
-					if (m->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL) {
-						interp_generate_not_supported_throw ();
-						interp_add_ins (MINT_LDNULL);
-						push_simple_type (StackType::MP);
-						interp_ins_set_dreg (last_ins, sp[-1].local);
-						ip += 5;
-						break;
-					}
-
+				/*
+				 * The pointer itself is what a delegate cannot take. The one
+				 * address a method native code owns is published in the C
+				 * convention, and Invoke would call it in this one. This reads
+				 * the pair rather than the constructor, because the argument
+				 * the constructor gets no longer says which method it came
+				 * from.
+				 */
+				if (G_UNLIKELY (*ip == CEE_LDFTN
+				                && mono_method_is_unmanaged_callers_only (m))) {
 					MonoMethod *ctor_method;
 
 					const unsigned char *next_ip = ip + 5;
@@ -3738,36 +3737,6 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 							"Cannot create delegate from method with UnmanagedCallersOnlyAttribute");
 						return FALSE;
 					}
-
-					MonoClass *delegate_klass = NULL;
-					MonoGCHandle target_handle = 0;
-					ERROR_DECL (wrapper_error);
-					m = mono_marshal_get_managed_wrapper (m, delegate_klass, target_handle,
-					                                      wrapper_error);
-					if (!is_ok (wrapper_error)) {
-						/* Generate a call that will throw an exception if the
-						 * UnmanagedCallersOnly attribute is used incorrectly */
-						interp_generate_ipe_throw_with_msg (wrapper_error);
-						mono_interp_error_cleanup (wrapper_error);
-						interp_add_ins (MINT_LDNULL);
-						push_simple_type (StackType::MP);
-						interp_ins_set_dreg (last_ins, sp[-1].local);
-					} else {
-						/* push a pointer to a trampoline that calls m */
-						gpointer entry =
-							mini_get_interp_callbacks ()->create_method_pointer (m, TRUE, error);
-#if SIZEOF_VOID_P == 8
-						interp_add_ins (MINT_LDC_I8);
-						WRITE64_INS (last_ins, 0, &entry);
-#else
-						interp_add_ins (MINT_LDC_I4);
-						WRITE32_INS (last_ins, 0, &entry);
-#endif
-						push_simple_type (StackType::MP);
-						interp_ins_set_dreg (last_ins, sp[-1].local);
-					}
-					ip += 5;
-					break;
 				}
 
 				/*

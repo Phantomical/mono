@@ -236,6 +236,30 @@ MethodLLVMEmitter::emit_method_access_failure (MonoIrBuilder &builder, MonoMetho
 	return llvm::Error::success ();
 }
 
+/// Emits a throw of NotSupportedException in place of a call to callee.
+///
+/// The callee carries [UnmanagedCallersOnly], so its one published entry is in
+/// the C convention. A call written in this engine's convention would arrive
+/// with its arguments in the wrong places. Only the instruction is refused, the
+/// way emit_method_access_failure () refuses one: a path through the body that
+/// never reaches this call still runs.
+llvm::Error
+MethodLLVMEmitter::emit_unmanaged_callers_only_failure (MonoIrBuilder &builder,
+                                                        MonoMethod *callee)
+{
+	llvm::Expected<llvm::Function *> raise =
+		icall_wrapper_decl (MONO_JIT_ICALL_mono_throw_unmanaged_callers_only);
+
+	if (!raise)
+		return raise.takeError ();
+
+	emit_unwinding_call (builder, *raise,
+	                     adapt_to_callee (builder, *raise,
+	                                      { method_symbol (method), method_symbol (callee) }));
+	builder.SetInsertPoint (create_cold_block ("unmanaged_callers_only"));
+	return llvm::Error::success ();
+}
+
 llvm::Error
 MethodLLVMEmitter::truncated_il (size_t needed)
 {

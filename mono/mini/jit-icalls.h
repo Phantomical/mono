@@ -223,6 +223,8 @@ ICALL_EXTERN_C double mono_ckfinite (double d);
 
 ICALL_EXTERN_C void mono_throw_method_access (MonoMethod *caller, MonoMethod *callee);
 
+ICALL_EXTERN_C void mono_throw_unmanaged_callers_only (MonoMethod *caller, MonoMethod *callee);
+
 ICALL_EXTERN_C void mono_throw_bad_image (void);
 
 ICALL_EXTERN_C void mono_throw_not_supported (void);

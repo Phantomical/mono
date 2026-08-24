@@ -6,6 +6,7 @@
 #include "method-to-llvm.hpp"
 #include "naming.hpp"
 #include "options.hpp"
+#include "runtime-error.hpp"
 #include <llvm/ADT/ScopeExit.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Function.h>
@@ -35,6 +36,7 @@
 #include "mono/metadata/appdomain.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/domain-internals.h"
+#include "mono/metadata/marshal.h"
 #include "mono/utils/mono-threads-api.h"
 #include <chrono>
 #include <condition_variable>
@@ -489,6 +491,12 @@ llvm::Error
 attach_interop_entry (MonoDomainMethod &dm)
 {
 	return MonoBackend::attach_interop (dm);
+}
+
+llvm::Expected<void *>
+published_entry_of (MonoDomainMethod &dm)
+{
+	return MonoBackend::published_entry (dm);
 }
 
 /*
@@ -1687,10 +1695,42 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 	if (llvm::Error err = entry_point (**state, **published).takeError ())
 		return std::move (err);
 
-	if (publishes_interop_entry (method))
-		return (*published)->interop_entry ();
+	return published_entry (**published);
+}
 
-	return (*published)->thunk.code ();
+/*
+ * The wrapper is resolved here rather than in attach_interop (), which runs
+ * under the record's lock. Compiling the wrapper translates its body, the
+ * trivial inliner folds this method into it, and note_folded_into () then wants
+ * that same lock. Nothing is cached on this record: the marshalling layer
+ * caches the wrapper and the wrapper's own record caches its entry, so the
+ * address is the same on every ask.
+ */
+llvm::Expected<void *>
+MonoBackend::published_entry (MonoDomainMethod &dm)
+{
+	if (!publishes_interop_entry (dm.method))
+		return dm.thunk.code ();
+
+	if (!mono_method_is_unmanaged_callers_only (dm.method))
+		return dm.interop_entry ();
+
+	llvm::Expected<MonoBackend *> backend = get ();
+
+	if (!backend)
+		return backend.takeError ();
+	if (*backend == nullptr)
+		return llvm::createStringError (llvm::inconvertibleErrorCode (),
+		                                "the engine has been taken apart");
+
+	ERROR_DECL (metadata_error);
+	MonoMethod *wrapper = mono_marshal_get_managed_wrapper (
+		dm.method, nullptr, (MonoGCHandle) 0, metadata_error);
+
+	if (wrapper == nullptr)
+		return runtime_error (metadata_error);
+
+	return (*backend)->compile (wrapper, dm.domain);
 }
 
 llvm::Expected<void *>
@@ -1706,7 +1746,12 @@ MonoBackend::stub_for (MonoMethod *method, MonoDomain *domain)
 	if (!published)
 		return published.takeError ();
 
-	return (*published)->thunk.code ();
+	/*
+	 * The same answer compile () gives. A method has one address, so the
+	 * engine that asks must not decide which one it gets: the interpreter
+	 * reaches here for its ldftn and the icall reaches compile ().
+	 */
+	return published_entry (**published);
 }
 
 } // namespace mono

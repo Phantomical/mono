@@ -2,6 +2,7 @@
 #include "hidden-return.hpp"
 #include "mini-runtime.h"
 #include "runtime-error.hpp"
+#include "runtime/naming.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
@@ -546,9 +547,10 @@ MethodLLVMEmitter::is_own_this (llvm::Value *value)
 /// a call target in this module.
 ///
 /// The address is the method's published entry, so a pointer taken here stays
-/// correct when a later compile replaces the body. A no-wrapper icall is the
-/// one method whose compiled callers do not go through that entry: they name
-/// the C function, which is what the entry jumps to.
+/// correct when a later compile replaces the body. Two kinds of method answer
+/// with something else. A no-wrapper icall's compiled callers name the C
+/// function the entry jumps to. A method native code enters answers with its C
+/// entry rather than with the thunk.
 llvm::Expected<llvm::Constant *>
 MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 {
@@ -557,6 +559,24 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 	// info that only a published thunk registers.
 	if (implemented_outside_il (target) && c_entry_of (target) == nullptr)
 		return create_method_decl (target);
+
+	/*
+	 * A method native code enters is published in the C convention, so its
+	 * address is that entry and not the thunk in front of its body. The symbol
+	 * is left unmarked, which is what keeps bind_symbols () from renaming it
+	 * onto the published thunk beside it.
+	 */
+	if (publishes_interop_entry (target)) {
+		char *name = mono_method_full_name (target, FALSE);
+		std::string symbol = identity_symbol (name, target) + "$entry";
+
+		g_free (name);
+
+		llvm::Constant *entry = extern_symbol (symbol);
+
+		record_external (symbol, ExternalSymbol::Kind::InteropCode, target);
+		return entry;
+	}
 
 	char *printed = mono_method_full_name (target, FALSE);
 	// This needs a placeholder name of its own, not the one create_method_decl ()
@@ -1193,6 +1213,20 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	// implementation the receiver dispatches to.
 	if (checks_accessibility () && !mono_method_can_access_method (method, *target)) {
 		if (llvm::Error error = emit_method_access_failure (builder, *target))
+			return error;
+	}
+
+	/*
+	 * The token again, for the same reason. A constrained. prefix resolves to
+	 * an override, and an override of a method native code owns is a method
+	 * this site cannot call whichever body the receiver selects.
+	 *
+	 * A wrapper is exempt. The native-to-managed wrapper is the transition
+	 * itself, so the one call it makes is the call this refuses everywhere
+	 * else, and a wrapper carries no IL an image author wrote.
+	 */
+	if (!in_wrapper () && mono_method_is_unmanaged_callers_only (*target)) {
+		if (llvm::Error error = emit_unmanaged_callers_only_failure (builder, *target))
 			return error;
 	}
 

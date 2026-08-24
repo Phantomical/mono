@@ -20,6 +20,19 @@ mono_throw_method_access (MonoMethod *caller, MonoMethod *callee)
 }
 
 void
+mono_throw_unmanaged_callers_only (MonoMethod *caller, MonoMethod *callee)
+{
+	char *caller_name = mono_method_get_reflection_name (caller);
+	char *callee_name = mono_method_get_reflection_name (callee);
+	ERROR_DECL (error);
+
+	mono_error_set_generic_error (error, "System", "NotSupportedException", "Method `%s' has UnmanagedCallersOnlyAttribute and cannot be called from managed method `%s'", callee_name, caller_name);
+	mono_error_set_pending_exception (error);
+	g_free (callee_name);
+	g_free (caller_name);
+}
+
+void
 mono_throw_bad_image ()
 {
 	ERROR_DECL (error);

@@ -6,10 +6,43 @@
 #include "mono/metadata/marshal.h"
 #include "mono/metadata/metadata-internals.h"
 #include "mono/metadata/metadata.h"
+#include "mono/metadata/mono-endian.h"
+#include "mono/metadata/opcodes.h"
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
 
 namespace mono {
+
+namespace {
+
+/// Whether the instruction at ip is a delegate constructor.
+///
+/// The IL a C# compiler writes for a delegate puts the constructor directly
+/// after the ldftn that produced its target. A site that separates the two is
+/// not read here, and gets a delegate over an address in the C convention.
+bool
+constructs_a_delegate (MonoMethod *method, const unsigned char *code, size_t code_size,
+                       size_t ip)
+{
+	ERROR_DECL (error);
+
+	if (ip + 5 > code_size || code[ip] != CEE_NEWOBJ)
+		return false;
+
+	MonoMethod *ctor = mono_get_method_checked (m_class_get_image (method->klass),
+	                                            read32 (code + ip + 1), method->klass,
+	                                            mono_method_get_context (method), error);
+
+	if (ctor == nullptr) {
+		mono_error_cleanup (error);
+		return false;
+	}
+
+	return m_class_get_parent (ctor->klass) == mono_defaults.multicastdelegate_class
+	       && strcmp (ctor->name, ".ctor") == 0;
+}
+
+} // namespace
 
 /*
  * III.3.41  ldftn - load method pointer
@@ -61,6 +94,21 @@ MethodLLVMEmitter::emit_ldftn (MonoIrBuilder &builder, uint32_t token)
 	if (checks_accessibility () && !mono_method_can_access_method (method, *target)) {
 		if (llvm::Error error = emit_method_access_failure (builder, *target))
 			return error;
+	}
+
+	/*
+	 * The pointer is what a delegate cannot take. The one address a method
+	 * native code owns is published in the C convention, and Invoke would call
+	 * it in this one. The whole method is refused, the way the interpreter's
+	 * transform refuses it, so that a program sees the same exception whichever
+	 * engine reached the site.
+	 */
+	if (mono_method_is_unmanaged_callers_only (*target)
+	    && constructs_a_delegate (method, code, code_size, ip)) {
+		ERROR_DECL (error);
+		mono_error_set_not_supported (
+			error, "Cannot create delegate from method with UnmanagedCallersOnlyAttribute");
+		return runtime_error (error);
 	}
 
 	// A synchronized method hands out the locking wrapper's entry. Whoever

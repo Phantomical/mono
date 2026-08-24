@@ -66,6 +66,9 @@ wants_unbox_entry (MonoMethod *method, MonoMethodSignature *sig)
 bool
 publishes_interop_entry (MonoMethod *method)
 {
+	if (mono_method_is_unmanaged_callers_only (method))
+		return true;
+
 	MonoMethodSignature *sig = mono_method_signature_internal (method);
 
 	return sig != nullptr && sig->pinvoke != 0

@@ -174,6 +174,7 @@ struct ExternalSymbol {
 		Method,  ///< `object` is the MonoMethod this names
 		Field,   ///< `object` is the MonoClassField this names
 		Code,    ///< the entry point of the MonoMethod in `object`
+		InteropCode, ///< the C-convention entry of the MonoMethod in `object`
 		Address, ///< `object` is the address itself, which the name stands for
 	};
 
@@ -610,6 +611,8 @@ private:
 	bool checks_accessibility () const;
 	llvm::Error field_access_failure (MonoClassField *field);
 	llvm::Error emit_method_access_failure (MonoIrBuilder &builder, MonoMethod *callee);
+	llvm::Error emit_unmanaged_callers_only_failure (MonoIrBuilder &builder,
+	                                                 MonoMethod *callee);
 
 	static StackType stack_type (MonoType *t);
 	static std::string describe (MonoType *t, StackType type);

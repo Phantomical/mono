@@ -338,6 +338,14 @@ llvm::Error attach_method_entries (MonoDomainMethod &dm);
 /// native enters is left with none and is not an error.
 llvm::Error attach_interop_entry (MonoDomainMethod &dm);
 
+/// The address that stands for \p dm's method wherever one is handed out: an
+/// ldftn, a stub request, or a raw function pointer.
+///
+/// The compiling engine defines this. Call it with no lock on \p dm held. It
+/// can compile, and what it compiles can fold this method in, which wants the
+/// record's own lock.
+llvm::Expected<void *> published_entry_of (MonoDomainMethod &dm);
+
 /// The record for \p method in \p domain, or null when nothing has asked for it
 /// yet.
 MonoDomainMethod *domain_method_find (MonoDomain *domain, MonoMethod *method);

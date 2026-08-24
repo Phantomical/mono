@@ -56,6 +56,27 @@ resolve_externals (MonoJit &jit, MonoDomain *domain,
 			module_symbols.emplace_back ((*callee)->name, (*callee)->thunk_address ());
 			continue;
 		}
+		case ExternalSymbol::Kind::InteropCode: {
+			/*
+			 * Registered under the translator's own name rather than the
+			 * method's published one. The C entry is a second address the
+			 * method has, and the published name already stands for the
+			 * thunk.
+			 */
+			llvm::Expected<MonoDomainMethod *> callee =
+				publish_callee (static_cast<MonoMethod *> (external.object));
+
+			if (!callee)
+				return callee.takeError ();
+
+			llvm::Expected<void *> entry = published_entry_of (**callee);
+
+			if (!entry)
+				return entry.takeError ();
+
+			address = *entry;
+			break;
+		}
 		}
 
 		if (llvm::Error err = jit.register_symbol (external.name, address))

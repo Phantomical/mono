@@ -359,12 +359,16 @@ TransformData::shift_op (int mint_op)
 	interp_ins_set_dreg (last_ins, sp[-1].local);
 }
 
+/// Writes a call to info, which raises for the pair of a caller and a callee it
+/// cannot reach.
+///
+/// The two methods are constants the bytecode carries, so this leaves the
+/// evaluation stack as it found it and the call the site was about still
+/// follows.
 void
-TransformData::interp_generate_mae_throw (MonoMethod *method, MonoMethod *target_method)
+TransformData::interp_generate_method_pair_throw (MonoJitICallInfo *info, MonoMethod *method,
+                                                  MonoMethod *target_method)
 {
-	MonoJitICallInfo *info = &mono_get_jit_icall_info ()->mono_throw_method_access;
-
-	/* Inject code throwing MethodAccessException */
 	interp_add_ins (MINT_MONO_LDPTR);
 	push_simple_type (StackType::I);
 	interp_ins_set_dreg (last_ins, sp[-1].local);
@@ -384,6 +388,24 @@ TransformData::interp_generate_mae_throw (MonoMethod *method, MonoMethod *target
 }
 
 void
+TransformData::interp_generate_mae_throw (MonoMethod *method, MonoMethod *target_method)
+{
+	interp_generate_method_pair_throw (
+		&mono_get_jit_icall_info ()->mono_throw_method_access, method, target_method);
+}
+
+/// Raises where target_method carries [UnmanagedCallersOnly], so the address it
+/// is published at is in the C convention and no managed call site can reach it.
+void
+TransformData::interp_generate_unmanaged_callers_only_throw (MonoMethod *method,
+                                                             MonoMethod *target_method)
+{
+	interp_generate_method_pair_throw (
+		&mono_get_jit_icall_info ()->mono_throw_unmanaged_callers_only, method,
+		target_method);
+}
+
+void
 TransformData::interp_generate_bie_throw ()
 {
 	MonoJitICallInfo *info = &mono_get_jit_icall_info ()->mono_throw_bad_image;
@@ -392,38 +414,6 @@ TransformData::interp_generate_bie_throw ()
 	// Allocate a dummy local to serve as dreg for this instruction
 	push_simple_type (StackType::I4);
 	sp--;
-	interp_ins_set_dreg (last_ins, sp[0].local);
-	last_ins->data[0] = get_data_item_index ((gpointer) info->func);
-}
-
-void
-TransformData::interp_generate_not_supported_throw ()
-{
-	MonoJitICallInfo *info = &mono_get_jit_icall_info ()->mono_throw_not_supported;
-
-	interp_add_ins (MINT_ICALL_V_V);
-	// Allocate a dummy local to serve as dreg for this instruction
-	push_simple_type (StackType::I4);
-	sp--;
-	interp_ins_set_dreg (last_ins, sp[0].local);
-	last_ins->data[0] = get_data_item_index ((gpointer) info->func);
-}
-
-void
-TransformData::interp_generate_ipe_throw_with_msg (MonoError *error_msg)
-{
-	MonoJitICallInfo *info = &mono_get_jit_icall_info ()->mono_throw_invalid_program;
-
-	char *msg = mono_mem_manager_strdup (mem_manager, mono_error_get_message (error_msg));
-
-	interp_add_ins (MINT_MONO_LDPTR);
-	push_simple_type (StackType::I);
-	interp_ins_set_dreg (last_ins, sp[-1].local);
-	locals[sp[-1].local].flags |= INTERP_LOCAL_FLAG_CALL_ARGS;
-	last_ins->data[0] = get_data_item_index (msg);
-
-	sp -= 1;
-	interp_add_ins (MINT_ICALL_P_V);
 	interp_ins_set_dreg (last_ins, sp[0].local);
 	last_ins->data[0] = get_data_item_index ((gpointer) info->func);
 }

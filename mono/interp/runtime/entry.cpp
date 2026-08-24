@@ -486,13 +486,31 @@ interp_create_method_pointer_llvmonly (MonoMethod *method, gboolean unbox, MonoE
 ///     translation failure is caught here rather than on first call.
 ///
 /// Returns NULL with the error set for a method it cannot support: one that
-/// fails to transform when compile is set, and a native-to-managed wrapper on
-/// a platform that has no such transition.
+/// fails to transform when compile is set, and one whose [UnmanagedCallersOnly]
+/// the marshalling layer refuses. A native-to-managed wrapper on a platform
+/// with no such transition gets a stand-in pointer instead, which raises when
+/// it is called.
 gpointer
 interp_create_method_pointer (MonoMethod *method, gboolean compile, MonoError *error)
 {
 	gpointer addr, entry_func, entry_wrapper = NULL;
 	MonoDomain *domain = mono_domain_get ();
+
+	/*
+	 * Native code holds the address of a method carrying
+	 * [UnmanagedCallersOnly] and calls it, so the entry has to take a C call
+	 * apart. The native-to-managed wrapper is what does that, and it carries
+	 * the calling convention the attribute asks for. This test refuses a
+	 * wrapper, so the call below comes back through it once and falls through.
+	 */
+	if (mono_method_is_unmanaged_callers_only (method)) {
+		MonoMethod *wrapper =
+			mono_marshal_get_managed_wrapper (method, NULL, (MonoGCHandle) 0, error);
+
+		return_val_if_nok (error, NULL);
+		return interp_create_method_pointer (wrapper, compile, error);
+	}
+
 	InterpMethod *imethod = mono_interp_get_imethod (domain, method, error);
 
 	if (imethod->jit_entry)

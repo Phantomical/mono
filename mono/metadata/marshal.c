@@ -3367,7 +3367,11 @@ mono_marshal_set_callconv_from_unmanaged_callers_only_attribute (MonoMethod* met
 		MonoObject* attr_obj = mono_custom_attrs_get_attr_checked (cinfo, attr->ctor->klass, error);
 		mono_error_assert_ok (error);
 		MonoClassField* field = mono_class_get_field_from_name_full (attr->ctor->klass, "CallConvs", NULL);
-		MonoArray* call_conv_array = (MonoArray*)mono_field_get_value_object_checked (mono_domain_get (), field, attr_obj, error);
+		/* The loop above takes the attribute by namespace and name, so the class
+		 * can be one an assembly declared for itself and need not carry this
+		 * field. A method with no CallConvs keeps the platform default. */
+		MonoArray* call_conv_array = field == NULL ? NULL :
+			(MonoArray*)mono_field_get_value_object_checked (mono_domain_get (), field, attr_obj, error);
 		mono_error_assert_ok (error);
 		if (call_conv_array) {
 			int length = mono_array_length_internal (call_conv_array);
@@ -6683,4 +6687,29 @@ mono_method_has_unmanaged_callers_only_attribute (MonoMethod *method)
 		mono_custom_attrs_free (cinfo);
 	return result;
 #endif
+}
+
+/**
+ * mono_method_is_unmanaged_callers_only:
+ *
+ * Returns \c TRUE when native code owns the one entry \p method is published
+ * at, so managed code cannot call it and its address carries the C convention.
+ *
+ * Both engines ask this at each call site they write, so the cheap tests come
+ * first. An answer of \c TRUE says nothing about whether the attribute is used
+ * correctly: an instance method and a generic one both reach here, and
+ * mono_marshal_get_managed_wrapper () is what refuses them by name.
+ */
+gboolean
+mono_method_is_unmanaged_callers_only (MonoMethod *method)
+{
+	/*
+	 * A wrapper is a body the runtime wrote. It carries the attributes the
+	 * marshalling layer gave it rather than the ones an image author wrote, and
+	 * the native-to-managed wrapper this attribute asks for is one of them.
+	 */
+	if (method->wrapper_type != MONO_WRAPPER_NONE)
+		return FALSE;
+
+	return mono_method_has_unmanaged_callers_only_attribute (method);
 }

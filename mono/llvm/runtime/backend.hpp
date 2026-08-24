@@ -97,9 +97,18 @@ public:
 public:
 	llvm::Expected<void *> compile (MonoMethod *method, MonoDomain *domain);
 
-	/// A method native code enters has an address of its own, handed back by
-	/// compile () instead: this function is never asked for one.
+	/// Returns the address that stands for \p method, publishing the method if
+	/// the domain has not seen it, and without compiling a body for it.
+	///
+	/// A method native code enters answers with its C entry instead, and that
+	/// one is compiled here rather than on a later call: an address handed to
+	/// native code is called without the runtime being asked again.
 	llvm::Expected<void *> stub_for (MonoMethod *method, MonoDomain *domain);
+
+	/// The address that stands for dm's method: the entry native code is
+	/// handed, or the thunk in front of the body. Call it with no lock on dm
+	/// held.
+	static llvm::Expected<void *> published_entry (MonoDomainMethod &dm);
 
 private:
 	MonoBackend () = default;

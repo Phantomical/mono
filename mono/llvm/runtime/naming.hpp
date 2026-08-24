@@ -64,11 +64,20 @@ bool wants_unbox_entry (MonoMethod *method, MonoMethodSignature *sig);
 /// Whether a method is entered from native code, and so needs a C-convention
 /// entry in front of its body.
 ///
-/// That is exactly the wrappers generated for the other side of the boundary to
-/// call: runtime-invoke, native-to-managed, the vtfixup and thunk-invoke
-/// entries. Each sets the pinvoke flag on its own signature. A [DllImport]
-/// method sets it too, but it is not a wrapper. What stands behind it is the
-/// marshaling wrapper, which is entered like any other method.
+/// Two sets answer yes. The first is the wrappers generated for the other side
+/// of the boundary to call: runtime-invoke, native-to-managed, the vtfixup and
+/// thunk-invoke entries. Each sets the pinvoke flag on its own signature. A
+/// [DllImport] method sets it too, but it is not a wrapper. What stands behind
+/// it is the marshaling wrapper, which is entered like any other method.
+///
+/// The second is a method carrying [UnmanagedCallersOnly]. Native code holds
+/// its address and calls it, and managed code cannot. So the C entry is the
+/// only entry such a method has, rather than a second one beside the thunk.
+///
+/// This settles the convention for every address this engine hands out: a
+/// compile, a stub, and the address an ldftn takes. Where the interpreter is
+/// the whole engine it publishes the entry itself, and
+/// interp_create_method_pointer () is what decides there.
 bool publishes_interop_entry (MonoMethod *method);
 
 /// Whether this engine gives a method an unboxing entry of its own, and so a

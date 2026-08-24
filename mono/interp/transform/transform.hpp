@@ -348,9 +348,11 @@ struct TransformData {
 	InterpInst *interp_fold_unop_cond_br (InterpBasicBlock *cbb, LocalValue *local_defs,
 	                                      int *local_ref_count, InterpInst *ins);
 	void interp_generate_bie_throw ();
-	void interp_generate_ipe_throw_with_msg (MonoError *error_msg);
 	void interp_generate_mae_throw (MonoMethod *method, MonoMethod *target_method);
-	void interp_generate_not_supported_throw ();
+	void interp_generate_method_pair_throw (MonoJitICallInfo *info, MonoMethod *method,
+	                                        MonoMethod *target_method);
+	void interp_generate_unmanaged_callers_only_throw (MonoMethod *method,
+	                                                   MonoMethod *target_method);
 	InterpInst *interp_get_ldc_i4_from_const (InterpInst *ins, gint32 ct, int dreg);
 	gboolean interp_handle_intrinsics (MonoMethod *target_method, MonoClass *constrained_class,
 	                                   MonoMethodSignature *csignature, gboolean readonly, int *op);

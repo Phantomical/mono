@@ -616,6 +616,19 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 	if (check_visibility && target_method && !mono_method_can_access_method (method, target_method))
 		interp_generate_mae_throw (method, target_method);
 
+	/*
+	 * Both engines refuse this call, because a method runs in either of them
+	 * and the address the method is published at carries the C convention in
+	 * both. The compiled engine refuses it in emit_call ().
+	 *
+	 * A wrapper is exempt. The native-to-managed wrapper is the transition
+	 * itself, so the one call it makes is the call this refuses everywhere
+	 * else, and a wrapper carries no IL an image author wrote.
+	 */
+	if (method->wrapper_type == MONO_WRAPPER_NONE && target_method
+	    && mono_method_is_unmanaged_callers_only (target_method))
+		interp_generate_unmanaged_callers_only_throw (method, target_method);
+
 	if (target_method && target_method->string_ctor) {
 		/* Create the real signature */
 		MonoMethodSignature *ctor_sig =
