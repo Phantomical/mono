@@ -416,7 +416,8 @@ MethodLLVMEmitter::emit_cpobj (MonoIrBuilder &builder, uint32_t token)
 		guint32 align = 0;
 		guint32 size = mono_class_value_size (klass, &align);
 
-		builder.CreateMemCpy (*dest, llvm::Align (align), *src, llvm::Align (align), size);
+		builder.CreateMemCpyInline (*dest, llvm::Align (align), *src,
+		                            llvm::Align (align), builder.getInt64 (size));
 	}
 
 	return llvm::Error::success ();
@@ -487,7 +488,8 @@ MethodLLVMEmitter::emit_initobj (MonoIrBuilder &builder, uint32_t token)
 		guint32 align = 0;
 		guint32 size = mono_class_value_size (klass, &align);
 
-		builder.CreateMemSet (*dest, builder.getInt8 (0), size, llvm::Align (align));
+		builder.CreateMemSetInline (*dest, llvm::Align (align), builder.getInt8 (0),
+		                           builder.getInt64 (size));
 	}
 
 	return llvm::Error::success ();
@@ -510,6 +512,31 @@ MethodLLVMEmitter::block_size (MonoIrBuilder &builder, StackValue size)
 
 	// The size is unsigned int32, so it zero-extends instead of sign-extends.
 	return builder.CreateZExtOrTrunc (value, native);
+}
+
+/*
+ * A block copy, inlined where that is the better lowering.
+ *
+ * The inline form keeps the copy inside this method, so a fault on a bad
+ * pointer lands in managed code and the runtime raises the exception it owes
+ * rather than dying inside libc. It is the right form only for a count the IL
+ * gave as a constant. PreISelIntrinsicLowering expands a non-constant one into
+ * a byte-at-a-time loop instead of letting the target lower it, because
+ * getMemcpyLoopLoweringType is a byte on amd64. The plain form reaches
+ * SelectionDAG, where `rep movsb` is what such a count becomes.
+ *
+ * Both ends keep the alignment the site promised, and neither form is volatile:
+ * the fences a volatile block op needs are written around the copy.
+ */
+void
+MethodLLVMEmitter::emit_inlined_copy (MonoIrBuilder &builder, llvm::Value *dest,
+                                      llvm::Align dest_align, llvm::Value *src,
+                                      llvm::Align src_align, llvm::Value *size)
+{
+	if (llvm::isa<llvm::ConstantInt> (size))
+		builder.CreateMemCpyInline (dest, dest_align, src, src_align, size);
+	else
+		builder.CreateMemCpy (dest, dest_align, src, src_align, size);
 }
 
 /*
@@ -579,7 +606,7 @@ MethodLLVMEmitter::emit_cpblk (MonoIrBuilder &builder)
 	// sides, because ordering only one side leaves the other unordered.
 	if (prefixes.volatile_)
 		builder.CreateFence (llvm::AtomicOrdering::SequentiallyConsistent);
-	builder.CreateMemCpy (*dest, align, *src, align, *size, prefixes.volatile_);
+	emit_inlined_copy (builder, *dest, align, *src, align, *size);
 	if (prefixes.volatile_)
 		builder.CreateFence (llvm::AtomicOrdering::SequentiallyConsistent);
 
@@ -659,7 +686,13 @@ MethodLLVMEmitter::emit_initblk (MonoIrBuilder &builder)
 	// A volatile fill is only a store, so the fence goes before it.
 	if (prefixes.volatile_)
 		builder.CreateFence (llvm::AtomicOrdering::Release);
-	builder.CreateMemSet (*dest, fill, *size, align, prefixes.volatile_);
+	// The same split as a block copy, for the same reason. amd64 lowers only a
+	// constant-count fill itself, so a runtime count keeps the plain form and
+	// the call to memset behind it.
+	if (llvm::isa<llvm::ConstantInt> (*size))
+		builder.CreateMemSetInline (*dest, align, fill, *size);
+	else
+		builder.CreateMemSet (*dest, fill, *size, align, prefixes.volatile_);
 
 	return llvm::Error::success ();
 }

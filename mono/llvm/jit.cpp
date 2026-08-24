@@ -1342,6 +1342,19 @@ MonoJit::create (CodeArena *arena)
 	// Value profiling needs compiler-rt, which we do not link.
 	default_option ("disable-vp", true);
 
+	/*
+	 * Lower a copy whose count is a runtime value to `rep movsb` rather than a
+	 * call to the library, which keeps the copy inside the method that asked
+	 * for it.
+	 *
+	 * This acts only where the subtarget has FSRM, and LLVM takes that from the
+	 * CPU model rather than from CPUID: X86.td gives FeatureFSRM to Ice Lake
+	 * client and to Zen 3 and later, and getHostCPUFeatures () never reports
+	 * it. So a host whose model does not carry the feature keeps the library
+	 * call, whatever this says and whatever /proc/cpuinfo says.
+	 */
+	default_option ("x86-use-fsrm-for-memcpy", true);
+
 	LLJITBuilder builder;
 	builder.setJITTargetMachineBuilder (host_target_machine_builder ());
 

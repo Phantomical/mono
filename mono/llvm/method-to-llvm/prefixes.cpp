@@ -315,10 +315,10 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 			builder.CreateCall (value_copy_decl (),
 			                    {address, value, builder.getInt32 (1), *cls});
 		} else {
-			builder.CreateMemCpy (address, align, value,
-			                      type_alignment (location),
-			                      vtype_size (location, /*native=*/false),
-			                      prefixes.volatile_);
+			builder.CreateMemCpyInline (
+				address, align, value, type_alignment (location),
+				builder.getInt64 (vtype_size (location, /*native=*/false)),
+				prefixes.volatile_);
 		}
 		return llvm::Error::success ();
 	}
@@ -355,7 +355,8 @@ MethodLLVMEmitter::copy_vtype (MonoIrBuilder &builder, llvm::Value *destination,
 {
 	llvm::Align align = type_alignment (t, native);
 
-	builder.CreateMemCpy (destination, align, source, align, vtype_size (t, native));
+	builder.CreateMemCpyInline (destination, align, source, align,
+	                            builder.getInt64 (vtype_size (t, native)));
 }
 
 llvm::Error
@@ -382,8 +383,9 @@ MethodLLVMEmitter::push_from_location (MonoIrBuilder &builder, llvm::Value *addr
 	llvm::Align source = prefixes.unaligned != 0 ? llvm::Align (prefixes.unaligned)
 	                                             : type_alignment (t, native);
 
-	builder.CreateMemCpy (*slot, type_alignment (t, native), address, source,
-	                      vtype_size (t, native), prefixes.volatile_);
+	builder.CreateMemCpyInline (*slot, type_alignment (t, native), address, source,
+	                            builder.getInt64 (vtype_size (t, native)),
+	                            prefixes.volatile_);
 	/*
 	 * A volatile read has acquire semantics (I.12.6.7). A copy is not one access
 	 * an ordering can be attached to, so this one is a fence. I.12.6.7 does not
