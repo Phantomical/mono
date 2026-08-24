@@ -23,6 +23,7 @@
  */
 
 #include "class-init.hpp"
+#include "strip-casts.hpp"
 
 #include <llvm/ADT/MapVector.h>
 #include <llvm/ADT/SmallVector.h>
@@ -31,29 +32,11 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
-#include <llvm/IR/Operator.h>
 
 using namespace llvm;
 
 namespace mono {
 namespace {
-
-/// Returns v with any address-preserving cast peeled off, so two spellings of
-/// one runtime address compare equal.
-const Value *
-strip_casts (const Value *v)
-{
-	while (const auto *op = dyn_cast<Operator> (v)) {
-		unsigned opcode = op->getOpcode ();
-
-		if (opcode != Instruction::BitCast && opcode != Instruction::PtrToInt
-		    && opcode != Instruction::IntToPtr)
-			break;
-		v = op->getOperand (0);
-	}
-
-	return v;
-}
 
 /// The class is whatever the call names. It is a symbol for the vtable when
 /// the class is known while compiling, and a value read from the runtime

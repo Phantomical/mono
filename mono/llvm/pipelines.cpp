@@ -7,6 +7,7 @@
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
 #include "passes/restore-tail-position.hpp"
+#include "passes/rgctx-dedup.hpp"
 #include "passes/rgctx-fetch.hpp"
 #include "passes/tier-counter.hpp"
 #include "passes/top-down-inline.hpp"
@@ -338,6 +339,7 @@ MonoPassBuilder::buildTier1Pipeline ()
 		MPM.addPass (mono::TierCounterPass ());
 
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RgctxDedupPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RestoreTailPositionPass ()));
 	MPM.addPass (mono::RgctxFetchPass ());
 	MPM.addPass (arch::MonoAbiPass ());
@@ -360,6 +362,10 @@ MonoPassBuilder::buildTier2SimplificationPipeline ()
 	// invoke where its class has a handler around it, and an edge is what the
 	// hash is over.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
+
+	// Behind the counts for the same reason, and in front of the pipeline
+	// below, which then optimizes one fetch rather than several.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RgctxDedupPass ()));
 
 	/*
 	 * O3 before anything weighs a call site, and that is what a cost model
@@ -397,6 +403,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 	// Again, because unrolling and jump threading copied whatever the run in
 	// the common pipeline left standing.
 	FPM.addPass (mono::ClassInitPass ());
+	FPM.addPass (mono::RgctxDedupPass ());
 
 	// Last, because what it repairs is the pipeline's own doing.
 	FPM.addPass (mono::RestoreTailPositionPass ());
