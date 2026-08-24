@@ -2439,47 +2439,51 @@ mono_remote_class_is_interface_proxy (MonoRemoteClass *remote_class)
 		remote_class->proxy_class == mono_defaults.marshalbyrefobject_class);
 }
 
-/**
- * mono_class_proxy_vtable:
- * \param domain the application domain
- * \param remove_class the remote class
- * \param error set on error
- * Creates a vtable for transparent proxies. It is basically
- * a copy of the real vtable of the class wrapped in \p remote_class,
- * but all function pointers invoke the remoting functions, and
- * \c vtable->klass points to the transparent proxy class, and not to \p class.
+/* What mono_class_proxy_vtable () fills a transparent proxy's vtable from. */
+typedef struct {
+	MonoVTable *class_vtable;	/* the vtable of the class the proxy stands in for */
+	MonoMethod **methods;		/* one for each proxy vtable slot, NULL where the slot stays empty */
+	gpointer *trampolines;		/* the trampoline for each of those slots, NULL where the method is */
+	int slot_count;
+	GSList *extra_interfaces;
+	guint32 max_interface_id;
+} MonoProxyVTableLayout;
+
+static void
+free_proxy_vtable_layout (MonoProxyVTableLayout *layout)
+{
+	g_slist_free (layout->extra_interfaces);
+	g_free (layout->methods);
+	g_free (layout->trampolines);
+}
+
+/*
+ * Collects what a proxy vtable for remote_class is filled from. On failure returns
+ * FALSE, sets error and leaves nothing to free.
  *
- * On failure returns NULL and sets \p error
+ * LOCKING: takes the loader lock and the domain lock, through
+ * mono_class_vtable_checked ().
  */
-static MonoVTable *
-mono_class_proxy_vtable (MonoDomain *domain, MonoRemoteClass *remote_class, MonoRemotingTarget target_type, MonoError *error)
+static gboolean
+collect_proxy_vtable_layout (MonoDomain *domain, MonoRemoteClass *remote_class, MonoProxyVTableLayout *layout, MonoError *error)
 {
 	MONO_REQ_GC_UNSAFE_MODE;
 
-	MonoVTable *vt, *pvt = NULL;
-	int i, j, vtsize, extra_interface_vtsize = 0;
-	guint32 max_interface_id;
+	int i, j, extra_method_count = 0;
 	MonoClass *k;
-	GSList *extra_interfaces = NULL;
 	MonoClass *klass = remote_class->proxy_class;
-	gpointer *interface_offsets;
-	uint8_t *bitmap = NULL;
-	int bsize;
-	size_t imt_table_bytes;
-	gboolean use_interpreter = callbacks.is_interpreter_enabled ();
+	GSList *extra_interfaces = NULL;
 
-#ifdef COMPRESSED_INTERFACE_BITMAP
-	int bcsize;
-#endif
-
+	memset (layout, 0, sizeof (*layout));
 	error_init (error);
 
-	vt = mono_class_vtable_checked (domain, klass, error);
+	MonoVTable *vt = mono_class_vtable_checked (domain, klass, error);
 	if (!is_ok (error))
-		return NULL;
-	max_interface_id = vt->max_interface_id;
-	
-	/* Calculate vtable space for extra interfaces */
+		return FALSE;
+	layout->class_vtable = vt;
+	layout->max_interface_id = vt->max_interface_id;
+
+	/* Count the methods of the interfaces the class does not implement itself */
 	for (j = 0; j < remote_class->interface_count; j++) {
 		MonoClass* iclass = remote_class->interfaces[j];
 		GPtrArray *ifaces;
@@ -2490,13 +2494,16 @@ mono_class_proxy_vtable (MonoDomain *domain, MonoRemoteClass *remote_class, Mono
 			continue;	/* interface implemented by the class */
 		if (g_slist_find (extra_interfaces, iclass))
 			continue;
-			
+
 		extra_interfaces = g_slist_prepend (extra_interfaces, iclass);
-		
+
 		method_count = mono_class_num_methods (iclass);
-	
+
 		ifaces = mono_class_get_implemented_interfaces (iclass, error);
-		goto_if_nok (error, failure);
+		if (!is_ok (error)) {
+			g_slist_free (extra_interfaces);
+			return FALSE;
+		}
 		if (ifaces) {
 			for (i = 0; i < ifaces->len; ++i) {
 				MonoClass *ic = (MonoClass *)g_ptr_array_index (ifaces, i);
@@ -2512,9 +2519,118 @@ mono_class_proxy_vtable (MonoDomain *domain, MonoRemoteClass *remote_class, Mono
 			ifaces = NULL;
 		}
 
-		extra_interface_vtsize += method_count * sizeof (gpointer);
-		if (m_class_get_max_interface_id (iclass) > max_interface_id) max_interface_id = m_class_get_max_interface_id (iclass);
+		extra_method_count += method_count;
+		if (m_class_get_max_interface_id (iclass) > layout->max_interface_id) layout->max_interface_id = m_class_get_max_interface_id (iclass);
 	}
+	layout->extra_interfaces = extra_interfaces;
+
+	mono_class_setup_vtable (klass);
+	int class_vtable_size = m_class_get_vtable_size (klass);
+	layout->slot_count = class_vtable_size + extra_method_count;
+	layout->methods = g_new0 (MonoMethod *, layout->slot_count);
+
+	MonoMethod **klass_vtable = m_class_get_vtable (klass);
+	for (i = 0; i < class_vtable_size; ++i)
+		layout->methods [i] = klass_vtable [i];
+
+	if (mono_class_is_abstract (klass)) {
+		/*
+		 * An abstract class leaves the slots of its abstract methods empty, and a
+		 * proxy call still has to reach the remote side through them. A method that
+		 * is not virtual carries slot -1, so the index is checked against the array.
+		 */
+		for (k = klass; k; k = m_class_get_parent (k)) {
+			MonoMethod* m;
+			gpointer iter = NULL;
+			while ((m = mono_class_get_methods (k, &iter)))
+				if (m->slot >= 0 && m->slot < class_vtable_size && !layout->methods [m->slot])
+					layout->methods [m->slot] = m;
+		}
+	}
+
+	if (extra_interfaces) {
+		int slot = class_vtable_size;
+		GSList *list_item;
+
+		for (list_item = extra_interfaces; list_item != NULL; list_item = list_item->next) {
+			MonoClass *interf = (MonoClass *)list_item->data;
+			gpointer iter = NULL;
+			MonoMethod *cm;
+
+			j = 0;
+			while ((cm = mono_class_get_methods (interf, &iter)))
+				layout->methods [slot + j++] = cm;
+
+			slot += mono_class_num_methods (interf);
+		}
+	}
+
+	return TRUE;
+}
+
+/*
+ * Builds the remoting trampoline for each method the layout names. On failure
+ * returns FALSE and sets error. The layout is still the caller's to free.
+ *
+ * LOCKING: takes the loader lock and the domain lock, through the compile behind
+ * each trampoline. Call it before the caller takes them. Under the loader lock,
+ * one compile for each slot runs with every class load and every compile of
+ * every other thread queued behind it.
+ */
+static gboolean
+build_proxy_trampolines (MonoDomain *domain, MonoProxyVTableLayout *layout, MonoRemotingTarget target_type, MonoError *error)
+{
+	MONO_REQ_GC_UNSAFE_MODE;
+
+	error_init (error);
+
+	layout->trampolines = g_new0 (gpointer, layout->slot_count);
+	for (int i = 0; i < layout->slot_count; ++i) {
+		if (!layout->methods [i])
+			continue;
+		layout->trampolines [i] = create_remoting_trampoline (domain, layout->methods [i], target_type, error);
+		return_val_if_nok (error, FALSE);
+	}
+
+	return TRUE;
+}
+
+/**
+ * mono_class_proxy_vtable:
+ * \param domain the application domain
+ * \param remote_class the remote class
+ * \param layout the contents built by \c collect_proxy_vtable_layout and \c build_proxy_trampolines
+ * \param error set on error
+ * Creates a vtable for transparent proxies. It is basically
+ * a copy of the real vtable of the class wrapped in \p remote_class,
+ * but all function pointers invoke the remoting functions, and
+ * \c vtable->klass points to the transparent proxy class, and not to \p class.
+ *
+ * On failure returns NULL and sets \p error
+ *
+ * LOCKING: requires the loader lock and the domain lock.
+ */
+static MonoVTable *
+mono_class_proxy_vtable (MonoDomain *domain, MonoRemoteClass *remote_class, const MonoProxyVTableLayout *layout, MonoError *error)
+{
+	MONO_REQ_GC_UNSAFE_MODE;
+
+	MonoVTable *pvt = NULL;
+	int i, vtsize;
+	MonoClass *klass = remote_class->proxy_class;
+	gpointer *interface_offsets;
+	uint8_t *bitmap = NULL;
+	int bsize;
+	size_t imt_table_bytes;
+	gboolean use_interpreter = callbacks.is_interpreter_enabled ();
+	int class_vtable_size = m_class_get_vtable_size (klass);
+	int extra_interface_vtsize = (layout->slot_count - class_vtable_size) * sizeof (gpointer);
+
+#ifdef COMPRESSED_INTERFACE_BITMAP
+	int bcsize;
+#endif
+
+	error_init (error);
 
 	imt_table_bytes = sizeof (gpointer) * MONO_IMT_SIZE;
 	if (use_interpreter)
@@ -2522,7 +2638,7 @@ mono_class_proxy_vtable (MonoDomain *domain, MonoRemoteClass *remote_class, Mono
 	UnlockedIncrement (&mono_stats.imt_number_of_tables);
 	UnlockedAdd (&mono_stats.imt_tables_size, imt_table_bytes);
 
-	vtsize = imt_table_bytes + MONO_SIZEOF_VTABLE + m_class_get_vtable_size (klass) * sizeof (gpointer);
+	vtsize = imt_table_bytes + MONO_SIZEOF_VTABLE + class_vtable_size * sizeof (gpointer);
 
 	UnlockedAdd (&mono_stats.class_vtable_size, vtsize + extra_interface_vtsize);
 
@@ -2533,7 +2649,7 @@ mono_class_proxy_vtable (MonoDomain *domain, MonoRemoteClass *remote_class, Mono
 	if (use_interpreter)
 		interface_offsets = (gpointer*)((char*)interface_offsets + imt_table_bytes / 2);
 
-	memcpy (pvt, vt, MONO_SIZEOF_VTABLE + m_class_get_vtable_size (klass) * sizeof (gpointer));
+	memcpy (pvt, layout->class_vtable, MONO_SIZEOF_VTABLE + class_vtable_size * sizeof (gpointer));
 
 	pvt->interp_vtable = NULL;
 	pvt->klass = mono_defaults.transparent_proxy_class;
@@ -2555,34 +2671,11 @@ mono_class_proxy_vtable (MonoDomain *domain, MonoRemoteClass *remote_class, Mono
 	}
 
 	/* initialize vtable */
-	mono_class_setup_vtable (klass);
-	MonoMethod **klass_vtable;
-	klass_vtable = m_class_get_vtable (klass);
-	for (i = 0; i < m_class_get_vtable_size (klass); ++i) {
-		MonoMethod *cm;
-		    
-		if ((cm = klass_vtable [i])) {
-			pvt->vtable [i] = create_remoting_trampoline (domain, cm, target_type, error);
-			goto_if_nok (error, failure);
-		} else
-			pvt->vtable [i] = NULL;
-	}
+	for (i = 0; i < layout->slot_count; ++i)
+		pvt->vtable [i] = layout->trampolines [i];
 
-	if (mono_class_is_abstract (klass)) {
-		/* create trampolines for abstract methods */
-		for (k = klass; k; k = m_class_get_parent (k)) {
-			MonoMethod* m;
-			gpointer iter = NULL;
-			while ((m = mono_class_get_methods (k, &iter)))
-				if (!pvt->vtable [m->slot]) {
-					pvt->vtable [m->slot] = create_remoting_trampoline (domain, m, target_type, error);
-					goto_if_nok (error, failure);
-				}
-		}
-	}
-
-	pvt->max_interface_id = max_interface_id;
-	bsize = sizeof (guint8) * (max_interface_id/8 + 1 );
+	pvt->max_interface_id = layout->max_interface_id;
+	bsize = sizeof (guint8) * (layout->max_interface_id/8 + 1 );
 #ifdef COMPRESSED_INTERFACE_BITMAP
 	bitmap = (uint8_t *)g_malloc0 (bsize);
 #else
@@ -2594,36 +2687,13 @@ mono_class_proxy_vtable (MonoDomain *domain, MonoRemoteClass *remote_class, Mono
 		bitmap [interface_id >> 3] |= (1 << (interface_id & 7));
 	}
 
-	if (extra_interfaces) {
-		int slot = m_class_get_vtable_size (klass);
-		MonoClass* interf;
-		gpointer iter;
-		MonoMethod* cm;
-		GSList *list_item;
-
-		/* Create trampolines for the methods of the interfaces */
-		for (list_item = extra_interfaces; list_item != NULL; list_item=list_item->next) {
-			interf = (MonoClass *)list_item->data;
-			
-			guint32 interf_interface_id = m_class_get_interface_id (interf);
-			bitmap [interf_interface_id >> 3] |= (1 << (interf_interface_id & 7));
-
-			iter = NULL;
-			j = 0;
-			while ((cm = mono_class_get_methods (interf, &iter))) {
-				pvt->vtable [slot + j++] = create_remoting_trampoline (domain, cm, target_type, error);
-				goto_if_nok (error, failure);
-			}
-			
-			slot += mono_class_num_methods (interf);
-		}
+	for (GSList *list_item = layout->extra_interfaces; list_item != NULL; list_item = list_item->next) {
+		guint32 interf_interface_id = m_class_get_interface_id ((MonoClass *)list_item->data);
+		bitmap [interf_interface_id >> 3] |= (1 << (interf_interface_id & 7));
 	}
 
 	/* Now that the vtable is full, we can actually fill up the IMT */
-	build_imt (klass, pvt, domain, interface_offsets, extra_interfaces);
-	if (extra_interfaces) {
-		g_slist_free (extra_interfaces);
-	}
+	build_imt (klass, pvt, domain, interface_offsets, layout->extra_interfaces);
 
 #ifdef COMPRESSED_INTERFACE_BITMAP
 	bcsize = mono_compress_bitmap (NULL, bitmap, bsize);
@@ -2636,8 +2706,6 @@ mono_class_proxy_vtable (MonoDomain *domain, MonoRemoteClass *remote_class, Mono
 	MONO_PROFILER_RAISE (vtable_loaded, (pvt));
 	return pvt;
 failure:
-	if (extra_interfaces)
-		g_slist_free (extra_interfaces);
 #ifdef COMPRESSED_INTERFACE_BITMAP
 	g_free (bitmap);
 #endif
@@ -2919,44 +2987,61 @@ mono_remote_class_vtable (MonoDomain *domain, MonoRemoteClass *remote_class, Mon
 	gpointer result = NULL;
 	error_init (error);
 
-	mono_loader_lock (); /*FIXME mono_class_from_mono_type_internal and mono_class_proxy_vtable take it*/
+	gboolean cross_domain = MONO_HANDLE_GETVAL (rp, target_domain_id) != -1;
+	MonoVTable **published = cross_domain ? &remote_class->xdomain_vtable : &remote_class->default_vtable;
+
 	mono_domain_lock (domain);
-	gint32 target_domain_id = MONO_HANDLE_GETVAL (rp, target_domain_id);
-	if (target_domain_id != -1) {
-		if (remote_class->xdomain_vtable == NULL)
-			remote_class->xdomain_vtable = mono_class_proxy_vtable (domain, remote_class, MONO_REMOTING_TARGET_APPDOMAIN, error);
-		goto_if_nok (error, leave);
-		result = remote_class->xdomain_vtable;
-		goto leave;
-	}
-	if (remote_class->default_vtable == NULL) {
+	result = *published;
+	mono_domain_unlock (domain);
+	if (result)
+		return result;
+
+	MonoRemotingTarget target_type = MONO_REMOTING_TARGET_APPDOMAIN;
+	if (!cross_domain) {
+		target_type = MONO_REMOTING_TARGET_UNKNOWN;
+#ifndef DISABLE_COM
 		MonoReflectionTypeHandle reftype = MONO_HANDLE_NEW (MonoReflectionType, NULL);
 		MONO_HANDLE_GET (reftype, rp, class_to_proxy);
-		
+
 		MonoType *type = MONO_HANDLE_GETVAL (reftype, type);
 		MonoClass *klass = mono_class_from_mono_type_internal (type);
-#ifndef DISABLE_COM
-		gboolean target_is_com = FALSE;
 		if (mono_class_is_com_object (klass) || (mono_class_get_com_object_class () && klass == mono_class_get_com_object_class ())) {
 			MonoVTable *klass_vtable = mono_class_vtable_checked (mono_domain_get (), klass, error);
-			goto_if_nok (error, leave);
+			return_val_if_nok (error, NULL);
 			if (!mono_vtable_is_remote (klass_vtable))
-				target_is_com = TRUE;
+				target_type = MONO_REMOTING_TARGET_COMINTEROP;
 		}
-		if (target_is_com)
-			remote_class->default_vtable = mono_class_proxy_vtable (domain, remote_class, MONO_REMOTING_TARGET_COMINTEROP, error);
-		else
 #endif
-			remote_class->default_vtable = mono_class_proxy_vtable (domain, remote_class, MONO_REMOTING_TARGET_UNKNOWN, error);
-		/* N.B. both branches of the if modify error */
-		goto_if_nok (error, leave);
-
 	}
-	
-	result = remote_class->default_vtable;
-leave:
+
+	/*
+	 * A slot of the vtable holds a remoting trampoline, and building one compiles a
+	 * method, so the trampolines are built here rather than under the locks below.
+	 */
+	MonoProxyVTableLayout layout;
+	if (!collect_proxy_vtable_layout (domain, remote_class, &layout, error))
+		return NULL;
+	if (!build_proxy_trampolines (domain, &layout, target_type, error)) {
+		free_proxy_vtable_layout (&layout);
+		return NULL;
+	}
+
+	/*
+	 * Two threads that arrive together each build a layout of their own. The one
+	 * that takes the locks first publishes its vtable, and the loser keeps that
+	 * one. A remote class has one vtable for each target, and a proxy already
+	 * holding the first must not meet a second.
+	 */
+	mono_loader_lock (); /*FIXME mono_class_proxy_vtable requires it*/
+	mono_domain_lock (domain);
+	if (*published == NULL)
+		*published = mono_class_proxy_vtable (domain, remote_class, &layout, error);
+	if (is_ok (error))
+		result = *published;
 	mono_domain_unlock (domain);
 	mono_loader_unlock ();
+
+	free_proxy_vtable_layout (&layout);
 	return result;
 }
 
@@ -2992,21 +3077,29 @@ mono_upgrade_remote_class (MonoDomain *domain, MonoObjectHandle proxy_object, Mo
 		redo_vtable = (remote_class->proxy_class != klass);
 	}
 
-	mono_loader_lock (); /*FIXME mono_remote_class_vtable requires it.*/
+	if (!redo_vtable)
+		return TRUE;
+
 	mono_domain_lock (domain);
-	if (redo_vtable) {
-		MonoRemoteClass *fresh_remote_class = clone_remote_class (domain, remote_class, klass);
-		MONO_HANDLE_SETVAL (tproxy, remote_class, MonoRemoteClass*, fresh_remote_class);
-		MonoRealProxyHandle real_proxy = MONO_HANDLE_NEW (MonoRealProxy, NULL);
-		MONO_HANDLE_GET (real_proxy, tproxy, rp);
-		MONO_HANDLE_SETVAL (proxy_object, vtable, MonoVTable*, (MonoVTable*)mono_remote_class_vtable (domain, fresh_remote_class, real_proxy, error));
-		goto_if_nok (error, leave);
-	}
-	
-leave:
+	MonoRemoteClass *fresh_remote_class = clone_remote_class (domain, remote_class, klass);
 	mono_domain_unlock (domain);
-	mono_loader_unlock ();
-	return is_ok (error);
+
+	MonoRealProxyHandle real_proxy = MONO_HANDLE_NEW (MonoRealProxy, NULL);
+	MONO_HANDLE_GET (real_proxy, tproxy, rp);
+	MonoVTable *vtable = (MonoVTable*)mono_remote_class_vtable (domain, fresh_remote_class, real_proxy, error);
+	return_val_if_nok (error, FALSE);
+
+	/*
+	 * The vtable is built from fresh_remote_class. The pair is written under one
+	 * lock, so a thread that upgrades the same proxy to a different class does not
+	 * see this remote class beside that thread's vtable.
+	 */
+	mono_domain_lock (domain);
+	MONO_HANDLE_SETVAL (tproxy, remote_class, MonoRemoteClass*, fresh_remote_class);
+	MONO_HANDLE_SETVAL (proxy_object, vtable, MonoVTable*, vtable);
+	mono_domain_unlock (domain);
+
+	return TRUE;
 }
 #endif /* DISABLE_REMOTING */
 
