@@ -102,13 +102,29 @@ parse_spec (const Function &decl)
 	return spec;
 }
 
+/// Reads one field of the array header.
 Value *
 load_field (IRBuilder<> &b, Value *base, uint64_t offset, uint64_t bytes)
 {
 	Value *slot = b.CreateInBoundsGEP (b.getInt8Ty (), base, b.getInt64 (offset));
+	LoadInst *load = b.CreateAlignedLoad (b.getIntNTy ((unsigned) bytes * 8), slot,
+	                                      Align (bytes));
 
-	return b.CreateAlignedLoad (b.getIntNTy ((unsigned) bytes * 8), slot,
-	                            Align (bytes));
+	mark_array_header_load (load);
+	return load;
+}
+
+/// Reads the pointer to the array's bounds vector.
+Value *
+load_bounds (IRBuilder<> &b, Value *array, const AddressSpec &spec)
+{
+	LoadInst *load = b.CreateAlignedLoad (
+		PointerType::get (b.getContext (), 0),
+		b.CreateInBoundsGEP (b.getInt8Ty (), array, b.getInt64 (spec.bounds_offset)),
+		Align (sizeof (void *)));
+
+	mark_array_header_load (load);
+	return load;
 }
 
 /// Weights a branch's throw edge as unlikely, matching what the translator
@@ -136,10 +152,7 @@ subtract_lower_bound (IRBuilder<> &b, Value *array, Value *index,
 	LLVMContext &ctx = b.getContext ();
 	Function *fn = b.GetInsertBlock ()->getParent ();
 	Type *i32 = b.getInt32Ty ();
-	Value *bounds = b.CreateAlignedLoad (
-		PointerType::get (ctx, 0),
-		b.CreateInBoundsGEP (b.getInt8Ty (), array, b.getInt64 (spec.bounds_offset)),
-		Align (sizeof (void *)));
+	Value *bounds = load_bounds (b, array, spec);
 	BasicBlock *from = b.GetInsertBlock ();
 	BasicBlock *have = BasicBlock::Create (ctx, "array_addr_lb", fn, continuation);
 	BasicBlock *merge = BasicBlock::Create (ctx, "array_addr_idx", fn, continuation);
@@ -200,11 +213,7 @@ lower_call (CallBase *site, const AddressSpec &spec)
 		check (b.CreateICmpUGE (b.CreateZExt (linear, b.getInt64Ty ()),
 		                        b.CreateZExtOrTrunc (length, b.getInt64Ty ())));
 	} else {
-		Value *bounds = b.CreateAlignedLoad (
-			PointerType::get (ctx, 0),
-			b.CreateInBoundsGEP (b.getInt8Ty (), array,
-		                             b.getInt64 (spec.bounds_offset)),
-			Align (sizeof (void *)));
+		Value *bounds = load_bounds (b, array, spec);
 
 		linear = nullptr;
 		for (uint64_t dim = 0; dim < spec.rank; ++dim) {

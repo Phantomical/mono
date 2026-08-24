@@ -168,7 +168,11 @@ MethodLLVMEmitter::array_length (MonoIrBuilder &builder, StackValue array)
 	/* This is a scalar typedef, so its size alone is the layout. No ABI table is involved. */
 	constexpr unsigned bytes = sizeof (mono_array_size_t);
 
-	return builder.CreateAlignedLoad (builder.getIntNTy (bytes * 8), slot, llvm::Align (bytes));
+	llvm::LoadInst *length =
+		builder.CreateAlignedLoad (builder.getIntNTy (bytes * 8), slot, llvm::Align (bytes));
+
+	mark_array_header_load (length);
+	return length;
 }
 
 llvm::Expected<llvm::Value *>
@@ -1197,11 +1201,13 @@ MethodLLVMEmitter::emit_array_dimension (MonoIrBuilder &builder, bool lower_boun
 		without_bounds = builder.CreateZExtOrTrunc (*whole, builder.getInt32Ty ());
 	}
 
-	llvm::Value *bounds = builder.CreateAlignedLoad (
+	llvm::LoadInst *bounds = builder.CreateAlignedLoad (
 		llvm::PointerType::get (context (), 0),
 		builder.CreateGEP (builder.getInt8Ty (), array.value,
 	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, bounds))),
 		llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	mark_array_header_load (bounds);
 
 	llvm::BasicBlock *flat = llvm::BasicBlock::Create (context (), "dim_szarray", function);
 	llvm::BasicBlock *shaped = llvm::BasicBlock::Create (context (), "dim_shaped", function);
@@ -1220,10 +1226,12 @@ MethodLLVMEmitter::emit_array_dimension (MonoIrBuilder &builder, bool lower_boun
 	unsigned bytes = lower_bound ? bound_bytes : length_bytes;
 	int32_t at = lower_bound ? MONO_STRUCT_OFFSET (MonoArrayBounds, lower_bound)
 	                         : MONO_STRUCT_OFFSET (MonoArrayBounds, length);
-	llvm::Value *held = builder.CreateAlignedLoad (
+	llvm::LoadInst *held = builder.CreateAlignedLoad (
 		builder.getIntNTy (bytes * 8),
 		builder.CreateGEP (builder.getInt8Ty (), bounds, builder.getInt32 (at)),
 		llvm::Align (bytes));
+
+	mark_array_header_load (held);
 
 	// A lower bound is signed and a length is not.
 	llvm::Value *first = lower_bound
