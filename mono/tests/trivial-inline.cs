@@ -101,6 +101,14 @@ static class Trivial {
 		throw new InvalidOperationException (what);
 	}
 
+	/*
+	 * A forwarder onto FailNoInline (). The mark keeps that method out of every
+	 * fold, so it holds a body and a frame of its own whatever its caller does.
+	 * The mark says nothing about this forwarder, and the chain walk lets this
+	 * one through.
+	 */
+	public static void FailThroughNoInline (string what) { FailNoInline (what); }
+
 	// A branch, so the shape test declines it however small it is - and the cost
 	// model behind it then weighs it and takes it.
 	public static void FailBranch (string what, bool yes)
@@ -114,10 +122,11 @@ static class Program {
 	static Outer o = new Outer ();
 
 	/* Which helpers the traces taken inside the roots below named. */
-	static bool saw_fail, saw_no_inline, saw_branch, saw_clone;
+	static bool saw_fail, saw_no_inline, saw_through, saw_branch, saw_clone;
 
 	/* Which of them ran inside their root's code rather than in a body of its own. */
-	static bool folded_fail, folded_no_inline, folded_branch, folded_clone;
+	static bool folded_fail, folded_no_inline, folded_through, folded_branch,
+		folded_clone;
 
 	/*
 	 * Whether the helper's frame covers the same code as root's.
@@ -168,10 +177,12 @@ static class Program {
 
 		saw_fail |= trace.Contains ("Trivial.Fail (");
 		saw_no_inline |= trace.Contains ("Trivial.FailNoInline");
+		saw_through |= trace.Contains ("Trivial.FailThroughNoInline");
 		saw_branch |= trace.Contains ("Trivial.FailBranch");
 
 		folded_fail |= RunsInside (e, "Fail", "Root");
 		folded_no_inline |= RunsInside (e, "FailNoInline", "Root");
+		folded_through |= RunsInside (e, "FailThroughNoInline", "Root");
 		folded_branch |= RunsInside (e, "FailBranch", "Root");
 
 		if (!trace.Contains ("Program.Root"))
@@ -216,6 +227,13 @@ static class Program {
 		}
 
 		try {
+			Trivial.FailThroughNoInline ("via");
+		} catch (InvalidOperationException e) {
+			total += e.Message.Length;
+			Record (e);
+		}
+
+		try {
 			Trivial.FailBranch ("crash", n > 0);
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
@@ -253,8 +271,9 @@ static class Program {
 			return false;
 		}
 
-		saw_fail = saw_no_inline = saw_branch = saw_clone = false;
-		folded_fail = folded_no_inline = folded_branch = folded_clone = false;
+		saw_fail = saw_no_inline = saw_through = saw_branch = saw_clone = false;
+		folded_fail = folded_no_inline = folded_through = folded_branch =
+			folded_clone = false;
 
 		int got = Root (3);
 
@@ -272,6 +291,9 @@ static class Program {
 		Check (saw_no_inline, "NoInlining keeps the helper's frame at " + name);
 		Check (!folded_no_inline,
 		       "and a refused helper runs in a body of its own at " + name);
+		Check (saw_through, "a forwarder onto it has a frame at " + name);
+		Check (folded_through,
+		       "and the mark on its target leaves it foldable at " + name);
 
 		/*
 		 * The icall behind Array:Clone () reads no frame, so the chain walk lets
@@ -299,7 +321,7 @@ static class Program {
 	{
 		int want = Root (3);
 
-		Check (want == 7 + 41 + 41 + 44 + 3 + 3 + 40 + 4 + 4 + 5,
+		Check (want == 7 + 41 + 41 + 44 + 3 + 3 + 40 + 4 + 4 + 3 + 5,
 			"the answer before any promotion");
 
 		MethodInfo root = typeof (Program).GetMethod ("Root",

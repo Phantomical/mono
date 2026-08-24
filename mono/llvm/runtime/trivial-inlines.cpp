@@ -284,18 +284,18 @@ forwards_into_a_cycle (MonoMethod *target, MonoDomain *domain)
 /// Whether target, or something it forwards to in turn, can read the frame it
 /// was called from.
 ///
-/// Checks the same two marks loses_its_frame_safely () gates on
-/// (inline-scope.hpp): NoInlining, and an internal call
-/// reads_the_callers_frame () names.
+/// Follows the forwarder chain to the internal call at its end, which is what
+/// reads_the_callers_frame () (inline-scope.hpp) decides. A chain this walk does
+/// not reach the end of answers yes.
+///
+/// NoInlining on a link is not read, for the reason loses_its_frame_safely ()
+/// gives.
 bool
 may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
 {
 	for (int link = 0; link < max_links; ++link) {
 		if (target == nullptr)
 			return false;
-
-		if ((target->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0)
-			return true;
 
 		// A body with no IL is where the chain stops. It keeps no frame of its
 		// own, so what it reports comes from the frame that called it.

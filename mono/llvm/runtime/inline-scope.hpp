@@ -168,10 +168,15 @@ bool reads_the_callers_frame (MonoMethod *target);
 /// Whether the body can lose its own frame without changing what a method it
 /// calls reports.
 ///
-/// Fold the body in and a helper it calls sees the caller's frame instead. Two
-/// marks say a helper reads that frame: NoInlining, which is what a managed one
-/// carries, and an internal call reads_the_callers_frame () names. A call
-/// through a pointer names no method, so a body holding one is refused outright.
+/// Fold the body in and a call it makes sees the caller's frame instead. The
+/// calls that read that frame are the internal calls reads_the_callers_frame ()
+/// names. This test covers the method's own call sites only. A call through a
+/// pointer names no method, so a body that holds one is refused outright.
+///
+/// NoInlining on a target is not read here. The mark says do not fold that
+/// target, which may_fold () enforces. The opposite reading refuses the shape
+/// the BCL uses the mark for. That shape is a hot body that keeps its cold half
+/// in a marked method of its own.
 bool loses_its_frame_safely (MonoMethod *method, MonoMethodHeader *header);
 
 /// Translates callee into the module its caller is being built in, marks the

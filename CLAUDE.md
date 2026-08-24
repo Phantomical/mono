@@ -623,8 +623,10 @@ asks, because the pass itself names no metadata, so a site the gates or `getInli
 refuse costs nothing but the questions. A candidate arrives with its own trivial callees
 already folded in. Everything past `may_fold ()` is a correctness gate of its own: no
 clauses, inside `MONO_LLVM_JIT_INLINE_COST_IL_LIMIT` bytes of IL, no `calli`, and no
-direct call to a `NoInlining` method. `loses_its_frame_safely ()` is that last gate, the
-frame-reading test widened to a body with several calls. A caller with no profile still
+direct call to an internal call that reads its caller's frame.
+`loses_its_frame_safely ()` is that last gate, the frame-reading test widened to a body
+with several calls. `NoInlining` on a call target is not one of the gates: the mark says
+do not fold that target, which `may_fold ()` already enforces. A caller with no profile still
 inlines, off the static frequencies BFI falls back to.
 
 **A body neither inliner folded in is taken back off.** `StripInlineCopiesPass`

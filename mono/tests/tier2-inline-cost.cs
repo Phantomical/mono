@@ -64,13 +64,27 @@ static class Costed {
 	}
 
 	/*
-	 * A body whose own call reads the frame it was called from. Folding this
-	 * would hand FailNoInline () the root's frame instead of this one's, so the
-	 * gate walks a candidate's calls and refuses it.
+	 * A body that calls a NoInlining method. The mark keeps FailNoInline () out
+	 * of every fold, so that method holds a body and a frame of its own whatever
+	 * its caller does. The mark says nothing about this body, and the cost model
+	 * is free to fold it. The branch keeps the shape test off this body, so a
+	 * fold here is the cost model's.
 	 */
 	public static void FailThroughNoInline (string what, bool yes)
 	{
-		FailNoInline (what, yes);
+		if (yes)
+			FailNoInline (what, true);
+	}
+
+	/*
+	 * A body whose own call reads the frame that called it. Fold this in and
+	 * Assembly:GetCallingAssembly () answers with the root's caller rather than
+	 * this body's. The gate walks a candidate's calls and refuses this one.
+	 */
+	public static void FailThroughFrameRead (string what, bool yes)
+	{
+		if (yes && Assembly.GetCallingAssembly () != null)
+			throw new InvalidOperationException (what);
 	}
 
 	// Past MONO_LLVM_JIT_INLINE_COST_IL_LIMIT, which bounds how much IL one
@@ -125,10 +139,11 @@ static class Costed {
 
 static class Program {
 	/* Which of the helpers the trace taken inside Root () named. */
-	static bool saw_branch, saw_no_inline, saw_through, saw_long;
+	static bool saw_branch, saw_no_inline, saw_through, saw_frame_read, saw_long;
 
 	/* Which of them ran inside Root ()'s code rather than in a body of its own. */
-	static bool folded_branch, folded_no_inline, folded_through, folded_long;
+	static bool folded_branch, folded_no_inline, folded_through, folded_frame_read,
+		folded_long;
 
 	/*
 	 * Whether the helper's frame covers the same code as Root ()'s.
@@ -165,11 +180,13 @@ static class Program {
 		saw_branch |= trace.Contains ("Costed.FailBranch");
 		saw_no_inline |= trace.Contains ("Costed.FailNoInline");
 		saw_through |= trace.Contains ("Costed.FailThroughNoInline");
+		saw_frame_read |= trace.Contains ("Costed.FailThroughFrameRead");
 		saw_long |= trace.Contains ("Costed.FailLong");
 
 		folded_branch |= RunsInsideRoot (e, "FailBranch");
 		folded_no_inline |= RunsInsideRoot (e, "FailNoInline");
 		folded_through |= RunsInsideRoot (e, "FailThroughNoInline");
+		folded_frame_read |= RunsInsideRoot (e, "FailThroughFrameRead");
 		folded_long |= RunsInsideRoot (e, "FailLong");
 
 		if (!trace.Contains ("Program.Root"))
@@ -199,6 +216,13 @@ static class Program {
 
 		try {
 			Costed.FailThroughNoInline ("through", throwing);
+		} catch (InvalidOperationException e) {
+			total += e.Message.Length;
+			Record (e);
+		}
+
+		try {
+			Costed.FailThroughFrameRead ("read", throwing);
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			Record (e);
@@ -243,9 +267,10 @@ static class Program {
 
 		int want = Root (4, true);
 
-		Check (saw_branch && saw_no_inline && saw_through && saw_long,
+		Check (saw_branch && saw_no_inline && saw_through && saw_frame_read && saw_long,
 			"every helper has a frame before tier 2");
-		Check (!folded_branch && !folded_no_inline && !folded_through && !folded_long,
+		Check (!folded_branch && !folded_no_inline && !folded_through
+			&& !folded_frame_read && !folded_long,
 			"and every one of them runs in a body of its own before tier 2");
 
 		// Enough calls to leave counts on the tier-1 body, and every one of them
@@ -258,8 +283,9 @@ static class Program {
 			return 1;
 		}
 
-		saw_branch = saw_no_inline = saw_through = saw_long = false;
-		folded_branch = folded_no_inline = folded_through = folded_long = false;
+		saw_branch = saw_no_inline = saw_through = saw_frame_read = saw_long = false;
+		folded_branch = folded_no_inline = folded_through = folded_frame_read =
+			folded_long = false;
 
 		Check (want == Root (4, true), "the answer at tier 2 is the answer before it");
 
@@ -270,8 +296,10 @@ static class Program {
 		 */
 		Check (folded_branch, "the cost model folds a helper with a branch");
 		Check (saw_no_inline && !folded_no_inline, "NoInlining keeps the helper's body");
-		Check (saw_through && !folded_through,
-			"a helper that calls a NoInlining helper keeps its body");
+		Check (saw_through && folded_through,
+			"and the mark on it leaves a helper that calls it foldable");
+		Check (saw_frame_read && !folded_frame_read,
+			"a helper that reads the frame that called it keeps its body");
 		Check (saw_long && !folded_long, "a helper past the IL limit keeps its body");
 
 		/*
@@ -282,7 +310,7 @@ static class Program {
 		 */
 		int cold = Root (-2, true);
 
-		Check (cold == 2 + 0 + 0 + Costed.Rare (-2) + 6 + 8 + 7 + 4,
+		Check (cold == 2 + 0 + 0 + Costed.Rare (-2) + 6 + 8 + 7 + 4 + 4,
 			"the cold path is the answer the helpers give");
 		Check (cold == Root (-2, true), "the cold path answers the same twice");
 
