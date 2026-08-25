@@ -23,8 +23,8 @@ namespace mono {
 
 namespace {
 
-/// One member of a type descriptor: where it starts, how many bytes it covers,
-/// and whether the descriptor names it.
+/// One member of a type descriptor: its type, where it starts, how many bytes it
+/// covers, and whether the descriptor names it.
 ///
 /// A reference field and a nested value type take space without being named. A
 /// reference is on its own leaf, and a field inside a nested value type is
@@ -45,8 +45,8 @@ struct Member {
 /// I.8.7.1 makes `array-element-compatible-with` "agnostic with respect to
 /// enumerations and integral signed-ness", so `int32` and `unsigned int32` name
 /// one storage, and so does an enum and the type behind it. Keying on the width
-/// merges all three. A float and an integer of one width stay apart, because no
-/// cast between their arrays is valid.
+/// merges them, and every other integer of that width with them. A float and an
+/// integer of one width stay apart, because no cast between their arrays is valid.
 std::string
 MethodLLVMEmitter::tbaa_scalar_name (MonoType *t)
 {
@@ -86,14 +86,13 @@ MethodLLVMEmitter::tbaa_scalar_node (MonoType *t)
 /// A descriptor asserts that the type is a struct whose members are distinct.
 /// LLVM compares the start offsets of two accesses and never checks that their
 /// byte ranges are disjoint, so a descriptor whose members overlap makes it
-/// answer NoAlias for one byte. Nothing catches that: the verifier rejects
-/// unsorted members, and an access at an offset the descriptor omits, and it
-/// takes an overlap in silence.
+/// answer NoAlias for two accesses that share a byte. The verifier does not
+/// catch it: it rejects unsorted members, and an access at an offset the
+/// descriptor omits, and it takes an overlap in silence.
 ///
 /// So the gate is whether the fields are provably disjoint, which is the walk
 /// that builds the descriptor anyway. II.10.7 lets a `[FieldOffset]` type put
-/// two scalars at one offset, and such a type gets no descriptor at all. A
-/// static block cannot overlap, because `[FieldOffset]` does not reach statics.
+/// two scalars at one offset, and such a type gets no descriptor at all.
 llvm::MDNode *
 MethodLLVMEmitter::type_descriptor (MonoClass *klass, bool statics)
 {
@@ -117,12 +116,16 @@ MethodLLVMEmitter::type_descriptor (MonoClass *klass, bool statics)
 		if (mono_field_is_deleted (field))
 			continue;
 
+		// A special static lives in a per-thread or per-context block rather
+		// than in this one, and its offset is not an offset into any block. Left
+		// in, it takes the whole class off the fine leaf.
+		if (statics && mono_class_field_is_special_static (field))
+			continue;
+
 		MonoType *ftype = mono_field_get_type_internal (field);
 		int32_t offset = static_cast<int32_t> (m_field_get_offset (field));
 
-		// A static's offset is into the block itself, so there is no header to
-		// discount. field_address () and static_field_address () split the same
-		// way.
+		// field_address () and static_field_address () split the same way.
 		if (!statics && m_class_is_valuetype (klass))
 			offset -= MONO_ABI_SIZEOF (MonoObject);
 
@@ -197,12 +200,13 @@ MethodLLVMEmitter::type_descriptor (MonoClass *klass, bool statics)
  *        |- "mono scalar 8f"                the nodes a type descriptor names
  *        \- "mono element 8f[2]"            one leaf per scalar array element
  *
- * Type descriptors sit beside that tree, one for each class, naming the "mono
- * scalar" nodes. A field access is tagged against its declaring type's
- * descriptor. Rooting it at the declaring type rather than at the receiver's
- * type is what makes an inherited field one leaf however it is reached, and it
- * keeps a nested value type out of the question: only a struct copy names the
- * outer type at those bytes, and a struct copy carries no tag.
+ * Type descriptors sit beside that tree, one for a class's instance fields and
+ * one for its static block, naming the "mono scalar" nodes.
+ *
+ * A field access names its declaring type rather than the receiver's, so an
+ * inherited field is one leaf however it is reached. A nested value type never
+ * appears in the outer descriptor: only a struct copy names the outer type at
+ * those bytes, and a struct copy carries no tag.
  *
  * Every fine node hangs below "mono managed scalar", so an access this declines
  * to place still aliases all of them. That is what lets one opcode carry a fine
@@ -228,13 +232,13 @@ MethodLLVMEmitter::tbaa_tag (const ManagedAccess &access, bool is_reference)
 	}
 
 	/*
-	 * A shared body names the shared form of its declaring class rather than
-	 * the instantiation it runs as, so it cannot say which storage it reaches.
+	 * A shared body names a field's class in its open form, not the
+	 * instantiation it runs as, so it cannot say which storage the field
+	 * reaches.
 	 *
 	 * A special static is left out as well. Its block is per thread or per
-	 * context and static_field_address () asks an icall for the address, so the
-	 * offset the descriptor would record is not the one the block is laid out
-	 * by.
+	 * context. static_field_address () asks an icall for the address, so a
+	 * descriptor's offset is not the one the block is laid out by.
 	 */
 	if (access.kind == ManagedAccess::Kind::field && !depends_on_context (access.field)
 	    && !mono_class_field_is_special_static (access.field)) {
@@ -257,8 +261,8 @@ MethodLLVMEmitter::tbaa_tag (const ManagedAccess &access, bool is_reference)
 	// A whole element carries a leaf only where it is one scalar. A value type
 	// covers the fields inside it, which are tagged against their own
 	// descriptor, and struct-path TBAA cannot name an access that wide. Such an
-	// element arrives as a struct copy, which emit_memory_store () leaves
-	// untagged, so this is belt and braces.
+	// element arrives as a struct copy, and neither emit_memory_store () nor
+	// push_from_location () tags one, so this guard is a second line.
 	if (access.kind == ManagedAccess::Kind::element
 	    && access.element->type != MONO_TYPE_VAR
 	    && access.element->type != MONO_TYPE_MVAR

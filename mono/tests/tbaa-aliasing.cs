@@ -3,7 +3,7 @@
  *
  * The back end tags the typed field and element opcodes - ldfld, stfld, ldsfld,
  * stsfld, ldelem, stelem and the array accessors - splitting managed memory
- * into a reference leaf and a scalar leaf (ManagedAccess,
+ * into a reference leaf and a scalar tree (ManagedAccess,
  * mono/llvm/method-to-llvm.hpp). The cases below reach one slot under two
  * types. A wrong split turns that into a dropped store, not a slow method.
  *

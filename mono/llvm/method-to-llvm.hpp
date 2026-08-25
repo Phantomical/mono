@@ -137,21 +137,24 @@ enum StackType { Int32, Int64, NativeInt, Float, ManagedPtr, ObjectRef, Invalid 
 
 constexpr size_t STACK_TYPE_COUNT = ObjectRef + 1;
 
-/// What a managed access tells the `!tbaa` tree about the slot it reaches.
-/// tbaa_tag () turns one of these into a tag, and documents the tree.
+/// The `!tbaa` classification of one memory access. tbaa_tag () turns one of
+/// these into a tag, and documents the tree.
 ///
 /// A `!tbaa` tag claims two accesses cannot touch one slot. ECMA-335 gives no
 /// warrant for such a claim: I.12.6.1 calls the memory store "simply an array
-/// of bytes", I.12.6.4 gives only the as-if rule, and I.8.8 calls unverifiable
-/// code valid code. So a tag rests on an invariant the runtime enforces, or on
-/// a documented contract, and never on two static types being different.
+/// of bytes", I.12.6.4 gives only the as-if rule, and II.3 calls unverifiable
+/// code "valid code that does not pass verification". So a tag rests on an
+/// invariant the runtime enforces, or on a documented contract, and never on
+/// two static types being different.
 ///
-/// Two of those carry the fine tags. II.10.7 says "offsets occupied by an
-/// object reference shall not overlap with offsets occupied by a built-in value
-/// type", which mono_class_layout_fields () enforces at type load
-/// (mono/metadata/class-init.c). And `Unsafe.As<T> (object)` is documented to
-/// be well defined only where the cast `(T) o` would have succeeded, which is
-/// what lets an object reference's static type describe its storage.
+/// II.10.7 says "offsets occupied by an object reference shall not overlap with
+/// offsets occupied by a built-in value type", which
+/// mono_class_layout_fields () enforces at type load
+/// (mono/metadata/class-init.c). That is what splits references from scalars. A
+/// finer tag rests on a layout type_descriptor () proved disjoint for itself,
+/// and on `Unsafe.As<T> (object)`, which is documented to be well defined only
+/// where the cast `(T) o` would have succeeded, and so lets an object
+/// reference's static type describe its storage.
 ///
 /// `Unsafe.As<TFrom,TTo> (ref)` carries the opposite contract. It is documented
 /// as a reinterpret_cast, and our class libraries write one field's storage
@@ -167,9 +170,9 @@ struct ManagedAccess {
 		/// The reference or the scalar leaf, which is all we can say about a
 		/// slot whose type we cannot place.
 		typed,
-		/// A field of a type whose layout LLVM can be given.
+		/// The opcode named a field.
 		field,
-		/// A whole element of an array, which the element type places.
+		/// The opcode named a whole array element, with its rank.
 		element,
 	};
 
@@ -418,21 +421,19 @@ private:
 	/// correctness.
 	llvm::DenseSet<llvm::Value *> allocated_here;
 
-	/// The managed pointers this body gave a type to, from ldelema, ldflda,
-	/// ldloca, ldarga or an array Address accessor. A field access through one
-	/// of these reaches the field its token names.
+	/// The managed pointers this body gave a type to, from ldelema, ldloca,
+	/// ldarga, an array Address accessor, or ldflda on a value-typed field. A
+	/// field access through one of these reaches the field its token names.
 	///
-	/// A managed pointer that arrived as an argument or came back from a call
-	/// is not in here, because its type is what a caller asserted, and
-	/// `Unsafe.As<TFrom,TTo> (ref)` is documented to let a caller assert
-	/// anything. That is what keeps Volatile.Write on the coarse leaf.
+	/// A managed pointer that arrived as an argument or came back from a call is
+	/// not in here. ManagedAccess says why.
 	///
-	/// A value that reached its use through a spill is not in here either,
-	/// which costs a tag and never correctness.
+	/// A value that reached its use through a spill is not in here either, which
+	/// costs a tag and never correctness.
 	llvm::DenseSet<llvm::Value *> trusted_byrefs;
 
 	/// The `!tbaa` descriptor each class got for its instance fields, or null
-	/// where they overlap.
+	/// where it cannot have one.
 	llvm::DenseMap<MonoClass *, llvm::MDNode *> type_descriptors;
 
 	/// The same for each class's static block, which is a separate allocation

@@ -1,22 +1,20 @@
 /*
  * Accesses that reach one slot through two receivers the JIT cannot tell apart.
  *
- * Each case below holds two references that are the same object at run time. A
+ * Most cases below hold two references that are the same object at run time. A
  * store goes through one and a load through the other. The two addresses come
  * from unrelated values, so LLVM's address-based analysis cannot connect them,
  * and the `!tbaa` tag is the only thing that keeps the load and the store
- * together. A tag that is too fine turns each case into a dropped store.
+ * together. A tag that is too fine turns such a case into a dropped store.
  *
- * The two receivers are what gives these cases teeth. With one receiver, LLVM
- * sees one pointer and answers from the address before it reads the tags, and
- * the case then passes under a tree that is wrong. Keep the pairs.
+ * Two receivers are what gives those cases teeth. With one, LLVM sees one
+ * pointer and answers from the address before it reads the tags, and the case
+ * then passes under a tree that is wrong. Keep the pairs where they are there.
  *
  * mono/tests/tbaa-aliasing.cs holds the other half: one slot under two types,
  * which is what the reference and scalar split has to survive.
  *
- * Every case runs at all three tiers. A tag rides the IR the translator writes,
- * so tier 1 and tier 2 both carry it, and only tier 2 optimizes hard enough to
- * act on one.
+ * Every case runs at all three tiers, the way tbaa-aliasing.cs does.
  */
 
 using System;
@@ -32,7 +30,7 @@ namespace Mono.Tiering {
 }
 
 /// Four scalars in one value type, which is the shape a per-field tag exists
-/// for. euler's Statevector is this.
+/// for.
 struct Vec4 {
 	public double A;
 	public double B;
@@ -54,8 +52,8 @@ class Box<T> {
 	public T Item;
 }
 
-/// Two fields of each array rank, so a case can put one array in both and make
-/// the two receivers name one object.
+/// A pair of array fields for each element type and rank a case reaches. Each
+/// pair holds one array, so the two receivers name one object.
 class Arrays {
 	public Vec4[] First = new Vec4 [4];
 	public Vec4[] Second = new Vec4 [4];
@@ -201,14 +199,14 @@ static class Program {
 	 * The same field of one generic type, reached through a shared body and a
 	 * specialised one. Box<string> shares its body and Box<int> does not.
 	 *
-	 * A shared body names the shared form of its declaring class rather than
-	 * the instantiation it runs as, so it cannot say which storage it reaches
+	 * A shared body names a field's class in its open form, not the
+	 * instantiation it runs as, so it cannot say which storage the field reaches
 	 * and takes the coarse leaf. depends_on_context () decides that
-	 * (method-to-llvm/tbaa.cpp).
+	 * (method-to-llvm/generic-sharing.cpp).
 	 *
 	 * This case covers both spellings. It cannot fail on its own, because the
-	 * two instantiations are different objects and never alias. Read the tier-2
-	 * IR to see which leaf each one took.
+	 * two instantiations are different objects and never alias. Read BumpBox's
+	 * IR at whatever tier it reaches to see which leaf each one took.
 	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int BumpBox<T> (Box<T> a, Box<T> b, int value)
@@ -235,19 +233,25 @@ static class Program {
 		Derived derived = new Derived ();
 		Arrays arrays = new Arrays ();
 
+		// One array in both fields of each pair, which is the shape a numeric
+		// kernel reaches when two of its arrays turn out to be the same one.
+		arrays.Second = arrays.First;
+		arrays.SecondGrid = arrays.FirstGrid;
+		arrays.SecondFlat = arrays.FirstFlat;
+
 		counter.Value = 1;
 		Check (tier + " volatile two refs", VolatileTwoRefs (counter, counter, 7), 8);
 
 		arrays.First [1].A = 1.0;
 		Check (tier + " same field two arrays",
-			SameFieldTwoArrays (arrays.First, arrays.First, 7.0), 8.0);
+			SameFieldTwoArrays (arrays.First, arrays.Second, 7.0), 8.0);
 
 		arrays.FirstGrid [1, 1].B = 1.0;
 		Check (tier + " same field two grids",
-			SameFieldTwoGrids (arrays.FirstGrid, arrays.FirstGrid, 7.0), 8.0);
+			SameFieldTwoGrids (arrays.FirstGrid, arrays.SecondGrid, 7.0), 8.0);
 
 		Check (tier + " distinct fields",
-			DistinctFields (arrays.First, arrays.First), 15.0);
+			DistinctFields (arrays.First, arrays.Second), 15.0);
 
 		counter.Value = 1;
 		Check (tier + " same field two objects",
@@ -258,7 +262,7 @@ static class Program {
 
 		arrays.FirstFlat [2] = 1.0;
 		Check (tier + " same element two arrays",
-			SameElementTwoArrays (arrays.FirstFlat, arrays.FirstFlat, 7.0), 8.0);
+			SameElementTwoArrays (arrays.FirstFlat, arrays.SecondFlat, 7.0), 8.0);
 
 		Check (tier + " whole element sees field",
 			WholeElementSeesField (arrays.First, 9.0), 9.0);

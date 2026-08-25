@@ -440,24 +440,18 @@ MethodLLVMEmitter::push_field_wrapper_operands (MonoIrBuilder &builder,
 	push_stack (builder.getInt64 (m_field_get_offset (field)), nint);
 }
 
-/// What a field access through this receiver can claim about the slot it
-/// reaches.
+/// The tag a field access through this receiver can carry.
 ///
-/// field_address () takes the offset from the token alone and never asks
-/// whether the receiver agrees with it. That is right for addressing, because a
-/// receiver reaching the wrong storage is the caller's error. It is not enough
-/// for a `!tbaa` tag, which claims some *other* access cannot reach that
-/// storage.
-///
-/// An object reference describes its storage: `Unsafe.As<T> (object)` is
-/// documented to be well defined only where the cast `(T) o` would have
-/// succeeded. A managed pointer does not, because `Unsafe.As<TFrom,TTo> (ref)`
-/// is documented as a reinterpret_cast and our class libraries use it to write
-/// one field's storage through a second field. So a managed pointer counts only
-/// where this body gave it its type.
+/// An object receiver gets the field tag, and so does a managed pointer this
+/// body gave its type (trusted_byrefs). Anything else gets the coarse leaf.
+/// ManagedAccess says what each of those rests on.
 ManagedAccess
 MethodLLVMEmitter::field_access (const StackValue &object, MonoClassField *field)
 {
+	// field_address () takes the offset from the token alone and never asks
+	// whether the receiver agrees. That is right for addressing, where a
+	// receiver reaching the wrong storage is the caller's error. A tag claims
+	// some other access cannot reach that storage, so it needs the receiver.
 	if (stack_type (object.type) == ObjectRef || trusted_byrefs.count (object.value) != 0)
 		return ManagedAccess::of_field (field);
 
