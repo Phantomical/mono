@@ -361,6 +361,13 @@ MethodLLVMEmitter::emit_resume_exit (MonoIrBuilder &builder, uint32_t clause)
 		return;
 	}
 
+	/*
+	 * This code keeps no IL offset. MonoEHGatherPass grows a clause's range
+	 * over the code whose offset lies in that clause's try region
+	 * (eh-gather.cpp). Where an endfinally sits inside an enclosing try, an
+	 * offset here puts this call under that clause as well. That is the
+	 * dispatch through the try's own pad this function avoids.
+	 */
 	llvm::BasicBlock *cont = create_cold_block ("resume_cont");
 	llvm::BasicBlock *pad_block =
 		create_cold_block (llvm::Twine ("resume_pad") + llvm::Twine (clause));
