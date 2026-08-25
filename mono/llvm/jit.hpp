@@ -62,6 +62,13 @@ unsigned host_max_atomic_bits (const llvm::Function &f);
 
 bool ir_verification_enabled ();
 
+/// Whether `--llvm-opt` asked LLVM to print what its passes did.
+///
+/// It reads the options queued by add_option (), so it answers as soon as the
+/// command line has been read and does not wait for a MonoJit to hand them to
+/// LLVM's parser.
+bool ir_printing_enabled ();
+
 /// One row of a compiled function's line table: an offset from the start of the
 /// function, and the IL offset in effect at it. The translator records these as
 /// debug locations (il-line-table.hpp), the compiler writes them into

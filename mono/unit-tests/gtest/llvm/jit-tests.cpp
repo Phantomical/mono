@@ -26,6 +26,7 @@
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/CommandLine.h>
 
 #include <sys/mman.h>
 
@@ -33,6 +34,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <memory>
+#include <string>
+#include <thread>
 #include <utility>
 
 using namespace llvm;
@@ -276,6 +279,40 @@ TEST_F (JitExecution, Tier0PipelinePromotesAllocasToSsa)
 
 	EXPECT_EQ (t->count ("alloca"), 0u);
 	EXPECT_GT (t->count ("add"), 0u);
+}
+
+/*
+ * LLVM's own print options reach the IR pipelines through the
+ * StandardInstrumentations each tier registers, and a lost registration is
+ * invisible from outside: the option parses, the pipeline runs and nothing
+ * prints, which a reader takes for an answer.
+ *
+ * A pipeline is built once for each thread, and it registers what the options
+ * said at the moment it was built. So the run goes on a thread of its own
+ * rather than on the one gtest ran the earlier tests on, and that thread builds
+ * its pipeline after the option is set.
+ */
+TEST_F (JitExecution, APrintOptionReachesTheTier1Pipeline)
+{
+	std::unique_ptr<Translation> t = translate_method ("arith", "Arith:Add");
+	ASSERT_NE (t->function, nullptr) << t->error;
+
+	cl::Option *option = cl::getRegisteredOptions ().lookup ("print-after-all");
+	ASSERT_NE (option, nullptr);
+
+	auto *print_after_all = static_cast<cl::opt<bool> *> (option);
+	bool was_set = print_after_all->getValue ();
+
+	print_after_all->setValue (true);
+	testing::internal::CaptureStderr ();
+
+	std::thread ([&t] { MonoJit::run_tier1_pipeline (*t->module); }).join ();
+
+	std::string printed = testing::internal::GetCapturedStderr ();
+	print_after_all->setValue (was_set);
+
+	EXPECT_NE (printed.find ("IR Dump After"), std::string::npos);
+	EXPECT_NE (printed.find ("InstCombinePass"), std::string::npos);
 }
 
 // The call shape belongs to the pass. What the translator emitted names no this at

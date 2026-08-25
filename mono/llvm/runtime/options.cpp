@@ -1,5 +1,6 @@
 #include "options.hpp"
 
+#include "jit.hpp"
 #include "method-to-llvm.hpp"
 
 #include <llvm/ADT/StringRef.h>
@@ -152,6 +153,16 @@ compile_worker_count ()
 
 			return set > 1 ? (uint32_t) set : 1;
 		}
+
+		/*
+		 * One thread while LLVM is printing. Both tiers print to stderr, and
+		 * two compiles printing at once interleave into text that names no
+		 * method. It narrows the overlap rather than removing it: a compile
+		 * the runtime asks for by name runs on the thread that asked, and can
+		 * still print over the worker.
+		 */
+		if (ir_printing_enabled ())
+			return 1;
 
 		/*
 		 * Two processors are left to the program, and eight threads is the

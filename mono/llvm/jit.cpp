@@ -30,6 +30,7 @@
 #include <llvm/ExecutionEngine/Orc/ObjectLinkingLayer.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Object/ELFObjectFile.h>
@@ -38,6 +39,7 @@
 #include <llvm/ADT/Any.h>
 #include <llvm/ADT/ScopeExit.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Passes/StandardInstrumentations.h>
 #include <llvm/ProfileData/InstrProf.h>
 #include <llvm/ProfileData/InstrProfWriter.h>
 #include <llvm/Support/CommandLine.h>
@@ -939,6 +941,52 @@ ir_verification_enabled ()
 	return verify_level () != VerifyLevel::off;
 }
 
+bool
+ir_printing_enabled ()
+{
+	/*
+	 * The instrumentations are registered whatever this answers, so an option
+	 * missing from this list still prints. What it costs is the worker count
+	 * that reads this: that option's output then comes out of as many threads
+	 * as are compiling.
+	 *
+	 * Each name below is an option LLVM declares, in PrintPasses.cpp,
+	 * StandardInstrumentations.cpp or DiagnosticHandler.cpp.
+	 *
+	 * Read from the queue rather than from the parsed options, because the
+	 * option queue fills before the first MonoJit hands it to LLVM's parser.
+	 */
+	static const char *const printers[] = {
+		"print-before",
+		"print-after",
+		"print-before-all",
+		"print-after-all",
+		"print-before-changed",
+		"print-changed",
+		"print-pass-numbers",
+		"print-before-pass-number",
+		"print-after-pass-number",
+		"print-on-crash",
+		"print-on-crash-path",
+		"ir-dump-directory",
+		"pass-remarks",
+		"pass-remarks-missed",
+		"pass-remarks-analysis",
+	};
+
+	std::lock_guard<std::mutex> lock (g_options_mutex);
+
+	for (const std::string &opt : g_options) {
+		StringRef name = StringRef (opt).ltrim ('-').split ('=').first;
+
+		for (const char *printer : printers)
+			if (name == printer)
+				return true;
+	}
+
+	return false;
+}
+
 namespace {
 
 thread_local Module *g_verify_module = nullptr;
@@ -988,8 +1036,6 @@ default_option_text (StringRef name, StringRef value)
 /// builds both once and reuses them. What one compile hands a pipeline goes in
 /// the two slots below, and comes back out when the compile is done.
 struct ThreadPipelines {
-	PassInstrumentationCallbacks pic;
-
 	/// The counts a tier-2 run reads, which the compile pushes and pops. See
 	/// pushProfile ().
 	IntrusiveRefCntPtr<OneFileFS> profile_fs = makeProfileFileSystem ();
@@ -999,8 +1045,35 @@ struct ThreadPipelines {
 	/// inliner takes as leaving every site alone.
 	InlineCandidates *inliner = nullptr;
 
+	/*
+	 * A context of this thread's own, which holds no IR.
+	 * StandardInstrumentations takes one and keeps the reference, to read the
+	 * gate `-opt-bisect-limit` sets. A compile's own context goes with the
+	 * compile and the instrumentations outlive it, so they cannot have that
+	 * one. The gate is process-wide, so a context with nothing in it answers
+	 * for the gate as well as any other.
+	 */
+	LLVMContext instrument_context;
+
 	/// One tier's pipeline and the analyses it runs against.
 	struct Tier {
+		// The callbacks and the instrumentations behind them are declared
+		// first, so that they are destroyed after the managers and the
+		// pipeline that read them.
+		PassInstrumentationCallbacks pic;
+		/// What makes LLVM's own `-print-after=<pass>` and the flags beside
+		/// it print. Each of them is off until its option is given.
+		StandardInstrumentations instrumentations;
+
+		explicit Tier (LLVMContext &context)
+		    // Verification is this backend's own, through
+		    // MONO_LLVM_JIT_VERIFY, so the instrumentations are asked for
+		    // none of theirs.
+		    : instrumentations (context, /*DebugLogging=*/false,
+		                        /*VerifyEach=*/false)
+		{
+		}
+
 		LoopAnalysisManager lam;
 		FunctionAnalysisManager fam;
 		CGSCCAnalysisManager cgam;
@@ -1029,16 +1102,22 @@ struct ThreadPipelines {
 	Tier &tier1 ();
 	Tier &tier2 ();
 
-	ThreadPipelines ();
-
 private:
+	/// Hangs the verifier and LLVM's own instrumentations off a tier's
+	/// callbacks, which is what a pipeline runs them from.
+	///
+	/// Run it once for each tier. The two keep a set of callbacks each,
+	/// because a callback registered twice on one set fires twice.
+	void instrument (Tier &tier);
+
 	std::optional<Tier> tier1_;
 	std::optional<Tier> tier2_;
 };
 
-ThreadPipelines::ThreadPipelines ()
+void
+ThreadPipelines::instrument (Tier &tier)
 {
-	pic.registerAfterPassCallback ([] (StringRef pass, Any ir, const PreservedAnalyses &) {
+	tier.pic.registerAfterPassCallback ([] (StringRef pass, Any ir, const PreservedAnalyses &) {
 		if (g_verify_module == nullptr)
 			return;
 		if (g_verify_level != VerifyLevel::each && !is_mono_pass (pass))
@@ -1055,6 +1134,9 @@ ThreadPipelines::ThreadPipelines ()
 			verify_or_die (*g_verify_module, when);
 	});
 
+	// The analysis manager is what `-verify-analysis-invalidation` keeps its
+	// record on, so the tier hands over its own.
+	tier.instrumentations.registerCallbacks (tier.pic, &tier.mam);
 }
 
 /*
@@ -1069,7 +1151,7 @@ ThreadPipelines::tier1 ()
 	if (tier1_)
 		return *tier1_;
 
-	Tier &tier = tier1_.emplace ();
+	Tier &tier = tier1_.emplace (instrument_context);
 	MonoPipelineTuningOptions options = MonoPipelineTuningOptions::forTier1 ();
 
 	/*
@@ -1081,13 +1163,14 @@ ThreadPipelines::tier1 ()
 	options.EnablePromotion = tier2_enabled ();
 	options.EnablePGO = tier1_profiling_enabled ();
 
-	MonoPassBuilder pb (&host_target_machine (), profile_fs.get (), &pic, options);
+	MonoPassBuilder pb (&host_target_machine (), profile_fs.get (), &tier.pic, options);
 
 	pb.registerModuleAnalyses (tier.mam);
 	pb.registerCGSCCAnalyses (tier.cgam);
 	pb.registerFunctionAnalyses (tier.fam);
 	pb.registerLoopAnalyses (tier.lam);
 	pb.crossRegisterProxies (tier.lam, tier.fam, tier.cgam, tier.mam);
+	instrument (tier);
 
 	tier.mpm = pb.buildTier1Pipeline ();
 	return tier;
@@ -1099,8 +1182,8 @@ ThreadPipelines::tier2 ()
 	if (tier2_)
 		return *tier2_;
 
-	Tier &tier = tier2_.emplace ();
-	MonoPassBuilder pb (&tier2_target_machine (), profile_fs.get (), &pic,
+	Tier &tier = tier2_.emplace (instrument_context);
+	MonoPassBuilder pb (&tier2_target_machine (), profile_fs.get (), &tier.pic,
 	                    MonoPipelineTuningOptions::forTier2 ());
 
 	pb.registerModuleAnalyses (tier.mam);
@@ -1108,6 +1191,7 @@ ThreadPipelines::tier2 ()
 	pb.registerFunctionAnalyses (tier.fam);
 	pb.registerLoopAnalyses (tier.lam);
 	pb.crossRegisterProxies (tier.lam, tier.fam, tier.cgam, tier.mam);
+	instrument (tier);
 
 	// Over the slot rather than over an engine, because the pipeline is built
 	// once and the engine belongs to one compile.

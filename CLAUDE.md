@@ -281,11 +281,22 @@ codegens. So a method that promoted in the middle of a batch has a dump of its o
 naming it in the filter finds it. Reading a whole batch therefore costs one codegen for
 each method in it, which is what bounds an unfiltered `tier1-asm` sweep.
 
-`--llvm-opt=-print-after=<pass>` and `-print-after-all` are **inert**, and print nothing
-rather than failing. They need `StandardInstrumentations::registerCallbacks ()`, and
-`ThreadPipelines` (`jit.cpp`) builds the `PassInstrumentationCallbacks` both tiers share
-without it. `-debug-only=` is unavailable as well, because the installed LLVM defines
+LLVM's own print options work through `--llvm-opt`: `-print-after=<pass>`,
+`-print-before=<pass>`, `-print-after-all`, `-print-changed` and the flags beside them.
+Each tier registers a `StandardInstrumentations` on its own callbacks (`jit.cpp`), and
+they print to stderr. `-debug-only=` is unavailable, because the installed LLVM defines
 `NDEBUG`.
+
+`-pass-remarks-missed=<regex>` and the two remarks beside it print as well, through the
+context's diagnostic handler rather than through the instrumentations. A pass that
+declines silently emits no remark, so an empty output there says nothing about the pass.
+
+Two compiles printing at once interleave into text that names no method, so a command
+line carrying one of those options compiles on **one worker** by default.
+`ir_printing_enabled ()` is what reads the command line for them, and a name it does not
+know still prints — it only misses the worker setting. One worker narrows the overlap
+rather than removing it: a compile the runtime asks for by name runs on the thread that
+asked, and prints over the worker.
 
 Measurement:
 - `MONO_LLVM_JIT_VERIFY=<0|off|each|all|other>` (`jit.cpp`) — how much IR the verifier
@@ -351,9 +362,10 @@ and the note says which split:
   bug from a backend one. Only tier-1 promotions batch. A tier-2 promotion, a dynamic
   method and any compile the runtime asks for by name each go alone.
 - `MONO_LLVM_JIT_WORKERS=<n>` — the most threads the compile queue runs promotions on at
-  once, default `mono_cpu_count () - 2` capped at eight. The queue starts a thread only
-  when work outruns the ones it has. One puts every background compile back on a single
-  thread, which separates a bug in a compile from a bug in two overlapping. Do not
+  once, default `mono_cpu_count () - 2` capped at eight, and one while LLVM prints. The
+  queue starts a thread only when work outruns the ones it has. One puts every
+  background compile back on a single thread, which separates a bug in a compile from
+  a bug in two overlapping. Do not
   expect throughput to follow the setting. ORC's session lock is taken twice per
   compile, and that measured 2.86x out of 18 threads on a compile-bound workload. The
   cap does not come off that measurement: it describes throughput, and what a promoted
