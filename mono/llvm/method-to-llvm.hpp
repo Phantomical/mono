@@ -1093,6 +1093,17 @@ private:
 	                                  bool lower_bound);
 	llvm::Error emit_string_length (MonoIrBuilder &builder);
 	llvm::Error emit_get_type (MonoIrBuilder &builder, bool receiver_by_reference);
+
+	/// A System.Type object's MonoType, and the word that holds its tag fields.
+	struct TypeTagLoad {
+		llvm::Value *type;
+		llvm::Value *tag;
+	};
+
+	TypeTagLoad load_type_tag (MonoIrBuilder &builder, llvm::Value *reflection_type);
+	llvm::Error emit_cor_element_type (MonoIrBuilder &builder, MonoMethodSignature *sig);
+	llvm::Error emit_element_type (MonoIrBuilder &builder, MonoMethod *callee_method,
+	                               MonoMethodSignature *sig);
 	llvm::FunctionCallee libm_decl (const char *name, llvm::Type *type, size_t arity);
 	llvm::Error emit_math_call (MonoIrBuilder &builder, const MathIntrinsic &math,
 	                            MonoMethodSignature *sig);
@@ -1302,6 +1313,19 @@ MonoMethod *icall_wrapper_target (MonoMethod *method);
 /// A site that names a dimension can still end up as a call: ArrayShapePass
 /// puts back the ones whose dimension it cannot read.
 bool answers_array_shape (MonoMethod *target, MonoMethodSignature *sig);
+
+/// Whether the translator answers a call to target out of the MonoType the
+/// argument names instead of entering the icall. sig is the signature the call
+/// site was written against.
+bool answers_cor_element_type (MonoMethod *target, MonoMethodSignature *sig);
+
+/// Whether the translator answers a call to target out of the element class's
+/// vtable instead of entering the icall. sig is the signature the call site was
+/// written against.
+///
+/// The site keeps its call for every shape but a zero-based one-dimensional
+/// array, and for one whose element class has no vtable in this domain yet.
+bool answers_element_type (MonoMethod *target, MonoMethodSignature *sig);
 
 /// What to emit for a call to method, or nothing when the backend has no
 /// arithmetic for it. sig is the signature the call site was written against.

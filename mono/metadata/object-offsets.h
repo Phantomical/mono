@@ -69,6 +69,11 @@ DECL_OFFSET(MonoClass, rank)
 DECL_OFFSET(MonoClass, sizes)
 DECL_OFFSET(MonoClass, supertypes)
 DECL_OFFSET(MonoClass, class_kind)
+DECL_OFFSET(MonoClass, image)
+DECL_OFFSET(MonoClass, runtime_info)
+
+DECL_OFFSET(MonoClassRuntimeInfo, max_domain)
+DECL_OFFSET(MonoClassRuntimeInfo, domain_vtables)
 
 DECL_OFFSET(MonoVTable, klass)
 DECL_OFFSET(MonoVTable, max_interface_id)
@@ -129,6 +134,8 @@ DECL_OFFSET(MonoException, caught_in_unmanaged)
 DECL_OFFSET(MonoTypedRef, type)
 DECL_OFFSET(MonoTypedRef, klass)
 DECL_OFFSET(MonoTypedRef, value)
+
+DECL_OFFSET(MonoReflectionType, type)
 
 //Internal structs
 DECL_OFFSET(MonoThreadsSync, status)

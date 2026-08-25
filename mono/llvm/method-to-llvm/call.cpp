@@ -1378,6 +1378,14 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (std::optional<BufferCopy> copy = buffer_copy_for (callee_method, sig))
 		return emit_buffer_copy (builder, *copy, sig);
 
+	// Asked of the method the IL named for the same reason. Each reads what the
+	// icall reads, and Array.GetValue () asks both once for every element.
+	if (answers_cor_element_type (callee_method, sig))
+		return emit_cor_element_type (builder, sig);
+
+	if (answers_element_type (callee_method, sig))
+		return emit_element_type (builder, callee_method, sig);
+
 	// Asked here for the same reason, and the call each puts on the declined
 	// edge is the one the rest of this function would have emitted.
 	if (std::optional<MonoJitICallId> fast = monitor_enter_fast_icall (callee_method, sig))
