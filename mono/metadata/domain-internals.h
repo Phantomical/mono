@@ -92,6 +92,14 @@ struct _MonoJitInfoTableChunk
 	volatile int           num_elements;
 	volatile gint8        *last_code_end;
 	MonoJitInfo *next_tombstone;
+	/*
+	 * code_end [i] is where the code of data [i] stops. A search does its
+	 * binary search on this array and not on the records. So it reads no
+	 * MonoJitInfo, and it takes no hazard pointer to find the position where
+	 * its scan starts. A writer holds the domain lock and keeps the two
+	 * arrays in step.
+	 */
+	volatile gint8        *code_end [MONO_JIT_INFO_TABLE_CHUNK_SIZE];
 	MonoJitInfo * volatile data [MONO_JIT_INFO_TABLE_CHUNK_SIZE];
 };
 

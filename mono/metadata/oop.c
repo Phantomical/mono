@@ -276,29 +276,20 @@ static int oop_jit_info_table_index(
     return left;
 }
 
+/* code_end comes from the copy of the chunk the caller made, so this reads no
+   memory of the target process. */
 static int
 oop_jit_info_table_chunk_index(
-    const MonoJitInfo** chunk_data,
+    const gint8* volatile* code_end,
     int num_elements,
     const gint8 *addr)
 {
-    const MonoJitInfo* ji;
     int left = 0, right = num_elements;
 
     while (left < right) {
         int pos = (left + right) / 2;
 
-        const gint8 *code_start;
-        const gint8 *code_end;
-        int code_size;
-
-        ji = chunk_data[pos];
-
-        code_start = (const gint8*)read_pointer(OFFSET_MEMBER(MonoJitInfo, ji, code_start));
-        code_size = read_dword(OFFSET_MEMBER(MonoJitInfo, ji, code_size));
-        code_end = code_start + code_size;
-
-        if (addr < code_end)
+        if (addr < code_end[pos])
             right = pos;
         else
             left = pos + 1;
@@ -339,7 +330,7 @@ oop_jit_info_table_find(
     // read the entire chunk
     read_memory(&chunk, read_pointer(chunkListPtr + chunk_pos), sizeof(MonoJitInfoTableChunk));
 
-    pos = oop_jit_info_table_chunk_index((const MonoJitInfo**)chunk.data, chunk.num_elements, (const gint8*)addr);
+    pos = oop_jit_info_table_chunk_index((const gint8* volatile*)chunk.code_end, chunk.num_elements, (const gint8*)addr);
     if (pos > chunk.num_elements)
         return NULL;
 

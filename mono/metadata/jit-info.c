@@ -192,17 +192,36 @@ jit_info_table_index (MonoJitInfoTable *table, gint8 *addr)
 	return left;
 }
 
+/*
+ * Stores a record at pos, together with the code end the search reads for it.
+ *
+ * The record goes first. A reader between the two stores therefore gets the
+ * code end of the record that was here before. An insert shifts records up,
+ * and each record ends at or lower than the record it replaces. That stale end
+ * is the higher of the two, so it sends the binary search left. The scan
+ * behind the search reads the records themselves and goes right. A search that
+ * starts too far left still finds its record. One that starts too far right
+ * does not.
+ *
+ * LOCKING: domain lock, or a chunk no other thread can reach yet
+ */
+static void
+jit_info_table_chunk_store (MonoJitInfoTableChunk *chunk, int pos, MonoJitInfo *ji)
+{
+	chunk->data [pos] = ji;
+	mono_memory_write_barrier ();
+	chunk->code_end [pos] = (gint8*)ji->code_start + ji->code_size;
+}
+
 static int
-jit_info_table_chunk_index (MonoJitInfoTableChunk *chunk, MonoThreadHazardPointers *hp, gint8 *addr)
+jit_info_table_chunk_index (MonoJitInfoTableChunk *chunk, gint8 *addr)
 {
 	int left = 0, right = chunk->num_elements;
 
 	while (left < right) {
 		int pos = (left + right) / 2;
-		MonoJitInfo *ji = (MonoJitInfo *)mono_get_hazardous_pointer((gpointer volatile*)&chunk->data [pos], hp, JIT_INFO_HAZARD_INDEX);
-		gint8 *code_end = (gint8*)ji->code_start + ji->code_size;
 
-		if (addr < code_end)
+		if (addr < chunk->code_end [pos])
 			right = pos;
 		else
 			left = pos + 1;
@@ -223,7 +242,7 @@ jit_info_table_find (MonoJitInfoTable *table, MonoThreadHazardPointers *hp, gint
 	chunk_pos = jit_info_table_index (table, (gint8*)addr);
 	g_assert (chunk_pos < table->num_chunks);
 
-	pos = jit_info_table_chunk_index (table->chunks [chunk_pos], hp, (gint8*)addr);
+	pos = jit_info_table_chunk_index (table->chunks [chunk_pos], (gint8*)addr);
 
 	/* We now have a position that's very close to that of the
 	   first element whose end address is higher than the one
@@ -384,6 +403,7 @@ jit_info_table_check (MonoJitInfoTable *table)
 			MonoJitInfo *this_ji = chunk->data [j];
 			MonoJitInfo *next;
 
+			g_assert ((gint8*)this_ji->code_start + this_ji->code_size == chunk->code_end [j]);
 			g_assert ((gint8*)this_ji->code_start + this_ji->code_size <= chunk->last_code_end);
 
 			if (j < chunk->num_elements - 1)
@@ -445,7 +465,7 @@ jit_info_table_realloc (MonoJitInfoTable *old)
 		for (j = 0; j < chunk_num_elements; ++j) {
 			if (!IS_JIT_INFO_TOMBSTONE (chunk->data [j])) {
 				g_assert (new_chunk < num_chunks);
-				result->chunks [new_chunk]->data [new_element] = chunk->data [j];
+				jit_info_table_chunk_store (result->chunks [new_chunk], new_element, chunk->data [j]);
 				if (++new_element >= JIT_INFO_TABLE_FILLED_NUM_ELEMENTS) {
 					result->chunks [new_chunk]->num_elements = new_element;
 					++new_chunk;
@@ -463,9 +483,8 @@ jit_info_table_realloc (MonoJitInfoTable *old)
 
 	for (i = 0; i < num_chunks; ++i) {
 		MonoJitInfoTableChunk *chunk = result->chunks [i];
-		MonoJitInfo *ji = chunk->data [chunk->num_elements - 1];
 
-		result->chunks [i]->last_code_end = (gint8*)ji->code_start + ji->code_size;
+		chunk->last_code_end = chunk->code_end [chunk->num_elements - 1];
 	}
 
 	return result;
@@ -484,11 +503,11 @@ jit_info_table_split_chunk (MonoJitInfoTableChunk *chunk, MonoJitInfoTableChunk 
 
 	memcpy ((void*)new1->data, (void*)chunk->data, sizeof (MonoJitInfo*) * new1->num_elements);
 	memcpy ((void*)new2->data, (void*)(chunk->data + new1->num_elements), sizeof (MonoJitInfo*) * new2->num_elements);
+	memcpy ((void*)new1->code_end, (void*)chunk->code_end, sizeof (gint8*) * new1->num_elements);
+	memcpy ((void*)new2->code_end, (void*)(chunk->code_end + new1->num_elements), sizeof (gint8*) * new2->num_elements);
 
-	new1->last_code_end = (gint8*)new1->data [new1->num_elements - 1]->code_start
-		+ new1->data [new1->num_elements - 1]->code_size;
-	new2->last_code_end = (gint8*)new2->data [new2->num_elements - 1]->code_start
-		+ new2->data [new2->num_elements - 1]->code_size;
+	new1->last_code_end = new1->code_end [new1->num_elements - 1];
+	new2->last_code_end = new2->code_end [new2->num_elements - 1];
 
 	*new1p = new1;
 	*new2p = new2;
@@ -531,12 +550,12 @@ jit_info_table_purify_chunk (MonoJitInfoTableChunk *old)
 	j = 0;
 	for (i = 0; i < old->num_elements; ++i) {
 		if (!IS_JIT_INFO_TOMBSTONE (old->data [i]))
-			result->data [j++] = old->data [i];
+			jit_info_table_chunk_store (result, j++, old->data [i]);
 	}
 
 	result->num_elements = j;
 	if (result->num_elements > 0)
-		result->last_code_end = (gint8*)result->data [j - 1]->code_start + result->data [j - 1]->code_size;
+		result->last_code_end = result->code_end [j - 1];
 	else
 		result->last_code_end = old->last_code_end;
 
@@ -661,31 +680,30 @@ jit_info_table_add (MonoDomain *domain, MonoJitInfoTable *volatile *table_ptr, M
 
 	num_elements = chunk->num_elements;
 
-	pos = jit_info_table_chunk_index (chunk, NULL, (gint8*)ji->code_start + ji->code_size);
+	pos = jit_info_table_chunk_index (chunk, (gint8*)ji->code_start + ji->code_size);
 
 	/* First we need to size up the chunk by one, by copying the
 	   last item, or inserting the first one, if the table is
 	   empty. */
 	if (num_elements > 0)
-		chunk->data [num_elements] = chunk->data [num_elements - 1];
+		jit_info_table_chunk_store (chunk, num_elements, chunk->data [num_elements - 1]);
 	else
-		chunk->data [0] = ji;
+		jit_info_table_chunk_store (chunk, 0, ji);
 	mono_memory_write_barrier ();
 	chunk->num_elements = ++num_elements;
 
 	/* Shift the elements up one by one. */
 	for (i = num_elements - 2; i >= pos; --i) {
 		mono_memory_write_barrier ();
-		chunk->data [i + 1] = chunk->data [i];
+		jit_info_table_chunk_store (chunk, i + 1, chunk->data [i]);
 	}
 
 	/* Now we have room and can insert the new item. */
 	mono_memory_write_barrier ();
-	chunk->data [pos] = ji;
+	jit_info_table_chunk_store (chunk, pos, ji);
 
 	/* Set the high code end address chunk entry. */
-	chunk->last_code_end = (gint8*)chunk->data [chunk->num_elements - 1]->code_start
-		+ chunk->data [chunk->num_elements - 1]->code_size;
+	chunk->last_code_end = chunk->code_end [chunk->num_elements - 1];
 
 	++table->num_valid;
 
@@ -753,7 +771,7 @@ jit_info_table_remove (MonoJitInfoTable *table, MonoJitInfo *ji)
 	chunk_pos = jit_info_table_index (table, (gint8 *)start);
 	g_assert (chunk_pos < table->num_chunks);
 
-	pos = jit_info_table_chunk_index (table->chunks [chunk_pos], NULL, (gint8 *)start);
+	pos = jit_info_table_chunk_index (table->chunks [chunk_pos], (gint8 *)start);
 
 	do {
 		chunk = table->chunks [chunk_pos];
@@ -776,7 +794,8 @@ jit_info_table_remove (MonoJitInfoTable *table, MonoJitInfo *ji)
  found:
 	g_assert (chunk->data [pos] == ji);
 
-	chunk->data [pos] = mono_jit_info_make_tombstone (chunk, ji);
+	/* A tombstone keeps the code range it replaces, so code_end does not move. */
+	jit_info_table_chunk_store (chunk, pos, mono_jit_info_make_tombstone (chunk, ji));
 	--table->num_valid;
 
 	/* Debugging code, should be removed. */
