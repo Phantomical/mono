@@ -72,11 +72,31 @@ const MonoThreadInfoRuntimeCallbacks *mono_runtime_callbacks;
 static MonoNativeTlsKey thread_info_key, thread_exited_key;
 #ifdef MONO_KEYWORD_THREAD
 static MONO_KEYWORD_THREAD gint32 tls_small_id = -1;
+MONO_KEYWORD_THREAD MonoThreadInfo *mono_thread_info_tls MONO_TLS_FAST;
 #else
 static MonoNativeTlsKey small_id_key;
 #endif
 static MonoLinkedListSet thread_list;
 static gboolean mono_threads_inited = FALSE;
+
+/*
+ * Writes the calling thread's MonoThreadInfo to the pthread key and to the
+ * thread-local variable that mono_thread_info_current_fast () reads.
+ */
+static void
+set_current_thread_info (MonoThreadInfo *info)
+{
+	mono_native_tls_set_value (thread_info_key, info);
+#ifdef MONO_KEYWORD_THREAD
+	/*
+	 * The key and the variable move together. A variable left set while the
+	 * key is clear answers a lookup for a thread that is already through its
+	 * teardown, where mono_thread_info_current () instead looks the thread up
+	 * and asserts on what it finds.
+	 */
+	mono_thread_info_tls = info;
+#endif
+}
 
 static MonoSemType suspend_semaphore;
 static size_t pending_suspends;
@@ -507,7 +527,7 @@ register_thread (MonoThreadInfo *info)
 	mono_os_sem_init (&info->resume_semaphore, 0);
 
 	/*set TLS early so SMR works */
-	mono_native_tls_set_value (thread_info_key, info);
+	set_current_thread_info (info);
 
 	mono_thread_info_get_stack_bounds (&staddr, &stsize);
 	g_assert (staddr);
@@ -533,7 +553,7 @@ register_thread (MonoThreadInfo *info)
 	if (threads_callbacks.thread_attach) {
 		if (!threads_callbacks.thread_attach (info)) {
 			// g_warning ("thread registation failed\n");
-			mono_native_tls_set_value (thread_info_key, NULL);
+			set_current_thread_info (NULL);
 			return FALSE;
 		}
 	}
@@ -649,7 +669,7 @@ unregister_thread (void *arg)
 
 	mono_threads_close_thread_handle (handle);
 
-	mono_native_tls_set_value (thread_info_key, NULL);
+	set_current_thread_info (NULL);
 }
 
 static void
@@ -843,9 +863,9 @@ thread_info_key_dtor (void *arg)
 	 * unregister code.  In some circumstances the thread needs to
 	 * take the GC lock which may block which requires a coop
 	 * state transition. */
-	mono_native_tls_set_value (thread_info_key, arg);
+	set_current_thread_info ((MonoThreadInfo *) arg);
 	unregister_thread (arg);
-	mono_native_tls_set_value (thread_info_key, NULL);
+	set_current_thread_info (NULL);
 }
 #endif
 

@@ -466,6 +466,30 @@ G_EXTERN_C // due to THREAD_INFO_TYPE varying
 THREAD_INFO_TYPE *
 mono_thread_info_current (void);
 
+#ifdef MONO_KEYWORD_THREAD
+extern MONO_KEYWORD_THREAD MonoThreadInfo *mono_thread_info_tls MONO_TLS_FAST;
+#endif
+
+/*
+ * Answers the calling thread's MonoThreadInfo.
+ *
+ * A thread that has not attached yet, and one that is through its teardown, has
+ * no thread-local value to read. Both get their answer from
+ * mono_thread_info_current (), which looks the thread up by its native id, so
+ * this function is safe wherever that one is.
+ */
+static inline MonoThreadInfo *
+mono_thread_info_current_fast (void)
+{
+#ifdef MONO_KEYWORD_THREAD
+	MonoThreadInfo *info = mono_thread_info_tls;
+
+	if (info)
+		return info;
+#endif
+	return (MonoThreadInfo *) mono_thread_info_current ();
+}
+
 MONO_API gboolean
 mono_thread_info_set_tools_data (void *data);
 

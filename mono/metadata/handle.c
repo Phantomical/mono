@@ -162,7 +162,7 @@ mono_handle_new (MonoObject *obj, MonoThreadInfo *info)
 mono_handle_new (MonoObject *obj, MonoThreadInfo *info, const char *owner)
 #endif
 {
-	info = info ? info : mono_thread_info_current ();
+	info = info ? info : mono_thread_info_current_fast ();
 
 	HandleStack *handles = info->handle_stack;
 	HandleChunk *top = handles->top;
@@ -355,7 +355,7 @@ mono_handle_stack_scan (HandleStack *stack, GcScanFunc func, gpointer gc_data, g
 MonoThreadInfo*
 mono_stack_mark_record_size (MonoThreadInfo *info, HandleStackMark *stackmark, const char *func_name)
 {
-	info = info ? info : mono_thread_info_current ();
+	info = info ? info : mono_thread_info_current_fast ();
 
 	HandleStack *handles = info->handle_stack;
 	HandleChunk *cur = stackmark->chunk;

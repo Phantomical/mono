@@ -184,36 +184,41 @@ Icall macros
 		MONO_DISABLE_WARNING(4459) /* declaration of 'identifier' hides global declaration */ \
 		ERROR_DECL (error);	\
 		/* There are deliberately locals and a constant NULL global with this same name. */ \
-		MonoThreadInfo *mono_thread_info_current_var = mono_thread_info_current (); \
+		MonoThreadInfo *mono_thread_info_current_var = mono_thread_info_current_fast (); \
 		MONO_RESTORE_WARNING \
 
 #define CLEAR_ICALL_COMMON	\
 	mono_error_set_pending_exception (error);
 
-// FIXME There should be fast and slow versions of this, i.e. with and without local variable.
+/*
+ * The frame resolves the thread once and keeps it, so that tearing the frame
+ * down reads no thread-local a second time. A caller that has one already
+ * passes it in the deliberately shadowed mono_thread_info_current_var.
+ */
 #define SETUP_ICALL_FRAME	\
 	HandleStackMark __mark;	\
-	mono_stack_mark_init (mono_thread_info_current_var ? mono_thread_info_current_var : mono_thread_info_current (), &__mark);
+	MonoThreadInfo *__frame_info = mono_thread_info_current_var ? mono_thread_info_current_var : mono_thread_info_current_fast (); \
+	mono_stack_mark_init (__frame_info, &__mark);
 
 #ifdef ENABLE_CHECKED_BUILD
 /* __FUNCTION__ creates a C string for every icall */
 // FIXME This should be one function call since it is not fully inlined.
 #define CLEAR_ICALL_FRAME	\
-	mono_stack_mark_pop (mono_stack_mark_record_size (mono_thread_info_current_var, &__mark, __FUNCTION__), &__mark);
+	mono_stack_mark_pop (mono_stack_mark_record_size (__frame_info, &__mark, __FUNCTION__), &__mark);
 // FIXME This should be one function call since it is not fully inlined.
 #define CLEAR_ICALL_FRAME_VALUE(RESULT, HANDLE)				\
-	(RESULT) = g_cast (mono_stack_mark_pop_value (mono_stack_mark_record_size (mono_thread_info_current_var, &__mark, __FUNCTION__), &__mark, (HANDLE)));
+	(RESULT) = g_cast (mono_stack_mark_pop_value (mono_stack_mark_record_size (__frame_info, &__mark, __FUNCTION__), &__mark, (HANDLE)));
 #else
 #define CLEAR_ICALL_FRAME	\
-	mono_stack_mark_pop (mono_thread_info_current_var ? mono_thread_info_current_var : mono_thread_info_current (), &__mark);
+	mono_stack_mark_pop (__frame_info, &__mark);
 #define CLEAR_ICALL_FRAME_VALUE(RESULT, HANDLE)				\
-	(RESULT) = g_cast (mono_stack_mark_pop_value (mono_thread_info_current_var ? mono_thread_info_current_var : mono_thread_info_current (), &__mark, (HANDLE)));
+	(RESULT) = g_cast (mono_stack_mark_pop_value (__frame_info, &__mark, (HANDLE)));
 #endif
 
 #define HANDLE_FUNCTION_ENTER() do {				\
 	MONO_DISABLE_WARNING(4459) /* declaration of 'identifier' hides global declaration */ \
 	/* There are deliberately locals and a constant NULL global with this same name. */ \
-	MonoThreadInfo *mono_thread_info_current_var = mono_thread_info_current ();	\
+	MonoThreadInfo *mono_thread_info_current_var = mono_thread_info_current_fast ();	\
 	MONO_RESTORE_WARNING \
 	SETUP_ICALL_FRAME					\
 
@@ -236,7 +241,7 @@ Icall macros
 #define SETUP_ICALL_FUNCTION \
 	MONO_DISABLE_WARNING(4459) /* declaration of 'identifier' hides global declaration */ \
 	/* There are deliberately locals and a constant NULL global with this same name. */ \
-	MonoThreadInfo *mono_thread_info_current_var = mono_thread_info_current () \
+	MonoThreadInfo *mono_thread_info_current_var = mono_thread_info_current_fast () \
 	MONO_RESTORE_WARNING
 
 // A common use of manual icall frame management is for loop.
