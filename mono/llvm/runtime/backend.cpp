@@ -746,6 +746,15 @@ shared_form (MonoMethod *method)
 	if (!mono_class_generic_sharing_enabled (method->klass))
 		return nullptr;
 
+	/*
+	 * A method with no IL of its own has no body for the instantiations to
+	 * share. mini writes one marshalling wrapper for each instantiation, and
+	 * it refuses an open one as a containing type that is not fully
+	 * instantiated - see mono_jit_compile_method_with_opt ().
+	 */
+	if (implemented_outside_il (method))
+		return nullptr;
+
 	// The shared method is itself open, and asking it for its own shared form
 	// again is how this would recurse.
 	if (mono_method_check_context_used (method) != 0)
