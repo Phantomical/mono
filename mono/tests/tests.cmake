@@ -243,6 +243,7 @@ set(MONO_TESTS_CS_SRC
   pinvoke-narrow-arg.cs
   tbaa-aliasing.cs
   tbaa-explicit-overlap.cs
+  typeload-field-memberref.cs
   tbaa-field-aliasing.cs
   math-intrinsics.cs
   buffer-copy-intrinsics.cs

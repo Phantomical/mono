@@ -329,7 +329,20 @@ field_from_memberref (MonoImage *image, guint32 token, MonoClass **retklass,
 	field = mono_class_get_field_from_name_full (klass, fname, sig_type);
 
 	if (!field) {
-		mono_error_set_field_missing (error, klass, fname, sig_type, "Could not find field in class");
+		/*
+		 * mono_class_get_field_from_name_full () refuses to search a class that
+		 * carries a load failure, so the lookup above misses whatever fields the
+		 * class has and reads as an absent field. We report the failure the class
+		 * recorded instead. That is the TypeLoadException .NET raises for a field
+		 * token that names a type which does not load.
+		 *
+		 * The miss is the gate. A class that carries a failure and still answers
+		 * the lookup keeps its field.
+		 */
+		if (mono_class_has_failure (klass))
+			mono_error_set_for_class_failure (error, klass);
+		else
+			mono_error_set_field_missing (error, klass, fname, sig_type, "Could not find field in class");
 	}
 
 	return field;
