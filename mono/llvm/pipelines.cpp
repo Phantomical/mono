@@ -7,7 +7,6 @@
 #include "passes/lower-builtins.hpp"
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
-#include "passes/profile-counter-sink.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "passes/rgctx-dedup.hpp"
 #include "passes/rgctx-fetch.hpp"
@@ -296,12 +295,6 @@ MonoPassBuilder::buildPgoInstrumentationPipeline ()
 	 */
 	MPM.addPass (llvm::InstrProfilingLoweringPass (llvm::InstrProfOptions{ .Atomic = true }));
 	MPM.addPass (mono::ProfileLocalizePass ());
-
-	/*
-	 * Behind the lowering, which is what leaves a counter update as the ordered
-	 * memory operation a null check cannot fold over.
-	 */
-	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ProfileCounterSinkPass ()));
 
 	return MPM;
 }

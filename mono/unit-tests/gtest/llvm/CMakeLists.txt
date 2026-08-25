@@ -18,7 +18,7 @@ set(MONO_LLVM_TEST_SOURCES
     unwind-records-tests.cpp unwind-transcode-tests.cpp inline-copies-tests.cpp
     profile-counters-tests.cpp profile-counter-promoter-tests.cpp
     rgctx-fetch-tests.cpp rgctx-dedup-tests.cpp clamp-frame-align-tests.cpp
-    array-address-tests.cpp profile-counter-sink-tests.cpp)
+    array-address-tests.cpp)
 
 if(MONO_CORPUS_ENABLED)
   # RELATIVE, because mono_corpus_il resolves its source against the current

@@ -1884,13 +1884,12 @@ MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *con
 /// not.
 ///
 /// The branch carries the !make.implicit tag LLVM's ImplicitNullChecks pass looks for.
-/// MonoJit::create () turns that pass on, and it then folds the test into whichever
-/// faulting memory operation follows in the not-taken block, so the check costs nothing
-/// until it fires.
+/// MonoJit::create () turns that pass on, and the comment on that option says which
+/// tier folds a check.
 ///
-/// That fold only works in the shape emitted here: a dereference in the not-taken arm,
-/// on the pointer that was tested. The pass declines and leaves the branch alone when
-/// the field offset is too far into the page for the hardware to trap on it.
+/// A fold needs the shape emitted here: a dereference in the not-taken arm, on the
+/// pointer that was tested. The pass declines and leaves the branch alone when the
+/// field offset is too far into the page for the hardware to trap on it.
 ///
 /// The tag goes on every check, inside a try region as well. A folded check raises
 /// its exception from the dereference rather than from the call this emits, and the

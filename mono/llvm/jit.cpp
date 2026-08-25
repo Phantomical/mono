@@ -19,7 +19,6 @@
 #include "passes/class-init.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/profile-counters.hpp"
-#include "passes/profile-counter-sink.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "passes/top-down-inline.hpp"
 #include "timing.hpp"
@@ -156,7 +155,6 @@ is_mono_pass (StringRef pass)
 {
 	return pass == ArrayAddressPass::name () || pass == ClassInitPass::name ()
 	       || pass == LowerBuiltinsPass::name ()
-	       || pass == ProfileCounterSinkPass::name ()
 	       || pass == RestoreTailPositionPass::name ()
 	       || pass == arch::MonoAbiPass::name ();
 }
@@ -1350,13 +1348,20 @@ MonoJit::create (CodeArena *arena)
 
 	/*
 	 * Fold a null check into the memory operation behind it. The translator
-	 * marks every check with !make.implicit, and the pass rewrites a marked
-	 * test and branch into a faulting access, so the check costs nothing
-	 * until it fires. A tier-1 body puts its profile counter, an atomicrmw,
-	 * in the not-taken block, and the pass declines an ordered memory
-	 * operation between the test and the dereference. ProfileCounterSinkPass
-	 * (passes/profile-counter-sink.hpp) moves that counter down past the
-	 * dereference.
+	 * marks every check with !make.implicit, and LLVM's ImplicitNullChecks
+	 * pass rewrites a marked test and branch into a faulting access, so the
+	 * check costs nothing until it fires.
+	 *
+	 * Only tier 2 folds a check. Tier-1 codegen runs at
+	 * CodeGenOptLevel::None, where a block takes one of two selection paths
+	 * and each one stops the fold on its own.
+	 *
+	 * FastISel selects the test as `CMP reg, 0`, and
+	 * X86InstrInfo::analyzeBranchPredicate () reads `TEST reg, reg` only, so
+	 * the pass leaves the block before it reads an instruction in it. A block
+	 * that SelectionDAG selects gets `TEST` instead. RegAllocFast then reloads
+	 * the tested pointer into a register of its own, which is not the register
+	 * the test read, so isSuitableMemoryOp () refuses the dereference.
 	 *
 	 * LLVM expects the runtime to read __llvm_faultmaps for the handler of a
 	 * faulting access. Mono instead turns a SIGSEGV inside a compiled body
