@@ -730,6 +730,37 @@ MethodLLVMEmitter::seed_handler_entry_stacks (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
+/// Whether entering method is one of the things that runs its class's type
+/// initializer.
+///
+/// ECMA-335 I.8.9.5 lists what triggers a type initializer that is not marked
+/// beforefieldinit: the first access to a static field of the type, the first
+/// call of a static method of it, the first call of an instance or virtual
+/// method of it *if it is a value type*, and the first call of a constructor
+/// for it. Entering an ordinary instance method of a reference type is not on
+/// the list, and the standard says why: a non-null instance can only come from
+/// a constructor, so the constructor already ran the initializer.
+///
+/// The two exemptions from that argument are back on the list here. An all-zero
+/// value type needs no constructor. And a constructor is what the argument
+/// rests on, so it runs the initializer itself rather than leaving that to the
+/// newobj site: the runtime can invoke a constructor with no such site in front
+/// of it.
+///
+/// Each static field access emits a check of its own, and so does newobj.
+static bool
+entry_runs_the_cctor (MonoMethod *method)
+{
+	if (!mono_class_needs_cctor_run (method->klass, method))
+		return false;
+
+	MonoMethodSignature *signature = mono_method_signature_internal (method);
+
+	return signature == nullptr || !signature->hasthis
+	       || m_class_is_valuetype (method->klass)
+	       || strcmp (method->name, ".ctor") == 0;
+}
+
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::emit ()
 {
@@ -890,9 +921,8 @@ MethodLLVMEmitter::emit ()
 
 	emit_profiler_enter (builder);
 
-	// The type initializer runs before the first entry into any of the class's
-	// methods (ECMA-335 II.10.5.3). Every way of reaching the method, such as a
-	// stub, a vtable slot, a delegate, or calli, funnels through the method's own
+	// Every way of reaching a method the entry does run the initializer for - a
+	// stub, a vtable slot, a delegate, or calli - funnels through the method's own
 	// entry. So the check lives here rather than at call sites.
 	//
 	// A native-to-managed wrapper is the exception. It is entered from C, on a
@@ -904,7 +934,7 @@ MethodLLVMEmitter::emit ()
 	// front of one. The method it goes on to call runs the initializer at its own
 	// entry, and by then the thread is attached.
 	if (method->wrapper_type != MONO_WRAPPER_NATIVE_TO_MANAGED
-	    && mono_class_needs_cctor_run (method->klass, method))
+	    && entry_runs_the_cctor (method))
 		if (auto error = emit_class_init (builder, method->klass))
 			return std::move (error);
 

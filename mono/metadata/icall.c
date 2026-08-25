@@ -8327,6 +8327,19 @@ ves_icall_System_Runtime_Activation_ActivationServices_AllocateUninitializedClas
 		MonoVTable *vtable = mono_class_vtable_checked (domain, klass, error);
 		return_val_if_nok (error, NULL_HANDLE);
 
+		/*
+		 * This is the one way to get an instance of a class whose constructor
+		 * never ran, and generated code takes the constructor as proof that the
+		 * type initializer ran (ECMA-335 I.8.9.5). Run it here so that the
+		 * instance handed back is one an instance method can read the statics
+		 * of. A beforefieldinit class is exempt: each static field access runs
+		 * the initializer itself.
+		 */
+		if (!mono_class_is_before_field_init (klass)) {
+			mono_runtime_class_init_full (vtable, error);
+			return_val_if_nok (error, NULL_HANDLE);
+		}
+
 		/* Bypass remoting object creation check */
 		return MONO_HANDLE_NEW (MonoObject, mono_object_new_alloc_specific_checked (vtable, error));
 	}
