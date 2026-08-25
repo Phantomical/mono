@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "runtime-error.hpp"
 #include "../passes/array-address.hpp"
+#include "../passes/array-shape.hpp"
 #include "../runtime/options.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-init.h"
@@ -717,9 +718,9 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 /// The symbolic element-address call that ArrayAddressPass expands.
 ///
 /// The expansion turns (array, idx...) into a pointer at the element, and
-/// throws IndexOutOfRangeException when an index misses its dimension. Every
-/// number the expansion needs travels on the declaration's attribute, which
-/// keeps mono's layouts out of the pass.
+/// throws the exception whose token trails the indices when one of them misses
+/// its dimension. The pass reads MonoArray itself; what the declaration carries
+/// is the rank, the element size and whether the array is bounded.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::array_accessor_address (MonoIrBuilder &builder, MonoClass *klass,
                                            llvm::Value *array,
@@ -736,41 +737,31 @@ MethodLLVMEmitter::array_accessor_address (MonoIrBuilder &builder, MonoClass *kl
 
 	if (decl == nullptr) {
 		llvm::Type *ptr = llvm::PointerType::get (context (), 0);
-		std::vector<llvm::Type *> params (1 + indices.size (), builder.getInt32Ty ());
+		// The array, one index for each dimension, and the exception token.
+		std::vector<llvm::Type *> params (2 + indices.size (), builder.getInt32Ty ());
 
 		params[0] = ptr;
 		decl = llvm::Function::Create (llvm::FunctionType::get (ptr, params, false),
 		                               llvm::GlobalValue::ExternalLinkage, name,
 		                               module);
 
-		MonoClass *ioor = mono_class_load_from_name (mono_get_corlib (), "System",
-		                                             "IndexOutOfRangeException");
-		char spec[256];
+		char spec[64];
 
-		snprintf (spec, sizeof (spec),
-		          "rank=%zu,size=%d,bounded=%d,token=%u,bounds=%d,maxlen=%d,"
-		          "maxlen_bytes=%zu,vector=%d,stride=%zu,blen=%d,blen_bytes=%zu,"
-		          "blb=%d,blb_bytes=%zu",
-		          indices.size (), size, bounded ? 1 : 0,
-		          m_class_get_type_token (ioor) - MONO_TOKEN_TYPE_DEF,
-		          (int) MONO_STRUCT_OFFSET (MonoArray, bounds),
-		          (int) MONO_STRUCT_OFFSET (MonoArray, max_length),
-		          sizeof (mono_array_size_t),
-		          (int) MONO_STRUCT_OFFSET (MonoArray, vector),
-		          sizeof (MonoArrayBounds),
-		          (int) MONO_STRUCT_OFFSET (MonoArrayBounds, length),
-		          sizeof (mono_array_size_t),
-		          (int) MONO_STRUCT_OFFSET (MonoArrayBounds, lower_bound),
-		          sizeof (mono_array_lower_bound_t));
+		snprintf (spec, sizeof (spec), "rank=%zu,size=%d,bounded=%d", indices.size (),
+		          size, bounded ? 1 : 0);
 		decl->addFnAttr (llvm::Attribute::get (context (), array_address_attribute,
 		                                       spec));
 	}
 
+	MonoClass *ioor = mono_class_load_from_name (mono_get_corlib (), "System",
+	                                             "IndexOutOfRangeException");
 	std::vector<llvm::Value *> args;
 
-	args.reserve (1 + indices.size ());
+	args.reserve (2 + indices.size ());
 	args.push_back (array);
 	args.insert (args.end (), indices.begin (), indices.end ());
+	args.push_back (
+		builder.getInt32 (m_class_get_type_token (ioor) - MONO_TOKEN_TYPE_DEF));
 	return emit_protected_call (builder, decl, args);
 }
 
@@ -1113,14 +1104,9 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
  * and the length of both arrays before it moves one element, which is six of
  * these sites in one method.
  *
- * A szarray carries no bounds vector. Its length is MonoArray.max_length and
- * its lower bound is zero. An array with a shape carries one MonoArrayBounds
- * for each dimension, so the dimension emitter branches on that pointer. This
- * is the split ves_icall_System_Array_GetLength () and
- * ves_icall_System_Array_GetLowerBound () make.
- *
- * Each emitter reads a field of the receiver, so each one raises
- * NullReferenceException on a null receiver.
+ * The first two read a field of the receiver, so each one raises
+ * NullReferenceException on a null receiver. The third leaves the read to
+ * ArrayShapePass, which owes the same exception.
  */
 
 /// Reads the rank out of the array's vtable, which is what Array.Rank answers.
@@ -1174,86 +1160,73 @@ MethodLLVMEmitter::emit_array_total_length (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
-/// Reads the length or the lower bound of dimension zero, which is what
-/// Array.GetLength (0) and Array.GetLowerBound (0) answer.
+/// The symbolic dimension call ArrayShapePass expands, for a site that asks
+/// Array.GetLength () or Array.GetLowerBound () for one dimension.
 ///
-/// The caller decides which sites qualify, and this pops the receiver and the
-/// dimension both. Dimension zero is inside every array, so this emits no test
-/// against the rank.
+/// The expansion answers dimension zero from the object and leaves any other
+/// dimension on the accessor. Which one a site is, is read in the pass rather
+/// than here, because a caller's dimension can arrive through a forwarded
+/// parameter. Array.GetUpperBound () is one such forwarder, and the constant
+/// reaches the accessor's body only once an inliner has folded it in.
+///
+/// The pass reads MonoArray itself. What the declaration carries is which
+/// accessor this is and the method a declined site falls back to, and the site
+/// carries the token of the exception a null array raises.
 llvm::Error
-MethodLLVMEmitter::emit_array_dimension (MonoIrBuilder &builder, bool lower_bound)
+MethodLLVMEmitter::emit_array_dimension (MonoIrBuilder &builder, MonoMethod *accessor,
+                                         bool lower_bound)
 {
 	if (stack.size () < 2)
 		return unbalanced_stack (2);
 
 	StackValue array = get_stack (1);
-	llvm::Value *without_bounds = builder.getInt32 (0);
 
-	/*
-	 * The answer a szarray gives is settled before the branch below.
-	 * array_length () raises the null reference this emitter owes, so it ends
-	 * in a block of its own. A phi that took the branch's arm for a
-	 * predecessor would then name the wrong block.
-	 */
-	if (lower_bound) {
-		if (stack_type (array.type) != ObjectRef)
-			return invalid_il (llvm::Twine ("an array was expected, not operand type ")
-			                   + describe (array.type, stack_type (array.type)));
+	if (stack_type (array.type) != ObjectRef)
+		return invalid_il (llvm::Twine ("an array was expected, not operand type ")
+		                   + describe (array.type, stack_type (array.type)));
 
-		emit_null_check (builder, array.value);
-	} else {
-		llvm::Expected<llvm::Value *> whole = array_length (builder, array);
+	// The accessor is an internal call, so what a declined site calls is the
+	// marshalling wrapper the runtime publishes it as.
+	MonoMethod *wrapper = icall_wrapper_target (accessor);
+	llvm::Expected<llvm::Function *> target = create_method_decl (wrapper);
 
-		if (!whole)
-			return whole.takeError ();
-		without_bounds = builder.CreateZExtOrTrunc (*whole, builder.getInt32Ty ());
+	if (!target)
+		return target.takeError ();
+
+	llvm::Expected<std::vector<llvm::Value *>> args =
+		pop_call_arguments (builder, mono_method_signature_internal (wrapper));
+
+	if (!args)
+		return args.takeError ();
+
+	llvm::StringRef kind = lower_bound ? array_shape_lower_bound : array_shape_length;
+	// One declaration per accessor in the module, the way create_method_decl ()
+	// keeps one per method.
+	std::string name =
+		(llvm::Twine (array_shape_prefix) + kind + "." + (*target)->getName ()).str ();
+	llvm::Function *decl = module->getFunction (name);
+
+	if (decl == nullptr) {
+		llvm::FunctionType *shape = (*target)->getFunctionType ();
+		std::vector<llvm::Type *> params (shape->param_begin (), shape->param_end ());
+
+		// The accessor's own arguments, and the exception token behind them.
+		params.push_back (builder.getInt32Ty ());
+		decl = llvm::Function::Create (
+			llvm::FunctionType::get (shape->getReturnType (), params, false),
+			llvm::GlobalValue::ExternalLinkage, name, module);
+		decl->addFnAttr (llvm::Attribute::get (context (), array_shape_attribute, kind));
+		decl->addFnAttr (llvm::Attribute::get (context (), array_shape_target_attribute,
+		                                       (*target)->getName ()));
 	}
 
-	llvm::LoadInst *bounds = builder.CreateAlignedLoad (
-		llvm::PointerType::get (context (), 0),
-		builder.CreateGEP (builder.getInt8Ty (), array.value,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, bounds))),
-		llvm::Align (TARGET_SIZEOF_VOID_P));
+	MonoClass *nre = mono_class_load_from_name (mono_get_corlib (), "System",
+	                                            "NullReferenceException");
 
-	mark_array_header_load (bounds);
+	args->push_back (
+		builder.getInt32 (m_class_get_type_token (nre) - MONO_TOKEN_TYPE_DEF));
 
-	llvm::BasicBlock *flat = llvm::BasicBlock::Create (context (), "dim_szarray", function);
-	llvm::BasicBlock *shaped = llvm::BasicBlock::Create (context (), "dim_shaped", function);
-	llvm::BasicBlock *done = llvm::BasicBlock::Create (context (), "dim_done", function);
-
-	builder.CreateCondBr (builder.CreateIsNull (bounds), flat, shaped);
-
-	builder.SetInsertPoint (flat);
-	builder.CreateBr (done);
-
-	builder.SetInsertPoint (shaped);
-
-	/* Both fields are scalar typedefs, so the size alone is the layout. */
-	constexpr unsigned length_bytes = sizeof (mono_array_size_t);
-	constexpr unsigned bound_bytes = sizeof (mono_array_lower_bound_t);
-	unsigned bytes = lower_bound ? bound_bytes : length_bytes;
-	int32_t at = lower_bound ? MONO_STRUCT_OFFSET (MonoArrayBounds, lower_bound)
-	                         : MONO_STRUCT_OFFSET (MonoArrayBounds, length);
-	llvm::LoadInst *held = builder.CreateAlignedLoad (
-		builder.getIntNTy (bytes * 8),
-		builder.CreateGEP (builder.getInt8Ty (), bounds, builder.getInt32 (at)),
-		llvm::Align (bytes));
-
-	mark_array_header_load (held);
-
-	// A lower bound is signed and a length is not.
-	llvm::Value *first = lower_bound
-		? builder.CreateSExtOrTrunc (held, builder.getInt32Ty ())
-		: builder.CreateZExtOrTrunc (held, builder.getInt32Ty ());
-
-	builder.CreateBr (done);
-
-	builder.SetInsertPoint (done);
-
-	llvm::PHINode *result = builder.CreatePHI (builder.getInt32Ty (), 2, "dim_result");
-
-	result->addIncoming (without_bounds, flat);
-	result->addIncoming (first, shaped);
+	llvm::Value *result = emit_protected_call (builder, decl, *args);
 
 	pop_stack (2);
 	push_stack (result, mono_get_int32_type ());

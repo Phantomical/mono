@@ -128,6 +128,27 @@ enters_a_method (MonoOpcodeEnum op)
 	return op == MONO_CEE_CALL || op == MONO_CEE_CALLVIRT || op == MONO_CEE_NEWOBJ;
 }
 
+/// Whether the translator answers a call to target out of the array it is made
+/// on, and the accessor that call can fall back to reads none of the frame it
+/// was made in.
+bool
+answers_the_shape_of_an_array (MonoMethod *target)
+{
+	/*
+	 * The class comes first because the signature does not: parsing one
+	 * resolves the types it names, and a body the pre-pass walks can name a
+	 * method whose parameter type is missing on purpose. That resolution is the
+	 * caller's to make, at the site the IL puts it at.
+	 */
+	if (target->klass != mono_defaults.array_class)
+		return false;
+
+	MonoMethodSignature *sig = mono_method_signature_internal (target);
+
+	return sig != nullptr && answers_array_shape (target, sig)
+	       && implemented_outside_il (target) && !reads_the_callers_frame (target);
+}
+
 bool
 branches_to_the_next (const unsigned char *code, MonoOpcodeEnum op, size_t operand)
 {
@@ -142,8 +163,9 @@ branches_to_the_next (const unsigned char *code, MonoOpcodeEnum op, size_t opera
 }
 
 /// Returns the method's shape when its IL is one straight line. The line holds
-/// at most one call, declines_a_fold () names what it may not hold, and its
-/// terminator is the last IL byte. Returns nullopt otherwise.
+/// at most one call, not counting the ones answers_the_shape_of_an_array ()
+/// names, declines_a_fold () names what it may not hold, and its terminator is
+/// the last IL byte. Returns nullopt otherwise.
 ///
 /// These are the shapes worth folding in without weighing them:
 ///
@@ -204,12 +226,28 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 		}
 
 		if (enters_a_method (op)) {
+			MonoMethod *target =
+				il_call_target (method, il_read_u32 (code + operand));
+
+			if (target == nullptr)
+				return std::nullopt;
+
+			/*
+			 * A site answered out of the array, which the one-call rule has
+			 * no frame to hold. Array.GetUpperBound () is the body this lets
+			 * through: two of these sites and arithmetic. Folding it in is
+			 * what puts a caller's literal dimension where ArrayShapePass
+			 * reads it.
+			 */
+			if (answers_the_shape_of_an_array (target)) {
+				at = next;
+				continue;
+			}
+
 			if (shape.forwards_to != nullptr)
 				return std::nullopt;
 
-			shape.forwards_to = il_call_target (method, il_read_u32 (code + operand));
-			if (shape.forwards_to == nullptr)
-				return std::nullopt;
+			shape.forwards_to = target;
 		} else if (declines_a_fold (op)
 		           // A C# compiler ends a value-returning method with
 		           // stloc.0, a branch to the next instruction, ldloc.0,

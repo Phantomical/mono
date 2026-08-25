@@ -9,14 +9,18 @@
  * zero-based array has no bounds vector at all, so that case compares the
  * index against max_length directly. That is the same check element_address ()
  * inlines for ldelem and stelem. A failed check throws the corlib exception
- * whose type token the declaration carries.
+ * whose type token the site carries behind its indices.
  *
- * Every number the arithmetic needs - field offsets and widths, the element
- * size, the exception token - arrives in the declaration's attribute, written
- * by the translator, which is what keeps mono's headers out of this file.
+ * The layout comes from mono's own headers. What arrives on the declaration is
+ * what no header states: the rank, the element size, and whether the array
+ * carries a bounds vector.
  */
 
 #include "array-address.hpp"
+
+#include "mono/metadata/abi-details.h"
+#include "mono/metadata/class-internals.h"
+#include "mono/metadata/object-internals.h"
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringExtras.h>
@@ -39,16 +43,6 @@ struct AddressSpec {
 	uint64_t rank;
 	uint64_t elem_size;
 	bool bounded;
-	uint64_t token;
-	uint64_t bounds_offset;
-	uint64_t max_length_offset;
-	uint64_t max_length_bytes;
-	uint64_t vector_offset;
-	uint64_t bounds_stride;
-	uint64_t length_offset;
-	uint64_t length_bytes;
-	uint64_t lower_bound_offset;
-	uint64_t lower_bound_bytes;
 };
 
 AddressSpec
@@ -73,26 +67,6 @@ parse_spec (const Function &decl)
 			spec.elem_size = number;
 		else if (key == "bounded")
 			spec.bounded = number != 0;
-		else if (key == "token")
-			spec.token = number;
-		else if (key == "bounds")
-			spec.bounds_offset = number;
-		else if (key == "maxlen")
-			spec.max_length_offset = number;
-		else if (key == "maxlen_bytes")
-			spec.max_length_bytes = number;
-		else if (key == "vector")
-			spec.vector_offset = number;
-		else if (key == "stride")
-			spec.bounds_stride = number;
-		else if (key == "blen")
-			spec.length_offset = number;
-		else if (key == "blen_bytes")
-			spec.length_bytes = number;
-		else if (key == "blb")
-			spec.lower_bound_offset = number;
-		else if (key == "blb_bytes")
-			spec.lower_bound_bytes = number;
 		else
 			report_fatal_error (Twine ("unknown key in ") + array_address_attribute
 			                    + " attribute on " + decl.getName ());
@@ -103,12 +77,14 @@ parse_spec (const Function &decl)
 }
 
 /// Reads one field of the array header.
+///
+/// Every field it is asked for is a scalar typedef, so the size alone is the
+/// layout.
 Value *
-load_field (IRBuilder<> &b, Value *base, uint64_t offset, uint64_t bytes)
+load_field (IRBuilder<> &b, Value *base, uint64_t offset, unsigned bytes)
 {
 	Value *slot = b.CreateInBoundsGEP (b.getInt8Ty (), base, b.getInt64 (offset));
-	LoadInst *load = b.CreateAlignedLoad (b.getIntNTy ((unsigned) bytes * 8), slot,
-	                                      Align (bytes));
+	LoadInst *load = b.CreateAlignedLoad (b.getIntNTy (bytes * 8), slot, Align (bytes));
 
 	mark_array_header_load (load);
 	return load;
@@ -116,11 +92,12 @@ load_field (IRBuilder<> &b, Value *base, uint64_t offset, uint64_t bytes)
 
 /// Reads the pointer to the array's bounds vector.
 Value *
-load_bounds (IRBuilder<> &b, Value *array, const AddressSpec &spec)
+load_bounds (IRBuilder<> &b, Value *array)
 {
 	LoadInst *load = b.CreateAlignedLoad (
 		PointerType::get (b.getContext (), 0),
-		b.CreateInBoundsGEP (b.getInt8Ty (), array, b.getInt64 (spec.bounds_offset)),
+		b.CreateInBoundsGEP (b.getInt8Ty (), array,
+	                             b.getInt64 (MONO_STRUCT_OFFSET (MonoArray, bounds))),
 		Align (sizeof (void *)));
 
 	mark_array_header_load (load);
@@ -147,12 +124,12 @@ mark_unlikely (BranchInst *branch)
 /// no bounds vector at all, so an absent vector means a lower bound of zero.
 Value *
 subtract_lower_bound (IRBuilder<> &b, Value *array, Value *index,
-                      const AddressSpec &spec, BasicBlock *continuation)
+                      BasicBlock *continuation)
 {
 	LLVMContext &ctx = b.getContext ();
 	Function *fn = b.GetInsertBlock ()->getParent ();
 	Type *i32 = b.getInt32Ty ();
-	Value *bounds = load_bounds (b, array, spec);
+	Value *bounds = load_bounds (b, array);
 	BasicBlock *from = b.GetInsertBlock ();
 	BasicBlock *have = BasicBlock::Create (ctx, "array_addr_lb", fn, continuation);
 	BasicBlock *merge = BasicBlock::Create (ctx, "array_addr_idx", fn, continuation);
@@ -161,7 +138,9 @@ subtract_lower_bound (IRBuilder<> &b, Value *array, Value *index,
 
 	IRBuilder<> hb (have);
 	Value *lower = hb.CreateZExtOrTrunc (
-		load_field (hb, bounds, spec.lower_bound_offset, spec.lower_bound_bytes), i32);
+		load_field (hb, bounds, MONO_STRUCT_OFFSET (MonoArrayBounds, lower_bound),
+	                    sizeof (mono_array_lower_bound_t)),
+		i32);
 
 	hb.CreateBr (merge);
 	b.SetInsertPoint (merge);
@@ -205,26 +184,30 @@ lower_call (CallBase *site, const AddressSpec &spec)
 		linear = b.CreateZExtOrTrunc (site->getArgOperand (1), i32);
 
 		if (spec.bounded)
-			linear = subtract_lower_bound (b, array, linear, spec, cont);
+			linear = subtract_lower_bound (b, array, linear, cont);
 
-		Value *length =
-			load_field (b, array, spec.max_length_offset, spec.max_length_bytes);
+		Value *length = load_field (b, array,
+		                            MONO_STRUCT_OFFSET (MonoArray, max_length),
+		                            sizeof (mono_array_size_t));
 
 		check (b.CreateICmpUGE (b.CreateZExt (linear, b.getInt64Ty ()),
 		                        b.CreateZExtOrTrunc (length, b.getInt64Ty ())));
 	} else {
-		Value *bounds = load_bounds (b, array, spec);
+		Value *bounds = load_bounds (b, array);
 
 		linear = nullptr;
 		for (uint64_t dim = 0; dim < spec.rank; ++dim) {
-			uint64_t at = dim * spec.bounds_stride;
+			uint64_t at = dim * sizeof (MonoArrayBounds);
 			Value *lower = b.CreateZExtOrTrunc (
-				load_field (b, bounds, at + spec.lower_bound_offset,
-			                    spec.lower_bound_bytes),
+				load_field (b, bounds,
+			                    at + MONO_STRUCT_OFFSET (MonoArrayBounds,
+			                                             lower_bound),
+			                    sizeof (mono_array_lower_bound_t)),
 				i32);
 			Value *length = b.CreateZExtOrTrunc (
-				load_field (b, bounds, at + spec.length_offset,
-			                    spec.length_bytes),
+				load_field (b, bounds,
+			                    at + MONO_STRUCT_OFFSET (MonoArrayBounds, length),
+			                    sizeof (mono_array_size_t)),
 				i32);
 			Value *relative =
 				b.CreateSub (site->getArgOperand (1 + (unsigned) dim), lower);
@@ -236,8 +219,8 @@ lower_call (CallBase *site, const AddressSpec &spec)
 		}
 	}
 
-	Value *vector = b.CreateInBoundsGEP (b.getInt8Ty (), array,
-	                                     b.getInt64 (spec.vector_offset));
+	Value *vector = b.CreateInBoundsGEP (
+		b.getInt8Ty (), array, b.getInt64 (MONO_STRUCT_OFFSET (MonoArray, vector)));
 	Value *address = b.CreateInBoundsGEP (
 		b.getInt8Ty (), vector,
 		b.CreateMul (b.CreateZExt (linear, b.getInt64Ty ()),
@@ -256,7 +239,8 @@ lower_call (CallBase *site, const AddressSpec &spec)
 	 * exception stays catchable exactly where the accessor call was.
 	 */
 	IRBuilder<> rb (raise);
-	Value *token = rb.getInt32 ((uint32_t) spec.token);
+	// Behind the indices, which is where the translator puts it.
+	Value *token = site->getArgOperand (1 + (unsigned) spec.rank);
 
 	site->replaceAllUsesWith (address);
 	if (auto *invoke = dyn_cast<InvokeInst> (site)) {

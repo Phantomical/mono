@@ -23,9 +23,9 @@
 namespace mono {
 
 /// The name prefix of the address declarations, and the attribute on each
-/// carrying the numbers the lowering needs (element size, array layout
-/// offsets, the bounds-failure exception token) as `key=value` pairs. Only
-/// the translator writes either.
+/// carrying what no header states — the rank, the element size, and whether
+/// the array carries a bounds vector — as `key=value` pairs. Only the
+/// translator writes either.
 constexpr llvm::StringRef array_address_prefix = "mono.array.address.";
 constexpr llvm::StringRef array_address_attribute = "mono-array-address";
 
@@ -57,8 +57,7 @@ mark_array_header_load (llvm::LoadInst *load)
 
 /// Rewrites every call to a `mono.array.address.*` declaration into the
 /// bounds-checked element address computation, throwing the corlib exception
-/// named in the declaration's attribute on a failed check. Runs before the
-/// optimization pipeline.
+/// the site names on a failed check. Runs before the optimization pipeline.
 class ArrayAddressPass : public llvm::PassInfoMixin<ArrayAddressPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Module &m,

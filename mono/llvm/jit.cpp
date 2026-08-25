@@ -16,6 +16,7 @@
 #include "seq-point-marker.hpp"
 #include "sidetables.hpp"
 #include "passes/array-address.hpp"
+#include "passes/array-shape.hpp"
 #include "passes/class-init.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/profile-counters.hpp"
@@ -155,7 +156,8 @@ verify_or_die (const Function &f, StringRef when)
 bool
 is_mono_pass (StringRef pass)
 {
-	return pass == ArrayAddressPass::name () || pass == ClassInitPass::name ()
+	return pass == ArrayAddressPass::name () || pass == ArrayShapePass::name ()
+	       || pass == ClassInitPass::name ()
 	       || pass == LowerBuiltinsPass::name ()
 	       || pass == RestoreTailPositionPass::name ()
 	       || pass == arch::MonoAbiPass::name ();

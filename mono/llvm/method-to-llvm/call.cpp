@@ -50,13 +50,20 @@ is_debugger_break (MonoMethod *target, MonoMethodSignature *sig)
 static constexpr bool array_length_fits_int32 =
 	sizeof (mono_array_size_t) <= sizeof (int32_t);
 
-/// Whether the operand naming a dimension is the constant zero.
-static bool
-names_dimension_zero (llvm::Value *dimension)
+bool
+answers_array_shape (MonoMethod *target, MonoMethodSignature *sig)
 {
-	llvm::ConstantInt *literal = llvm::dyn_cast<llvm::ConstantInt> (dimension);
+	if (target->klass != mono_defaults.array_class || !sig->hasthis)
+		return false;
 
-	return literal != nullptr && literal->isZero ();
+	std::string_view what = target->name;
+
+	if (sig->param_count == 0)
+		return what == "get_Rank" || what == "GetRank"
+		       || (what == "get_Length" && array_length_fits_int32);
+
+	return sig->param_count == 1 && array_length_fits_int32
+	       && (what == "GetLength" || what == "GetLowerBound");
 }
 
 llvm::Expected<MonoMethod *>
@@ -1342,28 +1349,23 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	    && sig->hasthis && sig->param_count == 0)
 		return emit_string_length (builder);
 
-	if (callee_method->klass == mono_defaults.array_class && sig->hasthis) {
+	if (answers_array_shape (callee_method, sig)) {
 		std::string_view what = callee_method->name;
 
-		if (sig->param_count == 0) {
-			if (what == "get_Rank" || what == "GetRank")
-				return emit_array_rank (builder);
+		if (what == "get_Rank" || what == "GetRank")
+			return emit_array_rank (builder);
 
-			if (what == "get_Length" && array_length_fits_int32)
-				return emit_array_total_length (builder);
-		}
+		if (what == "get_Length")
+			return emit_array_total_length (builder);
 
-		// Only dimension zero, which is the dimension Array.Copy asks for,
-		// and where mini stops as well. Any other dimension needs the rank
-		// test the icall makes, so those sites keep their call.
-		if (sig->param_count == 1 && array_length_fits_int32 && stack.size () >= 2
-		    && names_dimension_zero (get_stack (0).value)) {
-			if (what == "GetLength")
-				return emit_array_dimension (builder, false);
+		// Whatever dimension the site names. ArrayShapePass leaves the ones it
+		// cannot answer on the accessor, and it reads the dimension where an
+		// inliner has already folded a forwarded parameter into a constant.
+		if (what == "GetLength")
+			return emit_array_dimension (builder, callee_method, false);
 
-			if (what == "GetLowerBound")
-				return emit_array_dimension (builder, true);
-		}
+		if (what == "GetLowerBound")
+			return emit_array_dimension (builder, callee_method, true);
 	}
 
 	// Asked of the method the IL named, ahead of the wrapper swap below. That

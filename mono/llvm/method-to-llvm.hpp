@@ -1085,7 +1085,8 @@ private:
 	llvm::Error emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature *sig);
 	llvm::Error emit_array_rank (MonoIrBuilder &builder);
 	llvm::Error emit_array_total_length (MonoIrBuilder &builder);
-	llvm::Error emit_array_dimension (MonoIrBuilder &builder, bool lower_bound);
+	llvm::Error emit_array_dimension (MonoIrBuilder &builder, MonoMethod *accessor,
+	                                  bool lower_bound);
 	llvm::Error emit_string_length (MonoIrBuilder &builder);
 	llvm::Error emit_get_type (MonoIrBuilder &builder, bool receiver_by_reference);
 	llvm::FunctionCallee libm_decl (const char *name, llvm::Type *type, size_t arity);
@@ -1289,6 +1290,14 @@ bool is_intrinsic (MonoMethod *method);
 /// published address really is the C function. The other is an array
 /// accessor, which every call site lowers inline instead.
 MonoMethod *icall_wrapper_target (MonoMethod *method);
+
+/// Whether the translator answers a call to target out of the array it is made
+/// on instead of entering the accessor. sig is the signature the call site was
+/// written against.
+///
+/// A site that names a dimension can still end up as a call: ArrayShapePass
+/// puts back the ones whose dimension it cannot read.
+bool answers_array_shape (MonoMethod *target, MonoMethodSignature *sig);
 
 /// What to emit for a call to method, or nothing when the backend has no
 /// arithmetic for it. sig is the signature the call site was written against.

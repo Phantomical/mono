@@ -1,6 +1,7 @@
 #include "pipelines.hpp"
 #include "arch/arch.hpp"
 #include "passes/array-address.hpp"
+#include "passes/array-shape.hpp"
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init.hpp"
 #include "passes/inline-copies.hpp"
@@ -263,9 +264,21 @@ MonoPassBuilder::buildCommonModuleSimplificationPipeline ()
 	MPM.addPass (llvm::AlwaysInlinerPass (/*InsertLifetime=*/true));
 	MPM.addPass (mono::StripInlineCopiesPass ());
 
+	// A dimension the method's own IL settled, in front of the simplification
+	// that then optimizes the reads this writes.
+	MPM.addPass (mono::ArrayShapePass (/*finalize=*/false));
+
 	auto CommonFPM = buildCommonFunctionSimplificationPipeline ();
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (std::move (CommonFPM),
 	                                                      PTO.EagerlyInvalidateAnalyses));
+
+	/*
+	 * And a dimension that arrived with a fold. The translator gives every
+	 * argument an alloca, so an inlined parameter is a load until SROA has run
+	 * above, whatever the caller passed. Both tiers lower at both points, so a
+	 * body carries the same CFG into the PGO hash whichever tier compiled it.
+	 */
+	MPM.addPass (mono::ArrayShapePass (/*finalize=*/true));
 
 	return MPM;
 }

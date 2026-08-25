@@ -2,8 +2,9 @@
  * Tests for ArrayAddressPass, which turns a `mono.array.address.*` site into a
  * bounds check for each dimension.
  *
- * Pure LLVM: the pass names no mono type, so neither do these. The layout the
- * translator reads off MonoArray is written here by hand.
+ * The pass reads MonoArray's layout out of mono's own headers, so no case here
+ * states it. What each case writes is the rank, the element size and the bounded
+ * flag, which is what the translator puts on the declaration.
  *
  * The cases are about the `!invariant.load` tag on the header reads. A lost
  * tag changes no result managed code can see. It costs each bounds check that
@@ -34,15 +35,9 @@ namespace mono {
 namespace test {
 namespace {
 
-/// The amd64 layout of MonoArray and MonoArrayBounds, which is what the
-/// translator writes on the declaration. The widths are the ones
-/// `MONO_BIG_ARRAYS` leaves undefined, where `mono_array_size_t` is 4 bytes.
-constexpr const char *szarray_spec =
-	"rank=1,size=8,bounded=0,token=1,bounds=16,maxlen=24,maxlen_bytes=4,"
-	"vector=32,stride=8,blen=0,blen_bytes=4,blb=4,blb_bytes=4";
-constexpr const char *rect_spec =
-	"rank=2,size=8,bounded=1,token=1,bounds=16,maxlen=24,maxlen_bytes=4,"
-	"vector=32,stride=8,blen=0,blen_bytes=4,blb=4,blb_bytes=4";
+/// A szarray of eight-byte elements, and a rectangular array of two dimensions.
+constexpr const char *szarray_spec = "rank=1,size=8,bounded=0";
+constexpr const char *rect_spec = "rank=2,size=8,bounded=1";
 
 /// A module holding one address site, either on a szarray or on a rectangular
 /// array with a lower bound.
@@ -57,7 +52,8 @@ struct AddressModule {
 
 		Type *ptr = PointerType::get (*context, 0);
 		Type *i32 = Type::getInt32Ty (*context);
-		std::vector<Type *> params (1 + rank, i32);
+		// The array, one index for each dimension, and the exception token.
+		std::vector<Type *> params (2 + rank, i32);
 
 		params[0] = ptr;
 
@@ -75,9 +71,10 @@ struct AddressModule {
 
 		BasicBlock *entry = BasicBlock::Create (*context, "entry", caller);
 		IRBuilder<> b (entry);
-		std::vector<Value *> args (1 + rank, ConstantInt::get (i32, 3));
+		std::vector<Value *> args (2 + rank, ConstantInt::get (i32, 3));
 
 		args[0] = caller->getArg (0);
+		args[1 + rank] = ConstantInt::get (i32, 1);
 		b.CreateRet (b.CreateCall (decl, args));
 	}
 

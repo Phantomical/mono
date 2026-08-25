@@ -4,7 +4,13 @@ using System.Runtime.CompilerServices;
 
 /*
  * The System.Array shape accessors the compiled tiers answer from the object
- * instead of from an icall: Rank, Length, GetLength (0) and GetLowerBound (0).
+ * instead of from an icall: Rank, Length, GetLength (0), GetLowerBound (0) and
+ * GetUpperBound (0).
+ *
+ * The dimension decides which sites are answered that way, and a caller often
+ * writes it one frame above the accessor. GetUpperBound () and LengthAt () are
+ * the two shapes that put the constant behind a fold, so each answer here has to
+ * hold whether the tier folded the body in or left the call standing.
  *
  * Every receiver here is typed as Array. C# turns `a.Length` on an int[] into
  * ldlen, so a test that holds its arrays in their own type never reaches the
@@ -62,35 +68,48 @@ static class Program {
 	static int FirstLengthOf (Array a) { return a.GetLength (0); }
 	static int FirstLowerBoundOf (Array a) { return a.GetLowerBound (0); }
 
+	/// GetUpperBound () forwards its own parameter to GetLowerBound () and to
+	/// GetLength (), so the literal here is one frame above each of them.
+	static int FirstUpperBoundOf (Array a) { return a.GetUpperBound (0); }
+
+	/// Takes the dimension as a parameter, which is what its callers write a
+	/// literal for.
+	static int LengthAt (Array a, int dimension) { return a.GetLength (dimension); }
+
 	static int[] Sample ()
 	{
 		return new int[] {
-			RankOf (flat), LengthOf (flat),
-			FirstLengthOf (flat), FirstLowerBoundOf (flat),
+			RankOf (flat), LengthOf (flat), FirstLengthOf (flat),
+			FirstLowerBoundOf (flat), FirstUpperBoundOf (flat),
 
-			RankOf (square), LengthOf (square),
-			FirstLengthOf (square), FirstLowerBoundOf (square),
+			RankOf (square), LengthOf (square), FirstLengthOf (square),
+			FirstLowerBoundOf (square), FirstUpperBoundOf (square),
 
-			RankOf (bounded), LengthOf (bounded),
-			FirstLengthOf (bounded), FirstLowerBoundOf (bounded),
+			RankOf (bounded), LengthOf (bounded), FirstLengthOf (bounded),
+			FirstLowerBoundOf (bounded), FirstUpperBoundOf (bounded),
 
-			RankOf (empty), LengthOf (empty),
-			FirstLengthOf (empty), FirstLowerBoundOf (empty),
+			RankOf (empty), LengthOf (empty), FirstLengthOf (empty),
+			FirstLowerBoundOf (empty), FirstUpperBoundOf (empty),
 
-			// Dimension one is a constant the emitters decline, and a
-			// dimension out of a field is one they cannot see. Both keep
+			// Dimension one is a constant the pass declines, and a
+			// dimension out of a field is one it cannot read. Both keep
 			// the call, and both have to agree with the rest.
 			square.GetLength (1), square.GetLowerBound (1),
 			flat.GetLength (dimension), flat.GetLowerBound (dimension),
+
+			// The same two answers with the literal a frame above the
+			// accessor.
+			LengthAt (flat, 0), LengthAt (square, 1),
 		};
 	}
 
 	static readonly int[] pinned = new int[] {
-		1, 7, 7, 0,
-		2, 6, 2, 0,
-		1, 4, 4, 5,
-		1, 0, 0, 0,
+		1, 7, 7, 0, 6,
+		2, 6, 2, 0, 1,
+		1, 4, 4, 5, 8,
+		1, 0, 0, 0, -1,
 		3, 0, 7, 0,
+		7, 3,
 	};
 
 	static void Pinned (string tier)
@@ -115,6 +134,8 @@ static class Program {
 		Raises (tier + " Length", delegate { LengthOf (nothing); });
 		Raises (tier + " GetLength (0)", delegate { FirstLengthOf (nothing); });
 		Raises (tier + " GetLowerBound (0)", delegate { FirstLowerBoundOf (nothing); });
+		Raises (tier + " GetUpperBound (0)", delegate { FirstUpperBoundOf (nothing); });
+		Raises (tier + " GetLength (d)", delegate { LengthAt (nothing, 0); });
 	}
 
 	static void Raises (string what, Action body)
@@ -153,7 +174,8 @@ static class Program {
 	}
 
 	static readonly string[] compiled = new string[] {
-		"Sample", "RankOf", "LengthOf", "FirstLengthOf", "FirstLowerBoundOf", "Copy"
+		"Sample", "RankOf", "LengthOf", "FirstLengthOf", "FirstLowerBoundOf",
+		"FirstUpperBoundOf", "LengthAt", "Copy"
 	};
 
 	static bool PromoteAll (int tier)
