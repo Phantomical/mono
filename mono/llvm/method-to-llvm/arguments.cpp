@@ -116,6 +116,7 @@ MethodLLVMEmitter::emit_ldarga (MonoIrBuilder &builder, uint32_t index)
 
 	// The alloca already uses the argument's natural alignment. That is
 	// the alignment ldarga's address must have.
+	trusted_byrefs.insert (argument.alloca);
 	push_stack (argument.alloca, m_class_get_this_arg (klass));
 	return llvm::Error::success ();
 }

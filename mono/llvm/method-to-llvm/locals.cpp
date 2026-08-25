@@ -140,6 +140,7 @@ MethodLLVMEmitter::emit_ldloca (MonoIrBuilder &builder, uint32_t index)
 	// The alloca already uses the local's natural alignment. A class's
 	// this_arg is byval_arg with byref set, which is the managed pointer
 	// ldloca must push.
+	trusted_byrefs.insert (local.alloca);
 	push_stack (local.alloca, m_class_get_this_arg (klass));
 	return llvm::Error::success ();
 }

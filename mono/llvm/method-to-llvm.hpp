@@ -137,37 +137,61 @@ enum StackType { Int32, Int64, NativeInt, Float, ManagedPtr, ObjectRef, Invalid 
 
 constexpr size_t STACK_TYPE_COUNT = ObjectRef + 1;
 
-/// Whether a managed access carries a `!tbaa` tag.
+/// What a managed access tells the `!tbaa` tree about the slot it reaches.
+/// tbaa_tag () turns one of these into a tag, and documents the tree.
 ///
-/// A `!tbaa` tag claims two accesses cannot touch one slot. ECMA-335 has no
-/// strict-aliasing rule at all: I.12.6.1 calls the memory store "simply an
-/// array of bytes", and I.12.6.4 gives only the as-if rule. So a tag has to
-/// rest on what valid CIL cannot express, never on two static types being
-/// different.
+/// A `!tbaa` tag claims two accesses cannot touch one slot. ECMA-335 gives no
+/// warrant for such a claim: I.12.6.1 calls the memory store "simply an array
+/// of bytes", I.12.6.4 gives only the as-if rule, and I.8.8 calls unverifiable
+/// code valid code. So a tag rests on an invariant the runtime enforces, or on
+/// a documented contract, and never on two static types being different.
 ///
-/// Three passages take away the obvious trees. II.10.7 lets `[FieldOffset]`
-/// put two value-typed fields at one offset, so a class for each scalar width
-/// is out. I.8.7.1 makes `array-element-compatible-with` "agnostic with
-/// respect to enumerations and integral signed-ness" and gives array
-/// covariance, so a class for each element type is out. `Unsafe.As<TFrom,TTo>
-/// ()` hands out a reference of one class to another class's storage, which
-/// our class libraries do, so a class for each declaring class is out.
+/// Two of those carry the fine tags. II.10.7 says "offsets occupied by an
+/// object reference shall not overlap with offsets occupied by a built-in value
+/// type", which mono_class_layout_fields () enforces at type load
+/// (mono/metadata/class-init.c). And `Unsafe.As<T> (object)` is documented to
+/// be well defined only where the cast `(T) o` would have succeeded, which is
+/// what lets an object reference's static type describe its storage.
 ///
-/// What is left is the split the collector already forces. II.10.7 says
-/// "offsets occupied by an object reference shall not overlap with offsets
-/// occupied by a built-in value type". SGen's reference bitmap needs the same:
-/// a slot it scans as a pointer cannot also hold a `double`.
-/// mono_class_layout_fields () rejects a type that breaks the rule
-/// (mono/metadata/class-init.c).
-enum class ManagedAccess {
-	/// The access gets no tag, so LLVM keeps it aliasing everything. This is
-	/// what every opcode that reaches memory through a raw address takes.
-	/// `Unsafe.As ()`, `MemoryMarshal.Cast ()` and `Span<T>` all arrive that
-	/// way, and each reads one slot under a type its storage does not have.
-	untagged,
-	/// The opcode names the field or the element it reaches, so the location's
-	/// type describes the storage and the slot's leaf follows from it.
-	typed,
+/// `Unsafe.As<TFrom,TTo> (ref)` carries the opposite contract. It is documented
+/// as a reinterpret_cast, and our class libraries write one field's storage
+/// through a second field with it. So a managed pointer describes its storage
+/// only where this translation gave it its type, which trusted_byrefs records.
+struct ManagedAccess {
+	enum class Kind {
+		/// No tag, so LLVM keeps the access aliasing everything. Every opcode
+		/// that reaches memory through a raw address takes this.
+		/// `Unsafe.As ()`, `MemoryMarshal.Cast ()` and `Span<T>` arrive that
+		/// way, and each reads one slot under a type its storage does not have.
+		untagged,
+		/// The reference or the scalar leaf, which is all we can say about a
+		/// slot whose type we cannot place.
+		typed,
+		/// A field of a type whose layout LLVM can be given.
+		field,
+		/// A whole element of an array, which the element type places.
+		element,
+	};
+
+	Kind kind = Kind::untagged;
+	/// The field, when kind is field.
+	MonoClassField *field = nullptr;
+	/// The element type and the array's rank, when kind is element.
+	MonoType *element = nullptr;
+	int rank = 0;
+
+	static ManagedAccess untagged () { return ManagedAccess (); }
+	static ManagedAccess typed () { return { Kind::typed }; }
+
+	static ManagedAccess of_field (MonoClassField *field)
+	{
+		return { Kind::field, field };
+	}
+
+	static ManagedAccess of_element (MonoType *element, int rank)
+	{
+		return { Kind::element, nullptr, element, rank };
+	}
 };
 
 /// The type a conv instruction converts to, from the opcode tables in ECMA-335
@@ -393,6 +417,22 @@ private:
 	/// a devirtualization or an array store's covariance test, and never
 	/// correctness.
 	llvm::DenseSet<llvm::Value *> allocated_here;
+
+	/// The managed pointers this body gave a type to, from ldelema, ldflda,
+	/// ldloca, ldarga or an array Address accessor. A field access through one
+	/// of these reaches the field its token names.
+	///
+	/// A managed pointer that arrived as an argument or came back from a call
+	/// is not in here, because its type is what a caller asserted, and
+	/// `Unsafe.As<TFrom,TTo> (ref)` is documented to let a caller assert
+	/// anything. That is what keeps Volatile.Write on the coarse leaf.
+	///
+	/// A value that reached its use through a spill is not in here either,
+	/// which costs a tag and never correctness.
+	llvm::DenseSet<llvm::Value *> trusted_byrefs;
+
+	/// The `!tbaa` descriptor each class got, or null where its fields overlap.
+	llvm::DenseMap<MonoClass *, llvm::MDNode *> type_descriptors;
 
 	/// This frame's LMF and where the thread's chain head lives.
 	///
@@ -669,7 +709,7 @@ private:
 	/// Push what a location of type t holds at address, as the CLI tracks it.
 	llvm::Error push_from_location (MonoIrBuilder &builder, llvm::Value *address,
 	                                MonoType *t, bool native = false,
-	                                ManagedAccess access = ManagedAccess::untagged);
+	                                ManagedAccess access = ManagedAccess::untagged ());
 
 	/// Push value, which was produced in t's own LLVM type, as the CLI tracks it.
 	llvm::Error push_produced (MonoIrBuilder &builder, llvm::Value *value, MonoType *t,
@@ -722,12 +762,17 @@ private:
 	bool can_access_atomically (llvm::Type *type, llvm::Align align);
 	llvm::Value *emit_memory_load (MonoIrBuilder &builder, llvm::Type *type,
 	                               llvm::Value *address, MonoType *location,
-	                               ManagedAccess access = ManagedAccess::untagged);
+	                               ManagedAccess access = ManagedAccess::untagged ());
 	llvm::Error emit_memory_store (MonoIrBuilder &builder, llvm::Value *value,
 	                        llvm::Value *address, MonoType *location,
-	                        ManagedAccess access = ManagedAccess::untagged);
+	                        ManagedAccess access = ManagedAccess::untagged ());
 
-	llvm::MDNode *tbaa_tag (ManagedAccess access, bool is_reference);
+	ManagedAccess field_access (const StackValue &object, MonoClassField *field);
+	llvm::MDNode *tbaa_tag (const ManagedAccess &access, bool is_reference);
+	llvm::MDNode *type_descriptor (MonoClass *klass);
+	llvm::MDNode *tbaa_scalar_node (MonoType *t);
+	llvm::MDNode *tbaa_coarse_scalar_node ();
+	std::string tbaa_scalar_name (MonoType *t);
 
 	llvm::Expected<Flow> decode_flow (size_t at);
 	llvm::Error find_block_leaders ();
@@ -907,7 +952,7 @@ private:
 	llvm::FunctionCallee wbarrier_decl ();
 	void emit_reference_store (MonoIrBuilder &builder, llvm::Value *address,
 	                           llvm::Value *value, llvm::Align align,
-	                           ManagedAccess access = ManagedAccess::untagged);
+	                           ManagedAccess access = ManagedAccess::untagged ());
 	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static,
 	                                                bool *out_is_static = nullptr);
 	llvm::Constant *extern_symbol (const std::string &name);

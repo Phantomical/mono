@@ -244,31 +244,6 @@ MethodLLVMEmitter::can_access_atomically (llvm::Type *type, llvm::Align align)
 	       && bits <= host_max_atomic_bits (*function) && bits <= align.value () * 8;
 }
 
-/// Builds the tag for one managed access, or null for ManagedAccess::untagged.
-///
-/// is_reference selects the leaf, and it must be what mini_type_is_reference ()
-/// says of the slot being read or written.
-///
-/// The leaves are siblings, so LLVM reads a reference access and a scalar one
-/// as disjoint and everything else as may-alias. An untagged access aliases
-/// both, which is what lets this tag one opcode and leave the next alone.
-///
-/// LLVM uniques an MDNode on its operands within the context, so every method
-/// of a batch gets the same tree. The module needs no record of one.
-llvm::MDNode *
-MethodLLVMEmitter::tbaa_tag (ManagedAccess access, bool is_reference)
-{
-	if (access == ManagedAccess::untagged)
-		return nullptr;
-
-	llvm::MDBuilder md (context ());
-	llvm::MDNode *root = md.createTBAARoot ("mono managed memory");
-	const char *name = is_reference ? "mono managed reference" : "mono managed scalar";
-	llvm::MDNode *leaf = md.createTBAANode (name, root);
-
-	return md.createTBAAStructTagNode (leaf, leaf, 0);
-}
-
 llvm::Value *
 MethodLLVMEmitter::emit_memory_load (MonoIrBuilder &builder, llvm::Type *type, llvm::Value *address,
                                      MonoType *location, ManagedAccess access)

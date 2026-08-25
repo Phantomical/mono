@@ -241,6 +241,7 @@ set(MONO_TESTS_CS_SRC
   tier2-inline-override.cs
   tbaa-aliasing.cs
   tbaa-explicit-overlap.cs
+  tbaa-field-aliasing.cs
   math-intrinsics.cs
   buffer-copy-intrinsics.cs
   implicit-null-checks.cs

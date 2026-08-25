@@ -337,6 +337,7 @@ MethodLLVMEmitter::emit_ldelema (MonoIrBuilder &builder, uint32_t token)
 		return address.takeError ();
 
 	pop_stack (2);
+	trusted_byrefs.insert (*address);
 	push_stack (*address, m_class_get_this_arg (klass));
 	return llvm::Error::success ();
 }
@@ -408,7 +409,7 @@ MethodLLVMEmitter::emit_ldelem (MonoIrBuilder &builder, MonoType *element)
 
 	pop_stack (2);
 	return push_from_location (builder, *address, element, /*native=*/false,
-	                           ManagedAccess::typed);
+	                           ManagedAccess::of_element (element, 1));
 }
 
 namespace {
@@ -707,8 +708,8 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 		return address.takeError ();
 
 	pop_stack (3);
-	if (llvm::Error stored =
-		    emit_memory_store (builder, *value, *address, element, ManagedAccess::typed))
+	if (llvm::Error stored = emit_memory_store (builder, *value, *address, element,
+	                                            ManagedAccess::of_element (element, 1)))
 		return stored;
 	return llvm::Error::success ();
 }
@@ -854,13 +855,16 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 	pop_stack (depth);
 
 	if (is_set) {
-		if (llvm::Error stored = emit_memory_store (builder, value, *address, element,
-		                                            ManagedAccess::typed))
+		if (llvm::Error stored = emit_memory_store (
+			    builder, value, *address, element,
+			    ManagedAccess::of_element (element, m_class_get_rank (accessor->klass))))
 			return stored;
 	} else if (what == "Get") {
-		return push_from_location (builder, *address, element, /*native=*/false,
-		                           ManagedAccess::typed);
+		return push_from_location (
+			builder, *address, element, /*native=*/false,
+			ManagedAccess::of_element (element, m_class_get_rank (accessor->klass)));
 	} else {
+		trusted_byrefs.insert (*address);
 		push_stack (*address, m_class_get_this_arg (eclass));
 	}
 	return llvm::Error::success ();

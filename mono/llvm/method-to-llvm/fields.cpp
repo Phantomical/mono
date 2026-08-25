@@ -440,6 +440,30 @@ MethodLLVMEmitter::push_field_wrapper_operands (MonoIrBuilder &builder,
 	push_stack (builder.getInt64 (m_field_get_offset (field)), nint);
 }
 
+/// What a field access through this receiver can claim about the slot it
+/// reaches.
+///
+/// field_address () takes the offset from the token alone and never asks
+/// whether the receiver agrees with it. That is right for addressing, because a
+/// receiver reaching the wrong storage is the caller's error. It is not enough
+/// for a `!tbaa` tag, which claims some *other* access cannot reach that
+/// storage.
+///
+/// An object reference describes its storage: `Unsafe.As<T> (object)` is
+/// documented to be well defined only where the cast `(T) o` would have
+/// succeeded. A managed pointer does not, because `Unsafe.As<TFrom,TTo> (ref)`
+/// is documented as a reinterpret_cast and our class libraries use it to write
+/// one field's storage through a second field. So a managed pointer counts only
+/// where this body gave it its type.
+ManagedAccess
+MethodLLVMEmitter::field_access (const StackValue &object, MonoClassField *field)
+{
+	if (stack_type (object.type) == ObjectRef || trusted_byrefs.count (object.value) != 0)
+		return ManagedAccess::of_field (field);
+
+	return ManagedAccess::typed ();
+}
+
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
                                   MonoClassField *field, bool null_check)
@@ -625,16 +649,17 @@ MethodLLVMEmitter::emit_ldfld (MonoIrBuilder &builder, uint32_t token)
 
 		pop_stack (1);
 		return push_from_location (builder, address, ftype, /*native=*/false,
-		                           ManagedAccess::typed);
+		                           ManagedAccess::of_field (*field));
 	}
 
 	llvm::Expected<llvm::Value *> address = field_address (builder, object, *field);
 	if (!address)
 		return address.takeError ();
 
+	ManagedAccess access = field_access (object, *field);
+
 	pop_stack (1);
-	return push_from_location (builder, *address, ftype, /*native=*/false,
-	                           ManagedAccess::typed);
+	return push_from_location (builder, *address, ftype, /*native=*/false, access);
 }
 
 /*
@@ -752,6 +777,8 @@ MethodLLVMEmitter::emit_ldflda (MonoIrBuilder &builder, uint32_t token)
 			: m_class_get_this_arg (mono_class_from_mono_type_internal (ftype));
 
 	pop_stack (1);
+	if (m_class_is_valuetype (mono_class_from_mono_type_internal (ftype)))
+		trusted_byrefs.insert (*address);
 	push_stack (*address, pushed);
 	return llvm::Error::success ();
 }
@@ -850,13 +877,15 @@ MethodLLVMEmitter::emit_stfld (MonoIrBuilder &builder, uint32_t token)
 	if (!value)
 		return value.takeError ();
 
-	llvm::Expected<llvm::Value *> address = field_address (builder, get_stack (1), *field);
+	StackValue object = get_stack (1);
+	llvm::Expected<llvm::Value *> address = field_address (builder, object, *field);
 	if (!address)
 		return address.takeError ();
 
+	ManagedAccess access = field_access (object, *field);
+
 	pop_stack (2);
-	if (llvm::Error stored =
-		    emit_memory_store (builder, *value, *address, ftype, ManagedAccess::typed))
+	if (llvm::Error stored = emit_memory_store (builder, *value, *address, ftype, access))
 		return stored;
 	return llvm::Error::success ();
 }
@@ -911,7 +940,7 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 		return address.takeError ();
 
 	return push_from_location (builder, *address, ftype, /*native=*/false,
-	                           ManagedAccess::typed);
+	                           ManagedAccess::typed ());
 }
 
 /*
@@ -1042,7 +1071,7 @@ MethodLLVMEmitter::emit_stsfld (MonoIrBuilder &builder, uint32_t token)
 
 	pop_stack (1);
 	if (llvm::Error stored =
-		    emit_memory_store (builder, *value, *address, ftype, ManagedAccess::typed))
+		    emit_memory_store (builder, *value, *address, ftype, ManagedAccess::typed ()))
 		return stored;
 	return llvm::Error::success ();
 }
