@@ -62,6 +62,13 @@ Combine: MonoDefaults, GENERATE_GET_CLASS_WITH_CACHE, TYPED_HANDLE_DECL and frie
  * chunk should be updated before an object is written into the
  * handle, and chunks to be scanned (between bottom and top) should
  * always be valid.
+ *
+ * Each of those orders is one store against a later store, so
+ * STORE_STORE_FENCE is what they need. Both readers of another thread's
+ * handle stack, sgen_client_scan_thread_data () and report_stack_roots (),
+ * run inside the stop-the-world walk, so neither reads a thread that is
+ * still running. On x86 the fence is a compiler barrier and costs no
+ * instruction. On a weak target it stays a real barrier.
  */
 
 static HandleStack*
@@ -188,16 +195,16 @@ retry:
 		*objslot = NULL;
 		SET_OWNER (top,idx);
 		SET_SP (handles, top, idx);
-		mono_memory_write_barrier ();
+		STORE_STORE_FENCE;
 		top->size++;
-		mono_memory_write_barrier ();
+		STORE_STORE_FENCE;
 		*objslot = obj;
 		return objslot;
 	}
 	if (G_LIKELY (top->next)) {
 		top->next->size = 0;
 		/* make sure size == 0 is visible to a GC thread before it sees the new top */
-		mono_memory_write_barrier ();
+		STORE_STORE_FENCE;
 		top = top->next;
 		handles->top = top;
 		goto retry;
@@ -207,7 +214,7 @@ retry:
 	new_chunk->prev = top;
 	new_chunk->next = NULL;
 	/* make sure size == 0 before new chunk is visible */
-	mono_memory_write_barrier ();
+	STORE_STORE_FENCE;
 	top->next = new_chunk;
 	handles->top = new_chunk;
 	goto retry;
@@ -221,7 +228,7 @@ mono_handle_stack_alloc (void)
 
 	chunk->prev = chunk->next = NULL;
 	chunk->size = 0;
-	mono_memory_write_barrier ();
+	STORE_STORE_FENCE;
 	stack->top = stack->bottom = chunk;
 #ifdef MONO_HANDLE_TRACK_SP
 	stack->stackmark_sp = NULL;
@@ -236,7 +243,7 @@ mono_handle_stack_free (HandleStack *stack)
 		return;
 	HandleChunk *c = stack->bottom;
 	stack->top = stack->bottom = NULL;
-	mono_memory_write_barrier ();
+	STORE_STORE_FENCE;
 	while (c) {
 		HandleChunk *next = c->next;
 		free_handle_chunk (c);

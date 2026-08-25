@@ -21,6 +21,7 @@
 #include <mono/metadata/object.h>
 #include <mono/metadata/class.h>
 #include <mono/utils/mono-error-internals.h>
+#include <mono/utils/mono-memory-model.h>
 #include <mono/utils/mono-threads.h>
 #include <mono/utils/checked-build.h>
 #include <mono/metadata/class-internals.h>
@@ -165,10 +166,10 @@ mono_stack_mark_pop (MonoThreadInfo *info, HandleStackMark *stackmark)
 	HandleStack *handles = info->handle_stack;
 	HandleChunk *old_top = stackmark->chunk;
 	old_top->size = stackmark->size;
-	mono_memory_write_barrier ();
+	STORE_STORE_FENCE;
 	handles->top = old_top;
 #ifdef MONO_HANDLE_TRACK_SP
-	mono_memory_write_barrier (); /* write to top before prev_sp */
+	STORE_STORE_FENCE; /* write to top before prev_sp */
 	handles->stackmark_sp = stackmark->prev_sp;
 #endif
 }
