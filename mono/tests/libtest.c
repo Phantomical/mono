@@ -8677,6 +8677,34 @@ mono_test_handleref_mid (void *a, void *b, void *c, int d, float e)
 
 #undef CHECK_ARG
 
+/*
+ * What a native callee finds in the register a narrow argument arrives in.
+ *
+ * The psABI makes the caller fill the high bits of a char, bool or short
+ * argument, and a C callee can then read the whole register. clang does once
+ * it optimizes: it compiles a comparison against an unsigned short parameter
+ * to `cmp edi, 67` rather than `cmp di, 67`. At -O0 it loads the parameter
+ * again, so the high bits never reach the compare. gcc extends the value in
+ * the callee whatever the level. So a dirty high half is a wrong answer under
+ * some compilers and some builds, and the caller knows neither.
+ *
+ * The parameter below is wider than the managed declaration states. That
+ * mismatch is the measurement: the pair reports the bits the caller left,
+ * rather than an answer that only some compilers get wrong. Do not make the
+ * two types agree.
+ */
+LIBTEST_API int STDCALL
+mono_test_narrow_arg_register (unsigned int arg)
+{
+	return (int) arg;
+}
+
+LIBTEST_API int STDCALL
+mono_test_narrow_arg_register_second (void *first, unsigned int arg)
+{
+	return (int) arg;
+}
+
 #ifdef __cplusplus
 } // extern C
 #endif

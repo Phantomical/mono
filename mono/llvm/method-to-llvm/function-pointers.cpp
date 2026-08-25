@@ -475,14 +475,16 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		at = hidden_return_index ((*type)->getNumParams ());
 	}
 
-	// A managed body reads a narrow argument the way its own declaration
-	// promises, and this site names no declaration to take that promise from.
+	// This site names no callee, so LLVM has no declaration to take the
+	// promise from. Both ends it reaches want one. A managed body reads a
+	// narrow argument the way its own declaration states. A C body reads it
+	// the way the psABI does, which asks the caller for the same fill.
+	// MonoAbiPass keeps a scalar's attributes when it lowers the site.
 	auto describe_site = [&] (llvm::CallBase *site) {
-		if (sig->pinvoke == 0)
-			carry_parameter_extensions (site, sig,
-			                            hidden != nullptr
-			                                    ? at
-			                                    : (*type)->getNumParams ());
+		carry_parameter_extensions (site, sig,
+		                            hidden != nullptr
+		                                    ? at
+		                                    : (*type)->getNumParams ());
 	};
 
 	llvm::Value *result = emit_protected_call (

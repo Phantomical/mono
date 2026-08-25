@@ -240,6 +240,7 @@ set(MONO_TESTS_CS_SRC
   trivial-inline.cs
   tier2-inline-override.cs
   tier2-narrow-arg.cs
+  pinvoke-narrow-arg.cs
   tbaa-aliasing.cs
   tbaa-explicit-overlap.cs
   tbaa-field-aliasing.cs
