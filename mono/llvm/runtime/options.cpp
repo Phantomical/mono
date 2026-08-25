@@ -258,6 +258,32 @@ inline_write_barrier ()
 	return on;
 }
 
+llvm::FastMathFlags
+relaxed_float_flags ()
+{
+	static llvm::FastMathFlags flags = [] {
+		llvm::FastMathFlags relaxed;
+
+		if (!mono_use_fast_math)
+			return relaxed;
+
+		// Each of these gives back a value the operation did not compute, and
+		// each is what one of the transforms --ffast-math is asked for needs.
+		// nnan and ninf are left out: ECMA-335 I.12.1.3 makes a NaN or an
+		// infinity the answer an ordinary operation gives, and ckfinite is how
+		// a program tests for one.
+		relaxed.setAllowReassoc ();
+		relaxed.setNoSignedZeros ();
+		relaxed.setAllowReciprocal ();
+		relaxed.setAllowContract ();
+		relaxed.setApproxFunc ();
+
+		return relaxed;
+	}();
+
+	return flags;
+}
+
 /*
  * A tier-1 body spends one counter and asks for tier 2 when it runs out. The
  * counter is charged for the work the body does, one unit for each instruction

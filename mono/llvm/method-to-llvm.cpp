@@ -22,6 +22,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/MDBuilder.h>
+#include <llvm/IR/Operator.h>
 #include <llvm/IR/Type.h>
 #include <llvm/ADT/ScopeExit.h>
 #include <llvm/Support/ErrorHandling.h>
@@ -212,6 +213,27 @@ MethodLLVMEmitter::widen_to_stack (MonoIrBuilder &builder, llvm::Value *value, M
 	default:
 		return value;
 	}
+}
+
+/// `value` with the flags relaxed_float_flags () asks for, where it is a float
+/// operation that carries them.
+///
+/// Anything else comes back untouched, so a caller can wrap one arm of the ternary
+/// that picks between float and integer arithmetic.
+///
+/// Give this the operations a method's own IL asked for. The arithmetic this backend
+/// writes to lower an opcode is not one of them: `conv.u8` subtracts 2^63 to reach the
+/// low half of the range, and a flag on that subtraction relaxes a step of the
+/// conversion rather than a step of the program.
+llvm::Value *
+MethodLLVMEmitter::relax_float (llvm::Value *value)
+{
+	auto *instruction = llvm::dyn_cast<llvm::Instruction> (value);
+
+	if (instruction != nullptr && llvm::isa<llvm::FPMathOperator> (instruction))
+		instruction->setFastMathFlags (relaxed_float_flags ());
+
+	return value;
 }
 
 MonoType *

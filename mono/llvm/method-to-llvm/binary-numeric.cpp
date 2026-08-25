@@ -426,7 +426,7 @@ MethodLLVMEmitter::emit_add (MonoIrBuilder &builder)
 		llvm::Value *lhs = coerce (builder, value1.value, *type);
 		llvm::Value *rhs = coerce (builder, value2.value, *type);
 
-		sum = (*type)->isFloatingPointTy () ? builder.CreateFAdd (lhs, rhs)
+		sum = (*type)->isFloatingPointTy () ? relax_float (builder.CreateFAdd (lhs, rhs))
 		                                    : builder.CreateAdd (lhs, rhs);
 	}
 
@@ -497,8 +497,9 @@ MethodLLVMEmitter::emit_sub (MonoIrBuilder &builder)
 		llvm::Value *lhs = coerce (builder, value1.value, *type);
 		llvm::Value *rhs = coerce (builder, value2.value, *type);
 
-		difference = (*type)->isFloatingPointTy () ? builder.CreateFSub (lhs, rhs)
-		                                           : builder.CreateSub (lhs, rhs);
+		difference = (*type)->isFloatingPointTy ()
+		                     ? relax_float (builder.CreateFSub (lhs, rhs))
+		                     : builder.CreateSub (lhs, rhs);
 	}
 
 	push_stack (difference, result);
@@ -545,8 +546,9 @@ MethodLLVMEmitter::emit_mul (MonoIrBuilder &builder)
 
 	llvm::Value *lhs = coerce (builder, value1.value, *type);
 	llvm::Value *rhs = coerce (builder, value2.value, *type);
-	llvm::Value *product = (*type)->isFloatingPointTy () ? builder.CreateFMul (lhs, rhs)
-	                                                     : builder.CreateMul (lhs, rhs);
+	llvm::Value *product = (*type)->isFloatingPointTy ()
+	                               ? relax_float (builder.CreateFMul (lhs, rhs))
+	                               : builder.CreateMul (lhs, rhs);
 
 	push_stack (product, result);
 	return llvm::Error::success ();
@@ -689,7 +691,7 @@ MethodLLVMEmitter::emit_div (MonoIrBuilder &builder)
 	llvm::Value *quotient;
 
 	if ((*type)->isFloatingPointTy ()) {
-		quotient = builder.CreateFDiv (lhs, rhs);
+		quotient = relax_float (builder.CreateFDiv (lhs, rhs));
 	} else {
 		// sdiv, not udiv: div.un is a separate instruction with its own table.
 		emit_division_guards (builder, lhs, rhs, true);
@@ -772,7 +774,7 @@ MethodLLVMEmitter::emit_rem (MonoIrBuilder &builder)
 
 	if ((*type)->isFloatingPointTy ()) {
 		// frem is fmod, which truncates toward zero - not IEEERemainder.
-		remainder = builder.CreateFRem (lhs, rhs);
+		remainder = relax_float (builder.CreateFRem (lhs, rhs));
 	} else {
 		emit_division_guards (builder, lhs, rhs, true);
 		remainder = builder.CreateSRem (lhs, rhs);
@@ -1138,8 +1140,9 @@ MethodLLVMEmitter::emit_neg (MonoIrBuilder &builder)
 		return ltype.takeError ();
 
 	llvm::Value *coerced = coerce (builder, value.value, *ltype);
-	llvm::Value *negated = (*ltype)->isFloatingPointTy () ? builder.CreateFNeg (coerced)
-	                                                      : builder.CreateNeg (coerced);
+	llvm::Value *negated = (*ltype)->isFloatingPointTy ()
+	                               ? relax_float (builder.CreateFNeg (coerced))
+	                               : builder.CreateNeg (coerced);
 
 	pop_stack (1);
 	push_stack (negated, result);

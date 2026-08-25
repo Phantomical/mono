@@ -15,6 +15,8 @@
 
 #include "../util/lock.hpp"
 
+#include <llvm/IR/FMF.h>
+
 #include <chrono>
 #include <cstdint>
 #include <mutex>
@@ -106,6 +108,17 @@ bool tier2_enabled ();
 /// compiler marked wrong from a fault the collector has on its own. A collector
 /// that marks no cards takes that path whatever this answers.
 bool inline_write_barrier ();
+
+/// The fast-math flags the float operations a method asks for carry.
+///
+/// Empty unless --ffast-math is on the command line, which is the only way to
+/// leave IEC 60559 here. It never sets nnan or ninf, whatever the rest of the
+/// set is, so a NaN or an infinity a computation produces is still the value
+/// the program reads.
+///
+/// A method under these flags answers differently before and after it promotes,
+/// because the interpreter relaxes nothing.
+llvm::FastMathFlags relaxed_float_flags ();
 
 /// How much a tier-1 body spends before it asks to be compiled again.
 ///

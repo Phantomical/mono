@@ -703,6 +703,7 @@ private:
 	                            llvm::Type *type);
 	static llvm::Value *widen_to_stack (MonoIrBuilder &builder, llvm::Value *value,
 	                                    MonoType *t);
+	static llvm::Value *relax_float (llvm::Value *value);
 	static MonoType *stack_slot_type (MonoType *t);
 
 	/// Whether a value of type t rides the evaluation stack as the address of

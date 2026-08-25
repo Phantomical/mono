@@ -93,8 +93,11 @@ constexpr llvm::Intrinsic::ID no_intrinsic = llvm::Intrinsic::not_intrinsic;
  * when it is a NaN, and the second operand otherwise. Two operands that compare
  * equal therefore give back the second: Max (+0.0, -0.0) is -0.0 and
  * Max (-0.0, +0.0) is +0.0. llvm.maximum answers +0.0 to both, and llvm.maxnum
- * answers the wrong operand for a NaN as well. unity-main takes these two only
- * under mono_use_fast_math, which is the same conclusion.
+ * answers the wrong operand for a NaN as well.
+ *
+ * --ffast-math does not bring them back. relaxed_float_flags () leaves nnan out,
+ * and the NaN operand is half of what these two get wrong. unity-main takes them
+ * under mono_use_fast_math, where the whole set is on.
  *
  * IEEERemainder stays. Its managed body preserves the NaN payload of whichever
  * operand was a NaN, and it calls Math.Round on the quotient. libm remainder is
@@ -275,20 +278,24 @@ MethodLLVMEmitter::emit_math_call (MonoIrBuilder &builder, const MathIntrinsic &
 
 	switch (math.emit) {
 	case MathIntrinsic::Emit::Intrinsic:
-		result = builder.CreateIntrinsic (math.intrinsic, { type }, *args);
+		result = relax_float (builder.CreateIntrinsic (math.intrinsic, { type }, *args));
 		break;
 	case MathIntrinsic::Emit::Remainder:
-		result = builder.CreateFRem ((*args)[0], (*args)[1]);
+		result = relax_float (builder.CreateFRem ((*args)[0], (*args)[1]));
 		break;
 	case MathIntrinsic::Emit::Libm:
-		result = builder.CreateCall (libm_decl (math.libm, type, args->size ()), *args);
+		result = relax_float (
+			builder.CreateCall (libm_decl (math.libm, type, args->size ()), *args));
 		break;
 	case MathIntrinsic::Emit::Modf: {
 		// The pair is the fractional half and then the integral one. The
 		// caller owns the address the integral half goes to. A store through a
 		// bad one faults, which is what the icall's own store did.
-		llvm::Value *halves =
-			builder.CreateIntrinsic (math.intrinsic, { type }, { (*args)[0] });
+		//
+		// relax_float () sets flags on an FPMathOperator alone, so it takes the
+		// intrinsic call. The two extracts below it carry none.
+		llvm::Value *halves = relax_float (
+			builder.CreateIntrinsic (math.intrinsic, { type }, { (*args)[0] }));
 
 		builder.CreateAlignedStore (builder.CreateExtractValue (halves, 1),
 		                            (*args)[1], type_alignment (sig->ret));

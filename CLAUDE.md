@@ -229,9 +229,23 @@ submodules. The `print-versions` target reports which are checked out.
 **The `mono/llvm/` backend is the only JIT.** Every method the runtime compiles goes
 through `mono_llvm_jit_compile_method ()`. A method it cannot translate raises an
 ExecutionEngineException rather than falling back anywhere. `--llvm` and `--nollvm` are
-gone, and mono rejects them like any other unknown option. `--llvm-opt=OPT` is the one
-LLVM-facing flag left, and it forwards `OPT` to LLVM's own command-line parser. Repeat
-it to pass more than one. The AOT compiler refuses immediately.
+gone, and mono rejects them like any other unknown option. Two LLVM-facing flags are
+left. `--llvm-opt=OPT` forwards `OPT` to LLVM's own command-line parser; repeat it to
+pass more than one. The AOT compiler refuses immediately.
+
+`--ffast-math` is the other, and it is the only way to leave IEC 60559 here. It gives
+every float operation a method's own IL asked for the flags `relaxed_float_flags ()`
+(`runtime/options.cpp`) names: `reassoc`, `nsz`, `arcp`, `contract` and `afn`. `nnan`
+and `ninf` are left out, because ECMA-335 I.12.1.3 makes a NaN and the two infinities
+the answer an ordinary operation gives. Off by default, and off is the conforming
+setting — task #234 and `.claude/handoff/float-strictness/` hold why no flag can be a
+default. Three things follow from asking for it, and each is visible in one run:
+- The interpreter relaxes nothing, so a method's answer changes when it promotes out
+  of tier 0.
+- Tier 1 selects with FastISel, which does not fuse, so a multiply-add contracts at
+  tier 2 and not before.
+- The arithmetic this backend writes to lower an opcode keeps strict semantics,
+  because only the operations the IL asked for carry the flags.
 
 Each variable below is declared in `runtime/options.cpp` unless named otherwise, and
 each is documented at its declaration.
