@@ -217,21 +217,22 @@ MonoBackend::register_exit_teardown ()
 	std::call_once (once, [] {
 		atexit ([] {
 			/*
-			 * Tearing the backend down closes every domain's compile channel,
-			 * and closing one waits for the compiles already running on the
-			 * worker threads to retire. fork () keeps only the thread that
-			 * called it, so in a child those workers do not exist and a
-			 * ticket left in flight at the fork never retires - the wait
-			 * never ends. The crash handler forks exactly like this, so a
-			 * runtime that faults while a background compile is running would
-			 * otherwise leave a child parked here for good.
+			 * fork () keeps only the thread that called it, so a child has
+			 * none of the workers stop_compilation () joins, and that join
+			 * never ends. Only the process that built the engine takes it
+			 * apart.
 			 */
 			if (getpid () != owner_pid)
 				return;
 
-			auto backend = instance;
-			instance = nullptr;
-			delete backend;
+			/*
+			 * The engine is not deleted, and only its compile queue stops.
+			 * The mutators still run at this point, and a mutator compiles
+			 * as well: the finalizer thread compiles the wrapper it invokes
+			 * a finalizer through. A delete here would free mutex_ under
+			 * such a thread, which takes it in MonoBackend::state ().
+			 */
+			stop_compilation ();
 		});
 	});
 }
