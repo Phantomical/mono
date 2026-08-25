@@ -3444,6 +3444,7 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 		gpointer ip;
 		
 		if (resume_state) {
+			frame = resume_state->frame;
 			ji = resume_state->ji;
 			new_ctx = resume_state->new_ctx;
 			clause_index_start = resume_state->clause_index;
@@ -3696,6 +3697,7 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 						state->lmf = lmf;
 						state->first_filter_idx = first_filter_idx;
 						state->filter_idx = filter_idx;
+						state->frame = frame;
 						mini_set_abort_threshold (&frame);
 						MONO_CONTEXT_SET_IP (ctx, ei->handler_start);
 						return 0;
