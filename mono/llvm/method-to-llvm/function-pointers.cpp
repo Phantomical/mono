@@ -271,7 +271,14 @@ MethodLLVMEmitter::emit_dynamic_native_calli (MonoIrBuilder &builder,
 	}
 
 	llvm::Value *result = emit_protected_call (
-		builder, llvm::FunctionCallee (*type, wrapper), *args, {}, hidden, at);
+		builder, llvm::FunctionCallee (*type, wrapper), *args,
+		[&] (llvm::CallBase *site) {
+			carry_parameter_extensions (site, sig,
+			                            hidden != nullptr
+			                                    ? at
+			                                    : (*type)->getNumParams ());
+		},
+		hidden, at);
 
 	pop_stack (sig->param_count);
 
@@ -468,8 +475,18 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		at = hidden_return_index ((*type)->getNumParams ());
 	}
 
+	// A managed body reads a narrow argument the way its own declaration
+	// promises, and this site names no declaration to take that promise from.
+	auto describe_site = [&] (llvm::CallBase *site) {
+		if (sig->pinvoke == 0)
+			carry_parameter_extensions (site, sig,
+			                            hidden != nullptr
+			                                    ? at
+			                                    : (*type)->getNumParams ());
+	};
+
 	llvm::Value *result = emit_protected_call (
-		builder, llvm::FunctionCallee (*type, ftn), *args, {}, hidden, at);
+		builder, llvm::FunctionCallee (*type, ftn), *args, describe_site, hidden, at);
 
 	if (sig->pinvoke != 0)
 		mark_mono_call (llvm::cast<llvm::CallBase> (result));

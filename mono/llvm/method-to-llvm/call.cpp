@@ -1686,6 +1686,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	auto describe_site = [&] (llvm::CallBase *site) {
 		if (keyed)
 			site->addParamAttr (site->arg_size () - 1, llvm::Attribute::Nest);
+		carry_parameter_extensions (site, *declaration);
 	};
 
 	llvm::CallInst::TailCallKind tail_kind =

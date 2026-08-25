@@ -285,6 +285,7 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 	emit_protected_call (builder, run, args, [&] (llvm::CallBase *site) {
 		if (keyed)
 			site->addParamAttr (site->arg_size () - 1, llvm::Attribute::Nest);
+		carry_parameter_extensions (site, *declaration);
 	});
 	pop_stack (count);
 

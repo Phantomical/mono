@@ -239,6 +239,7 @@ set(MONO_TESTS_CS_SRC
   interp-native-detour.cs
   trivial-inline.cs
   tier2-inline-override.cs
+  tier2-narrow-arg.cs
   tbaa-aliasing.cs
   tbaa-explicit-overlap.cs
   tbaa-field-aliasing.cs

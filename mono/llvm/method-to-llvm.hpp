@@ -1247,6 +1247,15 @@ private:
 /// to fill its register, or None for everything else.
 llvm::Attribute::AttrKind integer_extension (MonoType *t);
 
+/// Puts target's narrow-integer extension attributes on call.
+void carry_parameter_extensions (llvm::CallBase *call, const llvm::Function *target);
+
+/// Puts the extensions sig asks for on call, whose hidden return pointer sits at
+/// hidden. Pass the parameter count as hidden where the prototype has no such
+/// pointer.
+void carry_parameter_extensions (llvm::CallBase *call, MonoMethodSignature *sig,
+                                 unsigned hidden);
+
 /// How many bytes of operand an opcode carries, or nothing for a switch, whose
 /// length is in its own operand.
 ///

@@ -300,6 +300,45 @@ integer_extension (MonoType *t)
 	}
 }
 
+/*
+ * A call site must say how it fills a narrow integer's high bits, whatever the
+ * callee's own declaration says.
+ *
+ * LLVM reads the extension off the site, and falls back to the callee's
+ * declaration only where the site names one (llvm::CallBase::paramHasAttr). A
+ * site that dispatches through a slot or a pointer names none. So it leaves the
+ * high bits alone, while the body on the other end reads the whole register and
+ * gets what the caller last put there.
+ */
+
+void
+carry_parameter_extensions (llvm::CallBase *call, const llvm::Function *target)
+{
+	const llvm::AttributeList attrs = target->getAttributes ();
+	unsigned count = std::min<unsigned> (target->arg_size (), call->arg_size ());
+
+	for (unsigned i = 0; i < count; ++i) {
+		if (attrs.hasParamAttr (i, llvm::Attribute::ZExt))
+			call->addParamAttr (i, llvm::Attribute::ZExt);
+		else if (attrs.hasParamAttr (i, llvm::Attribute::SExt))
+			call->addParamAttr (i, llvm::Attribute::SExt);
+	}
+}
+
+/// The form a calli needs, because the body it reaches has no declaration here
+/// to copy from.
+void
+carry_parameter_extensions (llvm::CallBase *call, MonoMethodSignature *sig, unsigned hidden)
+{
+	for (int i = 0; i < sig->param_count; ++i) {
+		llvm::Attribute::AttrKind ext = integer_extension (sig->params[i]);
+		unsigned at = natural_parameter_index (i + sig->hasthis, hidden);
+
+		if (ext != llvm::Attribute::None && at < call->arg_size ())
+			call->addParamAttr (at, ext);
+	}
+}
+
 bool
 is_intrinsic (MonoMethod *method)
 {
