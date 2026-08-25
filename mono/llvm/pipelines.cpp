@@ -39,6 +39,7 @@
 #include <llvm/Transforms/Scalar/SCCP.h>
 #include <llvm/Transforms/Scalar/BDCE.h>
 #include <llvm/Transforms/Scalar/ADCE.h>
+#include <llvm/Transforms/Scalar/Sink.h>
 #include <llvm/Transforms/IPO/Annotation2Metadata.h>
 #include <llvm/Transforms/IPO/ForceFunctionAttrs.h>
 #include <llvm/Transforms/IPO/InferFunctionAttrs.h>
@@ -410,6 +411,19 @@ MonoPassBuilder::buildTier2Pipeline ()
 	                                       buildTier2FunctionSimplificationPipeline ()));
 
 	MPM.addPass (mono::StripInlineCopiesPass ());
+
+	/*
+	 * InstCombine sinks a load only into a block whose unique predecessor is
+	 * the load's own block. It does no alias analysis for the move. So a load
+	 * of one array element's field stays above the next array's bounds check,
+	 * and SLP covers the split with an insertelement gather. SinkingPass asks
+	 * alias analysis instead. LLVM's O3 pipeline does not run it, so this
+	 * extension point puts it in front of the vectorizers.
+	 */
+	registerVectorizerStartEPCallback (
+		[] (llvm::FunctionPassManager &FPM, llvm::OptimizationLevel) {
+			FPM.addPass (llvm::SinkingPass ());
+		});
 
 	MPM.addPass (buildModuleOptimizationPipeline (llvm::OptimizationLevel::O3,
 	                                              llvm::ThinOrFullLTOPhase::None));
