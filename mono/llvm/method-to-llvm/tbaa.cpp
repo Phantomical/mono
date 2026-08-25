@@ -11,6 +11,7 @@
 #include "mono/metadata/class-inlines.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
+#include "mono/metadata/metadata-internals.h"
 #include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Metadata.h>
 
@@ -79,7 +80,8 @@ MethodLLVMEmitter::tbaa_scalar_node (MonoType *t)
 }
 
 /// The descriptor LLVM disambiguates this class's fields with, or null where it
-/// cannot have one.
+/// cannot have one. statics selects the class's static block, which is a
+/// separate allocation from any instance and so gets a descriptor of its own.
 ///
 /// A descriptor asserts that the type is a struct whose members are distinct.
 /// LLVM compares the start offsets of two accesses and never checks that their
@@ -90,24 +92,27 @@ MethodLLVMEmitter::tbaa_scalar_node (MonoType *t)
 ///
 /// So the gate is whether the fields are provably disjoint, which is the walk
 /// that builds the descriptor anyway. II.10.7 lets a `[FieldOffset]` type put
-/// two scalars at one offset, and such a type gets no descriptor at all.
+/// two scalars at one offset, and such a type gets no descriptor at all. A
+/// static block cannot overlap, because `[FieldOffset]` does not reach statics.
 llvm::MDNode *
-MethodLLVMEmitter::type_descriptor (MonoClass *klass)
+MethodLLVMEmitter::type_descriptor (MonoClass *klass, bool statics)
 {
-	auto cached = type_descriptors.find (klass);
+	llvm::DenseMap<MonoClass *, llvm::MDNode *> &cache =
+		statics ? static_descriptors : type_descriptors;
+	auto cached = cache.find (klass);
 
-	if (cached != type_descriptors.end ())
+	if (cached != cache.end ())
 		return cached->second;
 
 	// Claim the slot before walking the fields. A field of this class's own
 	// type would otherwise come back in here without end.
-	type_descriptors [klass] = nullptr;
+	cache [klass] = nullptr;
 
 	std::vector<Member> members;
 	gpointer iter = nullptr;
 
 	while (MonoClassField *field = mono_class_get_fields_internal (klass, &iter)) {
-		if ((mono_field_get_flags (field) & FIELD_ATTRIBUTE_STATIC) != 0)
+		if (((mono_field_get_flags (field) & FIELD_ATTRIBUTE_STATIC) != 0) != statics)
 			continue;
 		if (mono_field_is_deleted (field))
 			continue;
@@ -115,7 +120,10 @@ MethodLLVMEmitter::type_descriptor (MonoClass *klass)
 		MonoType *ftype = mono_field_get_type_internal (field);
 		int32_t offset = static_cast<int32_t> (m_field_get_offset (field));
 
-		if (m_class_is_valuetype (klass))
+		// A static's offset is into the block itself, so there is no header to
+		// discount. field_address () and static_field_address () split the same
+		// way.
+		if (!statics && m_class_is_valuetype (klass))
 			offset -= MONO_ABI_SIZEOF (MonoObject);
 
 		int align = 0;
@@ -150,13 +158,30 @@ MethodLLVMEmitter::type_descriptor (MonoClass *klass)
 	if (fields.empty ())
 		return nullptr;
 
+	/*
+	 * The name is the descriptor's identity, because LLVM uniques an MDNode on
+	 * its operands. Two assemblies can each declare a type of one full name, so
+	 * the assembly goes in front to keep them apart.
+	 *
+	 * This only has to be good enough. Two classes that reach one name and one
+	 * layout share a descriptor, which merges their leaves, and a merged leaf
+	 * costs disambiguation rather than correctness. A class can never reach two
+	 * names, which is the direction that would be wrong.
+	 */
+	MonoImage *image = m_class_get_image (klass);
+	const char *from = image->assembly_name != nullptr ? image->assembly_name : image->name;
 	llvm::MDBuilder md (context ());
-	char *name = mono_type_get_full_name (klass);
+	char *full = mono_type_get_full_name (klass);
+	std::string name = std::string (from != nullptr ? from : "?") + "!" + full;
+
+	if (statics)
+		name += " statics";
+
 	llvm::MDNode *descriptor = md.createTBAAStructTypeNode (name, fields);
 
-	g_free (name);
+	g_free (full);
 
-	type_descriptors [klass] = descriptor;
+	cache [klass] = descriptor;
 
 	return descriptor;
 }
@@ -202,16 +227,26 @@ MethodLLVMEmitter::tbaa_tag (const ManagedAccess &access, bool is_reference)
 		return md.createTBAAStructTagNode (leaf, leaf, 0);
 	}
 
-	// A shared body names the shared form of its declaring class rather than
-	// the instantiation it runs as, so it cannot say which storage it reaches.
-	if (access.kind == ManagedAccess::Kind::field && !depends_on_context (access.field)) {
+	/*
+	 * A shared body names the shared form of its declaring class rather than
+	 * the instantiation it runs as, so it cannot say which storage it reaches.
+	 *
+	 * A special static is left out as well. Its block is per thread or per
+	 * context and static_field_address () asks an icall for the address, so the
+	 * offset the descriptor would record is not the one the block is laid out
+	 * by.
+	 */
+	if (access.kind == ManagedAccess::Kind::field && !depends_on_context (access.field)
+	    && !mono_class_field_is_special_static (access.field)) {
 		MonoClass *parent = access.field->parent;
 		MonoType *ftype = mono_field_get_type_internal (access.field);
+		bool statics =
+			(mono_field_get_flags (access.field) & FIELD_ATTRIBUTE_STATIC) != 0;
 
-		if (llvm::MDNode *descriptor = type_descriptor (parent)) {
+		if (llvm::MDNode *descriptor = type_descriptor (parent, statics)) {
 			int32_t offset = static_cast<int32_t> (m_field_get_offset (access.field));
 
-			if (m_class_is_valuetype (parent))
+			if (!statics && m_class_is_valuetype (parent))
 				offset -= MONO_ABI_SIZEOF (MonoObject);
 
 			return md.createTBAAStructTagNode (descriptor, tbaa_scalar_node (ftype),

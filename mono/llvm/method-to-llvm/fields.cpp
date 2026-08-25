@@ -940,7 +940,7 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 		return address.takeError ();
 
 	return push_from_location (builder, *address, ftype, /*native=*/false,
-	                           ManagedAccess::typed ());
+	                           ManagedAccess::of_field (*field));
 }
 
 /*
@@ -1071,7 +1071,8 @@ MethodLLVMEmitter::emit_stsfld (MonoIrBuilder &builder, uint32_t token)
 
 	pop_stack (1);
 	if (llvm::Error stored =
-		    emit_memory_store (builder, *value, *address, ftype, ManagedAccess::typed ()))
+		    emit_memory_store (builder, *value, *address, ftype,
+		                       ManagedAccess::of_field (*field)))
 		return stored;
 	return llvm::Error::success ();
 }

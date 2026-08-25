@@ -431,8 +431,13 @@ private:
 	/// which costs a tag and never correctness.
 	llvm::DenseSet<llvm::Value *> trusted_byrefs;
 
-	/// The `!tbaa` descriptor each class got, or null where its fields overlap.
+	/// The `!tbaa` descriptor each class got for its instance fields, or null
+	/// where they overlap.
 	llvm::DenseMap<MonoClass *, llvm::MDNode *> type_descriptors;
+
+	/// The same for each class's static block, which is a separate allocation
+	/// and so a separate descriptor.
+	llvm::DenseMap<MonoClass *, llvm::MDNode *> static_descriptors;
 
 	/// This frame's LMF and where the thread's chain head lives.
 	///
@@ -769,7 +774,7 @@ private:
 
 	ManagedAccess field_access (const StackValue &object, MonoClassField *field);
 	llvm::MDNode *tbaa_tag (const ManagedAccess &access, bool is_reference);
-	llvm::MDNode *type_descriptor (MonoClass *klass);
+	llvm::MDNode *type_descriptor (MonoClass *klass, bool statics);
 	llvm::MDNode *tbaa_scalar_node (MonoType *t);
 	llvm::MDNode *tbaa_coarse_scalar_node ();
 	std::string tbaa_scalar_name (MonoType *t);
