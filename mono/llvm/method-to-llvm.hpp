@@ -342,6 +342,10 @@ private:
 		/// A block nothing reaches has no entry stack, so its body is never
 		/// translated.
 		bool reachable = false;
+		/// True once the body reads the entry types. A later edge still stores
+		/// into the slots, and it can no longer widen the type the body ran
+		/// against.
+		bool entry_read = false;
 	};
 
 	/// Where control can go from a single instruction: the offset immediately
@@ -795,7 +799,7 @@ private:
 	std::vector<Slot> spill_stack (MonoIrBuilder &builder);
 	llvm::Error enter_block (MonoIrBuilder &builder, size_t target,
 	                         const std::vector<Slot> &slots);
-	void reload_stack (MonoIrBuilder &builder, const Block &block);
+	void reload_stack (MonoIrBuilder &builder, Block &block);
 
 	int innermost_try (size_t at) const;
 	int innermost_handler (size_t at) const;

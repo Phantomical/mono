@@ -577,6 +577,40 @@ MethodLLVMEmitter::spill_stack (MonoIrBuilder &builder)
 	return slots;
 }
 
+/// The type an object reference has where two paths into a block disagree.
+///
+/// ECMA-335 III.1.8.1.3 makes that type the closest common supertype of the
+/// two. A type parameter, an interface and an array class each answer object
+/// instead. Covariance lets a variable of one array class hold another, and
+/// neither an interface nor a type parameter is on the other's parent chain.
+static MonoType *
+common_object_type (MonoType *left, MonoType *right)
+{
+	MonoType *object = m_class_get_byval_arg (mono_defaults.object_class);
+
+	if (left->type == MONO_TYPE_VAR || left->type == MONO_TYPE_MVAR
+	    || right->type == MONO_TYPE_VAR || right->type == MONO_TYPE_MVAR)
+		return object;
+
+	MonoClass *a = mono_class_from_mono_type_internal (left);
+	MonoClass *b = mono_class_from_mono_type_internal (right);
+
+	if (a == nullptr || b == nullptr)
+		return object;
+	if (a == b)
+		return left;
+	if (m_class_get_rank (a) != 0 || m_class_get_rank (b) != 0
+	    || mono_class_is_interface (a) || mono_class_is_interface (b))
+		return object;
+
+	for (MonoClass *up = a; up != nullptr; up = m_class_get_parent (up))
+		for (MonoClass *other = b; other != nullptr; other = m_class_get_parent (other))
+			if (other == up)
+				return m_class_get_byval_arg (up);
+
+	return object;
+}
+
 /// Record that `target` is entered holding `slots`.
 ///
 /// A conditional branch's two edges spill the same stack once, then each calls this
@@ -632,6 +666,29 @@ MethodLLVMEmitter::enter_block (MonoIrBuilder &builder, size_t target,
 			continue;
 		}
 
+		// Every object reference goes through one slot, so two paths that agree
+		// on the representation are no evidence that they agree on the class.
+		// The class a slot names is an upper bound on what is in it, and
+		// exact_receiver_class () settles a virtual call off a sealed one. So a
+		// slot that keeps the first path's class calls that path's override on
+		// the second path's object.
+		if (stack_type (block.entry[depth].type) == ObjectRef
+		    && stack_type (slots[depth].type) == ObjectRef) {
+			MonoType *merged =
+				common_object_type (block.entry[depth].type, slots[depth].type);
+
+			if (merged != block.entry[depth].type) {
+				// Only a back edge gets here. The translator wrote the body
+				// against the narrower class, and no pass over the stack runs
+				// first to find this edge.
+				if (block.entry_read)
+					return unsupported_il ("a back edge widens the class on the "
+					                       "evaluation stack");
+
+				block.entry[depth].type = merged;
+			}
+		}
+
 		if (block.entry[depth].alloca == slots[depth].alloca)
 			continue;
 
@@ -664,8 +721,10 @@ MethodLLVMEmitter::enter_block (MonoIrBuilder &builder, size_t target,
 }
 
 void
-MethodLLVMEmitter::reload_stack (MonoIrBuilder &builder, const Block &block)
+MethodLLVMEmitter::reload_stack (MonoIrBuilder &builder, Block &block)
 {
+	block.entry_read = true;
+
 	for (const Slot &slot : block.entry)
 		push_stack (builder.CreateLoad (slot.alloca->getAllocatedType (), slot.alloca),
 		            slot.type, slot.native);

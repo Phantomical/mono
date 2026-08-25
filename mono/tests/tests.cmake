@@ -238,6 +238,7 @@ set(MONO_TESTS_CS_SRC
   interp-tier1-promotion.cs
   interp-native-detour.cs
   trivial-inline.cs
+  stack-merge-class.cs
   tier2-inline-override.cs
   tier2-narrow-arg.cs
   pinvoke-narrow-arg.cs
