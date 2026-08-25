@@ -421,6 +421,7 @@ set(MONO_TESTS_CS_SRC
   cctor-init-loop.cs
   cctor-init-race.cs
   cctor-init-instance.cs
+  cctor-init-beforefieldinit.cs
   abort-try-holes.cs
   abort-tests.cs
   thread-native-exit.cs

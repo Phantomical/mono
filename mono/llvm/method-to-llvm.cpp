@@ -733,13 +733,17 @@ MethodLLVMEmitter::seed_handler_entry_stacks (MonoIrBuilder &builder)
 /// Whether entering method is one of the things that runs its class's type
 /// initializer.
 ///
-/// ECMA-335 I.8.9.5 lists what triggers a type initializer that is not marked
-/// beforefieldinit: the first access to a static field of the type, the first
-/// call of a static method of it, the first call of an instance or virtual
-/// method of it *if it is a value type*, and the first call of a constructor
-/// for it. Entering an ordinary instance method of a reference type is not on
-/// the list, and the standard says why: a non-null instance can only come from
-/// a constructor, so the constructor already ran the initializer.
+/// ECMA-335 I.8.9.5 lists what triggers a type initializer. A type marked
+/// beforefieldinit has one trigger, the first access to a static field of the
+/// type, so entering any of its methods is not one and this answers false for
+/// the whole type. Otherwise the triggers are that same static field access,
+/// the first call of a static method of the type, the first call of an instance
+/// or virtual method of it *if it is a value type*, and the first call of a
+/// constructor for it.
+///
+/// So entering an ordinary instance method of a reference type is not a
+/// trigger, and the standard says why: a non-null instance can only come from a
+/// constructor, so the constructor already ran the initializer.
 ///
 /// The two exemptions from that argument are back on the list here. An all-zero
 /// value type needs no constructor. And a constructor is what the argument
@@ -747,11 +751,16 @@ MethodLLVMEmitter::seed_handler_entry_stacks (MonoIrBuilder &builder)
 /// newobj site: the runtime can invoke a constructor with no such site in front
 /// of it.
 ///
-/// Each static field access emits a check of its own, and so does newobj.
+/// What carries the static field trigger is emit_ldsfld (), emit_ldsflda () and
+/// emit_stsfld (), which are the only three that reach the statics block and
+/// each of which checks the field's own parent. newobj emits a check as well.
 static bool
 entry_runs_the_cctor (MonoMethod *method)
 {
 	if (!mono_class_needs_cctor_run (method->klass, method))
+		return false;
+
+	if (mono_class_is_before_field_init (method->klass))
 		return false;
 
 	MonoMethodSignature *signature = mono_method_signature_internal (method);
