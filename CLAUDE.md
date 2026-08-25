@@ -467,12 +467,18 @@ as well as by `amd64.hpp`, so it holds nothing but `#define`s.
   the sweep behind it. `eh-gather` and `finally-range` are `MachineFunctionPass`es that
   emit nothing and instead fill in the side channel the EH sections are written from.
 
-No pass includes a mono header — not one of them, and that is the rule for new ones.
 Where a pass needs something only the front end knew, the front end emits a call to a
 declaration. That declaration's *name* says what the site means (`mono.array.address.*`,
-`mono.builtin.*`) and its attributes carry the numbers. The pass rewrites it into real
-IR before the optimizer runs. Encode the fact in the declaration rather than
-reverse-engineering it from the emitted arithmetic.
+`mono.builtin.*`, `mono.array.shape.*`) and its attributes carry what only the front end
+can say. The pass rewrites it into real IR before the optimizer runs. Encode the fact in
+the declaration rather than reverse-engineering it from the emitted arithmetic.
+
+A pass may include a mono header for what a header already states: a field offset, the
+width of a scalar typedef, a struct's layout. `passes/array-shape.cpp` reads MonoArray
+that way. What travels on the declaration instead is the runtime state behind such a
+fact — a class looked up by name, a metadata token, a parsed signature — and the symbol a
+site falls back to. That split is also what lets a test drive a pass with no runtime under
+it.
 
 A pass that has to *ask* rather than read takes an interface the engine implements.
 `InlineCandidates` (`passes/top-down-inline.hpp`) is the one, because a cost model
