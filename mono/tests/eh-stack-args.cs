@@ -6,19 +6,20 @@ using System.Runtime.CompilerServices;
  * A handler entered in a body that passes arguments on the stack.
  *
  * Nine integer arguments fill the six argument registers and put three on the
- * stack, so a call site has to move rsp for them. Where the compiler moves rsp
- * with pushes, the rsp a call site has is below the rsp the body's handlers and
- * its epilogue are written against, and LLVM records the difference as
- * DW_CFA_GNU_args_size. `.mono_unwind` carries no such rule, so a resume that
- * read the difference from the call site would enter the handler low by it and
- * the epilogue would return through the wrong slot.
+ * stack. Where a call site pushes those three instead, its rsp sits below the
+ * rsp the body's handlers and its epilogue are written against. LLVM records
+ * the difference as DW_CFA_GNU_args_size. `.mono_unwind` carries no such rule,
+ * so a resume that keeps the call site's rsp enters the handler low by it. The
+ * epilogue then returns through the wrong slot.
  *
- * Each root reads a stack argument inside its handler, so an rsp that is low
- * reads the wrong slot and the answer is wrong even where the return survives.
+ * Each of the two methods reads a stack argument inside its handler. The
+ * handler then reads the wrong slot, and the answer is wrong even where the
+ * return survives.
  *
- * Both roots are compiled at tier 2 through Mono.Tiering.MonoTier::PromoteNow.
- * Tier-1 codegen allocates the outgoing arguments in the prologue instead, so
- * tier 2 is the only tier that reaches this.
+ * Both methods are compiled at tier 2 through Mono.Tiering.MonoTier::PromoteNow.
+ * X86CallFrameOptimization is what emits the pushes, and it does not run at
+ * tier 1's CodeGenOptLevel::None. So tier 2 is the only tier that reaches this.
+ * jit.cpp turns the pass off through `no-x86-call-frame-opt`.
  */
 
 namespace Mono.Tiering {

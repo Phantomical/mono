@@ -209,12 +209,15 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 			emit (r.offset, DW_CFA_def_cfa_offset, 0, (int32_t) cfa_offset);
 			break;
 		/*
-		 * DWARF carries the argument bytes for a personality routine that
-		 * adjusts the stack as it unwinds. Mono's unwinder has no opcode
-		 * for it and never calls the personality routine. It sets no CFA
-		 * and no register rule, and the CFA movement around the call
-		 * arrives as its own record, so the description stays complete
-		 * without it.
+		 * DWARF carries the argument bytes a personality routine adds
+		 * back when it resumes into a landing pad. Mono's unwinder has
+		 * no opcode for it and never calls the personality routine, so
+		 * a body whose rsp moves across a call would resume into a pad
+		 * that much too low. jit.cpp keeps rsp still instead, with
+		 * `no-x86-call-frame-opt`.
+		 *
+		 * Unwinding out of the frame does not need the record: the CFA
+		 * movement around a call arrives as its own record.
 		 */
 		case MONO_UNWIND_OP_ARGS_SIZE:
 			break;

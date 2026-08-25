@@ -1437,19 +1437,22 @@ MonoJit::create (CodeArena *arena)
 	 * allocates, instead of pushing them at the call.
 	 *
 	 * X86CallFrameOptimization turns those stores into pushes, so rsp moves
-	 * at each call with arguments the registers did not take. LLVM records
+	 * across a call with arguments the registers did not take. LLVM records
 	 * the movement as DW_CFA_GNU_args_size, which is how much a landing pad
-	 * has to add back. transcode_unwind () (jinfo.cpp) drops that record and
-	 * mono's unwinder has no rule for it, so a resume enters the pad at the
-	 * rsp of the call site. The body then runs an epilogue that is short by
-	 * the pushed bytes, and its ret takes control to whatever sits below the
-	 * return slot.
+	 * has to add back. transcode_unwind () (jinfo.cpp) drops that record,
+	 * and mono's unwinder has no rule for it. A resume therefore enters the
+	 * pad at the rsp of the call site. The body then runs an epilogue that
+	 * is short by the pushed bytes, and its ret takes control to whatever
+	 * sits below the return slot.
 	 *
 	 * Only tier 2 reaches this, because tier-1 codegen runs at
 	 * CodeGenOptLevel::None and the pass does not run there.
 	 *
-	 * LLVM refuses the same pass on Darwin for the same cause: the compact
-	 * unwind encoding cannot carry the record either.
+	 * LLVM's own pass declines per function on Darwin, whose compact unwind
+	 * encoding cannot carry the record either. It declines for a function
+	 * with landing pads, or one with a frameless unwind table. That is the
+	 * narrowing to take if the pushes are ever worth having back.
+	 *
 	 * mono/tests/eh-stack-args.cs is the exerciser.
 	 */
 	default_option ("no-x86-call-frame-opt", true);
