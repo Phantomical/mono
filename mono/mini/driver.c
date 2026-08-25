@@ -1767,6 +1767,7 @@ print_icall_table (void)
 	printf ("[\n{ \"klass\": \"\", \"icalls\": [");
 #define NOHANDLES(inner) inner
 #define HANDLES(id, name, func, ...)	printf ("\t,{ \"name\": \"%s\", \"func\": \"%s_raw\", \"handles\": true }\n", name, #func);
+#define HANDLES_NO_FRAME		HANDLES
 #define HANDLES_REUSE_WRAPPER		HANDLES
 #define MONO_HANDLE_REGISTER_ICALL(...) /* nothing  */
 #define ICALL_TYPE(id,name,first) printf ("]},\n { \"klass\":\"%s\", \"icalls\": [{} ", name);

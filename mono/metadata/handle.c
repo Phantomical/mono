@@ -220,6 +220,20 @@ retry:
 	goto retry;
 }
 
+#ifdef ENABLE_CHECKED_BUILD
+void
+mono_handle_assert_no_handles (HandleStackMark *stackmark, const char *func_name)
+{
+	HandleStack *handles = mono_thread_info_current_fast ()->handle_stack;
+
+	if (handles->top == stackmark->chunk && handles->top->size == stackmark->size)
+		return;
+
+	g_error ("%s is declared to allocate no handle and allocated one. Declare it "
+		 "with HANDLES rather than HANDLES_NO_FRAME.", func_name);
+}
+#endif
+
 HandleStack*
 mono_handle_stack_alloc (void)
 {

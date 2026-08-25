@@ -9949,9 +9949,16 @@ ves_icall_System_Net_NetworkInformation_LinuxNetworkChange_CloseNLSocket (gpoint
 	MONO_HANDLE_DECLARE (id, name, func, ret, nargs, argtypes); \
 	MONO_HANDLE_IMPLEMENT (id, name, func, ret, nargs, argtypes)
 
+// The managed side marshals the arguments of a frameless icall exactly as it
+// does for any other, so only the wrapper's body differs.
+#define HANDLES_NO_FRAME(id, name, func, ret, nargs, argtypes) \
+	MONO_HANDLE_DECLARE (id, name, func, ret, nargs, argtypes); \
+	MONO_HANDLE_IMPLEMENT_NO_FRAME (id, name, func, ret, nargs, argtypes)
+
 #include "metadata/icall-def.h"
 
 #undef HANDLES
+#undef HANDLES_NO_FRAME
 #undef HANDLES_REUSE_WRAPPER
 #undef ICALL_TYPE
 #undef ICALL

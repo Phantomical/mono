@@ -264,6 +264,12 @@ typedef MonoStringHandle MonoStringOutHandle;
 #define MONO_HANDLE_RETURN_END_ICALL_HANDLES_WRAP_NONE   	HANDLE_FUNCTION_RETURN_VAL (icall_result)
 #define MONO_HANDLE_RETURN_END_ICALL_HANDLES_WRAP_OBJ		HANDLE_FUNCTION_RETURN_OBJ (icall_result)
 
+// A frameless icall answers no object, so its result needs no handle. An object
+// return type reaches no definition here and fails the build.
+#define MONO_HANDLE_RETURN_END_NO_FRAME(type)				MONO_HANDLE_DO (MONO_HANDLE_RETURN_END_NO_FRAME_, type);
+#define MONO_HANDLE_RETURN_END_NO_FRAME_Void				/* nothing */
+#define MONO_HANDLE_RETURN_END_NO_FRAME_ICALL_HANDLES_WRAP_NONE		return icall_result
+
 // Convert raw handles to typed handles, just by casting and copying a pointer.
 #define MONO_HANDLE_MARSHAL(type, n)					MONO_HANDLE_DO (MONO_HANDLE_MARSHAL_, type) (type, n)
 #define MONO_HANDLE_MARSHAL_ICALL_HANDLES_WRAP_NONE(type, n)     	a ## n
@@ -458,6 +464,36 @@ MONO_HANDLE_DECLARE_RAW (id, name, func, rettype, n, argtypes)			\
 	mono_error_set_pending_exception (error);				\
 										\
 	MONO_HANDLE_RETURN_END (rettype)					\
+}										\
+
+/*
+ * Implement ves_icall_foo_raw over ves_icall_foo, with no handle frame.
+ *
+ * An icall's argument handles point at volatile locals in the managed frame
+ * (marshal-ilgen.c), so the frame in MONO_HANDLE_IMPLEMENT is there for the
+ * handles the body allocates. A body that allocates none needs no frame, and
+ * pays a thread lookup, three loads, a store and a fence without it.
+ *
+ * Use this only for a body that reaches no MONO_HANDLE_NEW, its own or one
+ * inside anything it calls. A checked build asserts that on each call.
+ */
+#define MONO_HANDLE_IMPLEMENT_NO_FRAME(id, name, func, rettype, n, argtypes)	\
+										\
+MONO_HANDLE_DECLARE_RAW (id, name, func, rettype, n, argtypes)			\
+{										\
+	ERROR_DECL (error);							\
+										\
+	MONO_HANDLE_NO_FRAME_ENTER						\
+										\
+	MONO_HANDLE_RETURN_BEGIN (rettype)					\
+										\
+	func (MONO_HANDLE_CALL_ ## n argtypes MONO_HANDLE_COMMA_ ## n error);	\
+										\
+	mono_error_set_pending_exception (error);				\
+										\
+	MONO_HANDLE_NO_FRAME_LEAVE						\
+										\
+	MONO_HANDLE_RETURN_END_NO_FRAME (rettype)				\
 }										\
 
 // Declare the function that takes/returns raw pointers and no MonoError.

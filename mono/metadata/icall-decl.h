@@ -66,10 +66,12 @@ MONO_BEGIN_DECLS
 #define HANDLES(id, name, func, ret, nargs, argtypes) \
 	MONO_HANDLE_DECLARE_RAW (id, name, func, ret, nargs, argtypes); \
 	MONO_HANDLE_DECLARE (id, name, func, ret, nargs, argtypes);
+#define HANDLES_NO_FRAME(...) HANDLES(__VA_ARGS__)
 #include "icall-def.h"
 #undef ICALL_TYPE
 #undef ICALL
 #undef HANDLES
+#undef HANDLES_NO_FRAME
 #undef HANDLES_REUSE_WRAPPER
 #undef NOHANDLES
 #undef MONO_HANDLE_REGISTER_ICALL

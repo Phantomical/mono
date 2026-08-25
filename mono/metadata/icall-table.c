@@ -42,6 +42,7 @@
 // These definitions are used for multiple includes of icall-def.h and eventually undefined.
 #define NOHANDLES(inner) inner
 #define HANDLES(id, name, func, ...)	ICALL (id, name, func ## _raw)
+#define HANDLES_NO_FRAME		HANDLES
 #define HANDLES_REUSE_WRAPPER		HANDLES
 #define MONO_HANDLE_REGISTER_ICALL(...) /* nothing  */
 
@@ -169,6 +170,7 @@ static const guchar icall_uses_handles [] = {
 };
 
 #undef HANDLES
+#undef HANDLES_NO_FRAME
 #undef HANDLES_REUSE_WRAPPER
 #undef NOHANDLES
 #undef MONO_HANDLE_REGISTER_ICALL

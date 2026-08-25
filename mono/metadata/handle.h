@@ -216,6 +216,24 @@ Icall macros
 	(RESULT) = g_cast (mono_stack_mark_pop_value (__frame_info, &__mark, (HANDLE)));
 #endif
 
+/*
+ * What an icall declared with HANDLES_NO_FRAME promises: that it allocates no
+ * handle, and so needs nothing to pop. A checked build takes the mark it would
+ * have pushed and asserts on the way out that the stack has not moved.
+ */
+#ifdef ENABLE_CHECKED_BUILD
+void mono_handle_assert_no_handles (HandleStackMark *stackmark, const char *func_name);
+
+#define MONO_HANDLE_NO_FRAME_ENTER					\
+	HandleStackMark __no_frame_mark;				\
+	mono_stack_mark_init (mono_thread_info_current_fast (), &__no_frame_mark);
+#define MONO_HANDLE_NO_FRAME_LEAVE					\
+	mono_handle_assert_no_handles (&__no_frame_mark, __FUNCTION__);
+#else
+#define MONO_HANDLE_NO_FRAME_ENTER	/* nothing */
+#define MONO_HANDLE_NO_FRAME_LEAVE	/* nothing */
+#endif
+
 #define HANDLE_FUNCTION_ENTER() do {				\
 	MONO_DISABLE_WARNING(4459) /* declaration of 'identifier' hides global declaration */ \
 	/* There are deliberately locals and a constant NULL global with this same name. */ \
