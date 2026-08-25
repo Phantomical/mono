@@ -243,6 +243,7 @@ set(MONO_TESTS_CS_SRC
   reflection-element-type.cs
   tier2-narrow-arg.cs
   pinvoke-narrow-arg.cs
+  eh-stack-args.cs
   tbaa-aliasing.cs
   tbaa-explicit-overlap.cs
   typeload-field-memberref.cs

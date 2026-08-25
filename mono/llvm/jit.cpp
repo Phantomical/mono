@@ -1433,6 +1433,28 @@ MonoJit::create (CodeArena *arena)
 	default_option ("x86-use-fsrm-for-memcpy", true);
 
 	/*
+	 * Put a call's outgoing stack arguments in the frame the prologue
+	 * allocates, instead of pushing them at the call.
+	 *
+	 * X86CallFrameOptimization turns those stores into pushes, so rsp moves
+	 * at each call with arguments the registers did not take. LLVM records
+	 * the movement as DW_CFA_GNU_args_size, which is how much a landing pad
+	 * has to add back. transcode_unwind () (jinfo.cpp) drops that record and
+	 * mono's unwinder has no rule for it, so a resume enters the pad at the
+	 * rsp of the call site. The body then runs an epilogue that is short by
+	 * the pushed bytes, and its ret takes control to whatever sits below the
+	 * return slot.
+	 *
+	 * Only tier 2 reaches this, because tier-1 codegen runs at
+	 * CodeGenOptLevel::None and the pass does not run there.
+	 *
+	 * LLVM refuses the same pass on Darwin for the same cause: the compact
+	 * unwind encoding cannot carry the record either.
+	 * mono/tests/eh-stack-args.cs is the exerciser.
+	 */
+	default_option ("no-x86-call-frame-opt", true);
+
+	/*
 	 * Fold a null check into the memory operation behind it. The translator
 	 * marks every check with !make.implicit, and LLVM's ImplicitNullChecks
 	 * pass rewrites a marked test and branch into a faulting access, so the
