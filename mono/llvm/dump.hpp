@@ -37,6 +37,22 @@ namespace mono {
 llvm::Error with_dump_stream (DumpPoint point, llvm::StringRef name,
                               llvm::function_ref<llvm::Error (llvm::raw_pwrite_stream &)> body);
 
+/**
+ * Prints the module one body needs, so that the dump parses on its own.
+ *
+ * A function printed alone names declarations and metadata that stay behind in
+ * the module it came from, and `opt` refuses such text. This keeps the body of
+ * \p entry and the bodies folded into it, drops the other bodies, and prints
+ * what is left. The declarations, the globals and the metadata those bodies
+ * name come with them, so an offline run of a pipeline has all of it.
+ *
+ * Does nothing when the destination did not open, or when \p entry names no
+ * function. The caller has already decided the dump happens: this does not test
+ * the point or the filter again.
+ */
+llvm::Error dump_body_module (DumpPoint point, const llvm::Module &module,
+                              llvm::StringRef entry, llvm::StringRef name);
+
 /// Records the method a function was translated from, under the name every
 /// dump point matches the filter against.
 ///

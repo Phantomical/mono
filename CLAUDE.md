@@ -274,12 +274,18 @@ What each point prints:
   for as a default; `--llvm-opt=-x86-asm-syntax=att` gets AT&T back. It costs a second
   codegen over a clone, so the published code is untouched.
 
+**An IR point prints a module, not a function.** Each dump holds the method's body, the
+bodies an inliner folded into it, and the declarations, the globals and the metadata
+those bodies name. So `opt` reads the file as it stands, and an offline run of a
+pipeline stands in for the one inside the process. The other bodies in the module are
+dropped, and each dump costs a copy of that module.
+
 A tier-1 promotion compiles up to `MONO_LLVM_JIT_BATCH` methods in one module, and the
-IR and assembly points still print one method for each dump: the IR point prints that
-method's function, and the assembly point drops the other bodies from the clone it
-codegens. So a method that promoted in the middle of a batch has a dump of its own, and
-naming it in the filter finds it. Reading a whole batch therefore costs one codegen for
-each method in it, which is what bounds an unfiltered `tier1-asm` sweep.
+IR and assembly points still print one method for each dump: the IR point keeps that
+method's body and drops the others, and the assembly point drops the other bodies from
+the clone it codegens. So a method that promoted in the middle of a batch has a dump of
+its own, and naming it in the filter finds it. Reading a whole batch therefore costs one
+codegen for each method in it, which is what bounds an unfiltered `tier1-asm` sweep.
 
 LLVM's own print options work through `--llvm-opt`: `-print-after=<pass>`,
 `-print-before=<pass>`, `-print-after-all`, `-print-changed` and the flags beside them.

@@ -87,10 +87,7 @@ compile_thrower (MonoJit &jit, MonoDomain *domain, MonoMethod *method,
 		if (!dumping (point, dumped.c_str ()))
 			return;
 
-		cantFail (with_dump_stream (point, dumped, [&] (raw_ostream &out) {
-			function->print (out);
-			return Error::success ();
-		}));
+		cantFail (dump_body_module (point, *module, name, dumped));
 	};
 
 	dump_thrower (DumpPoint::unopt_ir);

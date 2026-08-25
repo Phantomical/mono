@@ -16,10 +16,7 @@
 #include "timing.hpp"
 #include "trivial-inlines.hpp"
 
-#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/IR/Constants.h>
-#include <llvm/IR/InstIterator.h>
-#include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
@@ -75,33 +72,9 @@ dump_ir (DumpPoint point, const Module &module, StringRef entry, StringRef name)
 	if (!dumping (point, name.str ().c_str ()))
 		return;
 
-	const Function *body = module.getFunction (entry);
-
-	// A pipeline can replace a function, so this looks the entry up again
-	// rather than holding the pointer translation returned.
-	if (body == nullptr)
-		return;
-
-	cantFail (with_dump_stream (point, name, [&] (raw_ostream &out) {
-		body->print (out);
-
-		SmallPtrSet<const Function *, 8> printed;
-
-		for (const Instruction &instruction : instructions (body)) {
-			const auto *call = dyn_cast<CallBase> (&instruction);
-			const Function *callee = call != nullptr ? call->getCalledFunction ()
-			                                         : nullptr;
-
-			if (callee == nullptr || callee->isDeclaration ()
-			    || !callee->hasLocalLinkage () || !printed.insert (callee).second)
-				continue;
-
-			out << '\n';
-			callee->print (out);
-		}
-
-		return Error::success ();
-	}));
+	// A pipeline can replace a function, so the entry is looked up by name
+	// rather than through the pointer translation returned.
+	cantFail (dump_body_module (point, module, entry, name));
 }
 
 DomainScope::DomainScope (MonoDomain *domain)
