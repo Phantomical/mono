@@ -354,12 +354,19 @@ public class UnsafeOps {
 	public static int test_100_localloc_is_released_on_return ()
 	{
 		// Every call gets the same address back, which says the frame gave the
-		// memory up when it returned.
+		// memory up when it returned. A promotion between two calls moves the
+		// buffer to another offset in the frame, so a run sees at most two
+		// addresses.
 		long first = LocallocLeaf (IdI4 (512));
+		long moved = 0;
 		int total = 0;
-		for (int i = 0; i < 100; i++)
-			if (LocallocLeaf (IdI4 (512)) == first)
+		for (int i = 0; i < 100; i++) {
+			long p = LocallocLeaf (IdI4 (512));
+			if (p != first && moved == 0)
+				moved = p;
+			if (p == first || p == moved)
 				total++;
+		}
 		return total;
 	}
 
