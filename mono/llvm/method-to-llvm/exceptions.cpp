@@ -742,6 +742,14 @@ MethodLLVMEmitter::emit_undeniable_exception_rethrow (MonoIrBuilder &builder)
 	builder.CreateCondBr (builder.CreateIsNotNull (pending), rethrow, carry_on);
 
 	MonoIrBuilder thrower (rethrow);
+
+	/*
+	 * The block holds the leave's own rethrow, so it takes the leave's IL
+	 * offset. Without it the line table gives the block the offset of whatever
+	 * code precedes it in the layout. A stack trace through the rethrow then
+	 * names the wrong instruction.
+	 */
+	il_debug_reapply (il_scope, &thrower);
 	emit_unwinding_call (thrower, throw_decl (module, "mono_llvm_throw_exception"),
 	                     {pending});
 	builder.SetInsertPoint (carry_on);
