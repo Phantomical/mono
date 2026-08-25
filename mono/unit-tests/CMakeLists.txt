@@ -15,4 +15,5 @@ add_subdirectory(managed)
 
 if(MONO_CORPUS_ENABLED)
   add_subdirectory(il-offsets)
+  add_subdirectory(jitdump)
 endif()

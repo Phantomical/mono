@@ -1704,9 +1704,21 @@ MonoJit::compile_batch (ThreadSafeModule tsm, ArrayRef<StringRef> entries,
 		locate_counters (layout, extents->counters, extents->counter_slots,
 		                 extents->profile_data, extents->profile_data_size);
 	std::vector<CompiledMethod> results;
+	auto object_code =
+		std::make_shared<std::vector<std::pair<const uint8_t *, size_t>>> ();
+
+	for (const auto &[name, extent] : extents->functions)
+		if (extent.first != nullptr && extent.second != 0)
+			object_code->push_back (extent);
+	for (const auto &stub : extents->linker_stubs)
+		if (stub.first != nullptr && stub.second != 0)
+			object_code->push_back (stub);
+	std::sort (object_code->begin (), object_code->end ());
 
 	for (StringRef entry : entries) {
 		CompiledMethod compiled;
+
+		compiled.object_code = object_code;
 
 		compiled.entry = (*found)[jit_->mangleAndIntern (entry)].getAddress ().toPtr<void *> ();
 		compiled.dylib = &jd;

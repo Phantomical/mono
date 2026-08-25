@@ -3,12 +3,79 @@
 #include "debugging/perf/jitdump.hpp"
 #include "runtime/naming.hpp"
 
+#include <algorithm>
 #include <string>
 #include <vector>
 
-#include "mini-runtime.h"
-
 namespace mono::perf {
+
+namespace {
+
+/// One function or linker stub of the object a method was linked into.
+struct Piece {
+	const uint8_t *code = nullptr;
+	size_t size = 0;
+	/// Empty for a stub, which carries no symbol.
+	llvm::StringRef symbol;
+};
+
+/// Whether the object puts nothing of its own between these two pieces, so that
+/// one record can cover both and take no neighbour's bytes with it.
+///
+/// A method compiled outside a batch carries no layout. Two pieces then have to
+/// touch, which is the answer that can swallow nothing.
+bool
+nothing_between (const CompiledMethod &compiled, const Piece &before, const Piece &after)
+{
+	const uint8_t *gap = before.code + before.size;
+
+	if (compiled.object_code == nullptr)
+		return gap == after.code;
+
+	for (const auto &[code, size] : *compiled.object_code)
+		if (code >= gap && code < after.code)
+			return false;
+	return true;
+}
+
+/// Publishes one run of pieces as a record, named for the piece it starts with.
+void
+publish_run (MonoMethod *method, const CompiledMethod &compiled, const Piece *run,
+             size_t count)
+{
+	const uint8_t *start = run[0].code;
+	size_t extent = (size_t) (run[count - 1].code + run[count - 1].size - start);
+	std::vector<FrameFunction> described;
+	std::string display;
+
+	for (size_t i = 0; i < count; ++i) {
+		FrameFunction fn{(size_t) (run[i].code - start), run[i].size, {}};
+
+		/* An FDE with no rules says the piece still has the frame it was called
+		 * with. That is what a jump has, so a stub gets one.
+		 *
+		 * A function whose block cannot be read is left out instead. A body with
+		 * a prologue does not keep the caller's frame, so publishing a no-rule
+		 * FDE there unwinds to a wrong answer. Leaving it out only stops the
+		 * walk. */
+		if (run[i].symbol.empty ())
+			described.push_back (std::move (fn));
+		else if (parse_unwind_records (compiled.unwind_table,
+		                               compiled.unwind_table_size, run[i].code,
+		                               fn.records))
+			described.push_back (std::move (fn));
+	}
+
+	if (!run[0].symbol.empty ())
+		display = display_name (method, run[0].symbol);
+	else
+		display = "linker stubs";
+
+	publish (display.c_str (), {start, extent, extent + code_slack ()},
+	         std::move (described));
+}
+
+} // namespace
 
 void
 dump_method (MonoMethod *method, const CompiledMethod &compiled)
@@ -16,74 +83,44 @@ dump_method (MonoMethod *method, const CompiledMethod &compiled)
 	if (!enabled ())
 		return;
 
-	/*
-	 * A whole object goes in as one record. perf claims the bytes behind a record
-	 * for the frame description it carries, and the functions of an object sit
-	 * against each other, so a record per function claims the next function's
-	 * bytes for every one but the last.
-	 *
-	 * The description covers them all instead: one FDE per function, and one for
-	 * each of the linker's stubs with no rules at all, which says the stub still
-	 * has the frame it was called with. That is what a jump has.
-	 */
-	const uint8_t *start = nullptr;
-	const uint8_t *end = nullptr;
-
-	auto span = [&] (const uint8_t *code, size_t size) {
-		if (start == nullptr || code < start)
-			start = code;
-		if (end == nullptr || code + size > end)
-			end = code + size;
-	};
+	std::vector<Piece> pieces;
 
 	for (const auto &[symbol, extent] : compiled.functions)
 		if (extent.first != nullptr && extent.second != 0)
-			span (extent.first, extent.second);
+			pieces.push_back ({extent.first, extent.second, symbol});
 
 	for (const auto &[code, size] : compiled.linker_stubs)
 		if (code != nullptr && size != 0)
-			span (code, size);
+			pieces.push_back ({code, size, {}});
 
-	if (start == nullptr)
-		return;
+	std::sort (pieces.begin (), pieces.end (),
+	           [] (const Piece &a, const Piece &b) { return a.code < b.code; });
 
-	std::string display;
-	std::vector<FrameFunction> functions;
+	/*
+	 * perf blames a sample on the record whose range holds the address, so a
+	 * record that reaches over a neighbour takes that neighbour's samples. A
+	 * tier-1 promotion links a batch into one object, where the neighbours are
+	 * other methods.
+	 *
+	 * A record therefore covers a run of this method's pieces that the object
+	 * puts nothing else between. What lies between two pieces of a run is
+	 * padding, and no sample lands in padding.
+	 *
+	 * A record for each piece is tighter still, and it costs a profile the frame
+	 * descriptions. perf maps an image per record, longer than the code by the
+	 * description, so each record overlaps the piece behind it. perf cuts the
+	 * earlier map back, and a walk out of a frame in a map it cut back stops
+	 * there. A run pays that once rather than once for each piece.
+	 */
+	for (size_t i = 0; i < pieces.size ();) {
+		size_t j = i + 1;
 
-	for (const auto &[symbol, extent] : compiled.functions) {
-		const auto &[code, size] = extent;
-
-		if (code == nullptr || size == 0)
-			continue;
-		if (code == start)
-			display = display_name (method, symbol);
-
-		FrameFunction fn{(size_t) (code - start), size, {}};
-
-		/* A function whose block cannot be read is left out. An FDE with no
-		 * rules says the function still has the frame it was called with. A body
-		 * with a prologue does not, so publishing one there unwinds to a wrong
-		 * answer. Leaving the function out only stops the walk instead. */
-		if (parse_unwind_records (compiled.unwind_table, compiled.unwind_table_size,
-		                          code, fn.records))
-			functions.push_back (std::move (fn));
+		while (j < pieces.size ()
+		       && nothing_between (compiled, pieces[j - 1], pieces[j]))
+			++j;
+		publish_run (method, compiled, pieces.data () + i, j - i);
+		i = j;
 	}
-
-	for (const auto &[code, size] : compiled.linker_stubs)
-		if (code != nullptr && size != 0)
-			functions.push_back ({(size_t) (code - start), size, {}});
-
-	if (display.empty ()) {
-		char *full = mono_method_full_name (method, TRUE);
-
-		display = full;
-		g_free (full);
-	}
-
-	size_t extent = (size_t) (end - start);
-
-	publish (display.c_str (), {start, extent, extent + code_slack ()},
-	         std::move (functions));
 }
 
 } // namespace mono::perf

@@ -174,6 +174,12 @@ struct CompiledMethod {
 	/// of these and the rest carry none.
 	std::vector<std::pair<const uint8_t *, size_t>> linker_stubs;
 
+	/// Every function and stub the object holds, ascending by address and
+	/// shared by the methods linked into it. A caller that has to say where
+	/// this method's own code ends and a batch neighbour's begins reads it,
+	/// because a gap between two of these is padding and nothing else.
+	std::shared_ptr<const std::vector<std::pair<const uint8_t *, size_t>>> object_code;
+
 	/// The entry function's native_offset -> il_offset rows, ascending by
 	/// native offset. Empty when the module carried no line table.
 	std::vector<IlLineRow> il_lines;
