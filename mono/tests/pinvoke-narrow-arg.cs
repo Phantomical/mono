@@ -17,11 +17,14 @@ using System.Runtime.InteropServices;
  * sum stays in eax, and something between there and C has to fill the high
  * bits again.
  *
- * Two places can fill them, and this test reads the chain rather than either
- * one. The managed-to-native wrapper states the fill on its own parameter, so
- * a managed caller extends the value before the wrapper runs. The calli inside
- * the wrapper states it as well. A run passes while either one holds, and
- * fails when the value reaches C unfilled.
+ * A compiled site has two places that can fill them, and this test reads the
+ * chain rather than either one. The managed-to-native wrapper states the fill
+ * on its own parameter, so a managed caller extends the value before the
+ * wrapper runs. The calli inside the wrapper states it as well. A run passes
+ * while either one holds, and fails when the value reaches C unfilled.
+ *
+ * An interpreted site reaches neither of those. Round () says what fills the
+ * bits there.
  */
 
 static class Program {
@@ -34,12 +37,15 @@ static class Program {
 	const char clean = (char) 0x0043;
 
 	/*
-	 * The signed arm. A short takes the other fill, so the high half must
-	 * come back set rather than clear. A check for zero would pass without
-	 * reading the direction.
+	 * The signed arms. A short and an sbyte take the other fill, so the high
+	 * half must come back set rather than clear. A check for zero would pass
+	 * without reading the direction. Each width has a seed of its own, because
+	 * a value that narrows to zero reads the same under both fills.
 	 */
-	const int signed_seed = 0x7FFF7FFF;
-	const int sign_filled = unchecked ((int) 0xFFFF8000);
+	const int short_seed = 0x7FFF7FFF;
+	const int short_filled = unchecked ((int) 0xFFFF8000);
+	const int sbyte_seed = 0x7FFF7F7F;
+	const int sbyte_filled = unchecked ((int) 0xFFFFFF80);
 
 	[DllImport ("libtest", EntryPoint = "mono_test_narrow_arg_register")]
 	static extern int PassChar (char c);
@@ -49,6 +55,9 @@ static class Program {
 
 	[DllImport ("libtest", EntryPoint = "mono_test_narrow_arg_register")]
 	static extern int PassShort (short s);
+
+	[DllImport ("libtest", EntryPoint = "mono_test_narrow_arg_register")]
+	static extern int PassSByte (sbyte b);
 
 	[DllImport ("libtest", EntryPoint = "mono_test_narrow_arg_register")]
 	static extern int PassInt (int i);
@@ -74,6 +83,12 @@ static class Program {
 		return (short) (x + 1);
 	}
 
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static sbyte DirtySByte (int x)
+	{
+		return (sbyte) (x + 1);
+	}
+
 	static int failures;
 
 	static void Expect (string what, int got, int want)
@@ -89,15 +104,13 @@ static class Program {
 	/*
 	 * Calls each site once and checks what the C end found in the register.
 	 *
-	 * The signed arm runs only where the compiled tiers pass the argument.
-	 * The interpreter reaches a pinvoke through a CallContext of its own
-	 * (mono_arch_set_native_call_context_args (), mono/mini/interp-amd64.c),
-	 * which it clears and then writes the narrow value into. So it fills the
-	 * high bits with zero whatever the sign of the parameter, and a short
-	 * arrives positive. That is a defect of its own, and this test is about
-	 * the site the compiler writes.
+	 * Each tier fills the bits its own way. A compiled site states the fill on
+	 * the call, and the interpreter fills the slot of its own CallContext
+	 * (mono_arch_set_native_call_context_args (), mono/mini/interp-amd64.c).
+	 * So a round runs at both, and the signed arms read the direction rather
+	 * than a zero.
 	 */
-	static void Round (string tier, bool signed_arm)
+	static void Round (string tier)
 	{
 		/*
 		 * The control. It states int, so the whole register is the
@@ -109,9 +122,10 @@ static class Program {
 
 		Expect (tier + ": a char argument", PassChar (DirtyChar (seed)), clean);
 		Expect (tier + ": a byte argument", PassByte (DirtyByte (seed)), 0x43);
-		if (signed_arm)
-			Expect (tier + ": a short argument",
-			        PassShort (DirtyShort (signed_seed)), sign_filled);
+		Expect (tier + ": a short argument",
+		        PassShort (DirtyShort (short_seed)), short_filled);
+		Expect (tier + ": an sbyte argument",
+		        PassSByte (DirtySByte (sbyte_seed)), sbyte_filled);
 		Expect (tier + ": a char in the second parameter",
 		        PassCharSecond (IntPtr.Zero, DirtyChar (seed)), clean);
 	}
@@ -134,20 +148,21 @@ static class Program {
 	public static int Main ()
 	{
 		// Whichever tier the interpreter is still on, these are its calls.
-		Round ("tier 0", signed_arm: false);
+		Round ("tier 0");
 
 		/*
 		 * Round () holds the call sites and Dirty*() writes the high bits,
 		 * so both ends have to leave the interpreter before a compiled site
 		 * passes a compiled method's return value.
 		 */
-		if (!Promote ("Round", new Type[] { typeof (string), typeof (bool) })
+		if (!Promote ("Round", new Type[] { typeof (string) })
 		    || !Promote ("DirtyChar", new Type[] { typeof (int) })
 		    || !Promote ("DirtyByte", new Type[] { typeof (int) })
-		    || !Promote ("DirtyShort", new Type[] { typeof (int) }))
+		    || !Promote ("DirtyShort", new Type[] { typeof (int) })
+		    || !Promote ("DirtySByte", new Type[] { typeof (int) }))
 			return 1;
 
-		Round ("tier 2", signed_arm: true);
+		Round ("tier 2");
 
 		if (failures != 0)
 			return 1;

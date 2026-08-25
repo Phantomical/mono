@@ -118,6 +118,33 @@ arg_set_val (CallContext *ccontext, ArgInfo *ainfo, gpointer src)
 	}
 }
 
+/*
+ * Fills the high bits of a narrow integer argument, in the eightbyte it is
+ * passed in.
+ *
+ * The psABI gives that fill to the caller, and frame_arg_to_data () writes only
+ * the width the managed type states. So this function makes the fill. The
+ * comment above mono_test_narrow_arg_register () (mono/tests/libtest.c) has
+ * what clang and gcc do with the bits.
+ *
+ * A 32-bit argument needs none. The psABI leaves the top half of its eightbyte
+ * undefined, and no callee reads it.
+ */
+static void
+extend_narrow_arg (ArgInfo *ainfo, gpointer storage)
+{
+	host_mgreg_t *slot = (host_mgreg_t*)storage;
+
+	switch (ainfo->byte_arg_size) {
+	case 1:
+		*slot = ainfo->is_signed ? (host_mgreg_t)*(gint8*)slot : (host_mgreg_t)*(guint8*)slot;
+		break;
+	case 2:
+		*slot = ainfo->is_signed ? (host_mgreg_t)*(gint16*)slot : (host_mgreg_t)*(guint16*)slot;
+		break;
+	}
+}
+
 void
 mono_arch_set_native_call_context_args (CallContext *ccontext, gpointer frame, MonoMethodSignature *sig)
 {
@@ -161,6 +188,8 @@ mono_arch_set_native_call_context_args (CallContext *ccontext, gpointer frame, M
 		interp_cb->frame_arg_to_data ((MonoInterpFrameHandle)frame, sig, i, storage);
 		if (temp_size)
 			arg_set_val (ccontext, ainfo, storage);
+		else
+			extend_narrow_arg (ainfo, storage);
 	}
 
 	g_free (cinfo);
