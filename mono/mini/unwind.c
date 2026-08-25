@@ -415,8 +415,16 @@ mono_unwind_ops_encode_full (GSList *unwind_ops, guint32 *out_len, gboolean enab
 {
 	MonoUnwindOp *op;
 	int loc = 0;
-	guint8 buf [4096];
-	guint8 *p, *res;
+	guint8 *buf, *p, *res;
+	gsize size;
+
+	/*
+	 * One op writes at most 16 bytes: an advance_loc4, then an opcode byte with
+	 * two LEB128 operands of 32 bits. No constant bounds the op count a
+	 * generated method carries, so the buffer size comes from the list.
+	 */
+	size = (gsize) g_slist_length (unwind_ops) * 16;
+	buf = (guint8 *) g_malloc (size);
 
 	p = buf;
 
@@ -523,10 +531,11 @@ mono_unwind_ops_encode_full (GSList *unwind_ops, guint32 *out_len, gboolean enab
 		}
 	}
 	
-	g_assert (p - buf < 4096);
+	g_assert ((gsize) (p - buf) <= size);
 	*out_len = p - buf;
 	res = (guint8 *)g_malloc (p - buf);
 	memcpy (res, buf, p - buf);
+	g_free (buf);
 	return res;
 }
 
