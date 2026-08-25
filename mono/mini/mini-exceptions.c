@@ -2505,7 +2505,6 @@ mini_jit_info_table_find_ext (MonoDomain *domain, gpointer addr, gboolean allow_
 
 	// FIXME: Transition all callers to this function
 	// or add it to mono_jit_info_table_find
-	ji = mono_jit_info_table_find_internal (domain, addr, TRUE, allow_trampolines);
 	addr = MINI_FTNPTR_TO_ADDR (addr);
 
 	ji = mono_jit_info_table_find_internal (domain, addr, TRUE, allow_trampolines);
