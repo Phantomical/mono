@@ -34,6 +34,7 @@
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/MC/MCContext.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DebugInfoMetadata.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
@@ -249,15 +250,21 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 
 	/*
 	 * The function's instructions in layout order, each with the try region its
-	 * IL offset falls in, and where each label sits among them. An instruction
-	 * with no location keeps the offset in effect, the same way IlLineHandler
-	 * does (compiler.cpp).
+	 * IL offset falls in, and where each label sits among them.
+	 *
+	 * An instruction with no location keeps the offset of the one before it in
+	 * the same block. The offset stops at the end of that block, because layout
+	 * order is not control flow. The block laid out after a try region is as
+	 * often a handler or a cold path as the rest of the region. A block that
+	 * opens with no location therefore names no region, so a range never grows
+	 * into it.
 	 */
 	std::vector<Position> positions;
 	DenseMap<const MCSymbol *, unsigned> at_label;
-	int il = -1;
 
 	for (MachineBasicBlock &mbb : mf) {
+		int il = -1;
+
 		for (MachineBasicBlock::iterator it = mbb.begin (), end = mbb.end ();
 		     it != end; ++it) {
 			if (it->getOpcode () == TargetOpcode::EH_LABEL)
@@ -267,8 +274,19 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 			if (it->isMetaInstruction ())
 				continue;
 
-			if (const DebugLoc &loc = it->getDebugLoc ())
-				il = (int) loc.getLine () - (int) IL_OFFSET_LINE_BIAS;
+			/*
+			 * A folded body's location carries the callee's IL offset,
+			 * which says nothing about this method's try regions. The
+			 * outermost location of the chain names the call site the
+			 * body was folded at, which is the offset IlLineHandler
+			 * records as well (compiler.cpp).
+			 */
+			if (const DILocation *loc = it->getDebugLoc ().get ()) {
+				while (loc->getInlinedAt () != nullptr)
+					loc = loc->getInlinedAt ();
+
+				il = (int) loc->getLine () - (int) IL_OFFSET_LINE_BIAS;
+			}
 
 			positions.push_back ({ &mbb, it, innermost_try (geometry, il) });
 		}
