@@ -34,8 +34,9 @@ size_t code_slack ();
 /// One range of JIT'd code as a dump record sees it.
 struct CodeRange {
 	const uint8_t *code = nullptr;
-	/// What the record names. perf reads it as the extent of the name, so a
-	/// range that covers a neighbour takes that neighbour's samples.
+	/// What the record names. Where two records claim one address, perf keeps
+	/// the one written later, so an overlap decides a sample's name by the
+	/// order the records went in.
 	size_t extent = 0;
 	/// How far past the code the record can reach. A description that does not
 	/// fit is left out.

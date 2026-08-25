@@ -35,8 +35,8 @@ struct FrameFunction {
 /// Describe every function in one record's code.
 ///
 /// image_size is the length the code load declares. perf puts `.eh_frame` after
-/// that many bytes of code, and one record covers a whole object, so it is more
-/// than any one function.
+/// that many bytes of code, and a record covers a run of an object's functions,
+/// so it is more than any one of them.
 ///
 /// A function whose program holds a rule this writer cannot say in DWARF is left
 /// out. A description short of one rule unwinds to a wrong answer instead of

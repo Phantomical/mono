@@ -380,7 +380,8 @@ transcribe_cfi (const MCCFIInstruction &i)
 }
 
 /**
- * Keeps the room a perf jit dump record needs free after each function.
+ * An AsmPrinter handler that spaces an object's functions apart for the perf
+ * jit dump.
  *
  * perf lays an image over the code a record names, longer than the code by the
  * frame description, and `.eh_frame_hdr` sits at the end of it. Where the next
@@ -390,11 +391,7 @@ transcribe_cfi (const MCCFIInstruction &i)
  * leaves it past an object, and this leaves it between the functions inside one,
  * which is what a batch of methods in one object needs.
  *
- * The bytes go in after the printer plants the function's end label and writes
- * its ELF size, so they land outside the symbol and no record names them.
- *
- * Nothing is emitted while no dump is open, because `code_slack ()` is then
- * zero.
+ * Inert unless a dump is open, so a build that never profiles pays nothing.
  */
 class CodeSlackHandler : public AsmPrinterHandler {
 public:
@@ -410,8 +407,12 @@ public:
 		if (slack == 0 || mf->getSection () == nullptr)
 			return;
 
-		/* Nops rather than zeros, so that a disassembly of the gap reads as
-		 * padding and a stray jump into it runs to the next function. */
+		/*
+		 * This runs after the printer plants the function's end label and
+		 * writes its ELF size, so the bytes land outside the symbol and no
+		 * record names them. Nops rather than zeros, so a disassembly of the
+		 * gap reads as padding.
+		 */
 		streamer_->switchSection (mf->getSection ());
 		streamer_->emitNops ((int64_t) slack, 0, SMLoc (), mf->getSubtarget ());
 	}

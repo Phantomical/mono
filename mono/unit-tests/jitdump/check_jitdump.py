@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 """Assert the perf jit dump gives each range of JIT'd code to exactly one name.
 
-perf resolves a sample to the record whose range holds the address and prints
-that record's name.  So a record that reaches over its neighbours takes their
-samples, and the error is invisible from the report: the names are real methods
-and the totals are plausible.  A tier-1 promotion links up to
+perf resolves a sample against the range of the record holding the address, and
+the error a wrong range makes is invisible from the report: the names are real
+methods and the totals are plausible.  A tier-1 promotion links up to
 MONO_LLVM_JIT_BATCH methods into one object, which is where the neighbours are
 other methods.
 
 The rule is a partition: the ranges do not overlap, and none of them sits inside
-another.  Containment is the shape that costs the most, because the record that
-holds the other one keeps the range for every address in it -- see
-mono_llvm_perf_code_slack () in mono/llvm/debugging/perf/perf.h.
+another.  A record's code_size is then the method's own code size, and no
+sample's name rests on the order two records were written in.
 
 The fixture has to reach tier 1 for any of this to be measured, so the run also
 has to show that it did.
@@ -31,7 +29,7 @@ RECORD_HEADER = 16
 LOAD_FIELDS = struct.Struct("<IIQQQQ")
 
 # How many of the fixture's own bodies have to reach tier 1 before the run says
-# anything.  A compile batch is 32 methods, so this is one full batch.
+# anything.  MONO_LLVM_JIT_BATCH defaults to 32, so this is one full batch.
 WANT_COMPILED = 32
 
 
@@ -65,7 +63,7 @@ def records(path):
 
 
 def partitioned(loaded):
-    """Diff the ranges against the partition rule, returning a message per break."""
+    """Return one message for each break of the partition rule."""
     issues = []
     holder = None
     for address, size, name in loaded:

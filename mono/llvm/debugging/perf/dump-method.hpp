@@ -23,11 +23,9 @@ namespace mono::perf {
 /// A record covers a run of the method's code that the object puts nothing else
 /// between, so a method that shares an object with a batch claims its own bytes
 /// and no more. It takes its name from the function it starts with, and a sample
-/// in a filter body behind that function prints under the same name.
+/// in a filter body after that function prints under the same name.
 ///
-/// The linker's stubs go in under a name that says what they are. They belong to
-/// the object, and the method that carries them is whichever one of a batch came
-/// first.
+/// The linker's stubs go in as "linker stubs" rather than under a method name.
 ///
 /// Does nothing unless a dump is open, so a caller needs no guard of its own.
 void dump_method (MonoMethod *method, const CompiledMethod &compiled);

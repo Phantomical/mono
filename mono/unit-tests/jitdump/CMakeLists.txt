@@ -1,10 +1,10 @@
 # What `--jitdump` tells perf about the code this runtime writes.
 #
-# A record's range is what perf resolves a sample against, so two records that
-# claim the same address make a profile blame the wrong method. Nothing about
-# executing the code depends on the ranges, and the report that comes out of a
-# wrong one still names real methods -- so the corpus stays green and the
-# profile lies. check_jitdump.py runs the fixture and reads the dump back.
+# A record's range is what perf resolves a sample against. Where two records
+# claim one address, the name a sample gets falls out of the order the records
+# were written, which nothing states. The ranges change no code the runtime
+# executes, and a report built on a wrong one still names real methods, so the
+# corpus stays green and the profile lies. check_jitdump.py reads the dump back.
 
 if(NOT MONO_ENABLE_LLVM)
   return()

@@ -19,11 +19,10 @@ struct Piece {
 	llvm::StringRef symbol;
 };
 
-/// Whether the object puts nothing of its own between these two pieces, so that
-/// one record can cover both and take no neighbour's bytes with it.
+/// Whether the object puts nothing of its own between these two pieces.
 ///
-/// A method compiled outside a batch carries no layout. Two pieces then have to
-/// touch, which is the answer that can swallow nothing.
+/// With no layout to read, only two pieces that touch count as adjacent. That
+/// is the conservative answer: a record over them covers no other code.
 bool
 nothing_between (const CompiledMethod &compiled, const Piece &before, const Piece &after)
 {
@@ -69,6 +68,8 @@ publish_run (MonoMethod *method, const CompiledMethod &compiled, const Piece *ru
 	if (!run[0].symbol.empty ())
 		display = display_name (method, run[0].symbol);
 	else
+		/* The stubs belong to the object, and the member that carries them is
+		 * whichever of a batch came first, so no method's name is right here. */
 		display = "linker stubs";
 
 	publish (display.c_str (), {start, extent, extent + code_slack ()},
@@ -97,20 +98,15 @@ dump_method (MonoMethod *method, const CompiledMethod &compiled)
 	           [] (const Piece &a, const Piece &b) { return a.code < b.code; });
 
 	/*
-	 * perf blames a sample on the record whose range holds the address, so a
-	 * record that reaches over a neighbour takes that neighbour's samples. A
-	 * tier-1 promotion links a batch into one object, where the neighbours are
-	 * other methods.
+	 * A record covers a run of this method's pieces that the object puts nothing
+	 * else between. What lies between two pieces of a run is padding, and no
+	 * sample lands in padding. A tier-1 promotion links a batch into one object,
+	 * so a record that reached further would name another method's bytes.
 	 *
-	 * A record therefore covers a run of this method's pieces that the object
-	 * puts nothing else between. What lies between two pieces of a run is
-	 * padding, and no sample lands in padding.
-	 *
-	 * A record for each piece is tighter still, and it costs a profile the frame
-	 * descriptions. perf maps an image per record, longer than the code by the
-	 * description, so each record overlaps the piece behind it. perf cuts the
-	 * earlier map back, and a walk out of a frame in a map it cut back stops
-	 * there. A run pays that once rather than once for each piece.
+	 * A record for each piece is tighter still. The linker's stubs get no slack
+	 * of their own, so a record over one of them overlaps the piece after it,
+	 * and perf cuts the earlier map back. A run keeps a stub inside the record
+	 * of the function it sits behind.
 	 */
 	for (size_t i = 0; i < pieces.size ();) {
 		size_t j = i + 1;

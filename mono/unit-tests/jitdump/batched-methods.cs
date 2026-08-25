@@ -2,9 +2,9 @@
 // this run writes holds records for several methods of one linked object.
 //
 // Each instantiation over a value type gets a body of its own, which is how one
-// short source reaches that many methods.  Every body carries a loop, because
-// the trivial-inline pre-pass refuses control flow.  A body it folds in leaves
-// no record of its own.
+// short source reaches that many methods.  Each Work<T> body carries a loop,
+// because the trivial-inline pre-pass refuses control flow.  A body it folds in
+// leaves no record of its own.
 
 using System;
 
