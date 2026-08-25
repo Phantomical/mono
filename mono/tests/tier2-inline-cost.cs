@@ -76,15 +76,22 @@ static class Costed {
 			FailNoInline (what, true);
 	}
 
+	/* What GetCurrentMethod () named inside FailThroughFrameRead (). */
+	public static string frame_read_saw;
+
 	/*
-	 * A body whose own call reads the frame that called it. Fold this in and
-	 * Assembly:GetCallingAssembly () returns the root's caller rather than
-	 * this body's. The gate walks a candidate's calls and refuses this one.
+	 * A body whose own calls read the frame they were called from. The fold takes
+	 * this body's frame off the stack, so both icalls answer off the frames the
+	 * compile recorded instead. The name below has to stay this method's, folded
+	 * or not, and the branch keeps the shape test away so a fold here is the cost
+	 * model's.
 	 */
 	public static void FailThroughFrameRead (string what, bool yes)
 	{
-		if (yes && Assembly.GetCallingAssembly () != null)
+		if (yes && Assembly.GetCallingAssembly () != null) {
+			frame_read_saw = MethodBase.GetCurrentMethod ().Name;
 			throw new InvalidOperationException (what);
+		}
 	}
 
 	// Past MONO_LLVM_JIT_INLINE_COST_IL_LIMIT, which bounds how much IL one
@@ -272,6 +279,9 @@ static class Program {
 		Check (!folded_branch && !folded_no_inline && !folded_through
 			&& !folded_frame_read && !folded_long,
 			"and every one of them runs in a body of its own before tier 2");
+		Check (Costed.frame_read_saw == "FailThroughFrameRead",
+			"GetCurrentMethod () names the body that asked before tier 2, not "
+			+ (Costed.frame_read_saw ?? "nothing"));
 
 		// Enough calls to leave counts on the tier-1 body, and every one of them
 		// through the same branch, so the site Rare () sits behind reads cold.
@@ -286,6 +296,7 @@ static class Program {
 		saw_branch = saw_no_inline = saw_through = saw_frame_read = saw_long = false;
 		folded_branch = folded_no_inline = folded_through = folded_frame_read =
 			folded_long = false;
+		Costed.frame_read_saw = null;
 
 		Check (want == Root (4, true), "the answer at tier 2 is the answer before it");
 
@@ -298,8 +309,11 @@ static class Program {
 		Check (saw_no_inline && !folded_no_inline, "NoInlining keeps the helper's body");
 		Check (saw_through && folded_through,
 			"and the mark on it leaves a helper that calls it foldable");
-		Check (saw_frame_read && !folded_frame_read,
-			"a helper that reads the frame that called it keeps its body");
+		Check (saw_frame_read && folded_frame_read,
+			"the cost model folds a helper that reads the frame that called it");
+		Check (Costed.frame_read_saw == "FailThroughFrameRead",
+			"and GetCurrentMethod () still names that body, not "
+			+ (Costed.frame_read_saw ?? "nothing"));
 		Check (saw_long && !folded_long, "a helper past the IL limit keeps its body");
 
 		/*

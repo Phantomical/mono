@@ -125,9 +125,6 @@ ProfileInliner::materialize (Function &decl, Module &into)
 	if (!is_small_and_clause_free (header, limit))
 		return nullptr;
 
-	if (!loses_its_frame_safely (callee, header))
-		return nullptr;
-
 	size_t resolved = externals_.size ();
 	Function *copy = materialize_inline_copy (into, target_.domain, callee, cfg.get (),
 	                                          externals_, types_, scope_,

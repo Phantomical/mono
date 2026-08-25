@@ -150,35 +150,6 @@ uint32_t il_read_u32 (const unsigned char *at);
 /// does not resolve it.
 MonoMethod *il_call_target (MonoMethod *method, uint32_t token);
 
-/// Whether an internal call reports something it reads off the frame that
-/// called it.
-///
-/// The caller has already found that target has no IL. Such a body keeps no
-/// frame of its own, so a fold moves the frame it reads. This names the corlib
-/// calls that walk the managed stack. Each one reaches mono_stack_walk_no_il (),
-/// mono_method_get_last_managed () or mono_runtime_get_caller_from_stack_mark ().
-///
-/// A method outside corlib answers yes. An embedder registers the internal calls
-/// it wants, and this backend has read no set but corlib's.
-///
-/// Add an entry for a new internal call that reads its caller. Without one the
-/// fold changes what that call reports, and no failure names this gate.
-bool reads_the_callers_frame (MonoMethod *target);
-
-/// Whether the body can lose its own frame without changing what a method it
-/// calls reports.
-///
-/// Fold the body in and a call it makes sees the caller's frame instead. The
-/// calls that read that frame are the internal calls reads_the_callers_frame ()
-/// names. This test covers the method's own call sites only. A call through a
-/// pointer names no method, so a body that holds one is refused outright.
-///
-/// NoInlining on a target is not read here. The mark says do not fold that
-/// target, which may_fold () enforces. The opposite reading refuses the shape
-/// the BCL uses the mark for. That shape is a hot body that keeps its cold half
-/// in a marked method of its own.
-bool loses_its_frame_safely (MonoMethod *method, MonoMethodHeader *header);
-
 /// Translates callee into the module its caller is being built in, marks the
 /// result as an inline copy and spends one of who's count.
 ///

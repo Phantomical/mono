@@ -638,13 +638,25 @@ detour or an override on the record, and an override the *table* holds
 (`registered_override_for ()`), which is the one that catches a declared override before
 anything has asked for the method's record and installed it.
 
-A forwarder is refused as well when what it forwards to reads the frame it was called
-from. `may_read_the_callers_frame ()` follows the chain, and a body with no IL counts,
-because every stack walk the runtime offers is an icall. A folded body keeps a frame in a
-stack trace, built from `.mono_inlines` rather than from a frame on the stack, and that
-frame owns no code: it reports the native offset of the call site it was folded at.
-Managed code that has to see its own caller must therefore carry `NoInlining`, the way the
-`StackFrame` constructors do.
+**A folded body keeps a frame any walk that asks for it can see.** The compiler
+writes `.mono_inlines` beside the code, `jinfo.cpp` turns it into the rows
+`mono_jinfo_inline_frame ()` reads, and `mono_walk_stack_full ()` reports one
+`FRAME_TYPE_INLINED` frame per folded body to a walk that asked for
+`MONO_UNWIND_INLINED_FRAMES`. `mono_stack_walk ()` and `mono_stack_walk_no_il ()`
+(`mono/metadata/loader.c`) both ask, which is what puts the folded frame in front of the
+icalls that read their caller — `Assembly.GetCallingAssembly ()`,
+`MethodBase.GetCurrentMethod ()`, the reflection stack marks and the core-clr security
+checks all reach one of those two. So a fold does not change what managed code sees of
+its own callers, and no gate refuses a callee for reaching such an icall.
+
+Such a frame owns no code: it reports the native offset of the call site it was folded
+at. `mono/tests/test-inline-call-stack.cs` is the gate, and it fails on
+`GetCurrentMethod`, `GetExecutingAssembly` and `GetCallingAssembly` if either half of
+this is taken out.
+
+Two walks stay blind to a folded frame, and both are async-safe: the thread dump
+(`mono/metadata/threads.c`) and `mono_stack_walk_async_safe ()`. Neither reads caller
+identity, and a fold the inliners have always allowed is already invisible to them.
 
 **What a method folds in is decided by that method alone.** A copy is built under a name
 of its own, `<callee>$copy@<root>`, and only the caller that asked for it has its call
@@ -670,10 +682,8 @@ translated on demand. `ProfileInliner` (`runtime/profile-inlines.cpp`) is what t
 asks, because the pass itself names no metadata, so a site the gates or `getInlineCost`
 refuse costs nothing but the questions. A candidate arrives with its own trivial callees
 already folded in. Everything past `may_fold ()` is a correctness gate of its own: no
-clauses, inside `MONO_LLVM_JIT_INLINE_COST_IL_LIMIT` bytes of IL, no `calli`, and no
-direct call to an internal call that reads its caller's frame.
-`loses_its_frame_safely ()` is that last gate, the frame-reading test widened to a body
-with several calls. `NoInlining` on a call target is not one of the gates: the mark says
+clauses, and inside `MONO_LLVM_JIT_INLINE_COST_IL_LIMIT` bytes of IL.
+`NoInlining` on a call target is not one of the gates: the mark says
 do not fold that target, which `may_fold ()` already enforces. A caller with no profile still
 inlines, off the static frequencies BFI falls back to.
 

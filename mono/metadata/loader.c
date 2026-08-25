@@ -1704,6 +1704,7 @@ stack_walk_adapter (MonoStackFrameInfo *frame, MonoContext *ctx, gpointer data)
 		return FALSE;
 	case FRAME_TYPE_MANAGED:
 	case FRAME_TYPE_INTERP:
+	case FRAME_TYPE_INLINED:
 		g_assert (frame->ji);
 		return d->func (frame->actual_method, frame->native_offset, frame->il_offset, frame->managed, d->user_data);
 		break;
@@ -1713,11 +1714,18 @@ stack_walk_adapter (MonoStackFrameInfo *frame, MonoContext *ctx, gpointer data)
 	}
 }
 
+/*
+ * The reflection and security internal calls that ask who called them reach one
+ * of the two walks below. So both ask for the bodies an inliner folded in: a
+ * walk without them names the root instead of the body that asked.
+ */
+
 void
 mono_stack_walk (MonoStackWalk func, gpointer user_data)
 {
 	StackWalkUserData ud = { func, user_data };
-	mono_get_eh_callbacks ()->mono_walk_stack_with_ctx (stack_walk_adapter, NULL, MONO_UNWIND_LOOKUP_ALL, &ud);
+	mono_get_eh_callbacks ()->mono_walk_stack_with_ctx (stack_walk_adapter, NULL,
+		(MonoUnwindOptions) (MONO_UNWIND_LOOKUP_ALL | MONO_UNWIND_INLINED_FRAMES), &ud);
 }
 
 /**
@@ -1727,7 +1735,8 @@ void
 mono_stack_walk_no_il (MonoStackWalk func, gpointer user_data)
 {
 	StackWalkUserData ud = { func, user_data };
-	mono_get_eh_callbacks ()->mono_walk_stack_with_ctx (stack_walk_adapter, NULL, MONO_UNWIND_DEFAULT, &ud);
+	mono_get_eh_callbacks ()->mono_walk_stack_with_ctx (stack_walk_adapter, NULL,
+		(MonoUnwindOptions) (MONO_UNWIND_DEFAULT | MONO_UNWIND_INLINED_FRAMES), &ud);
 }
 
 typedef struct {

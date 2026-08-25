@@ -90,7 +90,7 @@ declines_a_fold (MonoOpcodeEnum op)
 	case MONO_CEE_JMP:
 
 	// A call the shape test cannot name a target for, so the one-call rule
-	// cannot hold it and may_read_the_callers_frame () has nothing to follow.
+	// cannot hold it.
 	case MONO_CEE_CALLI:
 	// A tail call hands the frame over, and the folded copy is standing in that
 	// frame.
@@ -100,8 +100,6 @@ declines_a_fold (MonoOpcodeEnum op)
 	 * The frame. Each of these describes the frame the body runs in, which the
 	 * fold replaces with the caller's.
 	 */
-	// Reads the frame it was called from, which is the hazard
-	// may_read_the_callers_frame () exists for.
 	case MONO_CEE_ARGLIST:
 	// emit_user_break () calls a helper that walks the stack for a managed
 	// frame to report the break against, and asserts that it finds one.
@@ -129,8 +127,7 @@ enters_a_method (MonoOpcodeEnum op)
 }
 
 /// Whether the translator answers a call to target out of the array it is made
-/// on, and the accessor that call can fall back to reads none of the frame it
-/// was made in.
+/// on.
 bool
 answers_the_shape_of_an_array (MonoMethod *target)
 {
@@ -146,7 +143,7 @@ answers_the_shape_of_an_array (MonoMethod *target)
 	MonoMethodSignature *sig = mono_method_signature_internal (target);
 
 	return sig != nullptr && answers_array_shape (target, sig)
-	       && implemented_outside_il (target) && !reads_the_callers_frame (target);
+	       && implemented_outside_il (target);
 }
 
 bool
@@ -265,10 +262,8 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 	return std::nullopt;
 }
 
-// How far the two walks below follow a chain of forwarders. Longer than any
-// chain worth following, and each link costs a header. Both use the same bound,
-// which is what lets each one rely on what the other does with a chain that
-// outruns it.
+// How far the walk below follows a chain of forwarders. Longer than any chain
+// worth following, and each link costs a header.
 constexpr int max_links = 8;
 
 /// Whether target reaches itself through the forwarder chain shape_of ()
@@ -312,60 +307,11 @@ forwards_into_a_cycle (MonoMethod *target, MonoDomain *domain)
 	}
 
 	/*
-	 * A chain that reaches here is at least max_links long, so the walk
-	 * may_read_the_callers_frame () starts one link further along runs out too
-	 * and refuses the body. Answering "no cycle" costs nothing.
+	 * A cycle longer than this walk is still caught at the site move.
+	 * copy_reaches () keeps a site on its call when the copy it would move to
+	 * already reaches the caller, so giving up here costs nothing.
 	 */
 	return false;
-}
-
-/// Whether target, or something it forwards to in turn, can read the frame it
-/// was called from.
-///
-/// Follows the forwarder chain to the internal call at its end, which is what
-/// reads_the_callers_frame () (inline-scope.hpp) decides. A chain this walk does
-/// not reach the end of answers yes.
-///
-/// NoInlining on a link is not read, for the reason loses_its_frame_safely ()
-/// gives.
-bool
-may_read_the_callers_frame (MonoMethod *target, MonoDomain *domain)
-{
-	for (int link = 0; link < max_links; ++link) {
-		if (target == nullptr)
-			return false;
-
-		// A body with no IL is where the chain stops. It keeps no frame of its
-		// own, so what it reports comes from the frame that called it.
-		if (implemented_outside_il (target))
-			return reads_the_callers_frame (target);
-
-		ERROR_DECL (metadata_error);
-		MinimalCompile cfg (target, domain, metadata_error);
-		MonoMethodHeader *header = cfg.get ()->header;
-
-		if (header == nullptr) {
-			mono_error_cleanup (metadata_error);
-			return false;
-		}
-
-		// A body with clauses is not a forwarder, and neither is one the shape
-		// test declines. Either way it keeps a frame of its own, which is where
-		// the chain stops. No size limit here: what matters is the shape, and a
-		// straight line to one call can be longer than anything the pre-pass
-		// folds.
-		if (header->num_clauses != 0)
-			return false;
-
-		std::optional<Shape> shape = shape_of (target, header);
-
-		if (!shape)
-			return false;
-
-		target = shape->forwards_to;
-	}
-
-	return true;
 }
 
 /// A copy belongs to the one compile that asked for it. Another body in the
@@ -524,10 +470,6 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 				continue;
 
 			if (forwards_into_a_cycle (callee, domain))
-				continue;
-
-			if (shape->forwards_to != nullptr
-			    && may_read_the_callers_frame (shape->forwards_to, domain))
 				continue;
 
 			size_t before = externals.size ();

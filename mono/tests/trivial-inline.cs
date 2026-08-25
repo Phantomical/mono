@@ -89,9 +89,9 @@ static class Trivial {
 	public static void Fail (string what) { throw new InvalidOperationException (what); }
 
 	/*
-	 * A forwarder onto a method that forwards to an icall. Array:Clone () calls
-	 * object:MemberwiseClone (), which reads no frame, so the chain walk lets
-	 * this one through. A null array raises where the call stands.
+	 * A forwarder onto a method that forwards to an icall, which is two links of
+	 * chain for one fold: Array:Clone () calls object:MemberwiseClone (). A null
+	 * array raises where the call stands.
 	 */
 	public static object CloneOf (Array a) { return a.Clone (); }
 
@@ -104,8 +104,7 @@ static class Trivial {
 	/*
 	 * A forwarder onto FailNoInline (). The mark keeps that method out of every
 	 * fold, so it holds a body and a frame of its own whatever its caller does.
-	 * The mark says nothing about this forwarder, and the chain walk lets this
-	 * one through.
+	 * The mark says nothing about this forwarder, so this one folds.
 	 */
 	public static void FailThroughNoInline (string what) { FailNoInline (what); }
 
@@ -115,6 +114,20 @@ static class Trivial {
 	{
 		if (yes)
 			throw new InvalidOperationException (what);
+	}
+
+	/*
+	 * Asks who called it and throws the answer, so one trace says both what
+	 * GetCurrentMethod () named and where the body that asked ran. Three calls,
+	 * so the shape test declines it and only the cost model takes it - which
+	 * makes this the tier-2 arm for a folded body that walks the stack.
+	 *
+	 * The answer has to stay FailCurrent at both tiers. It comes off the frames
+	 * the compile recorded, and a walk blind to those names the root instead.
+	 */
+	public static void FailCurrent ()
+	{
+		throw new InvalidOperationException (MethodBase.GetCurrentMethod ().Name);
 	}
 }
 
@@ -126,7 +139,10 @@ static class Program {
 
 	/* Which of them ran inside their root's code rather than in a body of its own. */
 	static bool folded_fail, folded_no_inline, folded_through, folded_branch,
-		folded_clone;
+		folded_clone, folded_current;
+
+	/* What GetCurrentMethod () named inside FailCurrent (). */
+	static string current_name;
 
 	/*
 	 * Whether the helper's frame covers the same code as root's.
@@ -168,6 +184,17 @@ static class Program {
 		} catch (NullReferenceException e) {
 			saw_clone |= (e.StackTrace ?? "").Contains ("Trivial.CloneOf");
 			folded_clone |= RunsInside (e, "CloneOf", "CloneRoot");
+		}
+	}
+
+	/* A root of its own, for the reason CloneRoot () gives. */
+	static void CurrentRoot ()
+	{
+		try {
+			Trivial.FailCurrent ();
+		} catch (InvalidOperationException e) {
+			current_name = e.Message;
+			folded_current |= RunsInside (e, "FailCurrent", "CurrentRoot");
 		}
 	}
 
@@ -258,8 +285,8 @@ static class Program {
 	const int tier1 = 2;
 	const int tier2 = 3;
 
-	static bool AtTier (MethodInfo root, MethodInfo clone_root, int tier, string name,
-	                    int want)
+	static bool AtTier (MethodInfo root, MethodInfo clone_root, MethodInfo current_root,
+	                    int tier, string name, int want)
 	{
 		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, tier)) {
 			Console.WriteLine ("FAIL: Root () would not compile at {0}", name);
@@ -271,13 +298,20 @@ static class Program {
 			return false;
 		}
 
+		if (!Mono.Tiering.MonoTier.PromoteNow (current_root.MethodHandle.Value, tier)) {
+			Console.WriteLine ("FAIL: CurrentRoot () would not compile at {0}", name);
+			return false;
+		}
+
 		saw_fail = saw_no_inline = saw_through = saw_branch = saw_clone = false;
 		folded_fail = folded_no_inline = folded_through = folded_branch =
-			folded_clone = false;
+			folded_clone = folded_current = false;
+		current_name = null;
 
 		int got = Root (3);
 
 		CloneRoot ();
+		CurrentRoot ();
 
 		Check (want == got, "the answer at " + name);
 
@@ -296,9 +330,8 @@ static class Program {
 		       "and the mark on its target leaves it foldable at " + name);
 
 		/*
-		 * The icall behind Array:Clone () reads no frame, so the chain walk lets
-		 * the forwarder through. A gate that refuses every body with no IL keeps
-		 * CloneOf () in a body of its own and fails this.
+		 * A gate that refuses a forwarder for what it reaches keeps CloneOf ()
+		 * in a body of its own and fails this.
 		 */
 		Check (saw_clone, "a forwarder onto an icall has a frame at " + name);
 		Check (folded_clone, "and it runs inside CloneRoot () at " + name);
@@ -314,6 +347,18 @@ static class Program {
 			Check (saw_branch && !folded_branch,
 			       "a helper with a branch keeps a body of its own at " + name);
 
+		/*
+		 * A body that asks who called it. The name has to hold at both tiers,
+		 * and tier 2 is where it is asked of a body the cost model folded in.
+		 */
+		Check (current_name == "FailCurrent",
+		       "GetCurrentMethod () names the body that asked at " + name
+		       + ", not " + (current_name ?? "nothing"));
+
+		if (tier == tier2)
+			Check (folded_current,
+			       "and the cost model folded that body into CurrentRoot ()");
+
 		return true;
 	}
 
@@ -328,9 +373,11 @@ static class Program {
 			BindingFlags.Static | BindingFlags.NonPublic);
 		MethodInfo clone_root = typeof (Program).GetMethod ("CloneRoot",
 			BindingFlags.Static | BindingFlags.NonPublic);
+		MethodInfo current_root = typeof (Program).GetMethod ("CurrentRoot",
+			BindingFlags.Static | BindingFlags.NonPublic);
 
-		if (!AtTier (root, clone_root, tier1, "tier 1", want)
-		    || !AtTier (root, clone_root, tier2, "tier 2", want))
+		if (!AtTier (root, clone_root, current_root, tier1, "tier 1", want)
+		    || !AtTier (root, clone_root, current_root, tier2, "tier 2", want))
 			return 1;
 
 		if (fails != 0)
