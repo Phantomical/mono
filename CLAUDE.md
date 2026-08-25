@@ -334,10 +334,10 @@ and the note says which split:
   one add per loop header, and takes that total off at each exit. The exits are three: a
   ret, a throw of the body's own, and the pad the body's own fault clause names as its
   handler, which is what charges a callee's exception that unwinds through the frame. A
-  body that neither returns nor unwinds — one entered once that runs forever — keeps the
+  body that takes none of the three — one entered once that runs forever — keeps the
   constant and no more: the rest needs OSR, which does not exist here. Zero leaves a body
-  instrumented and
-  counting while it never promotes on its own, which is what a test driving the tiers
+  instrumented and counting while it never promotes on its own, which is what a test
+  driving the tiers
   through `Mono.Tiering.MonoTier::PromoteNow` wants.
 - `MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT=<n>` — what one call adds to that count, default 5000.
   It is the exchange rate between how hot a method is and how much it does, in the same
@@ -590,8 +590,8 @@ the counts it gathered, at O3 with an optimizing selector. `TierCounterPass` put
 counter in: every body takes a constant off at its entry, and a body with a loop adds the
 turns up in a register on top and takes that total off at each exit. Such a body also gets
 a fault clause over the whole of it, if it calls anything that can unwind. That clause's
-pad charges the turns when a callee's exception unwinds through the frame. Each call that
-can unwind becomes an invoke on to the pad, and `mono_lsda.cpp` reads the set back as one
+pad charges the turns when a callee's exception unwinds through the frame. The calls that
+can unwind become invokes on to the pad, and `mono_lsda.cpp` reads the set back as one
 clause, so what the runtime holds does not grow with the calls.
 
 Beyond taking a site the IL already settled — non-virtual, `final`, or resolved by

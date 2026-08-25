@@ -78,10 +78,9 @@ static class Program {
 	/*
 	 * Turns of the loop in UnwinderLoop (), and calls of it. Sixty-four calls
 	 * charge about three hundred thousand at the entry, which is well short of the
-	 * ten million the suite sets. The loop carries the rest, and its turns reach
-	 * the counter only through the pad the counter's fault clause names as its
-	 * handler: the throw that ends each call unwinds out of the frame past every
-	 * other write-back.
+	 * same ten million. The loop carries the rest. The throw that ends each call
+	 * unwinds out of the frame without reaching the ret, so the turns reach the
+	 * counter only through the tier counter's pad.
 	 */
 	const int unwind_loop_turns = 100000;
 	const int unwind_loop_calls = 64;
@@ -202,9 +201,9 @@ static class Program {
 	 * Probe () throws on every call, and no clause here catches it, so the ret
 	 * below is dead at run time.
 	 *
-	 * The loop puts this body on the accumulator path. Only the pad charges it,
-	 * because no call reaches the ret, and four turns are far less than what the
-	 * entry charges. So this case promotes on the calls.
+	 * The loop puts this body on the accumulator path, and the pad is the only exit
+	 * that charges the accumulator, because no call reaches the ret. Four turns are
+	 * far less than what the entry charges, so this case promotes on the calls.
 	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int Unwinder (int n)
@@ -222,9 +221,9 @@ static class Program {
 	 * Unwinder () with the call moved inside the loop, and with too few calls of it
 	 * to promote.
 	 *
-	 * Probe () is called from inside the loop, and throws on the last turn. That
-	 * keeps the site as hot as the loop, which is what the cost model reads to fold
-	 * it, and it still leaves the frame through a callee's exception.
+	 * Probe () throws on the last turn, so the site is as hot as the loop, which is
+	 * what the cost model reads to fold it. The frame still leaves through a
+	 * callee's exception.
 	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int UnwinderLoop (int n)

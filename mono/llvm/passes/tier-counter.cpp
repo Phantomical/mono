@@ -50,15 +50,15 @@ namespace {
  *
  * The entry charges the constant rather than the exits, because a body has a
  * third way out. A callee's exception can unwind through the frame while no
- * clause here catches it, and no instruction in the body marks that point. The
- * entry is the one point every call runs, so what it charges survives an exit of
- * any kind.
+ * clause here catches it, and no instruction the translator wrote marks that
+ * point. The entry is the one point every call runs, so what it charges survives
+ * an exit of any kind.
  *
  * The accumulator needs an exit of its own there, and that is the pad below. A
  * body with a loop and a call that can unwind gets a fault clause over the whole
  * of it. Its handler charges the turns, then calls mono_llvm_resume_unwind ().
- * Each call that can unwind becomes an invoke on to that pad, which is what makes
- * the clause table cover it.
+ * Each call collect_unwinding_calls () takes becomes an invoke on to that pad,
+ * which is what makes the clause table cover it.
  *
  * A call of a body no loop has any weight in costs the constant and no more, so
  * such a body carries no accumulator and no write-back. That is most methods.
@@ -463,10 +463,10 @@ instrument (Function &f, uint64_t threshold, uint64_t entry_weight, Constant *me
 
 	/*
 	 * A call of a body with no weight in any loop costs the constant and no
-	 * more. A body that leaves through none of the three ways out has nowhere to
-	 * write a running total back from, and the constant is the most it can be
-	 * charged. Either way the entry charges the whole cost, so the body carries
-	 * no accumulator.
+	 * more. A body that never returns, throws or unwinds has nowhere to write a
+	 * running total back from, and the constant is the most it can be charged.
+	 * Either way the entry charges the whole cost, so the body carries no
+	 * accumulator.
 	 *
 	 * The entry block holds no loop header, because it has no predecessor and so
 	 * lies on no cycle. So the split the check makes there leaves every header

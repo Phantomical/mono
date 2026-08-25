@@ -35,8 +35,8 @@ namespace mono {
 
 /// One entry decoded from a `.mono_lsda` section, in host byte order.
 struct MonoLsdaEntry {
-	std::uint32_t try_start_off = 0;  ///< invoke range start, code-relative.
-	std::uint32_t try_len = 0;        ///< invoke range length.
+	std::uint32_t try_start_off = 0;  ///< protected range start, code-relative.
+	std::uint32_t try_len = 0;        ///< protected range length.
 	std::uint32_t handler_off = 0;    ///< landing pad, code-relative.
 	std::uint32_t clause_index = 0;   ///< IL clause index, the join key.
 
@@ -85,7 +85,8 @@ bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *cod
  *                     carries a null data.filter, so the caller must join the
  *                     compiled filter body itself.
  * \param guards       thread-abort guards for this method's FINALLY clauses.
- *                     Each becomes one guard-only entry, appended last.
+ *                     Each becomes one guard-only entry, appended behind the
+ *                     dispatch entries.
  *
  * \returns whether the join succeeded.
  *
@@ -94,7 +95,9 @@ bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *cod
  * declining.
  *
  * An empty \p entries, or one holding only marker entries, publishes no
- * protected-region entry and succeeds. The guard entries are still appended.
+ * protected-region entry of the method's own and succeeds. A tier-unwind marker
+ * publishes one fault clause over the whole method. The guard entries are still
+ * appended.
  */
 bool build_ex_info (const std::vector<MonoLsdaEntry> &entries,
                     const MonoExceptionClause *clauses, int num_clauses,

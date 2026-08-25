@@ -52,8 +52,8 @@ namespace mono {
 /// in-process, with no ttype-table deref and no relocation dependency.
 ///
 /// The v2 form is a 2-word {i32 clause_index, i32 kind} struct. clause_marker ()
-/// and resume_marker () (method-to-llvm/exceptions.cpp) and unwind_marker ()
-/// (passes/tier-counter.cpp) build it. A bare i32 ConstantInt is the legacy 1-word
+/// and resume_marker () (method-to-llvm/exceptions.cpp) build it, and so does
+/// unwind_marker () (passes/tier-counter.cpp). A bare i32 ConstantInt is the legacy 1-word
 /// form, clause_index alone with kind 0, and is still accepted. An all-zero
 /// struct lowers to ConstantAggregateZero, which is not a ConstantStruct, so the
 /// two words are read with Constant::getAggregateElement.

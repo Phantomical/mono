@@ -12,7 +12,7 @@
  *     u16 count            number of entries
  *     u64 function         where the function this describes was linked
  *   Entry[count] (20 bytes each):
- *     u32 try_start_off    one invoke range, [code+try_start_off, +try_len)
+ *     u32 try_start_off    one protected range, [code+try_start_off, +try_len)
  *     u32 try_len
  *     u32 handler_off      landing pad = code + handler_off
  *     u32 clause_index     IL clause index, the join key
@@ -190,7 +190,7 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *code,
  * build_ex_info_entries () builds. A finally whose protected region has no call
  * that can unwind gets no dispatch entry to hang them on. The two sets are also
  * different sizes: one guard per recorded body range against one dispatch entry
- * per clause in each invoke range.
+ * per clause in each protected range.
  *
  * A guard entry's try range is empty, so is_address_protected () is false for
  * every PC and no dispatch walk can reach it. Without that, a handler can run
@@ -227,16 +227,16 @@ append_finally_guards (const std::vector<MonoFinallyGuard> &guards,
 	}
 }
 
-/// One published entry's [start, end) invoke range.
+/// One published entry's [start, end) protected range.
 struct RangeOff {
 	std::uint64_t start;
 	std::uint64_t end;
 };
 
 /// Whether every pair of ranges is either exactly equal or fully disjoint, which
-/// is the only shape a published array may have.
+/// is the only shape the dispatch entries may have.
 ///
-///   - Sibling catches share one pad over one invoke range, so they publish
+///   - Sibling catches share one pad over one range, so they publish
 ///     several entries with identical try_start_off and try_len. The runtime
 ///     matches the shared PC range for each, then picks by catch_class.
 ///   - A try with N protected calls yields N disjoint ranges, one per call.
@@ -288,8 +288,9 @@ record_resume_pad (const MonoLsdaEntry &e, const MonoExceptionClause *clauses,
  * section named one. Its try range is the whole body, so an exception that
  * unwinds out of the frame from any point reaches it.
  *
- * The section carries one entry per invoke range that unwinds to the pad, and
- * they all name the same pad. One clause covers the lot.
+ * The section carries one entry for each call that unwinds to the pad, and they
+ * all name the same pad. This reads their handler off and ignores their ranges:
+ * one clause covers the lot.
  *
  * The clause index is past the IL clauses, where handler_il_offset () reads it as
  * no clause of the method's and answers -1. It goes last, so a clause the IL
@@ -430,7 +431,7 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 	// one, so it reaches the enclosers innermost-first too. For try/finally C
 	// inside B inside A the published array is [C, B, A], and pass-2 runs C, B, A.
 	for (std::size_t i = 0; i < dispatch.size (); ) {
-		// One landing pad's entries for one invoke range: a single nesting chain.
+		// One landing pad's entries for one range: a single nesting chain.
 		std::size_t end = i;
 		while (end < dispatch.size () &&
 		       dispatch[end].try_start_off == dispatch[i].try_start_off &&
