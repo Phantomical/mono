@@ -33,6 +33,7 @@
 #include "sidetables.hpp"
 #include "timing.hpp"
 
+#include "debugging/perf/jitdump.hpp"
 #include "eh-side-channel.hpp"
 #include "passes/eh-gather.hpp"
 #include "passes/faulting-location.hpp"
@@ -51,6 +52,7 @@
 #include <llvm/CodeGen/MachineModuleInfo.h>
 #include <llvm/CodeGen/Passes.h>
 #include <llvm/CodeGen/TargetPassConfig.h>
+#include <llvm/CodeGen/TargetSubtargetInfo.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/MC/MCAsmBackend.h>
@@ -376,6 +378,47 @@ transcribe_cfi (const MCCFIInstruction &i)
 
 	return r;
 }
+
+/**
+ * Keeps the room a perf jit dump record needs free after each function.
+ *
+ * perf lays an image over the code a record names, longer than the code by the
+ * frame description, and `.eh_frame_hdr` sits at the end of it. Where the next
+ * function begins inside that reach, perf cuts the map back and takes the header
+ * out of reach, so a profile unwinds no further than the frame it sampled.
+ * `code_slack ()` is the room the description needs. The code allocator already
+ * leaves it past an object, and this leaves it between the functions inside one,
+ * which is what a batch of methods in one object needs.
+ *
+ * The bytes go in after the printer plants the function's end label and writes
+ * its ELF size, so they land outside the symbol and no record names them.
+ *
+ * Nothing is emitted while no dump is open, because `code_slack ()` is then
+ * zero.
+ */
+class CodeSlackHandler : public AsmPrinterHandler {
+public:
+	explicit CodeSlackHandler (MCStreamer *streamer) : streamer_ (streamer) {}
+
+	void endModule () override {}
+	void beginFunction (const MachineFunction *) override {}
+
+	void endFunction (const MachineFunction *mf) override
+	{
+		size_t slack = perf::code_slack ();
+
+		if (slack == 0 || mf->getSection () == nullptr)
+			return;
+
+		/* Nops rather than zeros, so that a disassembly of the gap reads as
+		 * padding and a stray jump into it runs to the next function. */
+		streamer_->switchSection (mf->getSection ());
+		streamer_->emitNops ((int64_t) slack, 0, SMLoc (), mf->getSubtarget ());
+	}
+
+private:
+	MCStreamer *streamer_;
+};
 
 class SideTableEmitPass : public MachineFunctionPass {
 public:
@@ -883,6 +926,8 @@ build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &
 	IlLineHandler *lines_ptr = lines.get ();
 
 	printer->addAsmPrinterHandler (std::move (lines));
+
+	printer->addAsmPrinterHandler (std::make_unique<CodeSlackHandler> (streamer_ptr));
 
 	/*
 	 * Ahead of the printer, so the pass below it closes the interval the
