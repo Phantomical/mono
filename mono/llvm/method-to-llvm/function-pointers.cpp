@@ -242,12 +242,11 @@ MethodLLVMEmitter::emit_dynamic_native_calli (MonoIrBuilder &builder,
 		target = builder.CreateIntToPtr (target, ptr);
 	pop_stack (1);
 
-	llvm::Constant *image = llvm::ConstantExpr::getIntToPtr (
-		builder.getInt64 (
-			reinterpret_cast<uint64_t> (m_class_get_image (method->klass))),
-		ptr);
-	llvm::Constant *signature = llvm::ConstantExpr::getIntToPtr (
-		builder.getInt64 (reinterpret_cast<uint64_t> (sig)), ptr);
+	MonoImage *declaring = m_class_get_image (method->klass);
+	llvm::Constant *image =
+		address_symbol (identity_symbol ("mono_image_", declaring), declaring);
+	llvm::Constant *signature =
+		address_symbol (identity_symbol ("mono_sig_", sig), sig);
 
 	llvm::Value *wrapper = emit_protected_call (
 		builder, *build,

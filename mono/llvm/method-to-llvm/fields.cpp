@@ -37,10 +37,10 @@ struct WriteBarrierLayout {
 	volatile gboolean *concurrent_flag = nullptr;
 };
 
-/// Reads the collector's card table and nursery bounds, once for the process.
+/// Reads the collector's write-barrier layout, once for the process.
 ///
-/// The collector fixes all of these while it starts, before any method compiles,
-/// so a compile can write them into the code as constants.
+/// The collector fixes each address and shift while it starts, before any method
+/// compiles, so a compile can bake them in.
 const WriteBarrierLayout &
 write_barrier_layout ()
 {
@@ -171,10 +171,9 @@ MethodLLVMEmitter::emit_reference_store (MonoIrBuilder &builder, llvm::Value *ad
 		 * front of the store can read false while the collection starts. The store
 		 * then lands with no card in an object the marker already read.
 		 */
-		llvm::Value *flag = builder.CreateIntToPtr (
-			llvm::ConstantInt::get (word,
-			                        reinterpret_cast<uintptr_t> (gc.concurrent_flag)),
-			llvm::PointerType::get (context (), 0));
+		llvm::Constant *flag =
+			address_symbol ("mono_gc_concurrent_collection_flag",
+		                        const_cast<gboolean *> (gc.concurrent_flag));
 		llvm::Value *concurrent = builder.CreateICmpNE (
 			builder.CreateAlignedLoad (flag_type, flag, llvm::Align (sizeof (gboolean)),
 			                           true, "wb_concurrent"),
@@ -196,9 +195,7 @@ MethodLLVMEmitter::emit_reference_store (MonoIrBuilder &builder, llvm::Value *ad
 	if (gc.card_mask != 0)
 		index = builder.CreateAnd (index, llvm::ConstantInt::get (word, gc.card_mask));
 
-	llvm::Value *table = builder.CreateIntToPtr (
-		llvm::ConstantInt::get (word, reinterpret_cast<uintptr_t> (gc.card_table)),
-		llvm::PointerType::get (context (), 0));
+	llvm::Constant *table = address_symbol ("mono_gc_card_table", gc.card_table);
 
 	builder.CreateAlignedStore (builder.getInt8 (1),
 	                            builder.CreateGEP (builder.getInt8Ty (), table, index),
@@ -290,9 +287,8 @@ MethodLLVMEmitter::record_external (const std::string &name, ExternalSymbol::Kin
 /// A printed name alone is not unique. Two assemblies loaded from different bytes can
 /// share an assembly name and define classes, methods and fields that print identically.
 /// Assembly.Load (byte[]) on two builds of one source is the ordinary way this happens.
-/// The engine resolves a symbol by name and keeps the first definition it gets. The
-/// pointer keeps the two assemblies apart: each gets its own symbol for its own
-/// MonoClass, vtable, statics and string literals.
+/// MonoJit::register_symbol () refuses a name it has already bound to a different
+/// address, so without the pointer the second assembly's first compile fails.
 std::string
 MethodLLVMEmitter::identity_symbol (const std::string &name, const void *object)
 {

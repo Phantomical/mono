@@ -497,6 +497,7 @@ TEST_F (TranslatorTest, StoringAReferenceMarksItsOwnCard)
 	EXPECT_EQ (field.count ("wbarrier_generic_store"), 0u) << field.text ();
 	EXPECT_EQ (field.count ("store i8 1"), 1u);
 	EXPECT_GE (field.count ("wb_mark"), 1u);
+	EXPECT_GE (field.count ("@mono_gc_card_table"), 1u) << field.text ();
 
 	ASSERT_NE (statics.function, nullptr) << statics.error;
 	EXPECT_EQ (statics.count ("wbarrier_generic_store"), 0u) << statics.text ();
@@ -510,16 +511,16 @@ TEST_F (TranslatorTest, StoringAReferenceMarksItsOwnCard)
 // the card table for the rest of the program.
 TEST_F (TranslatorTest, AConcurrentCollectorsFlagDecidesAtRuntime)
 {
-	volatile gboolean *flag = mono_gc_get_concurrent_collection_flag ();
-
-	if (mono_gc_card_table_nursery_check () || flag == nullptr)
+	if (mono_gc_card_table_nursery_check ()
+	    || mono_gc_get_concurrent_collection_flag () == nullptr)
 		GTEST_SKIP () << "this collector collects nothing concurrently";
 
 	const Translation &field = translate ("fields", "Fields:SetRef");
-	std::string address = std::to_string (reinterpret_cast<uintptr_t> (flag));
 
 	ASSERT_NE (field.function, nullptr) << field.error;
-	EXPECT_EQ (field.count ("load volatile i32, ptr inttoptr (i64 " + address), 1u)
+	EXPECT_EQ (
+		field.count ("load volatile i32, ptr @mono_gc_concurrent_collection_flag"),
+		1u)
 		<< field.text ();
 	EXPECT_GE (field.count ("wb_value_is_young"), 1u) << field.text ();
 }

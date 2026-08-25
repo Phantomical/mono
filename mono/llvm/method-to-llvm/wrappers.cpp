@@ -9,8 +9,8 @@
  *
  * This backend is JIT-only, so most of these opcodes are simple to translate.
  * Here the address is already known while translating. It travels as a
- * symbol the engine resolves, which keeps it out of the IR. Every other
- * runtime address the translator emits works the same way.
+ * symbol the engine resolves, which keeps it out of the IR. The translator
+ * emits other runtime addresses the same way.
  */
 
 #include "method-to-llvm.hpp"

@@ -208,8 +208,8 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 			                   + " does not hold a string");
 
 		llvm::Type *ptr = llvm::PointerType::get (context (), 0);
-		llvm::Constant *literal = llvm::ConstantExpr::getIntToPtr (
-			builder.getInt64 (reinterpret_cast<uint64_t> (data)), ptr);
+		llvm::Constant *literal =
+			address_symbol (identity_symbol ("mono_wrapper_str_", data), data);
 		llvm::Value *value = literal;
 
 		if (method->wrapper_type != MONO_WRAPPER_DYNAMIC_METHOD) {
