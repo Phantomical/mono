@@ -67,11 +67,7 @@ typedef struct {
 	MonoObject *ex_obj;
 	MonoLMF *lmf;
 	int first_filter_idx, filter_idx;
-	/*
-	 * The frame the unwind stopped in. A resumed unwind carries on through the
-	 * remaining clauses of that same frame, and it does not walk the stack
-	 * again, so this is its only description of the frame it is in.
-	 */
+	/* The frame the unwind parked in. */
 	StackFrameInfo frame;
 } ResumeState;
 

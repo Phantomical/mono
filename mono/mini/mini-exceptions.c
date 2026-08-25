@@ -3551,6 +3551,7 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 		gpointer ip;
 		
 		if (resume_state) {
+			/* This branch skips the unwinder, so the frame comes from the state. */
 			frame = resume_state->frame;
 			ji = resume_state->ji;
 			new_ctx = resume_state->new_ctx;
