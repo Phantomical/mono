@@ -2761,6 +2761,106 @@ handler_il_offset (MonoJitInfo *ji, MonoJitExceptionInfo *ei, int index)
 }
 
 /*
+ * The two passes of an unwind walk the same frames from the same context. The
+ * first pass records each frame's jit info here. The second pass reads the
+ * entry at the same ordinal, instead of asking the table again.
+ *
+ * An entry reaches the unwinder as its prev_ji. The unwinder keeps a prev_ji
+ * only while the address it is about to unwind lies inside that record's code.
+ * A second pass at a different address loses the entry and asks the table.
+ *
+ * A record stays valid over the two passes because the frame that runs its code
+ * is on the stack they unwind. The unwinder makes the same assumption about a
+ * record the table gives it: it holds no hazard pointer on that one either.
+ */
+#define UNWIND_MEMO_FRAMES 32
+
+typedef struct {
+	MonoJitInfo *ji;
+	MonoDomain *domain;
+} UnwindMemoEntry;
+
+typedef struct {
+	/* Frames the first pass recorded. It stops at UNWIND_MEMO_FRAMES. */
+	int count;
+	/* The entry the second pass reads next. */
+	int pos;
+	UnwindMemoEntry entries [UNWIND_MEMO_FRAMES];
+} UnwindMemo;
+
+static void
+unwind_memo_init (UnwindMemo *memo)
+{
+	memo->count = 0;
+	memo->pos = 0;
+}
+
+/*
+ * Records this frame's jit info for the second pass. Only the types below are
+ * recorded, and each of them reaches this function from the table alone.
+ *
+ * The interpreter's frame iterator is what the list keeps out. It reports a
+ * frame of its own as FRAME_TYPE_INTERP, and an interpreted pinvoke or internal
+ * call as FRAME_TYPE_MANAGED_TO_NATIVE, and it gives both the jit info of the
+ * InterpMethod. That record describes bytecode. The address test that guards a
+ * memo entry reads a native code range, so a bytecode record can pass it and
+ * take a frame the wrong body's record does not describe.
+ *
+ * FRAME_TYPE_MANAGED_TO_NATIVE therefore stays out, although the table's own
+ * path reaches it. That path carries no record to memo: it nulls the jit info
+ * of such a frame, because the frame is a marker the caller unwinds past.
+ *
+ * A frame with no record still takes an ordinal, so the two passes stay in
+ * step. So does a frame past the end of the memo: the second pass looks that
+ * one up in the table.
+ */
+static void
+unwind_memo_record (UnwindMemo *memo, StackFrameInfo *frame)
+{
+	UnwindMemoEntry *entry;
+
+	if (memo->count == UNWIND_MEMO_FRAMES)
+		return;
+
+	entry = &memo->entries [memo->count ++];
+	entry->ji = NULL;
+	entry->domain = NULL;
+
+	switch (frame->type) {
+	case FRAME_TYPE_MANAGED:
+	case FRAME_TYPE_TRAMPOLINE:
+	case FRAME_TYPE_INTERP_TO_MANAGED:
+	case FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX:
+		entry->ji = frame->ji;
+		entry->domain = frame->domain;
+		break;
+	default:
+		break;
+	}
+}
+
+/*
+ * Gives the record the first pass had at this ordinal, or NULL where it has
+ * none to give.
+ *
+ * The unwinder reports a frame it takes a prev_ji for in the domain the caller
+ * gives it. So an entry the first pass found in another domain is declined
+ * here, and the table answers for that frame again.
+ */
+static MonoJitInfo*
+unwind_memo_replay (UnwindMemo *memo, MonoDomain *domain)
+{
+	UnwindMemoEntry *entry;
+
+	if (memo->pos == memo->count)
+		return NULL;
+
+	entry = &memo->entries [memo->pos ++];
+
+	return entry->domain == domain ? entry->ji : NULL;
+}
+
+/*
  * handle_exception_first_pass:
  *
  *   The first pass of exception handling. Unwind the stack until a catch
@@ -2770,9 +2870,11 @@ handler_il_offset (MonoJitInfo *ji, MonoJitExceptionInfo *ei, int index)
  * \c MONO_FIRST_PASS_UNHANDLED otherwise, unless there is a native-to-managed
  * wrapper and an exception handling callback is installed (in which case
  * return \c MONO_FIRST_PASS_CALLBACK_TO_NATIVE).
+ *
+ * Gives each frame it unwinds to unwind_memo_record, for the second pass.
  */
 static MonoFirstPassResult
-handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filter_idx, MonoJitInfo **out_ji, MonoJitInfo **out_prev_ji, MonoObject *non_exception, StackFrameInfo *catch_frame, gboolean *last_mono_wrapper_runtime_invoke)
+handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filter_idx, MonoJitInfo **out_ji, MonoJitInfo **out_prev_ji, MonoObject *non_exception, StackFrameInfo *catch_frame, gboolean *last_mono_wrapper_runtime_invoke, UnwindMemo *memo)
 {
 	ERROR_DECL (error);
 	MonoDomain *domain = mono_domain_get ();
@@ -2860,6 +2962,8 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 			g_list_free (trace_ips);
 			return result;
 		}
+
+		unwind_memo_record (memo, &frame);
 
 		switch (frame.type) {
 		case FRAME_TYPE_DEBUGGER_INVOKE:
@@ -3236,6 +3340,9 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 	gboolean in_interp;
 	gboolean is_caught_unmanaged = FALSE;
 	gboolean last_mono_wrapper_runtime_invoke = TRUE;
+	UnwindMemo memo;
+
+	unwind_memo_init (&memo);
 
 	g_assert (ctx != NULL);
 	if (!obj) {
@@ -3376,7 +3483,7 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 		/* The first pass fills this in only where it finds a handler. */
 		StackFrameInfo catch_frame = { FRAME_TYPE_MANAGED };
 		MonoFirstPassResult res;
-		res = handle_exception_first_pass (&ctx_cp, obj, &first_filter_idx, &ji, &prev_ji, non_exception, &catch_frame, &last_mono_wrapper_runtime_invoke);
+		res = handle_exception_first_pass (&ctx_cp, obj, &first_filter_idx, &ji, &prev_ji, non_exception, &catch_frame, &last_mono_wrapper_runtime_invoke, &memo);
 
 		if (res == MONO_FIRST_PASS_UNHANDLED) {
 			if (mono_aot_mode == MONO_AOT_MODE_LLVMONLY_INTERP) {
@@ -3454,7 +3561,7 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 			in_interp = FALSE;
 			resume_state = NULL;
 		} else {
-			unwind_res = unwinder_unwind_frame (&unwinder, domain, jit_tls, NULL, ctx, &new_ctx, NULL, &lmf, NULL, &frame);
+			unwind_res = unwinder_unwind_frame (&unwinder, domain, jit_tls, unwind_memo_replay (&memo, domain), ctx, &new_ctx, NULL, &lmf, NULL, &frame);
 			if (!unwind_res) {
 				*(mono_get_lmf_addr ()) = lmf;
 
