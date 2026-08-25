@@ -734,26 +734,29 @@ MethodLLVMEmitter::seed_handler_entry_stacks (MonoIrBuilder &builder)
 /// initializer.
 ///
 /// ECMA-335 I.8.9.5 lists what triggers a type initializer. A type marked
-/// beforefieldinit has one trigger, the first access to a static field of the
-/// type, so entering any of its methods is not one and this answers false for
-/// the whole type. Otherwise the triggers are that same static field access,
-/// the first call of a static method of the type, the first call of an instance
-/// or virtual method of it *if it is a value type*, and the first call of a
-/// constructor for it.
+/// beforefieldinit has one trigger: the first access to a static field of the
+/// type. So entering any of its methods is never a trigger, and this answers
+/// false for the whole type. Otherwise the triggers are:
+///
+/// - that same static field access
+/// - the first call of a static method of the type
+/// - the first call of an instance or virtual method of it, if it is a
+///   value type
+/// - the first call of a constructor for it
 ///
 /// So entering an ordinary instance method of a reference type is not a
-/// trigger, and the standard says why: a non-null instance can only come from a
-/// constructor, so the constructor already ran the initializer.
+/// trigger. The standard says why: a non-null instance can only come from a
+/// constructor, and the constructor already ran the initializer.
 ///
-/// The two exemptions from that argument are back on the list here. An all-zero
-/// value type needs no constructor. And a constructor is what the argument
-/// rests on, so it runs the initializer itself rather than leaving that to the
-/// newobj site: the runtime can invoke a constructor with no such site in front
-/// of it.
+/// The two exemptions from that argument are back on the list here. An
+/// all-zero value type needs no constructor. A constructor is what the
+/// argument rests on, so it runs the initializer itself instead of leaving
+/// that to the newobj site: the runtime can invoke a constructor with no such
+/// site in front of it.
 ///
-/// What carries the static field trigger is emit_ldsfld (), emit_ldsflda () and
-/// emit_stsfld (), which are the only three that reach the statics block and
-/// each of which checks the field's own parent. newobj emits a check as well.
+/// What carries the static field trigger is emit_ldsfld (), emit_ldsflda ()
+/// and emit_stsfld (). They are the only three that reach the statics block,
+/// and each checks the field's own parent. newobj emits a check as well.
 static bool
 entry_runs_the_cctor (MonoMethod *method)
 {
@@ -930,9 +933,9 @@ MethodLLVMEmitter::emit ()
 
 	emit_profiler_enter (builder);
 
-	// Every way of reaching a method the entry does run the initializer for - a
-	// stub, a vtable slot, a delegate, or calli - funnels through the method's own
-	// entry. So the check lives here rather than at call sites.
+	// Every way of reaching the method - a stub, a vtable slot, a delegate, or
+	// calli - funnels through the method's own entry. So the check lives here
+	// rather than at call sites.
 	//
 	// A native-to-managed wrapper is the exception. It is entered from C, on a
 	// thread that can still be unattached, and attaching it is the first thing its

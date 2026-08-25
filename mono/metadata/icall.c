@@ -8329,7 +8329,7 @@ ves_icall_System_Runtime_Activation_ActivationServices_AllocateUninitializedClas
 
 		/*
 		 * This is the one way to get an instance of a class whose constructor
-		 * never ran, and generated code takes the constructor as proof that the
+		 * never ran. Generated code takes the constructor as proof that the
 		 * type initializer ran (ECMA-335 I.8.9.5). Run it here so that the
 		 * instance handed back is one an instance method can read the statics
 		 * of. A beforefieldinit class is exempt: each static field access runs

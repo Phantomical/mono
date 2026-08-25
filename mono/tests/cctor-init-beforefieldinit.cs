@@ -283,8 +283,9 @@ class BeforeFieldInit {
 		bad = Check ("Shared ()", Shared (), 22 * Turns, 3);
 		if (bad != 0) return bad;
 
-		// 99 every turn: the initializer ran before the first write, not
-		// between two of them.
+		// 99 every turn: the check runs before the store. If it ran after
+		// instead, the initializer's own assignment would overwrite the first
+		// write.
 		bad = Check ("Write ()", Write (), 99 * Turns, 4);
 		if (bad != 0) return bad;
 

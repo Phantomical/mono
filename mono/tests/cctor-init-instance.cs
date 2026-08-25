@@ -2,10 +2,11 @@ using System;
 using System.Runtime.Serialization;
 
 // ECMA-335 I.8.9.5 does not make entry into an instance method of a reference
-// type a trigger for the type initializer, because a non-null instance can only
-// come from a constructor and the constructor is a trigger. The backend leaves
-// the check out of such an entry. Each case below is a way to reach an instance
-// method whose class holds statics, and each one has to read them initialized.
+// type a trigger for the type initializer. A non-null instance can only come
+// from a constructor, and the constructor is itself a trigger. The backend
+// leaves the check out of such an entry. Each case below is a way to reach an
+// instance method of a class that holds statics, and each one has to see the
+// class initialized.
 //
 // Value types stay on the list, so a struct keeps its check. An all-zero struct
 // needs no constructor, which is the shape Zeroed () builds.
