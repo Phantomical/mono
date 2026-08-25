@@ -30,79 +30,6 @@ namespace mono {
 namespace test {
 namespace {
 
-/*
- * What the dumps in this file are selected by. The dump variables are read once,
- * on the first compile of the process, and booting the runtime already compiles
- * a dozen methods - so they have to be in place before any test runs, whether
- * this binary was started for one case or for all of them. Nothing but a method
- * a test named this way contains it, so no other compile is dumped.
- */
-constexpr const char *asm_filter = "mono.asm.dump.fixture";
-
-class SelectAsmDumps : public ::testing::Environment {
-public:
-	void SetUp () override
-	{
-		// One point, so what refuses a tier-2 compile below is the point the
-		// variable names and nothing else.
-		::setenv ("MONO_JIT_DUMP", "tier1-asm", 1);
-		::setenv ("MONO_JIT_DUMP_FILTER", asm_filter, 1);
-	}
-};
-
-const ::testing::Environment *asm_dumps_selected =
-	::testing::AddGlobalTestEnvironment (new SelectAsmDumps);
-
-/// Everything written to fd 1 - where a dump goes with no directory set - while
-/// this is alive.
-class CapturedStdout {
-public:
-	CapturedStdout ()
-	{
-		sink_ = ::tmpfile ();
-		saved_ = ::dup (STDOUT_FILENO);
-		::fflush (stdout);
-		::dup2 (::fileno (sink_), STDOUT_FILENO);
-	}
-
-	~CapturedStdout ()
-	{
-		restore ();
-		::fclose (sink_);
-	}
-
-	/// What has been written so far, with stdout handed back to the process.
-	std::string text ()
-	{
-		restore ();
-
-		std::string out;
-		char buffer[4096];
-
-		::rewind (sink_);
-		for (size_t got = ::fread (buffer, 1, sizeof (buffer), sink_); got != 0;
-		     got = ::fread (buffer, 1, sizeof (buffer), sink_))
-			out.append (buffer, got);
-
-		return out;
-	}
-
-private:
-	void restore ()
-	{
-		if (saved_ < 0)
-			return;
-
-		::fflush (stdout);
-		::dup2 (saved_, STDOUT_FILENO);
-		::close (saved_);
-		saved_ = -1;
-	}
-
-	FILE *sink_ = nullptr;
-	int saved_ = -1;
-};
-
 extern "C" void
 test_personality (void)
 {
@@ -138,7 +65,7 @@ protected:
 			EXPECT_NE (fold_method_into (*t, image, folded), nullptr);
 
 		/* As the engine does, so the dump is filed and filtered by method. */
-		set_dump_name (*t->function, dumped ? asm_filter : image);
+		set_dump_name (*t->function, dumped ? dump_filter : image);
 
 		std::string entry = t->function->getName ().str ();
 		auto jit = test::make_jit ();
@@ -191,7 +118,7 @@ TEST_F (AsmDump, PrintsTheCodeAndTheClauseTableOfASelectedMethod)
 
 	ASSERT_FALSE (entry.empty ());
 
-	EXPECT_NE (dump.find (asm_filter), std::string::npos) << dump;
+	EXPECT_NE (dump.find (dump_filter), std::string::npos) << dump;
 	/* The label the code starts at, quoted because the name has spaces in it. */
 	EXPECT_NE (dump.find ("\"" + entry + "\":"), std::string::npos) << dump;
 	/*

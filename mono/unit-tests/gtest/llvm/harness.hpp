@@ -10,6 +10,7 @@
 #ifndef MONO_LLVM_TESTS_HARNESS_HPP
 #define MONO_LLVM_TESTS_HARNESS_HPP
 
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <vector>
@@ -69,6 +70,36 @@ MonoImage *load_image (const std::string &name);
 
 /// What llvm::verifyFunction says about FUNCTION, empty if it is well formed.
 std::string verify_function (llvm::Function &function);
+
+/*
+ * The dump name a case gives a body it wants a dump point to print.
+ *
+ * This binary turns the points on and sets the filter to this name before any
+ * case runs, because the dump variables are read once, on the first compile of
+ * the process, and booting the runtime already compiles a dozen methods. So a
+ * body a case names this way is dumped and no other compile is.
+ */
+extern const char *const dump_filter;
+
+/// Everything written to fd 1 - where a dump goes with no directory set - while
+/// this is alive.
+class CapturedStdout {
+public:
+	CapturedStdout ();
+	~CapturedStdout ();
+
+	CapturedStdout (const CapturedStdout &) = delete;
+	CapturedStdout &operator= (const CapturedStdout &) = delete;
+
+	/// What has been written so far, with stdout handed back to the process.
+	std::string text ();
+
+private:
+	void restore ();
+
+	FILE *sink_ = nullptr;
+	int saved_ = -1;
+};
 
 /// What came back from one call to method_to_llvm ().
 ///

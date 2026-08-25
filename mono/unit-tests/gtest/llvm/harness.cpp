@@ -26,6 +26,9 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <unistd.h>
+
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -136,6 +139,71 @@ load_image (const std::string &name)
 	}
 
 	return mono_assembly_get_image_internal (assembly);
+}
+
+const char *const dump_filter = "mono.dump.fixture";
+
+namespace {
+
+/// Turns on the dump points the cases in this binary print through, before any
+/// of them runs.
+///
+/// `tier1-asm` is the only assembly point, which is what leaves a case that
+/// compiles at tier 2 with no assembly dump.
+class SelectDumps : public ::testing::Environment {
+public:
+	void SetUp () override
+	{
+		::setenv ("MONO_JIT_DUMP", "unopt-ir,tier1-asm", 1);
+		::setenv ("MONO_JIT_DUMP_FILTER", dump_filter, 1);
+	}
+};
+
+const ::testing::Environment *dumps_selected =
+	::testing::AddGlobalTestEnvironment (new SelectDumps);
+
+} // namespace
+
+CapturedStdout::CapturedStdout ()
+{
+	sink_ = ::tmpfile ();
+	saved_ = ::dup (STDOUT_FILENO);
+	::fflush (stdout);
+	::dup2 (::fileno (sink_), STDOUT_FILENO);
+}
+
+CapturedStdout::~CapturedStdout ()
+{
+	restore ();
+	::fclose (sink_);
+}
+
+std::string
+CapturedStdout::text ()
+{
+	restore ();
+
+	std::string out;
+	char buffer[4096];
+
+	::rewind (sink_);
+	for (size_t got = ::fread (buffer, 1, sizeof (buffer), sink_); got != 0;
+	     got = ::fread (buffer, 1, sizeof (buffer), sink_))
+		out.append (buffer, got);
+
+	return out;
+}
+
+void
+CapturedStdout::restore ()
+{
+	if (saved_ < 0)
+		return;
+
+	::fflush (stdout);
+	::dup2 (saved_, STDOUT_FILENO);
+	::close (saved_);
+	saved_ = -1;
 }
 
 std::string
