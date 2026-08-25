@@ -363,7 +363,8 @@ trace_inline (MonoMethod *callee, MonoMethod *caller)
 void
 materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *root,
                              Function &body, std::vector<ExternalSymbol> &externals,
-                             ModuleTypes &types, InlineScope &scope)
+                             ModuleTypes &types, InlineScope &scope,
+                             ResolveExternals resolve)
 {
 	uint32_t limit = trivial_inline_il_limit ();
 
@@ -384,6 +385,11 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 	};
 
 	SmallVector<Candidate, 8> pending { { root, &body, 0 } };
+
+	// The methods whose copy the resolution below refused. scope.folded keeps an
+	// entry naming a copy that has gone. A later site for one of these asks for
+	// a copy again and meets the same failure.
+	SmallPtrSet<MonoMethod *, 4> unresolved;
 
 	// The budget bounds what the loop translates rather than how far it walks.
 	// A body it can no longer fold into still has sites to move onto the copies
@@ -411,7 +417,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 		for (Function *decl : called) {
 			MonoMethod *callee = marked_method (*decl);
 
-			if (callee == nullptr)
+			if (callee == nullptr || unresolved.contains (callee))
 				continue;
 
 			/*
@@ -486,9 +492,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			    && may_read_the_callers_frame (shape->forwards_to, domain))
 				continue;
 
-			if (is_jit_trace_enabled ())
-				trace_inline (callee, into);
-
+			size_t before = externals.size ();
 			Function *copy =
 				materialize_inline_copy (module, domain, callee, cfg.get (),
 			                                 externals, types, scope,
@@ -496,6 +500,25 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 
 			if (copy == nullptr)
 				continue;
+
+			/*
+			 * A class the copy names may fail to load, and the program is owed
+			 * that failure at the call rather than at root's entry. The call
+			 * can sit inside a try whose catch is written for it. Taking the
+			 * copy back off leaves the call on the callee's thunk, where the
+			 * callee's own compile raises it. root then keeps the body it
+			 * would have had, clauses and all.
+			 */
+			if (Error err = resolve (ArrayRef (externals).drop_front (before))) {
+				consumeError (std::move (err));
+				externals.resize (before);
+				copy->eraseFromParent ();
+				unresolved.insert (callee);
+				continue;
+			}
+
+			if (is_jit_trace_enabled ())
+				trace_inline (callee, into);
 
 			// A shared body is entered with its context in a register and a
 			// call to it is not, which is the one shape these two disagree

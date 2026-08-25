@@ -671,6 +671,13 @@ with several calls. `NoInlining` on a call target is not one of the gates: the m
 do not fold that target, which `may_fold ()` already enforces. A caller with no profile still
 inlines, off the static frequencies BFI falls back to.
 
+**A copy is kept only where the runtime resolves what it names.** Each inliner resolves
+a copy's own externals as it builds it, and drops the copy when one of them fails. A
+class the copy names that will not load is a failure the program is owed at the call,
+inside whatever try the call sits in. A compile that fails instead raises it at the
+root's entry, with the root's clauses gone. Dropping the copy leaves the call on the
+callee's thunk, where the callee's own compile raises it.
+
 **A body neither inliner folded in is taken back off.** `StripInlineCopiesPass`
 (`passes/inline-copies.cpp`) erases every copy still standing and puts the call back on
 the callee's thunk. That is what lets a cost model translate, weigh and refuse without

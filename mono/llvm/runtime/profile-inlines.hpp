@@ -63,7 +63,7 @@ private:
 	InlineScope &scope_;
 	std::vector<std::pair<llvm::StringRef, void *>> &module_symbols_;
 
-	llvm::Error bind_and_resolve (llvm::Module &module, size_t from);
+	llvm::Error bind_and_resolve (llvm::Module &module, size_t from, size_t to);
 };
 
 } // namespace mono

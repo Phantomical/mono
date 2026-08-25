@@ -57,16 +57,17 @@ ProfileInliner::folded (Function &caller, Function &callee)
 }
 
 Error
-ProfileInliner::bind_and_resolve (Module &module, size_t from)
+ProfileInliner::bind_and_resolve (Module &module, size_t from, size_t to)
 {
 	if (Error err = bind_symbols (module))
 		return err;
 
 	timing::Scope timed (timing::Phase::resolve);
 
-	return resolve_externals (*target_.jit, target_.domain,
-	                          ArrayRef<ExternalSymbol> (externals_).drop_front (from),
-	                          target_.publish_callee, module_symbols_);
+	return resolve_externals (
+		*target_.jit, target_.domain,
+		ArrayRef<ExternalSymbol> (externals_).slice (from, to - from),
+		target_.publish_callee, module_symbols_);
 }
 
 Function *
@@ -135,18 +136,27 @@ ProfileInliner::materialize (Function &decl, Module &into)
 	if (copy == nullptr)
 		return nullptr;
 
+	// What the candidate itself named. The pre-pass below resolves each body as
+	// it builds it, so the range here stays the candidate's own.
+	size_t own = externals_.size ();
+
 	// The candidate brings its own getters and forwarders with it, so the cost
 	// model never has to weigh one and the shape test stays the only thing that
 	// decides them.
 	materialize_trivial_callees (into, target_.domain, callee, *copy, externals_,
-	                             types_, scope_);
+	                             types_, scope_, [&] (ArrayRef<ExternalSymbol> named) {
+		timing::Scope timed (timing::Phase::resolve);
+
+		return resolve_externals (*target_.jit, target_.domain, named,
+		                          target_.publish_callee, module_symbols_);
+	});
 
 	/*
 	 * The module the candidate was built in goes with it when it is dropped,
 	 * which is what leaves the root naming only what the compile had already
 	 * resolved.
 	 */
-	if (Error err = bind_and_resolve (into, resolved)) {
+	if (Error err = bind_and_resolve (into, resolved, own)) {
 		consumeError (std::move (err));
 		return nullptr;
 	}

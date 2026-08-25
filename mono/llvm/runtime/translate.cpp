@@ -201,11 +201,25 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	inlining.folded.push_back ({ method, nullptr });
 	inlining.budget = { trivial_inline_budget (), costed_inline_budget () };
 
+	std::vector<std::pair<StringRef, void *>> module_symbols;
+	auto resolve = [&] (ArrayRef<ExternalSymbol> named) {
+		timing::Scope timed (timing::Phase::resolve);
+
+		return resolve_externals (*target.jit, target.domain, named,
+		                          target.publish_callee, module_symbols);
+	};
+
+	// What the method itself named, which is everything the translation above
+	// recorded. The pre-pass resolves each copy's own share as it goes, so
+	// that a copy the runtime cannot resolve costs a fold rather than the
+	// whole compile.
+	size_t own = externals.size ();
+
 	// Both compiled tiers fold in the callees whose IL already says the inline
 	// pays. It runs here so that the bodies it adds still reach the naming and
 	// the resolution below.
 	materialize_trivial_callees (*module, target.domain, method, **function,
-	                             externals, types, inlining);
+	                             externals, types, inlining, resolve);
 
 	if (Error err = bind_symbols (*module))
 		return target.recover (std::move (err));
@@ -233,13 +247,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	 * fails here rather than in the translation above. It is the same failure
 	 * and it is raised the same way - at the call, not at the declaration.
 	 */
-	std::vector<std::pair<StringRef, void *>> module_symbols;
-	Error resolved = [&] {
-		timing::Scope timed (timing::Phase::resolve);
-
-		return resolve_externals (*target.jit, target.domain, externals,
-		                          target.publish_callee, module_symbols);
-	}();
+	Error resolved = resolve (ArrayRef (externals).take_front (own));
 
 	if (resolved)
 		return target.recover (std::move (resolved));
@@ -392,6 +400,10 @@ struct BatchMember {
 	/// What a dump of this member is filed under, empty when none is asked for.
 	std::string dumped;
 	std::vector<ExternalSymbol> externals;
+
+	/// How much of externals the member itself named. The pre-pass resolves
+	/// what each copy it adds names, so the resolution below takes the front.
+	size_t own = 0;
 	MonoLLVMBreakpointSwitch *bp_switch = nullptr;
 	SeqPointGraph seq_points;
 };
@@ -504,22 +516,30 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 
 	inlining.defined.assign (methods.begin (), methods.end ());
 
+	std::vector<std::pair<StringRef, void *>> module_symbols;
+
 	for (auto &member : members) {
 		inlining.root = member->method;
 		inlining.folded.assign ({ InlineScope::Folded { member->method, nullptr } });
 		inlining.budget = { trivial_inline_budget (), costed_inline_budget () };
+		member->own = member->externals.size ();
 
 		materialize_trivial_callees (*module, shared.domain, member->method,
 		                             *member->body, member->externals, types,
-		                             inlining);
+		                             inlining,
+		                             [&] (ArrayRef<ExternalSymbol> named) {
+			timing::Scope timed (timing::Phase::resolve);
+
+			return resolve_externals (*shared.jit, shared.domain, named,
+			                          member->target->publish_callee,
+			                          module_symbols);
+		});
 	}
 
 	if (Error err = bind_symbols (*module)) {
 		consumeError (std::move (err));
 		return give_up ();
 	}
-
-	std::vector<std::pair<StringRef, void *>> module_symbols;
 
 	for (auto &member : members) {
 		member->entry = member->body->getName ().str ();
@@ -545,8 +565,10 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 		Error resolved = [&] {
 			timing::Scope timed (timing::Phase::resolve);
 
-			return resolve_externals (*shared.jit, shared.domain, member->externals,
-			                          member->target->publish_callee, module_symbols);
+			return resolve_externals (
+				*shared.jit, shared.domain,
+				ArrayRef (member->externals).take_front (member->own),
+				member->target->publish_callee, module_symbols);
 		}();
 
 		if (resolved) {
