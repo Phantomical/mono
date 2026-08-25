@@ -541,8 +541,8 @@ build_counted_function (Module &m, LLVMContext &ctx, StringRef name, unsigned ar
 /*
  * Two instrumented methods in one batched compile. Each has to come back with
  * its own counter array: they share one `__llvm_prf_cnts`, so anything that
- * reads the section as a single method's array either answers with the other
- * method's numbers or refuses to answer.
+ * reads the section as a single method's array either returns the other method's
+ * numbers or fails.
  */
 TEST_F (JitProfile, EachInstrumentedFunctionGetsItsOwnCounters)
 {

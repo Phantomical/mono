@@ -103,7 +103,7 @@ static class Program {
 	 * A folded body has no code of its own, so the frame built for it reports
 	 * the call site it was folded at. That is the same native offset the caller's
 	 * own frame reports. A helper that was really called runs in its own body and
-	 * answers with an offset into that.
+	 * reports an offset into that.
 	 */
 	static bool RunsInsideKernel (Exception e, string kernel)
 	{

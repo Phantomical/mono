@@ -150,10 +150,10 @@ collect_write_backs (Function &f, SmallVectorImpl<Instruction *> &points)
 	}
 }
 
-/// Adds each loop's weight into per_loop, and answers with the weight of the
-/// blocks no loop holds.
+/// Adds each loop's weight into per_loop. Returns the weight of the blocks no
+/// loop holds.
 ///
-/// The entry block lies in no loop, because it has no predecessor, so the answer
+/// The entry block lies in no loop, because it has no predecessor, so the result
 /// is never zero.
 uint64_t
 weigh (Function &f, LoopInfo &li, DenseMap<const Loop *, uint64_t> &per_loop)
@@ -224,9 +224,9 @@ emit_accumulator (Function &f, LoopInfo &li,
  * The plain load in front keeps the atomic off the path a body takes once the
  * counter is spent. That is every exit after the method has asked.
  *
- * atomicrmw answers with the value from before it, and those answers decrease as
- * the threads take them. So exactly one thread sees a value above zero that its
- * own cost takes to zero or past it, and that thread is the one that asks.
+ * atomicrmw returns the value from before it, and those values decrease as the
+ * threads take them. So exactly one thread sees a value above zero that its own
+ * cost takes to zero or past it, and that thread is the one that asks.
  */
 void
 emit_check (Instruction *at, Value *cost, GlobalVariable *counter,
@@ -344,8 +344,8 @@ unwind_marker (Function &f)
 	                           GlobalValue::PrivateLinkage, value, name);
 }
 
-/// Builds the pad a callee's exception reaches on its way through this frame,
-/// and answers with it. The caller then sends each unwinding call to it.
+/// Builds the pad a callee's exception reaches on its way through this frame.
+/// The caller then sends each unwinding call to it.
 ///
 /// The pad charges the turns the loops made, then calls mono_llvm_resume_unwind
 /// (), the way any LLVM fault handler entered by unwinding does.
