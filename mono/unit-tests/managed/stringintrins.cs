@@ -1,5 +1,5 @@
 // The public operations that stand in front of the corlib helpers
-// transform.c answers with an opcode of its own: string.GetHashCode
+// transform.c replaces with an opcode of its own: string.GetHashCode
 // (System.Marvin.Block), Span.Clear over a reference element type
 // (SpanHelpers.ClearWithReferences), ordinal ignore-case comparison and
 // invariant casing (System.Text.Unicode.Utf16Utility),

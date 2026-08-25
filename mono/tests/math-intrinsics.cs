@@ -4,7 +4,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
- * The System.Math and System.MathF icalls the compiled tiers answer with
+ * The System.Math and System.MathF icalls the compiled tiers rewrite into
  * arithmetic instead of a call to the icall's wrapper.
  *
  * Two things are checked, and they catch different faults.
@@ -181,9 +181,9 @@ static class Program {
 			got.Add (MathF.Asinh (F (f)));
 			got.Add (MathF.Acosh (F (f)));
 			got.Add (MathF.Atanh (F (f)));
-			// Managed IL rather than icalls. Truncate and MathF.Round are
-			// answered with an intrinsic and Max and Min are not, so the tiers
-			// have to agree on all of them either way.
+			// Managed IL rather than icalls. Truncate and MathF.Round become
+			// an intrinsic and Max and Min do not, so the tiers have to agree
+			// on all of them either way.
 			got.Add (Math.Truncate (D (x)));
 			got.Add (MathF.Truncate (F (f)));
 			got.Add (MathF.Round (F (f)));
@@ -315,10 +315,10 @@ static class Program {
 		NaN ("MathF.Truncate (NaN)", MathF.Truncate (F (float.NaN)));
 
 		/*
-		 * Max and Min are not answered with an intrinsic, and these are the
-		 * cases that say why. The managed body returns the second operand when
-		 * the two compare equal, so the answer depends on the order the signed
-		 * zeros arrive in. llvm.maximum answers +0 to both of the first pair.
+		 * Max and Min do not become an intrinsic, and these are the cases that
+		 * say why. The managed body returns the second operand when the two
+		 * compare equal, so the result depends on the order the signed zeros
+		 * arrive in. llvm.maximum returns +0 for both of the first pair.
 		 */
 		Same ("Math.Max (0, -0)", Math.Max (D (0.0), E (-0.0)), -0.0);
 		Same ("Math.Max (-0, 0)", Math.Max (D (-0.0), E (0.0)), 0.0);

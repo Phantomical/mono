@@ -5,7 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 /*
- * The System.Buffer copies the compiled tiers answer with one memory intrinsic
+ * The System.Buffer copies the compiled tiers rewrite into one memory intrinsic
  * instead of the managed copy ladder.
  *
  * The oracle is Reference (), which copies a byte at a time through a

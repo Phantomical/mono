@@ -35,7 +35,7 @@ public:
 	/// the body is linked in, so the site still needs no rewriting of its own.
 	///
 	/// What comes back is fresh translator output, unless the engine folded the
-	/// method into this root already. It then answers with the body standing in
+	/// method into this root already. It then returns the body standing in
 	/// decl's own module, which the caller links nothing for. Read getParent ()
 	/// to tell the two apart.
 	///

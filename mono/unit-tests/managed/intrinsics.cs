@@ -1,4 +1,4 @@
-// The non-math intrinsics: the calls transform.c answers with an opcode of its
+// The non-math intrinsics: the calls transform.c replaces with an opcode of its
 // own, and the span and array opcodes beside them.
 //
 // Indexes and enum values come through NoInlining helpers.  The transform folds

@@ -333,7 +333,7 @@ struct TransformData {
 	void interp_emit_sfld_access (MonoClassField *field, MonoClass *field_class, MintType mt,
 	                              gboolean is_load, MonoError *error);
 	/// Writes a static field access of a class the generic context names,
-	/// through the vtable the context answers with.
+	/// through the vtable the context resolves to.
 	///
 	/// Records a refusal for the shapes that name more than that vtable: a
 	/// special static, and a store of a value type the context names.
@@ -436,9 +436,9 @@ struct TransformData {
 	/// The class returned is then the shared form's, so it describes the site
 	/// and never the instantiation.
 	///
-	/// A site that answers with a fetch passes NULL while inlining. A fetch
-	/// reads the receiver of the body being written, which is the caller's
-	/// rather than the callee's, so it would answer for the wrong generic
+	/// A site that resolves through a fetch passes NULL while inlining. A
+	/// fetch reads the receiver of the body being written, which is the
+	/// caller's rather than the callee's, so it would name the wrong generic
 	/// context. A site that only needs a size or a kind is free of this,
 	/// because reference sharing keeps those common.
 	MonoClass *resolve_class (MonoMethod *method, guint32 token,

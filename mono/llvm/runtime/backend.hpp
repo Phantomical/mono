@@ -100,8 +100,8 @@ public:
 	/// Returns the address that stands for \p method, publishing the method if
 	/// the domain has not seen it, and without compiling a body for it.
 	///
-	/// A method native code enters answers with its C entry instead, and that
-	/// one is compiled here rather than on a later call: an address handed to
+	/// The address for a method native code enters is its C entry, and that one
+	/// is compiled here rather than on a later call: an address handed to
 	/// native code is called without the runtime being asked again.
 	llvm::Expected<void *> stub_for (MonoMethod *method, MonoDomain *domain);
 
@@ -129,15 +129,15 @@ private:
 	/// entered at. This is what the method's thunk is published pointing at.
 	///
 	/// It takes no decision that has to wait for another thread. A method it
-	/// sends to a compiled tier is answered with the compile entry below, so
-	/// every thread that blocks for a body blocks there.
+	/// sends to a compiled tier gets the compile entry below, so every thread
+	/// that blocks for a body blocks there.
 	void *policy_entry (DomainState &domain, MonoDomainMethod &dm);
 
 	/// Compiles \p dm on the calling thread and returns where the body landed.
 	///
 	/// The one place a thread waits for a method's code. A method that cannot
-	/// be compiled is answered with a body that raises, so this always returns
-	/// somewhere the caller can be sent.
+	/// be compiled gets a body that raises, so this always returns somewhere
+	/// the caller can be sent.
 	void *compile_entry (DomainState &domain, MonoDomainMethod &dm);
 
 	/// Points \p dm's entry at the interpreter and returns it.

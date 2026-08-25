@@ -40,7 +40,7 @@ is_debugger_break (MonoMethod *target, MonoMethodSignature *sig)
 }
 
 /*
- * Array.Length, GetLength () and GetLowerBound () answer with an int32, and the
+ * Array.Length, GetLength () and GetLowerBound () return an int32, and the
  * fields they read are as wide as mono_array_size_t. Where that type is wider,
  * ves_icall_System_Array_GetLength () raises OverflowException on a length past
  * int32, and a load raises nothing. So the shape emitters stand down and the
@@ -547,10 +547,10 @@ MethodLLVMEmitter::is_own_this (llvm::Value *value)
 /// a call target in this module.
 ///
 /// The address is the method's published entry, so a pointer taken here stays
-/// correct when a later compile replaces the body. Two kinds of method answer
-/// with something else. A no-wrapper icall's compiled callers name the C
-/// function the entry jumps to. A method native code enters answers with its C
-/// entry rather than with the thunk.
+/// correct when a later compile replaces the body. Two kinds of method get
+/// something else. A no-wrapper icall's compiled callers name the C function
+/// the entry jumps to. A method native code enters gets its C entry rather
+/// than the thunk.
 llvm::Expected<llvm::Constant *>
 MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 {
@@ -1119,9 +1119,9 @@ MethodLLVMEmitter::emit_get_type (MonoIrBuilder &builder, bool receiver_by_refer
 	 * unguarded and this follows it. A guard costs every site, and the window
 	 * it covers is one managed code cannot run in.
 	 *
-	 * A transparent proxy answers with the type it stands for. Its vtable is a
-	 * copy of the real class's, and mono_class_proxy_vtable () overwrites
-	 * `type` with the interface for an interface proxy.
+	 * For a transparent proxy the field holds the type it stands for. Its
+	 * vtable is a copy of the real class's, and mono_class_proxy_vtable ()
+	 * overwrites `type` with the interface for an interface proxy.
 	 */
 	llvm::Value *type = builder.CreateAlignedLoad (
 		ptr,

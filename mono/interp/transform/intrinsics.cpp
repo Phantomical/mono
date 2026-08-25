@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief Library methods the transform answers with an opcode of its own.
+ * \brief Library methods the transform replaces with an opcode of its own.
  *
  * A call site whose target is one of these does not become a call. What
  * replaces it is either a single MINT opcode or a short sequence, so the

@@ -118,7 +118,7 @@ def main():
     if not want:
         die(f"{args.source} carries no IL-FRAME markers, so there is nothing to check.")
 
-    # --debug is what makes the runtime load the corpus's PDB and answer with a
+    # --debug is what makes the runtime load the corpus's PDB and print a
     # source line; it leaves the compile itself alone, so the map under test is
     # the one an ordinary run would get.
     proc = subprocess.run([args.runtime, "--debug", args.corpus],

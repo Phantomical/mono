@@ -78,7 +78,7 @@ static class Costed {
 
 	/*
 	 * A body whose own call reads the frame that called it. Fold this in and
-	 * Assembly:GetCallingAssembly () answers with the root's caller rather than
+	 * Assembly:GetCallingAssembly () returns the root's caller rather than
 	 * this body's. The gate walks a candidate's calls and refuses this one.
 	 */
 	public static void FailThroughFrameRead (string what, bool yes)
@@ -151,7 +151,7 @@ static class Program {
 	 * A folded body has no code of its own, so the frame reported for it names
 	 * the call site in Root () that it was folded at - the same native offset
 	 * Root ()'s own frame reports. A helper that was really called runs in its
-	 * own body and answers with an offset into that.
+	 * own body and reports an offset into that.
 	 */
 	static bool RunsInsideRoot (Exception e, string helper)
 	{

@@ -3,7 +3,7 @@
 
 /**
  * \file
- * \brief Bodies for library methods the interpreter answers with one opcode.
+ * \brief Bodies for library methods the interpreter replaces with one opcode.
  *
  * Each replaces a BCL method that shows up in interpreter-heavy work and
  * otherwise runs one bytecode at a time.

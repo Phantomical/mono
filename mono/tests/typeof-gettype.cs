@@ -64,7 +64,7 @@ static class Program {
 		++fails;
 	}
 
-	/* typeof, which the compiled tiers answer with a constant. */
+	/* typeof, which the compiled tiers rewrite into a constant. */
 	[MethodImpl (MethodImplOptions.NoInlining)] static Type OfBase () { return typeof (Base); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static Type OfVal () { return typeof (Val); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static Type OfArray () { return typeof (Base[]); }
@@ -164,11 +164,11 @@ static class Program {
 
 	/*
 	 * typeof on a type that Reflection.Emit has not created yet. The runtime
-	 * answers with the builder's own object rather than with a pinned
-	 * RuntimeType, so a moving collector can move it and the compiled tiers
-	 * have to leave the site alone there. The answer is the same object either
-	 * way, which is what this asks, because a test that reads the shape would
-	 * read a different one under each collector.
+	 * returns the builder's own object rather than a pinned RuntimeType, so a
+	 * moving collector can move it and the compiled tiers have to leave the
+	 * site alone there. The object is the same one either way, which is what
+	 * this asks, because a test that reads the shape would read a different
+	 * one under each collector.
 	 */
 	static Func<Type> EmitTypeOfUncreated (out TypeBuilder built)
 	{

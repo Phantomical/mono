@@ -352,7 +352,7 @@ public class OpcodesTail {
 	}
 
 	//
-	// The error arm of each remoted field opcode. The proxy answers with an
+	// The error arm of each remoted field opcode. The proxy fails with an
 	// exception, and the opcode has to raise it here.
 	//
 

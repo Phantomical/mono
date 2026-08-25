@@ -193,7 +193,7 @@ public class FuncPtrs {
 	}
 
 	// The call site keeps the method virtual and wraps whatever the vtable
-	// answers with.
+	// resolves to.
 	public static int test_31_synchronized_sealed_override_call ()
 	{
 		FpSealed s = (FpSealed) IdO (new FpSealed ());
@@ -393,8 +393,8 @@ public class FuncPtrs {
 
 	public static int test_5_delegate_built_from_an_entry_point ()
 	{
-		// The delegate gets an address and nothing else. The runtime answers with
-		// a native wrapper over it, so the call leaves managed code and comes
+		// The delegate gets an address and nothing else. The runtime builds a
+		// native wrapper over it, so the call leaves managed code and comes
 		// back.
 		MethodInfo m = typeof (FuncPtrs).GetMethod ("Marked", BindingFlags.Static | BindingFlags.NonPublic)
 			.MakeGenericMethod (typeof (string));

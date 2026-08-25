@@ -283,8 +283,8 @@ static class Program {
 		ExpectInner ("GuardedVirtualCall", tier, GuardedVirtualCall (null));
 		unsafe { ExpectInner ("GuardedBlockCopy", tier, GuardedBlockCopy (null)); }
 
-		// A case that must not throw, so a tier that answers with an
-		// exception everywhere fails here.
+		// A case that must not throw, so a tier that raises an exception
+		// everywhere fails here.
 		Holder present = new Holder ();
 
 		present.First = 11;

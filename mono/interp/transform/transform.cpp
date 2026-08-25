@@ -2619,8 +2619,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 					/*
 					 * Check the class for failures before the type check, which
 					 * can throw other exceptions. A class the context names is
-					 * open, and the fetch above answers with the
-					 * instantiation's own, which the opcode then checks.
+					 * open, and the fetch above reads the instantiation's
+					 * own, which the opcode then checks.
 					 */
 					mono_class_setup_vtable (klass);
 					CHECK_TYPELOAD (klass);
@@ -3166,7 +3166,7 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 			/*
 			 * The handle is burned into a data item, and typeof (T) in a body
 			 * shared between string and object needs two of them. Each kind of
-			 * handle has an rgctx entry that answers with the same pointer the
+			 * handle has an rgctx entry that reads the same pointer the
 			 * data item would have held.
 			 */
 			bool token_from_context = false;

@@ -58,11 +58,11 @@ public:
 	/// Reserve a trampoline that runs compile and continues into the address it
 	/// returns, and hand back its address.
 	///
-	/// A later call answers with that address rather than running compile
-	/// again, until rearm () takes the answer away. Threads that arrive
-	/// together all land on the same address, and each of them can run compile
-	/// to get there, so compile must be safe to run again and to run on more
-	/// than one thread at once.
+	/// A later call returns that address rather than running compile again,
+	/// until rearm () takes it away. Threads that arrive together all land on
+	/// the same address, and each of them can run compile to get there, so
+	/// compile must be safe to run again and to run on more than one thread
+	/// at once.
 	llvm::Expected<void *> reserve (LazyCompile compile);
 
 	/// Give trampoline back, for a later reserve () to hand out again, and drop

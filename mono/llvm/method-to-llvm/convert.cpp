@@ -245,7 +245,7 @@ int_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, Target target)
 ///
 /// The constrained intrinsics carry no poison clause, and LLVM constant folds none of
 /// them, so each one reaches the target's own conversion instruction. On amd64 that is
-/// cvttsd2si, which answers with the integer indefinite value. The interpreter's C cast
+/// cvttsd2si, which returns the integer indefinite value. The interpreter's C cast
 /// compiles to the same instruction, so the two engines agree with no range test in
 /// front of either of them.
 ///

@@ -310,7 +310,7 @@ MonoPassBuilder::buildPgoUsePipeline ()
 	 * file system serves whatever the running compile pushed, so one pipeline
 	 * built once reads a different method's counts each time.
 	 *
-	 * Every path this file system is asked for answers with that buffer, so
+	 * This file system serves that buffer for every path it is asked for, so
 	 * the name below only has to be one the reader will open.
 	 */
 	MPM.addPass (llvm::PGOInstrumentationUse (profile_file, "", /*IsCS=*/false, ProfileFS));

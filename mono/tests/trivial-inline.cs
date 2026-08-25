@@ -134,7 +134,7 @@ static class Program {
 	 * A folded body has no code of its own, so the frame reported for it names
 	 * the call site in root that it was folded at - the same native offset
 	 * root's own frame reports. A helper that was really called runs in its
-	 * own body and answers with an offset into that.
+	 * own body and reports an offset into that.
 	 */
 	static bool RunsInside (Exception e, string helper, string root)
 	{

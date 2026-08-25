@@ -1798,7 +1798,7 @@
 		ret
 	}
 
-	// Unary plus on an nfloat, which the unary table answers with a move. A move
+	// Unary plus on an nfloat, which the unary table maps to a move. A move
 	// narrower than the value drops its high half, and an nfloat is as wide as
 	// the native float it stands for.
 	.method public hidebysig static int32 test_7_nfloat_unary_plus () cil managed

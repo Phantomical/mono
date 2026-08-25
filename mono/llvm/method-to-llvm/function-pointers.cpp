@@ -181,9 +181,9 @@ MethodLLVMEmitter::emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token)
 
 	// The key says which method was asked for, so it has to be this
 	// instantiation's. A shared body reads it out of the context, and takes the
-	// helper that re-inflates what the receiver's vtable answered with: for a
-	// generic virtual method that answer is the definition on the receiver's
-	// class, and only the caller knows the type arguments it asked for.
+	// helper that re-inflates what the receiver's vtable resolved to: for a
+	// generic virtual method that is the definition on the receiver's class,
+	// and only the caller knows the type arguments it asked for.
 	bool shared_key = depends_on_context (*target);
 	llvm::Expected<llvm::Function *> lookup =
 		icall_wrapper_decl (shared_key ? MONO_JIT_ICALL_mono_ldvirtfn_gshared

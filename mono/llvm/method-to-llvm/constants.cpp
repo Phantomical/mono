@@ -357,7 +357,7 @@ MethodLLVMEmitter::fold_type_from_handle (MonoIrBuilder &builder, MonoType *type
 			return runtime_error (reflection_error);
 
 		/*
-		 * A type built through Reflection.Emit answers with the builder's own
+		 * A type built through Reflection.Emit gets the builder's own
 		 * object, which is not pinned. mono_class_create_runtime_vtable ()
 		 * registers a moving root for the vtable slot that holds one, and a
 		 * constant in code can have no such root.

@@ -441,7 +441,7 @@
 		ret
 	}
 
-	// An array element type, which mint_type () also answers with the reference
+	// An array element type, which mint_type () also maps to the reference
 	// arm. The row is longer than the array that holds it, so a load of the
 	// wrong element cannot give 3.
 	.method public static int32 test_3_array_element_token () cil managed
@@ -587,7 +587,7 @@
 	}
 
 	// ------------------------------------------------------------------
-	// Enums, which mint_type () answers with the underlying width
+	// Enums, which mint_type () maps to the underlying width
 	// ------------------------------------------------------------------
 
 	.method public static int32 test_1_sbyte_enum_token () cil managed

@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 
 /*
- * Monitor.Enter and Monitor.Exit, which the compiled tiers answer with a call
+ * Monitor.Enter and Monitor.Exit, which the compiled tiers rewrite into a call
  * to a fast helper and the call the site named on the edge the helper did not
  * take.
  *

@@ -111,7 +111,7 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 		return nullptr;
 
 	/*
-	 * The engine answered with a body the module holds already, so there is
+	 * The engine returned a body the module holds already, so there is
 	 * nothing to prepare and nothing to link. Move the sites off the
 	 * declaration the way the link below does and hand it back.
 	 */
