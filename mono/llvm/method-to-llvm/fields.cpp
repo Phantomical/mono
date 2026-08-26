@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "method-symbols.hpp"
 #include "runtime-error.hpp"
 #include "../passes/class-init.hpp"
 #include "../runtime/options.hpp"
@@ -326,7 +327,14 @@ MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 
 	g_free (name);
 	record_external (symbol, kind, klass);
-	return extern_symbol (symbol);
+
+	llvm::Constant *symbolic = extern_symbol (symbol);
+
+	// A pass that answers a dispatch site has the vtable and needs the class.
+	if (kind == ExternalSymbol::Kind::VTable)
+		mark_class_reference (*llvm::cast<llvm::GlobalValue> (symbolic), klass);
+
+	return symbolic;
 }
 
 llvm::Constant *

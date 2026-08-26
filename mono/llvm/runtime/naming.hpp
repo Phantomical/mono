@@ -54,6 +54,12 @@ llvm::Error bind_symbols (llvm::Module &m);
 /// two profiles of the same program cannot otherwise be compared or merged.
 std::string display_name (MonoMethod *method, llvm::StringRef symbol);
 
+/// Whether method has no IL body of its own to translate: an icall, a
+/// pinvoke declaration, or a method the runtime implements itself. A
+/// wrapper is never one of these, even when it wraps such a method,
+/// because it always carries IL of its own.
+bool implemented_outside_il (MonoMethod *method);
+
 /// Whether a call can ever reach a method with a boxed receiver, so that it
 /// wants an unboxing entry beside its ordinary one.
 ///

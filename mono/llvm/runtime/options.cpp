@@ -2,6 +2,7 @@
 
 #include "jit.hpp"
 #include "method-to-llvm.hpp"
+#include "naming.hpp"
 
 #include <llvm/ADT/StringRef.h>
 
@@ -239,6 +240,18 @@ tier2_enabled ()
 {
 	static bool on = [] {
 		const char *value = g_getenv ("MONO_LLVM_JIT_TIER2");
+
+		return value == nullptr || is_truthy_env_var (value);
+	}();
+
+	return on;
+}
+
+bool
+devirtualization_enabled ()
+{
+	static bool on = [] {
+		const char *value = g_getenv ("MONO_LLVM_JIT_DEVIRT");
 
 		return value == nullptr || is_truthy_env_var (value);
 	}();

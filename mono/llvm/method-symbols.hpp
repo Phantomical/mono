@@ -24,6 +24,7 @@ class GlobalValue;
 class Module;
 } // namespace llvm
 
+typedef struct _MonoClass MonoClass;
 typedef struct _MonoMethod MonoMethod;
 
 namespace mono {
@@ -40,6 +41,15 @@ void mark_method_reference (llvm::GlobalValue &value, MonoMethod *method);
 
 /// Returns the method \p value stands for, or null when it carries no marker.
 MonoMethod *marked_method (const llvm::GlobalValue &value);
+
+/// The same for a symbol that stands for one class's run-time structure.
+///
+/// The engine resolves such a symbol by name, so the mark is not what makes it
+/// resolve. It is there for a pass, which has the symbol and needs the class.
+void mark_class_reference (llvm::GlobalValue &value, MonoClass *klass);
+
+/// Returns the class \p value stands for, or null when it carries no marker.
+MonoClass *marked_class (const llvm::GlobalValue &value);
 
 /// Renames every marked declaration in \p m to what \p name_of calls that
 /// method, leaving the module referring only to symbols the engine publishes.

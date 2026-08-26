@@ -3,6 +3,7 @@
 #include "layout.hpp"
 #include "mini-runtime.h"
 #include "runtime-error.hpp"
+#include "runtime/naming.hpp"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/icall-internals.h"

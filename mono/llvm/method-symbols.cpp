@@ -19,28 +19,55 @@ namespace {
 /// The attribute holding a marked declaration's MonoMethod, printed as `%p`.
 constexpr StringRef method_attribute = "mono-method";
 
-std::optional<MonoMethod *>
-marker_of (const GlobalValue &value)
+/// The same for the MonoClass a per-class symbol stands for.
+constexpr StringRef class_attribute = "mono-class";
+
+/// The pointer \p name carries on \p value, or nothing where it carries none.
+std::optional<uintptr_t>
+pointer_marker (const GlobalValue &value, StringRef name)
 {
-	StringRef pointer;
+	StringRef printed;
 
 	if (auto *fn = dyn_cast<Function> (&value)) {
-		if (!fn->hasFnAttribute (method_attribute))
+		if (!fn->hasFnAttribute (name))
 			return std::nullopt;
-		pointer = fn->getFnAttribute (method_attribute).getValueAsString ();
+		printed = fn->getFnAttribute (name).getValueAsString ();
 	} else if (auto *global = dyn_cast<GlobalVariable> (&value)) {
-		if (!global->hasAttribute (method_attribute))
+		if (!global->hasAttribute (name))
 			return std::nullopt;
-		pointer = global->getAttribute (method_attribute).getValueAsString ();
+		printed = global->getAttribute (name).getValueAsString ();
 	} else {
 		return std::nullopt;
 	}
 
 	uintptr_t address = 0;
 
-	if (pointer.getAsInteger (0, address) || address == 0)
+	if (printed.getAsInteger (0, address) || address == 0)
 		return std::nullopt;
-	return reinterpret_cast<MonoMethod *> (address);
+	return address;
+}
+
+void
+mark_pointer (GlobalValue &value, StringRef name, const void *pointer)
+{
+	char printed[32];
+
+	snprintf (printed, sizeof (printed), "%p", pointer);
+
+	if (auto *fn = dyn_cast<Function> (&value))
+		fn->addFnAttr (name, printed);
+	else if (auto *global = dyn_cast<GlobalVariable> (&value))
+		global->addAttribute (name, printed);
+}
+
+std::optional<MonoMethod *>
+marker_of (const GlobalValue &value)
+{
+	std::optional<uintptr_t> address = pointer_marker (value, method_attribute);
+
+	if (!address)
+		return std::nullopt;
+	return reinterpret_cast<MonoMethod *> (*address);
 }
 
 } // namespace
@@ -48,20 +75,27 @@ marker_of (const GlobalValue &value)
 void
 mark_method_reference (GlobalValue &value, MonoMethod *method)
 {
-	char printed[32];
-
-	snprintf (printed, sizeof (printed), "%p", (void *) method);
-
-	if (auto *fn = dyn_cast<Function> (&value))
-		fn->addFnAttr (method_attribute, printed);
-	else if (auto *global = dyn_cast<GlobalVariable> (&value))
-		global->addAttribute (method_attribute, printed);
+	mark_pointer (value, method_attribute, method);
 }
 
 MonoMethod *
 marked_method (const GlobalValue &value)
 {
 	return marker_of (value).value_or (nullptr);
+}
+
+void
+mark_class_reference (GlobalValue &value, MonoClass *klass)
+{
+	mark_pointer (value, class_attribute, klass);
+}
+
+MonoClass *
+marked_class (const GlobalValue &value)
+{
+	std::optional<uintptr_t> address = pointer_marker (value, class_attribute);
+
+	return address ? reinterpret_cast<MonoClass *> (*address) : nullptr;
 }
 
 /// Carries a rename through the attributes that hold a symbol name rather

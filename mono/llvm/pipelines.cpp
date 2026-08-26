@@ -4,6 +4,7 @@
 #include "passes/array-shape.hpp"
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init.hpp"
+#include "passes/devirtualize.hpp"
 #include "passes/inline-copies.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/profile-counter-promoter.hpp"
@@ -171,6 +172,21 @@ MonoPassBuilder::MonoPassBuilder (llvm::TargetMachine *TM, OneFileFS *ProfileFS,
 	: llvm::PassBuilder (TM, PTO, std::nullopt, PIC), TM (TM), PTO (PTO),
 	  ProfileFS (ProfileFS)
 {
+	/*
+	 * Here rather than at a place in either pipeline, because what settles a
+	 * dispatch site is the simplification around it: SROA and EarlyCSE forward
+	 * the store at an allocation to the read of the vtable, and GVN reaches the
+	 * one a block boundary stands between. The peephole point sits behind each
+	 * of those rounds and in front of the SCCP and InstCombine runs that read
+	 * the direct call this leaves.
+	 *
+	 * Registered before either pipeline is built, since that is when the
+	 * callbacks are asked for.
+	 */
+	registerPeepholeEPCallback (
+		[] (llvm::FunctionPassManager &FPM, llvm::OptimizationLevel) {
+			FPM.addPass (mono::DevirtualizePass ());
+		});
 }
 
 llvm::FunctionPassManager

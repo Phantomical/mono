@@ -6,6 +6,7 @@
 #include "method-symbols.hpp"
 #include "method-to-llvm.hpp"
 #include "minimal-compile.hpp"
+#include "naming.hpp"
 #include "options.hpp"
 
 #include <llvm/ADT/STLExtras.h>

@@ -3,6 +3,7 @@
 #include "translate.hpp"
 
 #include "arch/arch.hpp"
+#include "compile-state.hpp"
 #include "debugging/perf/dump-method.hpp"
 #include "dump.hpp"
 #include "externals.hpp"
@@ -263,6 +264,46 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 
 	if (target.tier == JitTier::tier2)
 		inliner.emplace (target, externals, types, inlining, module_symbols);
+
+	/*
+	 * A pass that answers a dispatch site adds a declaration of its own, from
+	 * inside the pipeline and so past the resolution above. So it names and
+	 * resolves that one here, appending to the same two vectors the cost model
+	 * does. One that will not resolve goes back off and the site keeps its
+	 * lookup.
+	 */
+	auto publish_declaration = [&] (llvm::Function &decl, MonoMethod *callee) -> llvm::Function * {
+		llvm::Module &holder = *decl.getParent ();
+		std::string published = stub_symbol (callee);
+		size_t from = externals.size ();
+
+		externals.push_back (
+			{ decl.getName ().str (), ExternalSymbol::Kind::Code, callee });
+
+		Error named = bind_symbols (holder);
+
+		if (!named)
+			named = resolve (ArrayRef (externals).slice (from, externals.size () - from));
+
+		if (named) {
+			consumeError (std::move (named));
+			externals.resize (from);
+			return nullptr;
+		}
+
+		// bind_symbols () folds the declaration into one the module already
+		// held for this method, so read the survivor back by name.
+		return holder.getFunction (published);
+	};
+
+	// With no state to read, the pass leaves every site dispatching, which is
+	// what MONO_LLVM_JIT_DEVIRT off has to mean.
+	CompileState state;
+
+	if (devirtualization_enabled ())
+		state = CompileState { target.domain, publish_declaration };
+
+	CompileScope compiling (state);
 
 	std::vector<ProfileCounters> layout = MonoJit::optimize (
 		*module, target.tier, target.profile,

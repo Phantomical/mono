@@ -1283,12 +1283,6 @@ void carry_parameter_extensions (llvm::CallBase *call, MonoMethodSignature *sig,
 /// with this one the first time an operand kind is added.
 std::optional<size_t> il_operand_size (MonoOpcodeEnum opcode);
 
-/// Whether method has no IL body of its own to translate: an icall, a
-/// pinvoke declaration, or a method the runtime implements itself. A
-/// wrapper is never one of these, even when it wraps such a method,
-/// because it always carries IL of its own.
-bool implemented_outside_il (MonoMethod *method);
-
 /// Whether this method is implemented entirely by the backend, with its
 /// actual IL ignored.
 ///
