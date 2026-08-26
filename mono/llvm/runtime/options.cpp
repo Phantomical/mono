@@ -248,18 +248,6 @@ tier2_enabled ()
 }
 
 bool
-devirtualization_enabled ()
-{
-	static bool on = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_DEVIRT");
-
-		return value == nullptr || is_truthy_env_var (value);
-	}();
-
-	return on;
-}
-
-bool
 inline_write_barrier ()
 {
 	static bool on = [] {

@@ -101,14 +101,6 @@ std::chrono::milliseconds compile_worker_idle_timeout ();
 /// On unless MONO_LLVM_JIT_TIER2 turns it off.
 bool tier2_enabled ();
 
-/// Whether a dispatch site whose receiver the optimizer settled becomes a
-/// direct call.
-///
-/// On unless MONO_LLVM_JIT_DEVIRT turns it off. A false value leaves every site
-/// dispatching, which separates a bug in what a site was rewritten to from one
-/// in the body it now calls.
-bool devirtualization_enabled ();
-
 /// Whether MONO_LLVM_JIT_INLINE_WBARRIER left the inline write barrier on.
 ///
 /// A false value sends every reference store through

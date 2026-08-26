@@ -296,14 +296,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		return holder.getFunction (published);
 	};
 
-	// With no state to read, the pass leaves every site dispatching, which is
-	// what MONO_LLVM_JIT_DEVIRT off has to mean.
-	CompileState state;
-
-	if (devirtualization_enabled ())
-		state = CompileState { target.domain, publish_declaration };
-
-	CompileScope compiling (state);
+	CompileScope compiling ({ target.domain, publish_declaration });
 
 	std::vector<ProfileCounters> layout = MonoJit::optimize (
 		*module, target.tier, target.profile,
