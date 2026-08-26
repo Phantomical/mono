@@ -21,12 +21,12 @@ class Module;
 
 namespace mono {
 
-/// `ptr @mono.vtable.func (ptr vtable, i32 index)` answers the entry in slot
+/// `ptr @mono.vtable.func (ptr vtable, i32 index)` returns the entry in slot
 /// index of vtable. index counts words into `MonoVTable.vtable`, so it is the
 /// method's own vtable index. Only the translator writes a call to it.
 constexpr llvm::StringRef vtable_func_name = "mono.vtable.func";
 
-/// `ptr @mono.imt.func (ptr vtable, i32 slot, ptr key)` answers the entry in
+/// `ptr @mono.imt.func (ptr vtable, i32 slot, ptr key)` returns the entry in
 /// interface method table slot of vtable. The table sits in the words before
 /// the MonoVTable, and slot is the index into it that key hashes to.
 ///
@@ -36,7 +36,7 @@ constexpr llvm::StringRef vtable_func_name = "mono.vtable.func";
 /// asked for. The lowering drops it. Only the translator writes a call to this.
 constexpr llvm::StringRef imt_func_name = "mono.imt.func";
 
-/// `ptr @mono.vtable.gfunc (ptr vtable, i32 index, ptr key)` answers the entry
+/// `ptr @mono.vtable.gfunc (ptr vtable, i32 index, ptr key)` returns the entry
 /// in slot index of vtable for a virtual generic method.
 ///
 /// The slot itself can never hold one instantiation's code, so what stands

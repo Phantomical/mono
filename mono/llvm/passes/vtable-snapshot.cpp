@@ -25,8 +25,8 @@ namespace {
 /// One field a snapshot states, at the offset `MonoVTable` puts it.
 ///
 /// A pointer field keeps a pointer type, because the value it states is a symbol
-/// and a reader loads it as a pointer. Folding one through an integer of the
-/// same width goes through a reinterpretation that answers nothing useful.
+/// and a reader loads it as a pointer. An integer of the same width would make
+/// the fold reinterpret the bytes, which loses the symbol.
 struct StatedField {
 	uint64_t at;
 	uint64_t width;

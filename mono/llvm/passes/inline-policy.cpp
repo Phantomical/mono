@@ -3,7 +3,12 @@
 #include "strip-casts.hpp"
 #include "vtable-func.hpp"
 
+#include "mono/metadata/abi-details.h"
+#include "mono/metadata/class-internals.h"
+
+#include <llvm/ADT/APInt.h>
 #include <llvm/Analysis/CaptureTracking.h>
+#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
@@ -111,18 +116,35 @@ returns_a_named_allocation (const Function &f)
 	return false;
 }
 
+/// Whether \p vtable is the vtable of \p dispatched_on, read rather than named.
+///
+/// A vtable operand that is already a global is resolved, and folding a body in
+/// front of such a site changes nothing. MonoObject holds its vtable first, so
+/// the read is a load of the object's own address once the zero offset is
+/// folded away.
+bool
+reads_the_vtable_of (const Value *vtable, const Value *dispatched_on)
+{
+	const auto *read = dyn_cast<LoadInst> (vtable->stripPointerCasts ());
+
+	return read != nullptr
+	       && read->getPointerOperand ()->stripPointerCasts () == dispatched_on;
+}
+
 /// Whether a site in \p f reads a dispatch table out of \p object and cannot
 /// name the method in the slot.
 ///
-/// A site whose vtable operand is already a global is resolved, and folding a
-/// body in front of it changes nothing.
+/// An ordinary virtual site is the plain load of the slot, which is what folds
+/// against a vtable a compile states. The declarations are what is left: an
+/// interface, a virtual generic, and a method the runtime could give no slot.
 bool
 dispatches_unresolved_on (const Value *object, const Function &f)
 {
 	const Module *m = f.getParent ();
 	const Value *dispatched_on = object->stripPointerCasts ();
+	const DataLayout &dl = m->getDataLayout ();
 
-	for (StringRef name : { vtable_func_name, imt_func_name }) {
+	for (StringRef name : { vtable_func_name, imt_func_name, vtable_gfunc_name }) {
 		const Function *decl = m->getFunction (name);
 
 		if (decl == nullptr)
@@ -134,18 +156,27 @@ dispatches_unresolved_on (const Value *object, const Function &f)
 			if (site == nullptr || site->getFunction () != &f
 			    || site->arg_size () < 1)
 				continue;
+			if (reads_the_vtable_of (site->getArgOperand (0), dispatched_on))
+				return true;
+		}
+	}
 
-			const Value *vtable = site->getArgOperand (0)->stripPointerCasts ();
+	for (const BasicBlock &block : f) {
+		for (const Instruction &instruction : block) {
+			const auto *entry = dyn_cast<LoadInst> (&instruction);
 
-			if (isa<GlobalValue> (vtable))
+			if (entry == nullptr || !entry->getType ()->isPointerTy ())
 				continue;
 
-			// MonoObject holds its vtable first, so the read is a load of the
-			// object's own address once the zero offset is folded away.
-			const auto *read = dyn_cast<LoadInst> (vtable);
+			APInt at (64, 0);
+			const Value *base =
+				entry->getPointerOperand ()->stripAndAccumulateConstantOffsets (
+					dl, at, /*AllowNonInbounds=*/true);
 
-			if (read != nullptr
-			    && read->getPointerOperand ()->stripPointerCasts () == dispatched_on)
+			// The slots are the last field, so an offset short of them is one
+			// of the facts a snapshot states rather than a dispatch.
+			if (at.uge (MONO_STRUCT_OFFSET (MonoVTable, vtable))
+			    && reads_the_vtable_of (base, dispatched_on))
 				return true;
 		}
 	}
