@@ -2383,12 +2383,46 @@ mono_main (int argc, char* argv[])
  	return 0;
 }
 
+/*
+ * Applies the options in MONO_ENV_OPTIONS as though they arrived on a command
+ * line. An embedder gets no argv, so the options mono_jit_parse_options ()
+ * reads are otherwise out of reach.
+ *
+ * mono_main () reads the same variable through mono_parse_env_options (), and
+ * no path reaches both readers. An option this build does not know stops the
+ * process, which is what mono_jit_parse_options () does with one.
+ */
+static void
+parse_env_options_for_embedder (void)
+{
+	char *env_options = g_getenv ("MONO_ENV_OPTIONS");
+	if (env_options == NULL)
+		return;
+
+	/* merge_parsed_options () keeps argv [0] for the program name. */
+	char *placeholder [] = { (char *) "mono", NULL };
+	char **argv = placeholder;
+	int argc = 1;
+	char *parse_error = mono_parse_options_from (env_options, &argc, &argv);
+
+	g_free (env_options);
+
+	if (parse_error != NULL) {
+		fprintf (stderr, "%s", parse_error);
+		exit (1);
+	}
+
+	if (argc > 1)
+		mono_jit_parse_options (argc - 1, argv + 1);
+}
+
 /**
  * mono_jit_init:
  */
-MonoDomain * 
+MonoDomain *
 mono_jit_init (const char *file)
 {
+	parse_env_options_for_embedder ();
 	MonoDomain *ret = mini_init (file, NULL);
 	MONO_ENTER_GC_SAFE_UNBALANCED; //once it is not executing any managed code yet, it's safe to run the gc
 	return ret;
@@ -2414,9 +2448,10 @@ mono_jit_init (const char *file)
  * \returns the \c MonoDomain representing the domain where the assembly
  * was loaded.
  */
-MonoDomain * 
+MonoDomain *
 mono_jit_init_version (const char *domain_name, const char *runtime_version)
 {
+	parse_env_options_for_embedder ();
 	MonoDomain *ret = mini_init (domain_name, runtime_version);
 	MONO_ENTER_GC_SAFE_UNBALANCED; //once it is not executing any managed code yet, it's safe to run the gc
 	return ret;
