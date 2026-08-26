@@ -54,6 +54,15 @@ the file reachable from the class bodies above them.
 a class `InlineCost.h` declares, so it collides with the definition the dylib
 carries. `-mono-print-instruction-comments` turns the same annotation on here.
 
+**The indirect-call boost is an option and it is off.** `getInlineCost ()` passed
+`BoostIndirect` as a literal `true`; it now reads
+`-mono-inline-boost-indirect-calls`. The boost weighs the callee a resolved site
+names and takes the slack off the cost, and a managed dispatch resolves to a
+declaration this module holds no body for. `analyze ()` sets the threshold before
+it returns on an empty body, so such a callee reports the whole threshold as
+slack — a discount for a body nothing weighed. A site the walk resolved
+concretely is charged the ordinary call penalty instead.
+
 ## What the copy asks mono
 
 **`CallAnalyzer::analyze ()` skips the raising arm of a folded null check.**
@@ -66,6 +75,18 @@ such a check, so the arms are most of what a freshly translated body costs.
 It goes in behind `SingleBBBonus` and `VectorBonus`, which are shares of the
 threshold, and behind the target's multiplier, because what it adds is an
 absolute count rather than a proportion.
+
+**`CallAnalyzer::isLoweredToCall ()` asks `lowers_to_a_load ()` first.** Mono
+writes a dispatch read as a call to a declaration, and
+`TargetTransformInfoImpl::isLoweredToCall ()` answers true for any named
+declaration without reading an attribute. So a read that lowers to one load was
+charged a call penalty and an argument setup on top of it.
+
+**`CallAnalyzer::visitLoad ()` asks `folded_vtable_read ()` first.** A class's
+vtable is a defined constant while a compile optimizes, and the fields and slots
+it states fold. The walk has no memory model of its own, so the answer follows
+the vtable store an allocation carries — one step no other simplification here
+takes. It goes in front of the SROA question, which otherwise consumes the load.
 
 `inline-policy.hpp` documents what each answer means. Each answer is gated by an
 option of its own, so a run can be put back on LLVM's own answers without a
@@ -82,12 +103,18 @@ The copy drifts at every LLVM bump. On a bump, diff the new upstream file
 against the old one and apply what it says to the copy by hand. A new `cl::opt`
 needs the `mono-` prefix, and a new definition in `namespace llvm` needs the
 same decision the two above got: drop it when a header declares it, keep it when
-no header does. Watch the block walk in `analyze ()` and the tail of
-`updateThreshold ()`, because that is where the two mono calls sit.
+no header does. Watch the block walk in `analyze ()`, the tail of
+`updateThreshold ()`, the head of `isLoweredToCall ()` and the head of
+`visitLoad ()`, because that is where the mono calls sit. The last two churn
+upstream more than the first two do, so budget for them at each bump.
 
 A cost and a budget that `MONO_LLVM_JIT_TRACE` prints are not what an upstream
 build gives for the same pair, so a comparison against clang or against LLVM's
-own pipeline needs the options off first. Turning off
-`-mono-inline-implicit-null-free` and setting each `mono-inline-*-bonus` to zero
-is what gets LLVM's own answers back. LLVM's `getInlineCost ()` is linked in and
-still reachable as well, so one run can be read against the other.
+own pipeline needs the options off first. Setting each `mono-inline-*-bonus` to
+zero, turning off `-mono-inline-implicit-null-free`,
+`-mono-inline-dispatch-is-a-load`, `-mono-inline-fold-vtable-fields` and
+`-mono-inline-fold-vtable-slots`, and turning **on**
+`-mono-inline-boost-indirect-calls` is what gets LLVM's own answers back. Every
+answer this file adds owes an option here, so that this list stays the whole of
+it. LLVM's `getInlineCost ()` is linked in and still reachable as well, so one
+run can be read against the other.

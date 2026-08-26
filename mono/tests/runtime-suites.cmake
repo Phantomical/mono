@@ -613,12 +613,28 @@ _mono_exe_list(_tier2_inline_policy ${MONO_TESTS_TIER2_INLINE_POLICY_SRC})
 mono_runtime_suite(runtime-tier2-inline-policy TESTS ${_tier2_inline_policy}
                    ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
                        "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=155")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=110")
 mono_runtime_suite(runtime-tier2-inline-policy-off TESTS ${_tier2_inline_policy}
                    ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
                        "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
                        "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=155 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-scalarize-arg-bonus=0")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=110 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-scalarize-arg-bonus=0 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false --llvm-opt=-mono-inline-fold-vtable-slots=false")
+
+# What the cost model answers about a receiver the call site allocated. The off
+# arm turns those answers off and leaves the bonuses alone, because what it
+# separates is the fold rather than a threshold.
+_mono_exe_list(_tier2_inline_dispatch ${MONO_TESTS_TIER2_INLINE_DISPATCH_SRC})
+mono_runtime_suite(runtime-tier2-inline-dispatch TESTS ${_tier2_inline_dispatch}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=256"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=190")
+mono_runtime_suite(runtime-tier2-inline-dispatch-off TESTS ${_tier2_inline_dispatch}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=256"
+                       "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=190 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false --llvm-opt=-mono-inline-fold-vtable-slots=false")
 
 # MONO_ENV_OPTIONS has to reach the runtime before it parses its own argv.
 foreach(_gc IN LISTS _mono_gcs)

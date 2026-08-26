@@ -20,15 +20,26 @@ using System.Runtime.CompilerServices;
  * offset into itself.
  *
  * Both suites name a cold-callsite threshold of their own, because the bodies
- * have to sit between what the model gives them and what the bonus adds. Each
- * costs 180, and the bonuses are 100 and 50, so a threshold of 155 leaves 25
- * either way. Re-measure both numbers when this starts failing on one arm:
+ * have to sit between what the model gives them and what the bonus adds. The
+ * off arm costs each of them 180. The on arm prices Measure's interface
+ * dispatch as the load it lowers to and gives 135, and leaves Make where it is,
+ * so one threshold has to serve two costs.
+ *
+ * Measure is the tighter of the two: it has to decline at 180 and fold at
+ * 135 with the argument bonus of 50, which puts the threshold between 85 and
+ * 135. 110 takes the middle and leaves 25 either way. Make then declines at 180
+ * and folds with the return bonus of 100. Re-measure all of it when this starts
+ * failing on one arm:
  *
  *   MONO_LLVM_JIT_TRACE=1 MONO_LLVM_JIT_TIER2_THRESHOLD=0 \
  *   MONO_LLVM_JIT_INLINE_IL_LIMIT=0 MONO_INLINE_POLICY=off mono-sgen \
  *     --llvm-opt=-mono-inline-cost-full \
  *     --llvm-opt=-mono-inline-devirt-return-bonus=0 \
  *     --llvm-opt=-mono-inline-devirt-arg-bonus=0 tier2-inline-policy.exe
+ *
+ * That gives the on arm's costs, because zeroing the bonuses leaves the answers
+ * the model makes for itself. The off arm's costs want the rest of the options
+ * runtime-suites.cmake names for it, which turn those answers off as well.
  *
  * `-mono-inline-cost-full` is what makes the printed cost the whole cost. The
  * model stops adding once it is past the budget, so the cost a plain run prints

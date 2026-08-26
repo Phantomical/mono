@@ -2,22 +2,27 @@
 
 #include "strip-casts.hpp"
 #include "vtable-func.hpp"
+#include "vtable-snapshot.hpp"
 
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-internals.h"
 
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/CaptureTracking.h>
+#include <llvm/Analysis/ConstantFolding.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalValue.h>
+#include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Operator.h>
 #include <llvm/Support/CommandLine.h>
 
 #include <algorithm>
@@ -31,6 +36,20 @@ cl::opt<bool> ImplicitNullCheckFree (
 	"mono-inline-implicit-null-free", cl::Hidden, cl::init (true),
 	cl::desc ("Leave the raising arm of a folded null check out of a callee's "
 	          "cost"));
+
+cl::opt<bool> DispatchIsALoad (
+	"mono-inline-dispatch-is-a-load", cl::Hidden, cl::init (true),
+	cl::desc ("Price a dispatch read as the load it lowers to rather than as a "
+	          "call"));
+
+cl::opt<bool> FoldVTableFields (
+	"mono-inline-fold-vtable-fields", cl::Hidden, cl::init (true),
+	cl::desc ("Answer a read of the class, type or rank a vtable snapshot "
+	          "states"));
+
+cl::opt<bool> FoldVTableSlots (
+	"mono-inline-fold-vtable-slots", cl::Hidden, cl::init (true),
+	cl::desc ("Answer a read of a dispatch slot a vtable snapshot states"));
 
 /*
  * Each bonus below counts the calls a fold removes, times what the model
@@ -184,7 +203,127 @@ dispatches_unresolved_on (const Value *object, const Function &f)
 	return false;
 }
 
+/// The vtable snapshot \p object's allocation stored into its first word, or
+/// null where this cannot say what stands there.
+///
+/// `emit_object_alloc ()` writes that word once, behind an allocation nothing
+/// else holds yet, so a read of it anywhere below answers with what the store
+/// put there. That is the same fact `DevirtualizePass` stands on, and it is
+/// what lets a walk with no memory model follow one store.
+///
+/// Null covers a class whose allocation can return a transparent proxy, which
+/// gets no such store, and a class with no snapshot at all.
+GlobalVariable *
+stored_vtable_snapshot (Value *object, const DataLayout &dl)
+{
+	object = object->stripPointerCasts ();
+
+	if (!isa<CallBase> (object))
+		return nullptr;
+
+	SmallVector<User *, 8> work (object->users ());
+	GlobalVariable *found = nullptr;
+
+	while (!work.empty ()) {
+		User *user = work.pop_back_val ();
+
+		// An opaque pointer makes a getelementptr the only address arithmetic,
+		// so following the ones that move nowhere reaches every store that can
+		// name the first word.
+		if (auto *gep = dyn_cast<GEPOperator> (user)) {
+			if (gep->hasAllZeroIndices ())
+				work.append (user->user_begin (), user->user_end ());
+			continue;
+		}
+
+		auto *store = dyn_cast<StoreInst> (user);
+
+		if (store == nullptr)
+			continue;
+
+		APInt at (64, 0);
+
+		if (store->getPointerOperand ()->stripAndAccumulateConstantOffsets (
+			    dl, at, /*AllowNonInbounds=*/true) != object
+		    || at != 0)
+			continue;
+
+		auto *snapshot = dyn_cast<GlobalVariable> (
+			const_cast<Value *> (strip_casts (store->getValueOperand ())));
+
+		// A store this cannot read leaves the word unknown, and two that
+		// disagree leave it unknown as well.
+		if (snapshot == nullptr || !snapshot->hasMetadata (vtable_snapshot_metadata)
+		    || !snapshot->hasDefinitiveInitializer ())
+			return nullptr;
+		if (found != nullptr && found != snapshot)
+			return nullptr;
+
+		found = snapshot;
+	}
+
+	return found;
+}
+
 } // namespace
+
+bool
+lowers_to_a_load (const Function &f)
+{
+	if (!DispatchIsALoad)
+		return false;
+
+	// LowerVTableFuncPass writes one load back for each of these, whatever the
+	// slot is and whichever table it sits in.
+	StringRef name = f.getName ();
+
+	return name == vtable_func_name || name == imt_func_name
+	       || name == vtable_gfunc_name;
+}
+
+/*
+ * Word zero of a MonoObject and word zero of a MonoVTable are both at offset
+ * zero, so the offset tells the two reads apart in neither direction. What does
+ * is the base: this is the only thing that settles a value to a snapshot, so a
+ * base that is one is a vtable, and a base that is not is an object.
+ */
+Value *
+folded_vtable_read (LoadInst &load, SettledValue settled)
+{
+	if (!FoldVTableFields && !FoldVTableSlots)
+		return nullptr;
+
+	const DataLayout &dl = load.getModule ()->getDataLayout ();
+	APInt at (64, 0);
+	Value *base = load.getPointerOperand ()->stripAndAccumulateConstantOffsets (
+		dl, at, /*AllowNonInbounds=*/true);
+
+	if (Value *caller_side = settled (base))
+		base = caller_side->stripAndAccumulateConstantOffsets (
+			dl, at, /*AllowNonInbounds=*/true);
+
+	if (auto *snapshot = dyn_cast<GlobalVariable> (base)) {
+		if (!snapshot->hasMetadata (vtable_snapshot_metadata)
+		    || !snapshot->hasDefinitiveInitializer ())
+			return nullptr;
+
+		uint64_t offset = at.getZExtValue ();
+		bool slot = offset >= MONO_SIZEOF_VTABLE;
+
+		if (!(slot ? FoldVTableSlots : FoldVTableFields))
+			return nullptr;
+		if (!vtable_snapshot_states (offset, dl.getTypeStoreSize (load.getType ()),
+		                             vtable_snapshot_slots (*snapshot)))
+			return nullptr;
+
+		return ConstantFoldLoadFromConstPtr (snapshot, load.getType (), at, dl);
+	}
+
+	if (at != MONO_STRUCT_OFFSET (MonoObject, vtable) || !load.getType ()->isPointerTy ())
+		return nullptr;
+
+	return stored_vtable_snapshot (base, dl);
+}
 
 BasicBlock *
 implicit_null_check_successor (const BranchInst &branch)

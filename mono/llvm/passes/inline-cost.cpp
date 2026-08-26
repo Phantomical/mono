@@ -170,6 +170,17 @@ static cl::opt<int> CallPenalty(
     "mono-inline-call-penalty", cl::Hidden, cl::init(25),
     cl::desc("Call penalty that is applied per callsite when inlining"));
 
+// Off, where LLVM has it on. The boost weighs the callee a resolved site names
+// and takes the slack off the cost, and a resolved managed dispatch names a
+// declaration this module holds no body for. analyze() sets the threshold
+// before it returns on an empty body, so such a callee reports the whole
+// threshold as slack. A site the walk resolved concretely is charged the
+// ordinary call penalty instead.
+static cl::opt<bool> BoostIndirectCallSites(
+    "mono-inline-boost-indirect-calls", cl::Hidden, cl::init(false),
+    cl::desc("Weigh the callee a resolved indirect call names and discount the "
+             "site by the slack"));
+
 static cl::opt<size_t>
     StackSizeThreshold("mono-inline-max-stacksize", cl::Hidden,
                        cl::init(std::numeric_limits<size_t>::max()),
@@ -2354,6 +2365,14 @@ bool CallAnalyzer::visitFNeg(UnaryOperator &I) {
 }
 
 bool CallAnalyzer::visitLoad(LoadInst &I) {
+  // A read the call site settles: mono states a class's vtable as a constant,
+  // and the walk reaches one through the receiver this site passes.
+  auto Settled = [this](Value *V) { return getSimplifiedValueUnchecked(V); };
+  if (Value *Held = mono::folded_vtable_read(I, Settled)) {
+    SimplifiedValues[&I] = Held;
+    return true;
+  }
+
   if (handleSROA(I.getPointerOperand(), I.isSimple()))
     return true;
 
@@ -2448,6 +2467,12 @@ bool CallAnalyzer::simplifyCallSite(Function *F, CallBase &Call) {
 }
 
 bool CallAnalyzer::isLoweredToCall(Function *F, CallBase &Call) {
+  // A dispatch read mono writes as a call. TTI answers true for any named
+  // declaration and reads no attribute, so it costs a call penalty for one
+  // instruction.
+  if (mono::lowers_to_a_load(*F))
+    return false;
+
   const TargetLibraryInfo *TLI = GetTLI ? &GetTLI(*F) : nullptr;
   LibFunc LF;
   if (!TLI || !TLI->getLibFunc(*F, LF) || !TLI->has(LF))
@@ -3312,7 +3337,7 @@ InlineCost getInlineCost(
 
   InlineCostCallAnalyzer CA(*Callee, Call, Params, CalleeTTI,
                             GetAssumptionCache, GetBFI, GetTLI, PSI, ORE,
-                            /*BoostIndirect=*/true, /*IgnoreThreshold=*/false,
+                            BoostIndirectCallSites, /*IgnoreThreshold=*/false,
                             GetEphValuesCache);
   InlineResult ShouldInline = CA.analyze();
 
