@@ -150,7 +150,9 @@ refuse_withheld_reads (const GlobalVariable &snapshot, uint32_t slots)
 		// An offset the walk cannot read is refused with the rest. A load
 		// this cannot place is one this cannot show lands on a stated field.
 		if (base == &snapshot
-		    && vtable_snapshot_states (offset.getZExtValue (), slots))
+		    && vtable_snapshot_states (offset.getZExtValue (),
+		                               dl.getTypeStoreSize (load->getType ()),
+		                               slots))
 			continue;
 
 		report_fatal_error (Twine ("a load reads ") + snapshot.getName ()
@@ -158,9 +160,10 @@ refuse_withheld_reads (const GlobalVariable &snapshot, uint32_t slots)
 	}
 }
 
-/// The slots \p snapshot was built with, read back off its own type.
+} // namespace
+
 uint32_t
-slots_of (const GlobalVariable &snapshot)
+vtable_snapshot_slots (const GlobalVariable &snapshot)
 {
 	const DataLayout &dl = snapshot.getParent ()->getDataLayout ();
 	uint64_t bytes = dl.getTypeAllocSize (snapshot.getValueType ());
@@ -170,8 +173,6 @@ slots_of (const GlobalVariable &snapshot)
 
 	return uint32_t ((bytes - MONO_SIZEOF_VTABLE) / sizeof (gpointer));
 }
-
-} // namespace
 
 void
 mark_vtable_snapshot (GlobalVariable &snapshot)
@@ -275,13 +276,21 @@ vtable_snapshot_init (Module &m, const VTableConstants &held)
 }
 
 bool
-vtable_snapshot_states (uint64_t offset, uint32_t slots)
+vtable_snapshot_states (uint64_t offset, uint64_t width, uint32_t slots)
 {
+	if (width == 0 || offset + width < offset)
+		return false;
+
+	// Inside one stated field. A read that starts in a field and runs past it
+	// takes in the padding behind it, which stands for bytes the initializer
+	// does not hold.
 	for (const StatedField &field : stated)
-		if (offset >= field.at && offset < field.at + field.width)
+		if (offset >= field.at && offset + width <= field.at + field.width)
 			return true;
 
-	return offset >= MONO_SIZEOF_VTABLE && offset < vtable_bytes (slots);
+	// Anywhere in the slot array. Two adjacent slots each hold the address the
+	// runtime's own slot holds, so a read over both still reads what is there.
+	return offset >= MONO_SIZEOF_VTABLE && offset + width <= vtable_bytes (slots);
 }
 
 PreservedAnalyses
@@ -293,7 +302,7 @@ StripVTableSnapshotPass::run (Module &m, ModuleAnalysisManager &)
 		return PreservedAnalyses::all ();
 
 	for (GlobalVariable *snapshot : found) {
-		refuse_withheld_reads (*snapshot, slots_of (*snapshot));
+		refuse_withheld_reads (*snapshot, vtable_snapshot_slots (*snapshot));
 
 		// The initializer is what made this a definition. Dropping it leaves
 		// the declaration the translator wrote before the snapshot, under the

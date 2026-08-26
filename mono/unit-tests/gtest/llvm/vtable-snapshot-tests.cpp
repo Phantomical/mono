@@ -95,34 +95,49 @@ TEST (VTableSnapshot, TheInventoryIsTheFieldsFixedWhenTheVtableIsBuilt)
 	// mono_class_create_runtime_vtable () writes each of these once, while it
 	// builds the vtable, and nothing writes them again.
 	EXPECT_TRUE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, klass),
-	                                     test_slots));
+	                                     sizeof (MonoClass *), test_slots));
 	EXPECT_TRUE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, rank),
-	                                     test_slots));
+	                                     sizeof (guint8), test_slots));
 	EXPECT_TRUE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, type),
-	                                     test_slots));
+	                                     sizeof (gpointer), test_slots));
 
 	// The collector writes gc_bits, and the three fields beside it share its
 	// storage unit. The rest here is written after the vtable exists.
 	EXPECT_FALSE (vtable_snapshot_states (
-		MONO_STRUCT_OFFSET (MonoVTable, imt_collisions_bitmap), test_slots));
+		MONO_STRUCT_OFFSET (MonoVTable, imt_collisions_bitmap),
+		sizeof (gpointer), test_slots));
 	EXPECT_FALSE (vtable_snapshot_states (
-		MONO_STRUCT_OFFSET (MonoVTable, runtime_generic_context), test_slots));
+		MONO_STRUCT_OFFSET (MonoVTable, runtime_generic_context),
+		sizeof (gpointer), test_slots));
+
+	// A read wider than the field it starts on. rank is one byte and padding
+	// follows it, so a word read there answers with bytes the initializer holds
+	// and the run-time vtable does not.
+	EXPECT_FALSE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, rank),
+	                                      sizeof (gpointer), test_slots));
 
 	// Every slot the class has, so a dispatch on a settled receiver folds to
 	// the callee. One past the last is not: it is the static field block, or
 	// nothing at all.
 	EXPECT_TRUE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, vtable),
-	                                     test_slots));
+	                                     sizeof (gpointer), test_slots));
 	EXPECT_TRUE (vtable_snapshot_states (
 		MONO_STRUCT_OFFSET (MonoVTable, vtable)
 			+ (test_slots - 1) * sizeof (gpointer),
-		test_slots));
+		sizeof (gpointer), test_slots));
 	EXPECT_FALSE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, vtable)
 	                                              + test_slots * sizeof (gpointer),
-	                                      test_slots));
+	                                      sizeof (gpointer), test_slots));
+
+	// The last slot read wide, which runs off the end of the array.
+	EXPECT_FALSE (vtable_snapshot_states (
+		MONO_STRUCT_OFFSET (MonoVTable, vtable)
+			+ (test_slots - 1) * sizeof (gpointer),
+		2 * sizeof (gpointer), test_slots));
 
 	// A snapshot with no slot array states none of them.
-	EXPECT_FALSE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, vtable), 0));
+	EXPECT_FALSE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, vtable),
+	                                      sizeof (gpointer), 0));
 }
 
 TEST (VTableSnapshot, TheInitializerStatesTheClassAsASymbol)

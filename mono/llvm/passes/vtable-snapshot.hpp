@@ -85,9 +85,16 @@ llvm::Constant *vtable_snapshot_init (llvm::Module &m, const VTableConstants &he
 /// the result is not the size the runtime gives a vtable of that many slots.
 llvm::Type *vtable_snapshot_type (llvm::Module &m, uint32_t slots);
 
-/// Whether a snapshot of a vtable with \p slots slots states the field at
-/// \p offset. Generated code can read a stated field as a plain load.
-bool vtable_snapshot_states (uint64_t offset, uint32_t slots);
+/// Whether a snapshot of a vtable with \p slots slots states all \p width bytes
+/// at \p offset. Generated code can read stated bytes as a plain load.
+///
+/// The width is part of the question. A read that starts on a stated field and
+/// runs past it takes in the padding behind, and an answer built from those
+/// bytes is one the run-time vtable never held.
+bool vtable_snapshot_states (uint64_t offset, uint64_t width, uint32_t slots);
+
+/// The dispatch slots \p snapshot was built with, read back off its own type.
+uint32_t vtable_snapshot_slots (const llvm::GlobalVariable &snapshot);
 
 /// Turns every vtable snapshot the module still defines back into the external
 /// symbol the link resolves to the real `MonoVTable`.
