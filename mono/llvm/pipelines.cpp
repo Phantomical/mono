@@ -18,6 +18,7 @@
 #include "passes/tier-counter.hpp"
 #include "passes/top-down-inline.hpp"
 #include "passes/vtable-func.hpp"
+#include "passes/vtable-snapshot.hpp"
 #include <llvm/IR/PassManager.h>
 #include <llvm/ADT/Statistic.h>
 #include <llvm/IR/ProfileSummary.h>
@@ -492,6 +493,10 @@ MonoPassBuilder::buildTier1Pipeline ()
 
 	MPM.addPass (mono::RgctxFetchPass ());
 
+	// In front of the lowering below, which reads an IMT slot at a negative
+	// offset from the vtable - memory a snapshot does not describe.
+	MPM.addPass (mono::StripVTableSnapshotPass ());
+
 	// In front of the ABI lowering, which rewrites the calls this leaves, and of
 	// codegen, which has no lowering for the declaration at all.
 	MPM.addPass (mono::LowerVTableFuncPass ());
@@ -588,6 +593,9 @@ MonoPassBuilder::buildTier2Pipeline ()
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (std::move (FPM)));
 
 	MPM.addPass (mono::RgctxFetchPass ());
+
+	// In front of the lowering below, for the reason tier 1 gives.
+	MPM.addPass (mono::StripVTableSnapshotPass ());
 
 	// In front of the ABI lowering, for the reason tier 1 gives.
 	MPM.addPass (mono::LowerVTableFuncPass ());
