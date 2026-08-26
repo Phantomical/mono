@@ -1,6 +1,7 @@
 #include "top-down-inline.hpp"
 
 #include "inline-copies.hpp"
+#include "inline-cost.hpp"
 #include "tier-counter.hpp"
 
 #include <llvm/ADT/SmallVector.h>
@@ -216,7 +217,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 		return fam.getResult<BlockFrequencyAnalysis> (f);
 	};
 
-	InlineParams params = getInlineParams ();
+	InlineParams params = mono::getInlineParams ();
 	bool changed = false;
 
 	for (Function *root : roots) {
@@ -283,9 +284,10 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 				continue;
 			}
 
-			InlineCost cost = getInlineCost (*call, callee, params,
-			                                 fam.getResult<TargetIRAnalysis> (*callee),
-			                                 get_ac, get_tli, get_bfi, &psi);
+			InlineCost cost = mono::getInlineCost (
+				*call, callee, params,
+				fam.getResult<TargetIRAnalysis> (*callee), get_ac, get_tli,
+				get_bfi, &psi);
 
 			if (!cost) {
 				candidates->declined (*root, *callee, cost, site.count);

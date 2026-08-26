@@ -704,6 +704,18 @@ clauses, and inside `MONO_LLVM_JIT_INLINE_COST_IL_LIMIT` bytes of IL.
 do not fold that target, which `may_fold ()` already enforces. A caller with no profile still
 inlines, off the static frequencies BFI falls back to.
 
+**The `getInlineCost ()` it calls is a copy of LLVM's**, `passes/inline-cost.cpp`, taken
+from `llvm/lib/Analysis/InlineCost.cpp` at `llvmorg-22.1.8`. `CallAnalyzer` is in no
+header, so a subclass outside LLVM cannot reach it. No line of the model itself is
+changed, and `passes/inline-cost.md` records every change the copy does carry and how to
+read it against a later release. Two of those matter from outside. Each command-line
+option carries a `mono-` prefix, because LLVM's CommandLine calls `report_fatal_error ()`
+on a name registered twice and the runtime links the dylib that registers all of them —
+so `--llvm-opt=-mono-inline-threshold=N` tunes this copy and `-inline-threshold=N` tunes
+the one the rest of the pipeline reads. And each of these entry points has to be called
+qualified, because the arguments are llvm types and an unqualified call finds LLVM's
+overload beside ours.
+
 **A copy is kept only where the runtime resolves what it names.** Each inliner resolves
 a copy's own externals as it builds it, and drops the copy when one of them fails. A
 class the copy names that will not load is a failure the program is owed at the call,
