@@ -4548,10 +4548,6 @@ using namespace mono::interp;
 static const char *
 interp_jit_call_refusal (MonoMethod *method, MonoMethodSignature *sig)
 {
-	/* jit_call_cb () spells out the call for each argument count and stops at
-	 * eight. The receiver and the return address take two of those places. */
-	if (sig->param_count > 6)
-		return "the callee takes too many arguments";
 	/* The callee's own signature says nothing about the arguments a vararg
 	 * call site actually pushed, so the wrapper cannot be built for one. */
 	if (sig->call_convention == MONO_CALL_VARARG)
@@ -4576,6 +4572,18 @@ interp_jit_call_refusal (MonoMethod *method, MonoMethodSignature *sig)
 		return "the callee is a string constructor";
 	if (method->wrapper_type != MONO_WRAPPER_NONE)
 		return "the callee is a wrapper";
+	/*
+	 * This test runs last, because only a wider jit_call_cb () removes the
+	 * refusal. A method reported for it is one that the marshalling otherwise
+	 * accepts.
+	 *
+	 * MONO_INTERP_JIT_CALL_MAX_ARGS says what the count is over. A static method
+	 * that returns void therefore reaches the limit two parameters later than an
+	 * instance method that returns a value.
+	 */
+	if ((sig->hasthis ? 1 : 0) + (sig->ret->type != MONO_TYPE_VOID ? 1 : 0) + sig->param_count
+	    > MONO_INTERP_JIT_CALL_MAX_ARGS)
+		return "the callee takes too many arguments";
 
 	return NULL;
 }

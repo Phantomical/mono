@@ -379,6 +379,12 @@ void mono_interp_print_code (InterpMethod *imethod);
 /// starts at start. The offset it prints is relative to start.
 void mono_interp_dis_mintop (FILE *out, const guint16 *ip, const guint16 *start);
 
+/// Bounds what do_jit_call () puts in args[]: the receiver, the return address
+/// and the parameters. jit_call_cb () spells out the call for each count up to
+/// this one, and passes the ftndesc after them, outside args[].
+/// interp_jit_call_refusal () refuses a method that needs more.
+#define MONO_INTERP_JIT_CALL_MAX_ARGS 16
+
 gboolean mono_interp_jit_call_marshallable (MonoMethod *method, MonoMethodSignature *sig);
 
 gboolean mono_interp_jit_call_supported (MonoMethod *method, MonoMethodSignature *sig);

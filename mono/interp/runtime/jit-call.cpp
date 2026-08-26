@@ -121,6 +121,81 @@ jit_call_cb (gpointer arg)
 		func (args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], ftndesc);
 		break;
 	}
+	case 9: {
+		typedef void (*T) (gpointer, gpointer, gpointer, gpointer, gpointer, gpointer, gpointer,
+		                   gpointer, gpointer, gpointer);
+		T func = (T) jit_wrapper;
+
+		func (args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
+		      ftndesc);
+		break;
+	}
+	case 10: {
+		typedef void (*T) (gpointer, gpointer, gpointer, gpointer, gpointer, gpointer, gpointer,
+		                   gpointer, gpointer, gpointer, gpointer);
+		T func = (T) jit_wrapper;
+
+		func (args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
+		      args[9], ftndesc);
+		break;
+	}
+	case 11: {
+		typedef void (*T) (gpointer, gpointer, gpointer, gpointer, gpointer, gpointer, gpointer,
+		                   gpointer, gpointer, gpointer, gpointer, gpointer);
+		T func = (T) jit_wrapper;
+
+		func (args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
+		      args[9], args[10], ftndesc);
+		break;
+	}
+	case 12: {
+		typedef void (*T) (gpointer, gpointer, gpointer, gpointer, gpointer, gpointer, gpointer,
+		                   gpointer, gpointer, gpointer, gpointer, gpointer, gpointer);
+		T func = (T) jit_wrapper;
+
+		func (args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
+		      args[9], args[10], args[11], ftndesc);
+		break;
+	}
+	case 13: {
+		typedef void (*T) (gpointer, gpointer, gpointer, gpointer, gpointer, gpointer, gpointer,
+		                   gpointer, gpointer, gpointer, gpointer, gpointer, gpointer, gpointer);
+		T func = (T) jit_wrapper;
+
+		func (args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
+		      args[9], args[10], args[11], args[12], ftndesc);
+		break;
+	}
+	case 14: {
+		typedef void (*T) (gpointer, gpointer, gpointer, gpointer, gpointer, gpointer, gpointer,
+		                   gpointer, gpointer, gpointer, gpointer, gpointer, gpointer, gpointer,
+		                   gpointer);
+		T func = (T) jit_wrapper;
+
+		func (args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
+		      args[9], args[10], args[11], args[12], args[13], ftndesc);
+		break;
+	}
+	case 15: {
+		typedef void (*T) (gpointer, gpointer, gpointer, gpointer, gpointer, gpointer, gpointer,
+		                   gpointer, gpointer, gpointer, gpointer, gpointer, gpointer, gpointer,
+		                   gpointer, gpointer);
+		T func = (T) jit_wrapper;
+
+		func (args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
+		      args[9], args[10], args[11], args[12], args[13], args[14], ftndesc);
+		break;
+	}
+	case 16: {
+		typedef void (*T) (gpointer, gpointer, gpointer, gpointer, gpointer, gpointer, gpointer,
+		                   gpointer, gpointer, gpointer, gpointer, gpointer, gpointer, gpointer,
+		                   gpointer, gpointer, gpointer);
+		T func = (T) jit_wrapper;
+
+		func (args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8],
+		      args[9], args[10], args[11], args[12], args[13], args[14], args[15], ftndesc);
+		break;
+	}
 	default:
 		g_assert_not_reached ();
 		break;
@@ -230,6 +305,9 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 		mono_error_assert_ok (error);
 	}
 	cinfo = static_cast<JitCallInfo *> (rmethod->jit_call_info);
+
+	static_assert (MONO_INTERP_JIT_CALL_MAX_ARGS <= 32,
+	               "args[] must hold one pointer for each argument jit_call_cb () reads");
 
 	/*
 	 * Convert the arguments on the interpreter stack to the format the
