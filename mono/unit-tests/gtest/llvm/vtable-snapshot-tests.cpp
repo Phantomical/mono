@@ -108,10 +108,21 @@ TEST (VTableSnapshot, TheInventoryIsTheFieldsFixedWhenTheVtableIsBuilt)
 	EXPECT_FALSE (vtable_snapshot_states (
 		MONO_STRUCT_OFFSET (MonoVTable, runtime_generic_context), test_slots));
 
-	// A slot holds an address the runtime chooses, and the first call through
-	// it patches the entry in.
-	EXPECT_FALSE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, vtable),
+	// Every slot the class has, so a dispatch on a settled receiver folds to
+	// the callee. One past the last is not: it is the static field block, or
+	// nothing at all.
+	EXPECT_TRUE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, vtable),
+	                                     test_slots));
+	EXPECT_TRUE (vtable_snapshot_states (
+		MONO_STRUCT_OFFSET (MonoVTable, vtable)
+			+ (test_slots - 1) * sizeof (gpointer),
+		test_slots));
+	EXPECT_FALSE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, vtable)
+	                                              + test_slots * sizeof (gpointer),
 	                                      test_slots));
+
+	// A snapshot with no slot array states none of them.
+	EXPECT_FALSE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, vtable), 0));
 }
 
 TEST (VTableSnapshot, TheInitializerStatesTheClassAsASymbol)

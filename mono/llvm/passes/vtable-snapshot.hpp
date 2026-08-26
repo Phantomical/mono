@@ -54,15 +54,25 @@ void mark_vtable_snapshot (llvm::GlobalVariable &snapshot);
 /// What a snapshot states about a class's vtable.
 ///
 /// Both pointers are symbols rather than addresses, so a comparison against the
-/// same symbol folds: a type test reads the class word, and `typeof` names the
+/// same symbol folds. A type test reads the class word, and `typeof` names the
 /// `System.Type` object under the symbol `type` carries here.
 struct VTableFacts {
 	llvm::Constant *klass = nullptr;
 	llvm::Constant *type = nullptr;
 	uint8_t rank = 0;
+
+	/// One entry for each dispatch slot, in vtable order. A slot the compile
+	/// can name holds the callee's own declaration, which makes a folded
+	/// dispatch a direct call an inliner can act on. Any other holds the
+	/// address the runtime's own slot holds.
+	///
+	/// Every slot the class has, or none at all: a load past the last entry
+	/// folds against whatever the constant ends with.
+	llvm::ArrayRef<llvm::Constant *> slots;
 };
 
-/// The initializer a snapshot of a vtable with no slots carries.
+/// The initializer a snapshot carries, laid out for as many slots as \p facts
+/// gives.
 llvm::Constant *vtable_snapshot_init (llvm::Module &m, const VTableFacts &facts);
 
 /// The type a snapshot of a vtable with \p slots dispatch slots is laid out as.

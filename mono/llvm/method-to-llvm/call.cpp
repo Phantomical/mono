@@ -337,18 +337,41 @@ MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver, 
 /// Loads the callee out of target's vtable slot in the object receiver points
 /// at.
 ///
-/// The site is a `mono.vtable.func` call rather than the load it stands for, so
-/// the vtable and the slot stay operands. A receiver whose class the optimizer
-/// settles then leaves both constant, which is what a later pass answers from.
-/// LowerVTableFuncPass writes the load back for every site nothing answered.
+/// The load is the plain one, so a receiver whose class the optimizer settles
+/// leaves it reading a vtable snapshot, and the entry folds to the callee's own
+/// declaration. Constant folding does that, and so does the inline cost model,
+/// which weighs a candidate against what its caller settled and cannot run a
+/// pass of ours.
+///
+/// The load is `!invariant.load` even though the slot does change: it holds the
+/// shared vcall trampoline until the first call through it patches the entry in,
+/// and an override moves it again. Every value it takes enters the method the
+/// site named, so a reader that keeps an older one calls the same method.
+///
+/// A method with no slot of its own carries an index of -1, which reads back
+/// into the interface method table rather than the slots. Such a site keeps the
+/// declaration, whose lowering does that arithmetic signed.
 llvm::Value *
 MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
                                    MonoMethod *target)
 {
-	return builder.CreateCall (
-		vtable_func_decl (*module),
-		{ load_vtable (builder, receiver),
-	          builder.getInt32 (mono_method_get_vtable_index (target)) });
+	int index = mono_method_get_vtable_index (target);
+	llvm::Value *vtable = load_vtable (builder, receiver);
+
+	if (index < 0)
+		return builder.CreateCall (vtable_func_decl (*module),
+		                           { vtable, builder.getInt32 (index) });
+
+	llvm::LoadInst *entry = builder.CreateAlignedLoad (
+		llvm::PointerType::get (context (), 0),
+		builder.CreateGEP (builder.getInt8Ty (), vtable,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, vtable)
+	                                             + index * TARGET_SIZEOF_VOID_P)),
+		llvm::Align (TARGET_SIZEOF_VOID_P), "vtable_entry");
+
+	entry->setMetadata (llvm::LLVMContext::MD_invariant_load,
+	                    llvm::MDNode::get (context (), {}));
+	return entry;
 }
 
 /// Loads the callee out of target's IMT slot in the object receiver points at.

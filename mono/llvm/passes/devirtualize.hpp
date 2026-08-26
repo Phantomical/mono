@@ -13,7 +13,21 @@
 
 #include <llvm/IR/PassManager.h>
 
+#include <cstdint>
+
+typedef struct _MonoClass MonoClass;
+typedef struct _MonoMethod MonoMethod;
+
 namespace mono {
+
+/// The method in slot \p index of \p klass's vtable that a caller can name
+/// directly, or null where it cannot name what stands there.
+///
+/// Null covers a slot with no method, one whose method is abstract, generic or
+/// implemented outside IL, and one whose entry needs a context. A synchronized
+/// method answers with its wrapper, because that is what the runtime puts in
+/// the slot.
+MonoMethod *slot_target (MonoClass *klass, int32_t index);
 
 /// Replaces a `mono.vtable.func` call whose class and slot are settled with the
 /// entry it stands for.

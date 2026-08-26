@@ -104,8 +104,8 @@ nameable (MonoMethod *target)
 	return target;
 }
 
-/// The method in slot \p index of \p klass's vtable, or null where a caller
-/// cannot name what stands there.
+} // namespace
+
 MonoMethod *
 slot_target (MonoClass *klass, int32_t index)
 {
@@ -122,6 +122,8 @@ slot_target (MonoClass *klass, int32_t index)
 
 	return nameable (m_class_get_vtable (klass)[index]);
 }
+
+namespace {
 
 /// The method \p klass implements \p asked with, or null where a caller cannot
 /// name it.

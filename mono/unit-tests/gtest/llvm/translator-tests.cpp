@@ -826,19 +826,20 @@ TEST_F (TranslatorTest, OnlyAnOverridableCallvirtReadsTheVtable)
 
 	ASSERT_NE (overridable.function, nullptr) << overridable.error;
 	EXPECT_EQ (overridable.count ("Base:Virt"), 0u) << overridable.text ();
-	/*
-	 * The lookup is a mono.vtable.func call rather than the load it stands for,
-	 * so the vtable and the slot stay operands for a later pass to read.
-	 */
-	EXPECT_EQ (overridable.count ("@mono.vtable.func"), 1u) << overridable.text ();
+
+	// The lookup is the plain load of the slot, so a receiver whose class the
+	// optimizer settles reads a vtable snapshot and folds it to the callee.
+	EXPECT_EQ (overridable.count ("%vtable_entry = load ptr"), 1u)
+		<< overridable.text ();
 
 	ASSERT_NE (final_method.function, nullptr) << final_method.error;
 	EXPECT_GE (final_method.count ("Base:Sealed"), 1u);
-	EXPECT_EQ (final_method.count ("@mono.vtable.func"), 0u) << final_method.text ();
+	EXPECT_EQ (final_method.count ("%vtable_entry = load ptr"), 0u)
+		<< final_method.text ();
 
 	ASSERT_NE (instance.function, nullptr) << instance.error;
 	EXPECT_GE (instance.count ("Base:Inst"), 1u);
-	EXPECT_EQ (instance.count ("@mono.vtable.func"), 0u) << instance.text ();
+	EXPECT_EQ (instance.count ("%vtable_entry = load ptr"), 0u) << instance.text ();
 }
 
 // An interface call reaches its target through the IMT rather than the vtable,

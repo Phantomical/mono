@@ -75,9 +75,12 @@ vtable_bytes (uint32_t slots)
 ///
 /// The type and the initializer are both built from this walk, which is what
 /// keeps a field and its value in step.
-template <typename Field, typename Gap>
+/// \p slot_array takes the dispatch slots, which are one member of their own so
+/// that a load of one folds to the symbol it holds. Bytes cannot carry a symbol,
+/// so a slot inside a padding run would fold to nothing.
+template <typename Field, typename Gap, typename SlotArray>
 void
-walk_members (uint32_t slots, Field field, Gap gap)
+walk_members (uint32_t slots, Field field, Gap gap, SlotArray slot_array)
 {
 	uint64_t at = 0;
 	auto pad_to = [&] (uint64_t offset) {
@@ -92,7 +95,10 @@ walk_members (uint32_t slots, Field field, Gap gap)
 		at += stated[i].width;
 	}
 
-	pad_to (vtable_bytes (slots));
+	pad_to (MONO_SIZEOF_VTABLE);
+
+	if (slots != 0)
+		slot_array (slots);
 }
 
 /// The snapshots \p m defines.
@@ -209,6 +215,10 @@ vtable_snapshot_type (Module &m, uint32_t slots)
 		},
 		[&] (uint64_t width) {
 			members.push_back (ArrayType::get (byte, width));
+		},
+		[&] (uint32_t count) {
+			members.push_back (
+				ArrayType::get (PointerType::get (c, 0), count));
 		});
 
 	// Packed, so each field sits where the offset above put it rather than
@@ -224,12 +234,13 @@ vtable_snapshot_type (Module &m, uint32_t slots)
 Constant *
 vtable_snapshot_init (Module &m, const VTableFacts &facts)
 {
-	auto *laid_out = cast<StructType> (vtable_snapshot_type (m, 0));
+	uint32_t slots = uint32_t (facts.slots.size ());
+	auto *laid_out = cast<StructType> (vtable_snapshot_type (m, slots));
 	LLVMContext &c = m.getContext ();
 	SmallVector<Constant *, 8> members;
 
 	walk_members (
-		0,
+		slots,
 		[&] (StatedIndex i) {
 			switch (i) {
 			case stated_klass:
@@ -253,6 +264,11 @@ vtable_snapshot_init (Module &m, const VTableFacts &facts)
 		[&] (uint64_t width) {
 			members.push_back (Constant::getNullValue (
 				ArrayType::get (Type::getInt8Ty (c), width)));
+		},
+		[&] (uint32_t count) {
+			members.push_back (ConstantArray::get (
+				ArrayType::get (PointerType::get (c, 0), count),
+				facts.slots));
 		});
 
 	return ConstantStruct::get (laid_out, members);
@@ -265,8 +281,7 @@ vtable_snapshot_states (uint64_t offset, uint32_t slots)
 		if (offset >= field.at && offset < field.at + field.width)
 			return true;
 
-	(void) slots;
-	return false;
+	return offset >= MONO_SIZEOF_VTABLE && offset < vtable_bytes (slots);
 }
 
 PreservedAnalyses

@@ -14,6 +14,7 @@
 
 #include "il-line-table.hpp"
 #include "method-symbols.hpp"
+#include "passes/vtable-snapshot.hpp"
 #include "mini.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-forward.h"
@@ -983,6 +984,11 @@ private:
 	std::string identity_symbol (const std::string &name, const void *object);
 	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
 	llvm::Constant *vtable_symbol (MonoClass *klass, const std::string &symbol);
+	bool vtable_facts (MonoClass *klass, VTableFacts &facts,
+	                   llvm::SmallVectorImpl<llvm::Constant *> &slots);
+	bool vtable_slots (MonoClass *klass,
+	                   llvm::SmallVectorImpl<llvm::Constant *> &slots);
+	llvm::Function *unbox_shim (llvm::Function *callee);
 	llvm::Expected<llvm::Constant *> typeof_symbol (MonoType *type);
 	MonoClass *parameter_class (MonoType *type);
 	llvm::Constant *field_symbol (MonoClassField *field);
