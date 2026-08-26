@@ -1,5 +1,6 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
+#include "method-symbols.hpp"
 #include "mini-runtime.h"
 #include "passes/vtable-func.hpp"
 #include "runtime-error.hpp"
@@ -339,13 +340,20 @@ MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver
 /// on the class that implements it. Dispatch goes instead through the interface method
 /// table, a small hash table the runtime lays out in the words immediately before each
 /// MonoVTable. Its slots sit at negative offsets from that same base.
+///
+/// The site is a `mono.imt.func` call rather than the load it stands for, which
+/// keeps the vtable, the slot and the key the site asks with as operands. A
+/// slot is a hash bucket, so the key is what says which method of the several
+/// that reach it this site wants. LowerVTableFuncPass writes the load back for
+/// every site nothing answered.
 llvm::Value *
 MethodLLVMEmitter::interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
-                                     MonoMethod *target)
+                                     MonoMethod *target, llvm::Value *key)
 {
-	int32_t slot = static_cast<int32_t> (mono_method_get_imt_slot (target)) - MONO_IMT_SIZE;
-
-	return vtable_entry (builder, receiver, slot * TARGET_SIZEOF_VOID_P);
+	return builder.CreateCall (
+		imt_func_decl (*module),
+		{ load_vtable (builder, receiver),
+	          builder.getInt32 (mono_method_get_imt_slot (target)), key });
 }
 
 /// Whether a call to target must dispatch through the delegate it is made on,
@@ -418,7 +426,14 @@ MethodLLVMEmitter::method_symbol (MonoMethod *target)
 
 	g_free (name);
 	record_external (symbol, ExternalSymbol::Kind::Method, target);
-	return extern_symbol (symbol);
+
+	llvm::Constant *symbolic = extern_symbol (symbol);
+
+	// A pass that answers an interface site has the key and needs the method it
+	// stands for.
+	mark_method_pointer (*llvm::cast<llvm::GlobalValue> (symbolic), target);
+
+	return symbolic;
 }
 
 /// Returns target, or the wrapper that takes and releases its lock when target
@@ -1686,9 +1701,19 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			// instantiation.
 			keyed = true;
 
+			// Read before the lookup, because an interface site carries it
+			// into the lookup as well: the slot it reads is a bucket, and the
+			// key is what says which of the methods that reach it this site
+			// asked for.
+			llvm::Expected<llvm::Value *> key =
+				method_operand (builder, callee_method);
+
+			if (!key)
+				return key.takeError ();
+
 			llvm::Value *code =
 				is_interface
-					? interface_callee (builder, (*args)[0], callee_method)
+					? interface_callee (builder, (*args)[0], callee_method, *key)
 					: virtual_callee (builder, (*args)[0], callee_method);
 			std::vector<llvm::Type *> params (slot_type->param_begin (),
 			                                  slot_type->param_end ());
@@ -1698,11 +1723,6 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 				llvm::FunctionType::get (slot_type->getReturnType (), params,
 			                                 slot_type->isVarArg ()),
 				code);
-			llvm::Expected<llvm::Value *> key =
-				method_operand (builder, callee_method);
-
-			if (!key)
-				return key.takeError ();
 
 			args->push_back (*key);
 			through_slot = true;

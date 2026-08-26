@@ -42,30 +42,23 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-/// The method in slot \p index of \p klass's vtable, or null where a caller
-/// cannot name what stands there.
-MonoMethod *
-slot_target (MonoClass *klass, int32_t index)
+/// Whether klass has a vtable for a slot to be read out of.
+///
+/// The layout is what fills the slots in, and a class that cannot have one
+/// reaches vtable[index] with vtable null. Leaving a site alone puts the type
+/// load back where the runtime raises it.
+bool
+laid_out (MonoClass *klass)
 {
-	/*
-	 * The layout is what fills the slots in, and a class that cannot have one
-	 * reaches vtable[index] with vtable null. Leaving the site alone puts the
-	 * type load back where the runtime raises it.
-	 */
 	mono_class_setup_vtable (klass);
-	if (mono_class_has_failure (klass) || m_class_get_vtable (klass) == nullptr)
-		return nullptr;
 
-	/*
-	 * The word at vtable_size is the static field block rather than a method,
-	 * so the bound is strict. A negative index is what a method with no slot of
-	 * its own carries.
-	 */
-	if (index < 0 || index >= m_class_get_vtable_size (klass))
-		return nullptr;
+	return !mono_class_has_failure (klass) && m_class_get_vtable (klass) != nullptr;
+}
 
-	MonoMethod *target = m_class_get_vtable (klass)[index];
-
+/// \p target as a caller can name it, or null where it cannot.
+MonoMethod *
+nameable (MonoMethod *target)
+{
 	// A class that leaves an inherited abstract method unimplemented has no
 	// body to enter, and no instances either, so the site that raises stands.
 	if (target == nullptr || (target->flags & METHOD_ATTRIBUTE_ABSTRACT) != 0)
@@ -111,6 +104,71 @@ slot_target (MonoClass *klass, int32_t index)
 	return target;
 }
 
+/// The method in slot \p index of \p klass's vtable, or null where a caller
+/// cannot name what stands there.
+MonoMethod *
+slot_target (MonoClass *klass, int32_t index)
+{
+	if (!laid_out (klass))
+		return nullptr;
+
+	/*
+	 * The word at vtable_size is the static field block rather than a method,
+	 * so the bound is strict. A negative index is what a method with no slot of
+	 * its own carries.
+	 */
+	if (index < 0 || index >= m_class_get_vtable_size (klass))
+		return nullptr;
+
+	return nameable (m_class_get_vtable (klass)[index]);
+}
+
+/// The method \p klass implements \p asked with, or null where a caller cannot
+/// name it.
+///
+/// The IMT slot a site reads is a hash bucket, so the answer comes from the
+/// method the site asked for rather than from the slot. That is the same
+/// question the runtime's thunk answers with the key in its register.
+MonoMethod *
+imt_target (MonoClass *klass, MonoMethod *asked)
+{
+	if (!mono_class_is_interface (asked->klass) || !laid_out (klass))
+		return nullptr;
+
+	/*
+	 * The table is indexed from the receiver's offset for that interface, and
+	 * the resolver asserts that the offset is there. Verifiable IL gives one,
+	 * so a site that does not keeps its lookup rather than reading past the
+	 * array.
+	 */
+	gboolean variance_used = FALSE;
+
+	if (mono_class_interface_offset_with_variance (klass, asked->klass, &variance_used) <= 0)
+		return nullptr;
+
+	ERROR_DECL (error);
+	MonoMethod *target = mono_class_get_virtual_method (klass, asked, FALSE, error);
+
+	if (!is_ok (error)) {
+		mono_error_cleanup (error);
+		return nullptr;
+	}
+
+	/*
+	 * A default implementation lives on an interface rather than on the class,
+	 * and which one a class gets is not always a question with one answer: where
+	 * two interfaces override a method and neither is more specific, the runtime
+	 * raises AmbiguousImplementationException at the dispatch.
+	 * mono_class_get_virtual_method () answers with a candidate instead of
+	 * raising, so that verdict stays the dispatch's to give.
+	 * mono/tests/dim-diamondshape.cs is what asks for it.
+	 */
+	if (target != nullptr && mono_class_is_interface (target->klass))
+		return nullptr;
+
+	return nameable (target);
+}
+
 /// The shape every use of \p site calls the entry with, or null where the uses
 /// do not agree or one of them is not a call.
 ///
@@ -140,17 +198,64 @@ called_shape (CallBase *site)
 	return shape;
 }
 
-/// Points every call that reads \p site at \p entry instead.
+/// Rewrites \p call so it enters \p entry.
 ///
 /// A value type's slot holds the unbox entry, which steps the receiver past the
 /// object header before it runs into the body. \p steps_receiver names an entry
-/// that expects the step to have happened, so the call has to do here what that
+/// that expects the step to have happened, so the call does here what that
 /// prologue did - mono/mini/thunk.cpp asserts the same size the arch stub is
 /// baked with.
+///
+/// \p drops_key names a site that carried the method it asked for in the IMT
+/// register. The thunk that read it is gone, and the target never did
+/// (emit_call () says so where it puts the key on), so the call is built again
+/// without it. That is also what leaves this site holding the same prototype a
+/// direct call to the same method holds anywhere else.
 void
-enter_directly (CallBase *site, Function *entry, bool steps_receiver)
+enter_at (CallBase *call, Function *entry, bool steps_receiver, bool drops_key)
 {
-	if (!steps_receiver) {
+	IRBuilder<> builder (call);
+	SmallVector<Value *, 8> args (call->args ().begin (), call->args ().end ());
+
+	if (steps_receiver)
+		args[0] = builder.CreateGEP (builder.getInt8Ty (), args[0],
+		                             builder.getInt64 (MONO_ABI_SIZEOF (MonoObject)));
+
+	if (!drops_key) {
+		call->setArgOperand (0, args[0]);
+		call->setCalledFunction (entry);
+		return;
+	}
+
+	args.pop_back ();
+
+	CallBase *direct;
+
+	if (auto *invoke = dyn_cast<InvokeInst> (call))
+		direct = builder.CreateInvoke (entry, invoke->getNormalDest (),
+		                               invoke->getUnwindDest (), args);
+	else
+		direct = builder.CreateCall (entry, args);
+
+	// The key's own slot goes with it. Everything else the site said about its
+	// arguments - which are extended, which are by value - still holds.
+	direct->setAttributes (call->getAttributes ().removeParamAttributes (
+		call->getContext (), call->arg_size () - 1));
+	direct->setCallingConv (call->getCallingConv ());
+	direct->setDebugLoc (call->getDebugLoc ());
+
+	if (auto *from = dyn_cast<CallInst> (call))
+		cast<CallInst> (direct)->setTailCallKind (from->getTailCallKind ());
+
+	call->replaceAllUsesWith (direct);
+	call->eraseFromParent ();
+}
+
+/// Points every call that reads \p site at \p entry instead.
+void
+enter_directly (CallBase *site, Function *entry, bool steps_receiver, bool drops_key)
+{
+	if (!steps_receiver && !drops_key) {
 		site->replaceAllUsesWith (entry);
 		return;
 	}
@@ -160,15 +265,8 @@ enter_directly (CallBase *site, Function *entry, bool steps_receiver)
 	for (User *user : site->users ())
 		calls.push_back (cast<CallBase> (user));
 
-	for (CallBase *call : calls) {
-		IRBuilder<> builder (call);
-		Value *unboxed =
-			builder.CreateGEP (builder.getInt8Ty (), call->getArgOperand (0),
-		                           builder.getInt64 (MONO_ABI_SIZEOF (MonoObject)));
-
-		call->setArgOperand (0, unboxed);
-		call->setCalledFunction (entry);
-	}
+	for (CallBase *call : calls)
+		enter_at (call, entry, steps_receiver, drops_key);
 }
 
 /// The entry a call of \p shape enters \p target through, declared in \p m.
@@ -207,16 +305,15 @@ entry_for (Module &m, MonoMethod *target, FunctionType *shape, const CompileStat
 	return entry;
 }
 
-} // namespace
-
-PreservedAnalyses
-DevirtualizePass::run (Function &f, FunctionAnalysisManager &)
+/// Answers what it can of the sites in \p f that call \p decl.
+///
+/// \p through_imt says which declaration decl is, which is what decides where
+/// the method comes from and whether the calls carry a key to drop.
+bool
+answer_sites (Function &f, Function *decl, const CompileState &compile, bool through_imt)
 {
-	const CompileState &compile = current_compile ();
-	Function *decl = f.getParent ()->getFunction (vtable_func_name);
-
-	if (decl == nullptr || compile.domain == nullptr || !compile.publish)
-		return PreservedAnalyses::all ();
+	if (decl == nullptr)
+		return false;
 
 	SmallVector<CallBase *, 4> sites;
 
@@ -242,7 +339,26 @@ DevirtualizePass::run (Function &f, FunctionAnalysisManager &)
 		if (klass == nullptr || shape == nullptr)
 			continue;
 
-		MonoMethod *target = slot_target (klass, static_cast<int32_t> (index->getSExtValue ()));
+		MonoMethod *target = nullptr;
+
+		if (!through_imt) {
+			target = slot_target (klass,
+			                      static_cast<int32_t> (index->getSExtValue ()));
+		} else {
+			auto *key = dyn_cast<GlobalValue> (site->getArgOperand (2));
+			MonoMethod *asked =
+				key != nullptr ? marked_method_pointer (*key) : nullptr;
+
+			// The key is the last argument, and what the call enters is the
+			// method's own prototype, which does not have it.
+			if (asked == nullptr || shape->getNumParams () < 1)
+				continue;
+
+			target = imt_target (klass, asked);
+			shape = FunctionType::get (shape->getReturnType (),
+			                           shape->params ().drop_back (),
+			                           shape->isVarArg ());
+		}
 
 		if (target == nullptr)
 			continue;
@@ -256,12 +372,31 @@ DevirtualizePass::run (Function &f, FunctionAnalysisManager &)
 		 * The entry replaces the value the site answered rather than the calls
 		 * that read it. Each of those is then a call of a constant, which the
 		 * simplification behind this pass turns into a direct one. A receiver
-		 * the entry wants stepped is the one case that has to reach the calls.
+		 * the entry wants stepped and a key it does not take are the two cases
+		 * that have to reach the calls.
 		 */
-		enter_directly (site, entry, publishes_unbox_entry (target));
+		enter_directly (site, entry, publishes_unbox_entry (target), through_imt);
 		site->eraseFromParent ();
 		changed = true;
 	}
+
+	return changed;
+}
+
+} // namespace
+
+PreservedAnalyses
+DevirtualizePass::run (Function &f, FunctionAnalysisManager &)
+{
+	const CompileState &compile = current_compile ();
+	Module &m = *f.getParent ();
+
+	if (compile.domain == nullptr || !compile.publish)
+		return PreservedAnalyses::all ();
+
+	bool changed = answer_sites (f, m.getFunction (vtable_func_name), compile, false);
+
+	changed |= answer_sites (f, m.getFunction (imt_func_name), compile, true);
 
 	return changed ? PreservedAnalyses::none () : PreservedAnalyses::all ();
 }

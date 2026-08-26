@@ -22,6 +22,10 @@ constexpr StringRef method_attribute = "mono-method";
 /// The same for the MonoClass a per-class symbol stands for.
 constexpr StringRef class_attribute = "mono-class";
 
+/// The same for a symbol holding the MonoMethod itself. Kept apart from
+/// method_attribute, which is what the renaming below reads.
+constexpr StringRef method_pointer_attribute = "mono-method-pointer";
+
 /// The pointer \p name carries on \p value, or nothing where it carries none.
 std::optional<uintptr_t>
 pointer_marker (const GlobalValue &value, StringRef name)
@@ -96,6 +100,20 @@ marked_class (const GlobalValue &value)
 	std::optional<uintptr_t> address = pointer_marker (value, class_attribute);
 
 	return address ? reinterpret_cast<MonoClass *> (*address) : nullptr;
+}
+
+void
+mark_method_pointer (GlobalValue &value, MonoMethod *method)
+{
+	mark_pointer (value, method_pointer_attribute, method);
+}
+
+MonoMethod *
+marked_method_pointer (const GlobalValue &value)
+{
+	std::optional<uintptr_t> address = pointer_marker (value, method_pointer_attribute);
+
+	return address ? reinterpret_cast<MonoMethod *> (*address) : nullptr;
 }
 
 /// Carries a rename through the attributes that hold a symbol name rather

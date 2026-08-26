@@ -26,14 +26,25 @@ namespace mono {
 /// method's own vtable index. Only the translator writes a call to it.
 constexpr llvm::StringRef vtable_func_name = "mono.vtable.func";
 
-/// The declaration in m, created on first use and carrying its attributes.
-llvm::Function *vtable_func_decl (llvm::Module &m);
-
-/// Rewrites every `mono.vtable.func` call into the load it stands for, and
-/// erases the declaration.
+/// `ptr @mono.imt.func (ptr vtable, i32 slot, ptr key)` answers the entry in
+/// interface method table slot of vtable. The table sits in the words before
+/// the MonoVTable, and slot is the index into it that key hashes to.
 ///
-/// Codegen has no lowering for one, so both tiers run this behind everything
-/// that reads the call.
+/// The key is what the site passes the thunk in the IMT register, and it is
+/// carried here as well because a slot is a hash bucket: several interface
+/// methods reach one, so the slot alone does not say which method the site
+/// asked for. The lowering drops it. Only the translator writes a call to this.
+constexpr llvm::StringRef imt_func_name = "mono.imt.func";
+
+/// The declarations in m, created on first use and carrying their attributes.
+llvm::Function *vtable_func_decl (llvm::Module &m);
+llvm::Function *imt_func_decl (llvm::Module &m);
+
+/// Rewrites every `mono.vtable.func` and `mono.imt.func` call into the load it
+/// stands for, and erases the declarations.
+///
+/// Codegen has no lowering for either, so both tiers run this behind everything
+/// that reads the calls.
 class LowerVTableFuncPass : public llvm::PassInfoMixin<LowerVTableFuncPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);

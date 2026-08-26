@@ -51,6 +51,18 @@ void mark_class_reference (llvm::GlobalValue &value, MonoClass *klass);
 /// Returns the class \p value stands for, or null when it carries no marker.
 MonoClass *marked_class (const llvm::GlobalValue &value);
 
+/// The same for a symbol that holds the MonoMethod itself rather than the
+/// method's code.
+///
+/// A separate mark from the one above, and it has to be: bind_method_symbols ()
+/// renames what that one marks to the symbol the method's *code* is published
+/// under, and a key that named code would send the wrong word to whatever reads
+/// it.
+void mark_method_pointer (llvm::GlobalValue &value, MonoMethod *method);
+
+/// Returns the method \p value holds, or null when it carries no such marker.
+MonoMethod *marked_method_pointer (const llvm::GlobalValue &value);
+
 /// Renames every marked declaration in \p m to what \p name_of calls that
 /// method, leaving the module referring only to symbols the engine publishes.
 ///

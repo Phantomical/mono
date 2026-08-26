@@ -927,7 +927,7 @@ private:
 	llvm::Value *virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
 	                             MonoMethod *target);
 	llvm::Value *interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
-	                               MonoMethod *target);
+	                               MonoMethod *target, llvm::Value *key);
 	llvm::Value *delegate_invoke_callee (MonoIrBuilder &builder, llvm::Value *receiver,
 	                                     MonoMethod *target);
 	llvm::Constant *method_symbol (MonoMethod *target);
