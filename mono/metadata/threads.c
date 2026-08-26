@@ -3852,6 +3852,15 @@ abort_threads (gpointer key, gpointer value, gpointer user)
 	if ((thread->flags & MONO_THREAD_FLAG_DONT_MANAGE))
 		return;
 
+	/* An abort is already pending on this thread, so request_thread_abort ()
+	 * refuses a second one and the walk reports a failure that did not happen.
+	 * Managed code sets ThreadState_AbortRequested with Thread.Abort (). A
+	 * thread that set ThreadState_Stopped is inside
+	 * mono_thread_detach_internal (). It waits there for the threads_mutex this
+	 * walk holds, so it cannot leave the table yet. */
+	if (thread->state & (ThreadState_AbortRequested | ThreadState_Stopped))
+		return;
+
 	MonoThreadHandle *handle = mono_threads_open_thread_handle (thread->handle);
 	THREAD_DEBUG (g_print ("%s: Aborting id: %" G_GSIZE_FORMAT "\n", __func__, (gsize)thread->tid));
 	if (!mono_thread_internal_abort (thread, FALSE)) {
