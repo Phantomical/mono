@@ -406,13 +406,6 @@ and the note says which split:
 - `MONO_LLVM_JIT_RECOMPILE=<substr>` — translate matching methods afresh on every
   request instead of answering from the cache, so they end up with several live bodies.
   No other setting produces one, and the code that has to cope has no other exerciser.
-- `MONO_LLVM_JIT_INLINE_WBARRIER=<0|false|empty>` — take the card mark back out of a
-  reference store, so every one of them calls
-  `mono_gc_wbarrier_generic_store_internal ()` again. On by default, and inert under a
-  collector that marks no cards: Boehm makes that call whatever this says. A wrong card
-  is a reference the collector never scans, so what it produces is a crash somewhere
-  else entirely. This switch is what separates the card the compiler wrote from the
-  collector that read it.
 
 Inlining. `MONO_LLVM_JIT_TRACE=1` prints a line for each fold, which is the only place a
 fold is visible from outside:

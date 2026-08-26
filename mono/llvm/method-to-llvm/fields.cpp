@@ -2,7 +2,6 @@
 #include "method-symbols.hpp"
 #include "runtime-error.hpp"
 #include "../passes/class-init.hpp"
-#include "../runtime/options.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
@@ -49,9 +48,6 @@ write_barrier_layout ()
 		WriteBarrierLayout read;
 		gpointer mask = nullptr;
 		size_t nursery_size = 0;
-
-		if (!inline_write_barrier ())
-			return read;
 
 		read.card_table = mono_gc_get_card_table (&read.card_bits, &mask);
 

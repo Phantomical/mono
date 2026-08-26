@@ -486,8 +486,7 @@ TEST_F (TranslatorTest, InstanceFieldAccessNullChecks)
 
 // The store is the method's own and the card mark sits behind a test of the
 // destination, so the collector's call is gone. The harness links sgen, whose
-// major collector marks cards; a collector that marks none keeps the call, and
-// so does MONO_LLVM_JIT_INLINE_WBARRIER=0.
+// major collector marks cards. A collector that marks none keeps the call.
 TEST_F (TranslatorTest, StoringAReferenceMarksItsOwnCard)
 {
 	const Translation &field = translate ("fields", "Fields:SetRef");
