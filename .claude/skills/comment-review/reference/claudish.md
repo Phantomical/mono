@@ -66,10 +66,9 @@ approval-gated release path".
 
 The word lists above are diagnoses, not substitutions. Half the vocabulary that marks
 Claudish elsewhere is this domain's own name for the thing: a fast **path**, a **cold**
-block, the **surface**
-`runtime.h` publishes, a ctest **gate**, a commit that **landed**, profile **drift**
-across a rebuild. Each of those is the clearest name for the thing, and rewriting one
-costs a reader the term the code uses (G12).
+block, the **surface** `runtime.h` publishes, a ctest **gate**, a commit that **landed**,
+profile **drift** across a rebuild. Each of those is the clearest name for the thing, and
+rewriting one costs a reader the term the code uses (G12).
 
 Rewrite a metaphor only where it stands in for a relationship the sentence never states.
 Where the sentence states the relationship, the metaphor is the domain's word and stays.

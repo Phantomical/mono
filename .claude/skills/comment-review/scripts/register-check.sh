@@ -70,8 +70,8 @@ for f in "$@"; do
 		}
 	}' /tmp/.cr-text.$$
 
-	# Informational: the file's own mix decides a body remark's marker. A doc
-	# comment written /* */ is the real finding, and it is above a declaration.
+	# A body remark takes /* */ only when it runs to several paragraphs. A doc
+	# comment written /* */ is the worse finding, and it is above a declaration.
 	echo "-- /* */ blocks with no blank comment line (a doc comment here is a finding)"
 	# A /** */ banner is a doc comment and is exempt.
 	awk '

@@ -4,10 +4,8 @@ What people write instead of what the rules ask for, ordered by how hard the pus
 lands. Every entry is a correction that was actually made in this tree. The full record,
 with the commits behind each, is `.claude/docs/comment-review.md`.
 
-**Being in the tree means nothing.** The sweep covered `mono/llvm/method-to-llvm/`,
-`jit.cpp/hpp`, `mono_lsda*`, `runtime.h(pp)` and the interp test corpus. Everything else
-— `runtime/backend.hpp`, `passes/`, most of `mono/mini/` — was never swept and still
-carries the banned patterns. Do not calibrate on a neighbouring comment.
+**Being in the tree means nothing.** Most of the tree has never been swept and still
+carries every pattern below. Do not calibrate on a neighbouring comment.
 
 ---
 
@@ -43,7 +41,7 @@ only what a caller cannot see from the signature and would otherwise get wrong (
 to 59).
 
 **B2. Documenting a caller's policy as if this function guaranteed it.** The subtlest
-one. That icall wrappers compile into the root domain is `mini-runtime.c`'s policy; the
+one. That icall wrappers compile into the root domain is `mini-runtime.c`'s policy. The
 backend compiles into whatever it is handed, so the rule **read as a guarantee that is
 not made**.
 
@@ -138,7 +136,7 @@ Lower severity individually. Corrected in bulk.
 | semicolon joining two clauses | two sentences |
 | sentences over 25 words | split |
 | `/* */` for a one-line remark | `//`, and `///` for a doc |
-| imperative summary among indicative neighbours | match the file |
+| imperative summary | indicative, third person |
 | hypotheticals ("what assigning the bit *would* do") | state the ordering fact directly |
 | filler: simply, just, note that, essentially | delete |
 | an em dash | cut the aside it carries, not the dash |
@@ -185,15 +183,16 @@ it looks like thoroughness.
 
 If the content amounts to "here is how it works, you work out when to use it", convert it
 to "use this when X, otherwise use Y". Register note: the summary line stays indicative
-third person; guidance to the caller is imperative and may address them directly.
+third person. Guidance to the caller is imperative and can address them directly.
 
 **G3. A cost stated in implementation units.** "at the price of a symbol and a stub" is
 not a number and not a choice. Document a cost only when the caller can spend it
 differently — and then give the quantity.
 
 **G4. Documenting the default.** "A reservation is readable, writable and executable, and
-stays that way." Readable and writable are assumed; executable was already in the summary;
-"stays that way" documents a non-event. Permissions *changing* would deserve the sentence.
+stays that way." Readable and writable are assumed. Executable was already in the summary,
+and "stays that way" documents a non-event. Permissions *changing* would deserve the
+sentence.
 
 **G5. Repeating in the body what the summary fixed.** The summary's terms are in force for
 the rest of the comment.
@@ -319,7 +318,7 @@ unlike a wire format changing for one writer.
 
 **G18. A prohibition with the consequence left out.** "Do not call it while holding a lock:
 the compile it waits for takes locks of its own." → "Calling this while holding the domain
-or loader lock can deadlock." **Prefer the consequence when the reader might have a reason
+or loader lock can deadlock." **Prefer the consequence when the reader can have a reason
 to do the thing anyway** — a rule alone leaves someone with a genuine need to guess how
 hard it binds. It is also shorter: *deadlock* is the whole of "the compile it waits for
 takes locks of its own".
@@ -445,7 +444,7 @@ nothing, since it hands the next reader an argument for the wrong value.
 
 The two questions that separate them: what does this comment lose if nobody ever challenges
 the code, and can a reader derive it by reading? Evidence survives the first and fails the
-second; a decision fails the first and survives it. Keep what a reader cannot derive. This is
+second. A decision fails the first and survives it. Keep what a reader cannot derive. This is
 the constructive half of the advice rule in SKILL.md — a comment that needs defending is
 usually failing the governing test, and a comment that is genuinely needed is still written
 wrong when it is written as a defence.

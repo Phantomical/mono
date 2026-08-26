@@ -26,6 +26,12 @@ fact and a reader without it gets something wrong.
 which reader goes wrong without it and what they do, and answer with both. A block you
 cannot make that case for goes, however well it reads and however much it taught you.
 
+**The unit is the fact, not the block.** One sentence that passes the test carries no
+other sentence with it, and a fact that passes carries no clause welded to it. Take the
+block apart, run the test on each fact on its own, and keep the ones that pass. G23 is
+what a block judged whole looks like: three sentences in one paragraph, each failing a
+filter that already existed.
+
 Length is evidence against a comment, not for it. Every correction in the record made
 the text shorter. A comment that teaches you a lot about the implementation is the
 characteristic failure mode in this tree, not the goal.
@@ -33,9 +39,8 @@ characteristic failure mode in this tree, not the goal.
 **Most functions here want a one-line doc.** One line is the normal size, not the
 degenerate case.
 
-**When the call is close, cut.** The two errors are not symmetric and must not be weighed
-as if they were. A comment cut wrongly costs one reader one trip to the code, which is
-what they came to read anyway. A comment kept wrongly costs every reader after it, and it
+**When the call is close, cut.** The two errors are not symmetric. A comment cut wrongly
+costs one reader one trip to the code, which is what they came to read anyway. A comment kept wrongly costs every reader after it, and it
 is the kept ones that go stale, get restated in the next file, and have to be re-checked
 by every sweep that follows. So "I could not decide" resolves to a cut, and so does "it
 seems helpful".
@@ -85,7 +90,7 @@ diff /tmp/a.i /tmp/b.i && echo "comment-only"
 ```
 
 **Never `git stash` to get the old text.** `git show HEAD:<path>` reads it without
-touching the working tree; a stash puts the user's other work at risk for nothing.
+touching the working tree. A stash puts the user's other work at risk for nothing.
 
 ### 1. Classify every block first
 
@@ -95,20 +100,27 @@ when cut. Classify before checking:
 | kind | check | action |
 | --- | --- | --- |
 | **Claim** — names an identifier, file, section, pass, env var | grep every name | remove or fix what does not survive |
-| **Quotation** — ECMA-335 and the like | none applies | **do not touch.** Move it if it is in the wrong file. Never shorten it |
-| **Reason** — why a branch exists, why an order is what it is | read it against the code | cut only what the code now contradicts |
+| **Quotation** — ECMA-335 and the like | none applies | **do not touch.** Move it if it is in the wrong file, never shorten it. The one legitimate edit is to replace a quote documenting nothing local with the part not in the standard (F1) |
+| **Reason** — why a branch exists, why an order is what it is | read it against the code | cut only what the code now contradicts. Keeping the description and dropping the "because" is the shortening that destroys the value (F2) |
 | **Specification** — a wire format, an ABI, a table layout | can a second implementation be written from it? | **add what is missing.** Economy is not the test here |
 
-A sweep that runs only the name-grep and reports clean has produced a report that is
-true and irrelevant at once — worse than a red, because a red gets investigated.
+A sweep that runs only the name-grep and reports clean has produced a report that is true
+and irrelevant at once, and nobody investigates a clean report.
 
 ### 2. Pass 1 — is it false? (highest severity)
 
 This is by a wide margin the most productive check.
 
 - Grep every name the comment uses. A name with no definition is a delete, not a
-  reword. The record's worst finds named a type with no definition anywhere and a
-  function attributed to a file that has never been in the tree.
+  reword (D1).
+- Read the claim against **every path**, the early returns included. A sentence true on
+  the main path and false on an early return is a false sentence, and worse than a
+  missing one, because it reads as a guarantee.
+- `every` / `each` / `all` / `always` / `never` claim a scope. What is it counted over,
+  and does the code hold all of it? A doc promising a container holds many when the code
+  puts one in it is a bug in the type — fix the type, not the sentence.
+- A claim about a caller that this function does not enforce belongs to the caller.
+- A fact tied to a transient setting — opt level, ISel, thread count — is already stale.
 
 **A verification that comes back negative is a claim too, and it is the dangerous one.**
 "I grepped and found nothing" is what deletes a true fact, and nothing downstream catches
@@ -122,9 +134,9 @@ nonexistent, satisfy yourself you looked where it lives:
 | a macro | it can be defined under an `#if` you did not compile |
 | a build fact | `build/compile_commands.json`, and the CMake files |
 
-A one-line grep of the working tree answers none of those. And when a name turns out to
-be real inside a sentence that is stale in some other way, **fix the stale part and keep
-the name** — a compound false claim is not licence to delete the true clause with it.
+A one-line grep of the working tree answers none of those. Where a name is real inside a
+sentence that is stale in some other way, **fix the stale part and keep the name**. A
+compound false claim is not licence to delete the true clause with it.
 
 **A replacement must still make a claim.** Rewriting a definite sentence into "X can
 happen, and Y can erase it" is a way of being unfalsifiable rather than correct. If you
@@ -134,14 +146,6 @@ alone. Hedging is a worse outcome than either keeping or cutting.
 That leave-it-alone covers a fact you could not check. It is not the answer to a block you
 could not argue for, which the governing test cuts. Uncertain about the **fact**: write
 nothing new. Uncertain about the **worth**: cut.
-- Read the claim against **every path**, the early returns included. A sentence true on
-  the main path and false on an early return is a false sentence, and worse than a
-  missing one, because it reads as a guarantee.
-- `every` / `each` / `all` / `always` / `never` claim a scope. What is it counted over,
-  and does the code hold all of it? A doc promising a container holds many when the code
-  puts one in it is a bug in the type — fix the type, not the sentence.
-- A claim about a caller that this function does not enforce belongs to the caller.
-- A fact tied to a transient setting — opt level, ISel, thread count — is already stale.
 
 ### 3. Pass 2 — does it belong?
 
@@ -161,9 +165,8 @@ record_ranges:
 ```
 
 Read by eye, the second sentence looks like it belongs, because it is true and it is
-about something the function does. Written down next to its subject it is obviously
-another thing's contract. This is the check that most often gets skipped, and the
-enumeration is what stops that.
+about something the function does. Written down next to its subject it is another thing's
+contract.
 
 **Run it on doc comments only.** A remark sitting at a line is *about* the code under it,
 so its subject is routinely something else — that is what rationale is, and the subject
@@ -195,8 +198,7 @@ still be describing how it works. Mechanism goes down to the line it explains.
 repaired, a mechanism moved down — leaves a survivor that has never been read cold. Read
 it cold and ask whether it was wanted at all. C1 went twice: the first round corrected the
 subject, the second deleted what the first round wrote. A block you have just rewritten
-reads as valuable because you spent the effort, and that is where the governing test is
-hardest to apply and most often skipped.
+reads as valuable because you spent the effort.
 
 **Rationale moves, it does not vanish.** A doc comment arguing why the code takes one
 approach is holding text the body wants. Move it to the line. The exception is a
@@ -209,7 +211,7 @@ the subject test again where it lands. A fact hoisted onto a function whose whol
 that fact usually collapses into the summary — "Plants a label at \p at that emits no
 code" rather than a paragraph about what an `EH_LABEL` is.
 
-**Preconditions duplicate; conventions hoist.** A convention is one mechanism several
+**Preconditions duplicate. Conventions hoist.** A convention is one mechanism several
 functions build — the reader needs it once. A precondition is obeyed at the call site by
 someone looking at exactly one function, so it goes on each function it constrains.
 
@@ -224,17 +226,14 @@ sentences that had already survived several passes. The tell that it fired: your
 restatement contains a term the comment did not (*modulo*), or it leads with what the
 comment buried (*do not dereference this*).
 
-**Then run the same test over the whole block.** Claudish is the register an assistant
-writes by default: polished, contrast-heavy, metaphor-led, and stating one proposition
-several times at different levels of abstraction. It survives every other pass, because
-nothing in it is false, nothing belongs to another subject and no modal is banned. What
-is wrong is the ratio between the block and what it says.
+**Then run the same test over the whole block.** What Claudish is, and why the other
+passes cannot see it, is in `reference/claudish.md`. Read it before running this.
 
 Write out the smallest set of ordinary propositions the block states, then read the block
 against that list. Whatever the block has and the list has not is ornament, and ornament
 is deleted rather than paraphrased. Do not write one sentence for each sentence you read.
-The four moves, and the carve-outs that stop each of them over-firing, are in
-`reference/claudish.md`:
+The four moves are below. Each one over-fires without the carve-out beside it in that
+file:
 
 - collapse sentences that restate one proposition through a second abstraction, a
   metaphorical label, or a contrast with an alternative nobody believes
@@ -246,17 +245,10 @@ The four moves, and the carve-outs that stop each of them over-firing, are in
 - decode a compound — *X-gated*, *X-backed*, *X-side* — into the relationship it stands
   for, where the sentence never states that relationship
 
-The word lists are diagnoses and not substitutions. A **path**, a **cold** block, a
-**gate** and the **surface** a header publishes are the domain's own terms, and *rather
-than* here is nearly always factual contrast against the alternative a reader would
-otherwise assume. Rewrite one only where it stands in for a relationship the sentence
-never makes.
-
-**A compression must not strengthen the claim.** A trigger is not an exclusivity rule, a
-prerequisite is not a cause, *required* is not *sufficient*, and *not tested* is not
-*wrong*. Where the block is ambiguous, keep the narrowest reading the surrounding code
-supports. A shorter sentence that claims more than the long one is a Pass 1 finding
-against your own edit.
+**A compression must not strengthen the claim.** *Required* is not *sufficient* and *not
+tested* is not *wrong*. A shorter sentence that claims more than the long one is a Pass 1
+finding against your own edit, and `reference/claudish.md` has the table of the swaps that
+do it.
 
 - Use the domain's word. "Returns the address to call a method at" is a circumlocution
   for *function pointer*. A summary that ends on a preposition is the tell
@@ -272,7 +264,7 @@ against your own edit.
   otherwise, which has to be taken back out again when the method is freed* looks like
   the same shape, and is a caller obligation: the record really must reach
   `mono_jit_info_table_remove ()`. Amputating a duty deletes contract. A reason answers
-  *why*; a duty tells the caller what to write
+  *why*, and a duty tells the caller what to write
 - A complement spelled out as a set — *for every other method* — is `otherwise`
 - The subject is a noun the code cannot execute (*the order*, *the rule*, *the reason*):
   find the verb further in and promote its owner. Active voice is not enough on its own
@@ -292,8 +284,8 @@ against your own edit.
 
 ### 5. Pass 4 — register (lowest severity)
 
-Invoke the `simple-english` skill rather than working from memory of it. Descriptive
-register.
+Invoke the `simple-english:simple-english` skill rather than working from memory of it.
+Descriptive register.
 
 - Modals: `can`, `will` and `must` in an indicative sentence. `should` and `might` are
   hedges — say what happens, or say in the report that you could not establish it.
@@ -305,7 +297,7 @@ register.
   "fix" to them was a revert. `may` is the same: real possibility about runtime state
   (*the vtable might not be initialized yet*) is a fact, not a hedge
 - **A FIXME or a TODO is not documentation.** It is a note to whoever picks the work up,
-  in that author's words. Leave its register alone; the register rules govern what the
+  in that author's words. Leave its register alone. The register rules govern what the
   code's documentation claims
 - A **function** summary starts with a verb, indicative, no parenthetical, no "The one
   X". The one carve-out is a predicate: `Whether mbb leaves inside the clause` is the
@@ -321,11 +313,10 @@ register.
   breaks
 - Ask **doc or remark** before you ask anything about length. A doc comment sits above a
   declaration and is `///`, or `/** */` when it runs to paragraphs — never `/* */`,
-  however long it is; that one is unambiguous and always worth fixing. A remark inside a
-  body is `//`, and `/* */` only once it runs to several paragraphs, which is what
-  `CLAUDE.md` states. What the file around you already does decides nothing: fix the
-  marker in the blocks you are rewriting anyway, and report the rest as a sweep with the
-  count
+  however long it is. That one is unambiguous and always worth fixing. A remark inside a
+  body is `//`, and `/* */` only once it runs to several paragraphs. What the file around
+  you already does decides nothing: fix the marker in the blocks you are rewriting anyway,
+  and report the rest as a sweep with the count
 - Filler out: simply, just, note that, essentially, basically, obviously
 - **Do not flag plain passives.** The diagnosis is almost always circumlocution instead,
   and the preferred rewrites in the record use passives freely
@@ -349,9 +340,9 @@ Register defects do not survive eyeballing. Run the script:
 .claude/skills/comment-review/scripts/register-check.sh <file>...
 ```
 
-It lists semicolons joining clauses, banned modals, filler, empty subjects, rhetorical
-scaffolding, every UPPERCASE token, sentences over 25 words, and `/* */` blocks holding a
-single paragraph.
+It lists semicolons joining clauses, the hedging modals and the conditional ones on
+separate lines, filler, empty subjects, rhetorical scaffolding, every UPPERCASE token,
+sentences over 25 words, and `/* */` blocks holding a single paragraph.
 
 The scaffolding line finds the phrases that have a fixed form. The Claudish shapes that
 cost most — one proposition stated three ways, a contrast against an alternative nobody
@@ -387,10 +378,10 @@ then run the preprocess identity check above.
 
 ## Advice about one comment
 
-The procedure above is written for a diff. The rules hold when someone instead asks about a
-single block, but the deletion bias is what gets dropped there, because the question
-arrives shaped as "how should I word this" and answering it as asked has already conceded
-that the text stays. Answer the cut first, then the wording.
+The procedure above is written for a diff, and the rules hold for a single block as well.
+What gets dropped there is the deletion bias: the question arrives shaped as "how should I
+word this", and answering it as asked has already conceded that the text stays. Answer the
+cut first, then the wording.
 
 - **"How do I stop a sweep cutting this?"** A comment that needs defending is failing the
   governing test already. A live hazard needs no defence: it names what breaks, and every
@@ -405,7 +396,7 @@ that the text stays. Answer the cut first, then the wording.
 
 ## CMake files
 
-Everything above applies, with four changes.
+Everything above applies, with the changes below.
 
 **The marker rules do not.** CMake has one comment marker. A comment above a
 `function ()`, `macro ()` or `option ()` is a doc comment and gets the doc rules — verb
@@ -445,23 +436,10 @@ was measured at.
 
 Run `scripts/register-check-cmake.sh <file>...` instead of `register-check.sh`.
 
-## Two traps that produced reverts
-
-Both are the most costly failure mode, because a sweep that commits them reports
-success.
-
-1. **Deleting quoted standard text.** A sweep once deleted twenty verbatim ECMA-335
-   passages for being long and restating the standard. Being the standard is why they
-   are there. The one legitimate edit is to *replace* a quote that documents nothing
-   local, with the part not in the standard.
-2. **Dropping the "because" and keeping the description.** When a block is a reason and
-   the code still needs it, that is the shortening that looks safest and destroys the
-   value.
-
 ## A tic is a sweep, not a review comment
 
 Grep a suspected house tic before filing it. `answers` for `returns` ran 63 times in
-`mono/llvm/`. Sixty instances is a sweep and a style-guide entry; one review comment on
+`mono/llvm/`. Sixty instances is a sweep and a style-guide entry. One review comment on
 one site is noise. The count decides the shape of the fix. It never decides whether the
 thing is a defect: that one was, and it has since been swept.
 `reference/catalogue.md` G20 has the four senses of *answer* that are not the tic and

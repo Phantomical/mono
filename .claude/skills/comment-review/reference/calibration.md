@@ -153,7 +153,7 @@ reader decodes against it.**
 **A property the block never pinned.** Entry order is significant — `eh-gather.cpp` reverses
 `TypeIds` to restore innermost-first, and `.mono_lsda` carries that by position. Anyone
 writing a second reader from the block alone would sort or hash the entries and lose the
-nesting chain. Nothing in the block was wrong; the fact was simply absent, which is why no
+nesting chain. Nothing in the block was wrong. The fact was absent, which is why no
 ordinary check fires on it.
 
 For a specification, run the checks backwards: take each field, then each structural
@@ -170,8 +170,8 @@ The same block also produced a legitimate keep. This survives:
 It clears the bar on a narrow argument: a violation fails immediately — the test segfaults
 — but it fails in a way that **misdirects the repair**. The obvious reading of that crash
 is "the test passes a bogus pointer". The comment exists to stop the wrong fix, not to
-announce a property. **A comment whose only job is to redirect a diagnosis is legitimate;
-the test is whether the failure names its own cause.**
+announce a property. **A comment whose only job is to redirect a diagnosis is legitimate.
+The test is whether the failure names its own cause.**
 
 ---
 
@@ -195,7 +195,7 @@ static void stop_compilation ();
 /// compiled it there.
 ```
 
-Imperative summaries where the file's neighbours are indicative; "Note that" filler;
+Imperative summaries where the house form is indicative; "Note that" filler;
 UPPERCASE parameter names; `will` where the approved modal is `can`; and "UB" for what is a
 use-after-free — the language's term for a construct the standard does not define, borrowed
 for a runtime lifetime rule it does not govern.
@@ -213,7 +213,7 @@ These look like findings and are not. A reviewer that reports them is tuned wron
 > "Calling this while the method is still in use will lead to UB."
 
 An earlier review flagged `Calling` under the `-ing` rule. STE 3.5 bans the `-ing` form as
-a **verb**; here it heads a gerund subject, which is a noun phrase and is approved. A
+a **verb**. Here it heads a gerund subject, which is a noun phrase and is approved. A
 register rule is a claim too, and this one was applied from the shape of the word rather
 than from its part of speech in the sentence.
 
@@ -232,10 +232,9 @@ failure. The fix is "Records that…", **not** deletion.
 **3. A good comment is allowed to break register rules.**
 
 `compile-queue.hpp` states its rule before the reasoning and names the tempting change that
-breaks it — which is what makes the block necessary rather than merely informative, because
-it is aimed at the person about to make that change. It also uses `would` twice and one "nothing here". That
-is the right severity ranking: flag those as register nits and do not suggest touching the
-substance.
+breaks it. That is what makes the block necessary: it is aimed at the reader about to make
+that change. It also uses `would` twice and one "nothing here". Flag those as register nits
+and do not suggest touching the substance.
 
 (Separately, that block is also the G15 example — the argument goes because the type
 enforces the rule. Both readings are in the record. The point here is the ranking: never
