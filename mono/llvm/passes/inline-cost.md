@@ -7,12 +7,18 @@ told what the managed metadata knows about a call site: the class a caller
 already settled its argument to, a type test that class answers, and a dispatch
 that resolves to a direct call.
 
-No line of the model itself is changed. Every change the copy carries is one of
-the four below, and each is there to let one process hold two copies of the same
-code. Read a diff against upstream before you believe otherwise:
+The copy carries two kinds of change, and a diff against upstream has to sort
+every hunk into one of them:
 
     diff -u ~/projects/llvm-project/llvm/lib/Analysis/InlineCost.cpp \
             mono/llvm/passes/inline-cost.cpp
+
+The four under "What the copy changes" are mechanical. Each is there to let one
+process hold two copies of the same code, and none of them moves a number.
+
+The two under "What the copy asks mono" are the point of taking a copy at all.
+Each is one call into `inline-policy.cpp`, which holds the policy, so a hunk
+that reasons about managed metadata inside this file belongs somewhere else.
 
 ## What the copy changes
 
@@ -48,6 +54,23 @@ the file reachable from the class bodies above them.
 a class `InlineCost.h` declares, so it collides with the definition the dylib
 carries. `-mono-print-instruction-comments` turns the same annotation on here.
 
+## What the copy asks mono
+
+**`CallAnalyzer::analyze ()` skips the raising arm of a folded null check.**
+`implicit_null_check_successor ()` answers which successor a branch marked
+`!make.implicit` reaches, and the walk then treats the other arm the way it
+treats an arm a constant condition settled. Every managed dereference carries
+such a check, so the arms are most of what a freshly translated body costs.
+
+**`InlineCostCallAnalyzer::updateThreshold ()` adds `call_site_bonus ()`.**
+It goes in behind `SingleBBBonus` and `VectorBonus`, which are shares of the
+threshold, and behind the target's multiplier, because what it adds is an
+absolute count rather than a proportion.
+
+`inline-policy.hpp` documents what each answer means. Each answer is gated by an
+option of its own, so a run can be put back on LLVM's own answers without a
+rebuild.
+
 `InlineCostFeaturesAnalyzer`, `getInliningCostFeatures ()` and
 `getInliningCostEstimate ()` stay, and nothing in this tree calls them. They are
 what LLVM's ML inline advisor reads the model through, and keeping them costs
@@ -59,11 +82,12 @@ The copy drifts at every LLVM bump. On a bump, diff the new upstream file
 against the old one and apply what it says to the copy by hand. A new `cl::opt`
 needs the `mono-` prefix, and a new definition in `namespace llvm` needs the
 same decision the two above got: drop it when a header declares it, keep it when
-no header does.
+no header does. Watch the block walk in `analyze ()` and the tail of
+`updateThreshold ()`, because that is where the two mono calls sit.
 
-The numbers stop being LLVM's the moment a change lands here that is not on the
-list above. A cost and a budget that `MONO_LLVM_JIT_TRACE` prints are then no
-longer what an upstream build gives for the same pair, and a comparison against
-clang or against LLVM's own pipeline stops meaning what it did. LLVM's
-`getInlineCost ()` is still linked in and still reachable, so one run can be
-read against the other.
+A cost and a budget that `MONO_LLVM_JIT_TRACE` prints are not what an upstream
+build gives for the same pair, so a comparison against clang or against LLVM's
+own pipeline needs the options off first. Turning off
+`-mono-inline-implicit-null-free` and setting each `mono-inline-*-bonus` to zero
+is what gets LLVM's own answers back. LLVM's `getInlineCost ()` is linked in and
+still reachable as well, so one run can be read against the other.

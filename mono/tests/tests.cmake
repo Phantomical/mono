@@ -992,6 +992,13 @@ set(MONO_TESTS_TIER2_COST_TRIGGER_SRC
   tier2-cost-trigger.cs
 )
 
+# The bonuses mono adds to the tier-2 cost model. It runs twice, on the defaults
+# and with every bonus set to zero, and reads the variable to know which arm it
+# is in. The file itself says why each suite names a threshold of its own.
+set(MONO_TESTS_TIER2_INLINE_POLICY_SRC
+  tier2-inline-policy.cs
+)
+
 # The tailcall suite, including the corpus imported from coreclr.
 set(MONO_TESTS_TAILCALL_CS_SRC
   tailcall/coreclr/JIT/CodeGenBringUpTests/RecursiveTailCall.cs

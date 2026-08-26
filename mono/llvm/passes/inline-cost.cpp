@@ -16,8 +16,13 @@
 //
 // inline-cost.md beside this file records each change the copy needs to build
 // outside LLVM, and how to read the copy against a later release.
+//
+// What this backend knows that the model does not is asked for through
+// inline-policy.hpp, so the copy carries the two calls and none of the policy.
 
 #include "inline-cost.hpp"
+
+#include "inline-policy.hpp"
 
 #include "llvm/Analysis/InlineCost.h"
 #include "llvm/ADT/STLExtras.h"
@@ -2197,6 +2202,11 @@ void InlineCostCallAnalyzer::updateThreshold(CallBase &Call, Function &Callee) {
   SingleBBBonus = Threshold * SingleBBBonusPercent / 100;
   VectorBonus = Threshold * VectorBonusPercent / 100;
 
+  // Behind the two above, which are shares of the threshold, and behind the
+  // target's multiplier. What mono adds is an absolute count of calls the fold
+  // takes away, so neither scaling applies to it.
+  Threshold += mono::call_site_bonus(Call, F);
+
   // If there is only one call of the function, and it has internal linkage,
   // the cost of inlining it drops dramatically. It may seem odd to update
   // Cost in updateThreshold, but the bonus depends on the logic in this method.
@@ -3016,6 +3026,14 @@ InlineResult CallAnalyzer::analyze() {
         Value *Cond = BI->getCondition();
         if (ConstantInt *SimpleCond = getSimplifiedValue<ConstantInt>(Cond)) {
           BasicBlock *NextBB = BI->getSuccessor(SimpleCond->isZero() ? 1 : 0);
+          BBWorklist.insert(NextBB);
+          KnownSuccessors[BB] = NextBB;
+          findDeadBlocks(BB, NextBB);
+          continue;
+        }
+        // A null check codegen folds into the dereference behind it. The arm
+        // that raises is left uncounted, because no run arrives there.
+        if (BasicBlock *NextBB = mono::implicit_null_check_successor(*BI)) {
           BBWorklist.insert(NextBB);
           KnownSuccessors[BB] = NextBB;
           findDeadBlocks(BB, NextBB);

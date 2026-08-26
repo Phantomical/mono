@@ -305,6 +305,7 @@ foreach(_s IN LISTS MONO_TESTS_CS_SRC MONO_TESTS_BENCH_SRC MONO_TESTS_GSHARED_SR
                     MONO_TESTS_TIER_PINNED_SRC
                     MONO_TESTS_TIER2_COSTED_SRC
                     MONO_TESTS_TIER2_COST_TRIGGER_SRC
+                    MONO_TESTS_TIER2_INLINE_POLICY_SRC
                     MONO_TESTS_TAILCALL_CS_SRC)
   string(REGEX REPLACE "\\.cs$" ".exe" _exe "${_s}")
   if(_exe IN_LIST _seen)

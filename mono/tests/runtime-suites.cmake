@@ -590,6 +590,22 @@ mono_runtime_suite(runtime-tier2-cost-trigger TESTS ${_tier2_cost_trigger}
 mono_runtime_suite(runtime-tier2-cost-trigger-off TESTS ${_tier2_cost_trigger}
                    ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0")
 
+# The bonuses mono adds to the cost model. Two arms, on and off, the way
+# runtime-tier2-cost-trigger has it. The root drives its own compiles, so
+# self-promotion is off the way the costed suite has it, and the trivial
+# pre-pass is off so that every fold the test reads is the cost model's.
+# The threshold and the calibration behind it are the test file's subject.
+_mono_exe_list(_tier2_inline_policy ${MONO_TESTS_TIER2_INLINE_POLICY_SRC})
+mono_runtime_suite(runtime-tier2-inline-policy TESTS ${_tier2_inline_policy}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=155")
+mono_runtime_suite(runtime-tier2-inline-policy-off TESTS ${_tier2_inline_policy}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=155 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-scalarize-arg-bonus=0")
+
 # MONO_ENV_OPTIONS has to reach the runtime before it parses its own argv.
 foreach(_gc IN LISTS _mono_gcs)
   _mono_gc_env(_gc_env "${_gc}")

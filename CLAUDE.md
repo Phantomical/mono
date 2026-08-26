@@ -721,15 +721,46 @@ inlines, off the static frequencies BFI falls back to.
 
 **The `getInlineCost ()` it calls is a copy of LLVM's**, `passes/inline-cost.cpp`, taken
 from `llvm/lib/Analysis/InlineCost.cpp` at `llvmorg-22.1.8`. `CallAnalyzer` is in no
-header, so a subclass outside LLVM cannot reach it. No line of the model itself is
-changed, and `passes/inline-cost.md` records every change the copy does carry and how to
-read it against a later release. Two of those matter from outside. Each command-line
+header, so a subclass outside LLVM cannot reach it. Two kinds of change touch the copy:
+the mechanical ones that let it build outside LLVM, and the calls below into
+`passes/inline-policy.cpp`. `passes/inline-cost.md` records both and how to read them
+against a later release. Two of the mechanical ones matter from outside. Each command-line
 option carries a `mono-` prefix, because LLVM's CommandLine calls `report_fatal_error ()`
 on a name registered twice and the runtime links the dylib that registers all of them —
 so `--llvm-opt=-mono-inline-threshold=N` tunes this copy and `-inline-threshold=N` tunes
 the one the rest of the pipeline reads. And each of these entry points has to be called
 qualified, because the arguments are llvm types and an unqualified call finds LLVM's
 overload beside ours.
+
+**What the copy asks that LLVM's cannot answer lives in `passes/inline-policy.cpp`**, so
+the copy carries two calls and none of the policy. Each of the four answers has an option
+of its own, which puts a run back on LLVM's own answers without a rebuild:
+- `-mono-inline-implicit-null-free` — leave the raising arm of a `!make.implicit` branch
+  out of a callee's cost, because ImplicitNullChecks folds the test into the dereference
+  and mono raises from the faulting instruction rather than entering the handler. Every
+  managed dereference carries such a check, so the arms are most of what a freshly
+  translated body costs: a body with nine of them measured 30 against 0.
+- `-mono-inline-devirt-return-bonus` — the callee answers with an object it allocated
+  under a class it names, and the caller dispatches on that answer.
+- `-mono-inline-devirt-arg-bonus` — the site passes an object of a named class into a
+  parameter the callee dispatches on.
+- `-mono-inline-scalarize-arg-bonus` — the site passes a fresh allocation into a
+  parameter the callee does not capture, so the fold hands SROA the accesses a call was
+  hiding. **SGen only**, because what lets LLVM erase the allocation behind the
+  scalarized fields is the alloc kind on a managed allocator, and
+  `mono_gc_get_managed_allocator ()` answers null under Boehm.
+
+The three bonuses are threshold bonuses rather than cost discounts, and each is priced
+as a count of calls the fold takes away. They go in behind `SingleBBBonus` and
+`VectorBonus`, which are shares of the threshold, and behind the cold-callsite clamp,
+which is what lets one reach a cold site at all. A hot site is weighed against
+`HotCallSiteThreshold`, which is large enough that none of them decides anything there.
+
+What states a fresh object's class in the IR is the vtable store `emit_object_alloc ()`
+writes, not the alloc kind the managed allocator alone carries, so the two
+devirtualization bonuses answer the same under either collector. `passes/inline-policy.hpp` says what each one recognizes
+and `mono/tests/tier2-inline-policy.cs` gates the two that a threshold can be calibrated
+against.
 
 **A copy is kept only where the runtime resolves what it names.** Each inliner resolves
 a copy's own externals as it builds it, and drops the copy when one of them fails. A
