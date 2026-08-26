@@ -2652,39 +2652,117 @@ build_native_trace (MonoError *error)
 #endif
 }
 
+/* Frames a trace holds before it needs the heap. */
+#define TRACE_IPS_INLINE_FRAMES 16
+
+/*
+ * The frames a first pass has walked, in the order MonoException.trace_ips
+ * keeps them. One frame takes TRACE_IP_ENTRY_SIZE words.
+ *
+ * The words start inside the struct, so a throw over an ordinary stack records
+ * its frames without an allocation. Beyond that the buffer moves to the heap,
+ * and trace_ips_dispose () gives it back.
+ */
+typedef struct {
+	gpointer *words;
+	int count;
+	int capacity;
+	gpointer inline_words [TRACE_IP_ENTRY_SIZE * TRACE_IPS_INLINE_FRAMES];
+} TraceIps;
+
 static void
-remove_wrappers_from_trace (GList **trace_ips_p)
+trace_ips_init (TraceIps *trace)
 {
-	GList *trace_ips = *trace_ips_p;
-	GList *p = trace_ips;
-
-	/* jit info, generic info, ip */
-	while (p) {
-		MonoJitInfo *jinfo = (MonoJitInfo*) p->data;
-		GList *next_p = p->next->next->next;
-		/* FIXME Maybe remove more wrapper types */
-		if (jinfo->d.method->wrapper_type == MONO_WRAPPER_OTHER) {
-			trace_ips = g_list_delete_link (trace_ips, p->next->next);
-			trace_ips = g_list_delete_link (trace_ips, p->next);
-			trace_ips = g_list_delete_link (trace_ips, p);
-		}
-		p = next_p;
-	}
-
-	*trace_ips_p = trace_ips;
+	trace->words = trace->inline_words;
+	trace->count = 0;
+	trace->capacity = G_N_ELEMENTS (trace->inline_words);
 }
 
-/* This can be called more than once on a MonoException. */
 static void
-setup_stack_trace (MonoException *mono_ex, GSList **dynamic_methods, GList *trace_ips, gboolean remove_wrappers)
+trace_ips_dispose (TraceIps *trace)
+{
+	if (trace->words != trace->inline_words)
+		g_free (trace->words);
+	trace_ips_init (trace);
+}
+
+static void
+trace_ips_add (TraceIps *trace, gpointer ip, gpointer generic_info, MonoJitInfo *ji)
+{
+	ExceptionTraceIp *entry;
+
+	if (trace->count + TRACE_IP_ENTRY_SIZE > trace->capacity) {
+		int capacity = trace->capacity * 2;
+		gpointer *words = g_new (gpointer, capacity);
+
+		memcpy (words, trace->words, trace->count * sizeof (gpointer));
+		if (trace->words != trace->inline_words)
+			g_free (trace->words);
+		trace->words = words;
+		trace->capacity = capacity;
+	}
+
+	entry = (ExceptionTraceIp*) &trace->words [trace->count];
+	entry->ip = ip;
+	entry->generic_info = generic_info;
+	entry->ji = ji;
+	trace->count += TRACE_IP_ENTRY_SIZE;
+}
+
+/*
+ * Builds the IntPtr[] MonoException.trace_ips holds. remove_wrappers leaves out
+ * the frames of a MONO_WRAPPER_OTHER method.
+ *
+ * Returns NULL where the trace holds no frame, which is what the exception
+ * object then keeps.
+ */
+static MonoArray *
+trace_ips_to_array (TraceIps *trace, gboolean remove_wrappers, MonoError *error)
+{
+	MonoArray *res;
+	int len = trace->count;
+	int pos = 0;
+
+	error_init (error);
+	if (!len)
+		return NULL;
+
+	if (remove_wrappers) {
+		len = 0;
+		for (int i = 0; i < trace->count; i += TRACE_IP_ENTRY_SIZE) {
+			ExceptionTraceIp *entry = (ExceptionTraceIp*) &trace->words [i];
+
+			/* FIXME Maybe remove more wrapper types */
+			if (entry->ji->d.method->wrapper_type != MONO_WRAPPER_OTHER)
+				len += TRACE_IP_ENTRY_SIZE;
+		}
+		if (!len)
+			return NULL;
+	}
+
+	res = mono_array_new_checked (mono_domain_get (), mono_defaults.int_class, len, error);
+	return_val_if_nok (error, NULL);
+
+	for (int i = 0; i < trace->count; i += TRACE_IP_ENTRY_SIZE) {
+		ExceptionTraceIp *entry = (ExceptionTraceIp*) &trace->words [i];
+
+		if (remove_wrappers && entry->ji->d.method->wrapper_type == MONO_WRAPPER_OTHER)
+			continue;
+
+		for (int j = 0; j < TRACE_IP_ENTRY_SIZE; ++j)
+			mono_array_set_internal (res, gpointer, pos ++, trace->words [i + j]);
+	}
+
+	return res;
+}
+
+/* This can be called more than once on a MonoException, so it leaves the trace as it found it. */
+static void
+setup_stack_trace (MonoException *mono_ex, GSList **dynamic_methods, TraceIps *trace_ips, gboolean remove_wrappers)
 {
 	if (mono_ex) {
-		GList *trace_ips_copy = g_list_copy (trace_ips);
-		if (remove_wrappers)
-			remove_wrappers_from_trace (&trace_ips_copy);
-		trace_ips_copy = g_list_reverse (trace_ips_copy);
 		ERROR_DECL (error);
-		MonoArray *ips_arr = mono_glist_to_array (trace_ips_copy, mono_defaults.int_class, error);
+		MonoArray *ips_arr = trace_ips_to_array (trace_ips, remove_wrappers, error);
 		mono_error_assert_ok (error);
 		MONO_OBJECT_SETREF_INTERNAL (mono_ex, trace_ips, ips_arr);
 		MONO_OBJECT_SETREF_INTERNAL (mono_ex, native_trace_ips, build_native_trace (error));
@@ -2717,8 +2795,6 @@ setup_stack_trace (MonoException *mono_ex, GSList **dynamic_methods, GList *trac
 			g_slist_free (*dynamic_methods);
 			*dynamic_methods = NULL;
 		}
-
-		g_list_free (trace_ips_copy);
 	}
 }
 
@@ -2882,7 +2958,7 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 	static int (*call_filter) (MonoContext *, gpointer) = NULL;
 	MonoJitTlsData *jit_tls = mono_tls_get_jit_tls ();
 	MonoLMF *lmf = mono_get_lmf ();
-	GList *trace_ips = NULL;
+	TraceIps trace_ips;
 	GSList *dynamic_methods = NULL;
 	MonoException *mono_ex;
 	gboolean stack_overflow = FALSE;
@@ -2902,6 +2978,8 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 	if (obj == (MonoObject *)domain->stack_overflow_ex)
 		stack_overflow = TRUE;
 
+	trace_ips_init (&trace_ips);
+
 	mono_ex = (MonoException*)obj;
 	MonoArray *initial_trace_ips = mono_ex->trace_ips;
 	if (initial_trace_ips) {
@@ -2911,12 +2989,10 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 		if (!mono_ex->caught_in_unmanaged)
 			len -= 1;
 
-		for (i = 0; i < len; i++) {
-			for (int j = 0; j < TRACE_IP_ENTRY_SIZE; ++j) {
-				gpointer p = mono_array_get_internal (initial_trace_ips, gpointer, (i * TRACE_IP_ENTRY_SIZE) + j);
-				trace_ips = g_list_prepend (trace_ips, p);
-			}
-		}
+		ExceptionTraceIp *entries = (ExceptionTraceIp*) mono_array_addr_internal (initial_trace_ips, ExceptionTraceIp, 0);
+
+		for (i = 0; i < len; i++)
+			trace_ips_add (&trace_ips, entries [i].ip, entries [i].generic_info, entries [i].ji);
 	}
 
 	// Reset the state because we're making it be caught somewhere
@@ -2958,8 +3034,8 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 
 		unwind_res = unwinder_unwind_frame (&unwinder, domain, jit_tls, NULL, ctx, &new_ctx, NULL, &lmf, NULL, &frame);
 		if (!unwind_res) {
-			setup_stack_trace (mono_ex, &dynamic_methods, trace_ips, FALSE);
-			g_list_free (trace_ips);
+			setup_stack_trace (mono_ex, &dynamic_methods, &trace_ips, FALSE);
+			trace_ips_dispose (&trace_ips);
 			return result;
 		}
 
@@ -3003,9 +3079,7 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 		if (method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE && mono_ex) {
 			// avoid giant stack traces during a stack overflow
 			if (frame_count < 1000) {
-				trace_ips = g_list_prepend (trace_ips, ip);
-				trace_ips = g_list_prepend (trace_ips, get_generic_info_from_stack_frame (ji, ctx));
-				trace_ips = g_list_prepend (trace_ips, ji);
+				trace_ips_add (&trace_ips, ip, get_generic_info_from_stack_frame (ji, ctx), ji);
 			}
 		}
 
@@ -3048,7 +3122,7 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 					ex_obj = obj;
 
 				if (ei->flags == MONO_EXCEPTION_CLAUSE_FILTER) {
-					setup_stack_trace (mono_ex, &dynamic_methods, trace_ips, FALSE);
+					setup_stack_trace (mono_ex, &dynamic_methods, &trace_ips, FALSE);
 
 #ifndef DISABLE_PERFCOUNTERS
 					mono_atomic_inc_i32 (&mono_perfcounters->exceptions_filters);
@@ -3103,7 +3177,7 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 					filter_idx ++;
 
 					if (filtered) {
-						g_list_free (trace_ips);
+						trace_ips_dispose (&trace_ips);
 						/* mono_debugger_agent_handle_exception () needs this */
 						mini_set_abort_threshold (&frame);
 						MONO_CONTEXT_SET_IP (ctx, ei->handler_start);
@@ -3118,8 +3192,8 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 				ERROR_DECL (isinst_error); // FIXME not used https://github.com/mono/mono/pull/3055/files#r240548187
 				if (ei->flags == MONO_EXCEPTION_CLAUSE_NONE && object_is_instance_of (ex_obj, catch_class, error)) {
 					/* runtime invokes catch even unhandled exceptions */
-					setup_stack_trace (mono_ex, &dynamic_methods, trace_ips, method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE);
-					g_list_free (trace_ips);
+					setup_stack_trace (mono_ex, &dynamic_methods, &trace_ips, method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE);
+					trace_ips_dispose (&trace_ips);
 
 					if (out_ji)
 						*out_ji = ji;
