@@ -125,9 +125,7 @@ namespace MonoTests.System.Threading.Tasks.Dataflow {
 			((IDataflowBlock)source1).Fault (new Exception ());
 			source2.Complete ();
 
-			Thread.Sleep (100);
-
-			Assert.IsTrue (completion.IsCanceled);
+			Assert.IsTrue (WaitFor (() => completion.IsCanceled));
 		}
 
 		[Test]
@@ -147,9 +145,7 @@ namespace MonoTests.System.Threading.Tasks.Dataflow {
 
 			tokenSource.Cancel ();
 
-			Thread.Sleep (100);
-
-			Assert.IsTrue (completion.IsCanceled);
+			Assert.IsTrue (WaitFor (() => completion.IsCanceled));
 		}
 
 		[Test]
@@ -212,6 +208,20 @@ namespace MonoTests.System.Threading.Tasks.Dataflow {
 			Assert.IsFalse (action1);
 			Assert.IsFalse (action2);
 			Assert.IsTrue (action3);
+		}
+
+		// Waits up to 10 s for condition to become true, and returns what the last
+		// poll saw.
+		static bool WaitFor (Func<bool> condition)
+		{
+			for (int i = 0; i < 1000; i++) {
+				if (condition ())
+					return true;
+				// Another thread completes the block, so a constant sleep here is
+				// a guess at how long that takes. Load makes the guess too short.
+				Thread.Sleep (10);
+			}
+			return condition ();
 		}
 	}
 }

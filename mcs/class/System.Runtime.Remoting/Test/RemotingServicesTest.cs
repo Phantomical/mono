@@ -400,11 +400,25 @@ namespace MonoTests.Remoting
 				Thread.Sleep (20);
 				Assert.IsFalse (MarshalObject.IsMethodOneWay, "#A10.2");
 				objRem.Method3 ();
-				Thread.Sleep (20);
-				Assert.IsTrue (MarshalObject.IsMethodOneWay, "#A10.3");
+				Assert.IsTrue (WaitForOneWay (), "#A10.3");
 			} finally {
 				ChannelServices.UnregisterChannel (chn);
 			}
+		}
+
+		// Waits up to 10 s for the server to run the one-way call, and returns what
+		// the last poll saw.
+		static bool WaitForOneWay ()
+		{
+			for (int i = 0; i < 1000; i++) {
+				if (MarshalObject.IsMethodOneWay)
+					return true;
+				// A one-way call returns before the server runs it, so a constant
+				// sleep here is a guess at how long that takes. Load makes the
+				// guess too short.
+				Thread.Sleep (10);
+			}
+			return MarshalObject.IsMethodOneWay;
 		}
 
 		[Test]
