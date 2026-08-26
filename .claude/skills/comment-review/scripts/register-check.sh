@@ -44,6 +44,14 @@ for f in "$@"; do
 	grep -nEi 'nothing (here|else)|load-bearing|important to note' /tmp/.cr-text.$$ |
 		sed 's/^[0-9]*://'
 
+	# Claudish scaffolding. These carry no fact, so the fix is a deletion. The
+	# shapes that cost most - one proposition stated three ways, a contrast
+	# against an invented alternative - are not greppable, so a clean run here
+	# says nothing about the block. See reference/claudish.md.
+	echo "-- rhetorical scaffolding (staged emphasis, orientation, aphoristic ending)"
+	grep -nEi 'in other words|put differently|in one sentence|to be clear|the (key|real) (distinction|point|question|insight)|the deeper (point|issue)|the honest (answer|take)|that is the (boundary|constraint|point)|the whole point|not (merely|so much)' \
+		/tmp/.cr-text.$$ | sed 's/^[0-9]*://'
+
 	echo "-- UPPERCASE words (a parameter name in prose, or a real macro)"
 	grep -oE '(^|[^A-Za-z_])[A-Z][A-Z0-9_]+([^A-Za-z0-9_]|$)' /tmp/.cr-text.$$ |
 		tr -cd 'A-Z0-9_\n' | sort -u | tr '\n' ' '

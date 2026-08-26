@@ -1,6 +1,6 @@
 ---
 name: comment-review
-description: Review the comments and doc comments in this tree's C/C++ sources against the house rules — cut what a caller cannot act on, catch false claims, move rationale to the line it justifies, and fix register. Use when asked to review, sweep, tighten or write comments in mono/llvm, mono/mini, mono/interp or the CMake files, or before committing a change that adds doc comments. Not a code review: it reads the comments, and the code only to check them.
+description: Review the comments and doc comments in this tree's C/C++ sources against the house rules — cut what a caller cannot act on, catch false claims, move rationale to the line it justifies, translate assistant-written prose back into plain English, and fix register. Use when asked to review, sweep, tighten, de-slop or write comments in mono/llvm, mono/mini, mono/interp or the CMake files, or before committing a change that adds doc comments. Not a code review: it reads the comments, and the code only to check them.
 ---
 
 # Comment review
@@ -12,7 +12,8 @@ before/after pairs — is in `.claude/docs/comment-review.md`.
 
 Read `reference/catalogue.md` before reporting anything. Read
 `reference/calibration.md` when a finding feels borderline: it holds the before/after
-pairs and the two fixtures that look like false positives and are not.
+pairs and the two fixtures that look like false positives and are not. Read
+`reference/claudish.md` when a block reads well and says little.
 
 ## The governing test
 
@@ -201,6 +202,40 @@ sentences that had already survived several passes. The tell that it fired: your
 restatement contains a term the comment did not (*modulo*), or it leads with what the
 comment buried (*do not dereference this*).
 
+**Then run the same test over the whole block.** Claudish is the register an assistant
+writes by default: polished, contrast-heavy, metaphor-led, and stating one proposition
+several times at different levels of abstraction. It survives every other pass, because
+nothing in it is false, nothing belongs to another subject and no modal is banned. What
+is wrong is the ratio between the block and what it says.
+
+Write out the smallest set of ordinary propositions the block states, then read the block
+against that list. Whatever the block has and the list has not is ornament, and ornament
+is deleted rather than paraphrased. Do not write one sentence for each sentence you read.
+The four moves, and the carve-outs that stop each of them over-firing, are in
+`reference/claudish.md`:
+
+- collapse sentences that restate one proposition through a second abstraction, a
+  metaphorical label, or a contrast with an alternative nobody believes
+- lower the abstraction: ordinary verbs over nominalizations. "Only the domain lock
+  orders these two" over "ordering here is domain-lock-gated"
+- delete the scaffolding — staged emphasis (*the key distinction*, *the deeper point*),
+  orientation (*in other words*, *put differently*) and aphoristic endings (*that is the
+  boundary*)
+- decode a compound — *X-gated*, *X-backed*, *X-side* — into the relationship it stands
+  for, where the sentence never states that relationship
+
+The word lists are diagnoses and not substitutions. A **path**, a **cold** block, a
+**gate** and the **surface** a header publishes are this tree's own terms, and *rather
+than* here is nearly always factual contrast against the alternative a reader would
+otherwise assume. Rewrite one only where it stands in for a relationship the sentence
+never makes.
+
+**A compression must not strengthen the claim.** A trigger is not an exclusivity rule, a
+prerequisite is not a cause, *required* is not *sufficient*, and *not tested* is not
+*wrong*. Where the block is ambiguous, keep the narrowest reading the surrounding code
+supports. A shorter sentence that claims more than the long one is a Pass 1 finding
+against your own edit.
+
 - Use the domain's word. "Returns the address to call a method at" is a circumlocution
   for *function pointer*. A summary that ends on a preposition is the tell
 - Use the name the IR or the source uses — `tail call`, not *a call* plus *the marker*
@@ -292,8 +327,13 @@ Register defects do not survive eyeballing. Run the script:
 .claude/skills/comment-review/scripts/register-check.sh <file>...
 ```
 
-It lists semicolons joining clauses, banned modals, filler, empty subjects, every
-UPPERCASE token, sentences over 25 words, and `/* */` blocks holding a single paragraph.
+It lists semicolons joining clauses, banned modals, filler, empty subjects, rhetorical
+scaffolding, every UPPERCASE token, sentences over 25 words, and `/* */` blocks holding a
+single paragraph.
+
+The scaffolding line finds the phrases that have a fixed form. The Claudish shapes that
+cost most — one proposition stated three ways, a contrast against an alternative nobody
+believes — have no fixed form, so a clean run there says nothing about the block.
 
 **Every hit is a candidate, not a verdict.** The UPPERCASE line mixes real acronyms with
 parameter names — `CLAUSE MBB MI NOT WOULD` against `DWARF LLVM PEI` — and a long

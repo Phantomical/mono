@@ -428,7 +428,7 @@ this function and still be describing how it works.
 paragraph, and a paragraph invites sentences to fill it. Put the clause in the summary and
 delete the blank line rather than finding two more sentences to keep it company.
 
-**G10. Written as a defence, so it leads with the evidence and omits the decision.** A
+**G24. Written as a defence, so it leads with the evidence and omits the decision.** A
 constant's comment gave the measurement behind it — fold counts on two corpora at four
 depths — and the measurement picks 4 where the code says 8. The reason for 8 was a judgment
 call to err toward inlining, and it was in a chat message and a handoff document rather than
