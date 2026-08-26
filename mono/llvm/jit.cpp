@@ -873,6 +873,23 @@ tier1_profiling_enabled ()
 	return on;
 }
 
+uint64_t
+profile_entry_count ()
+{
+	static const uint64_t entry = [] () -> uint64_t {
+		const char *value = ::getenv ("MONO_LLVM_JIT_PROFILE_ENTRY");
+
+		if (value == nullptr)
+			return 0;
+
+		uint64_t set = 0;
+
+		return StringRef (value).getAsInteger (10, set) ? 0 : set;
+	}();
+
+	return entry;
+}
+
 /*
  * The host target configuration every compile uses, detected once.
  *

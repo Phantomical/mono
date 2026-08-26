@@ -136,6 +136,17 @@ enum class JitTier {
 /// other.
 std::vector<uint8_t> build_profile (llvm::ArrayRef<ProfileCounters> counters);
 
+/// The entry count every body's profile is normalized to, or zero to leave the
+/// counts as they were counted. MONO_LLVM_JIT_PROFILE_ENTRY sets it.
+///
+/// A body reaches tier 2 either on many calls or on a heavy loop, and the raw
+/// counts say which. LLVM reads a block cold against the rest of the profile, so
+/// a loop-driven body's entry reads cold beside its own loop, and the calls it
+/// makes there get a budget almost nothing clears. One entry count for every
+/// body separates a call site the profile calls rare from one that only looks
+/// rare beside a loop.
+uint64_t profile_entry_count ();
+
 /// One frame slot, as a register number and a displacement whose sum is the
 /// slot's address - the shape MonoDebugVarInfo names a variable's home in.
 struct VarSlot {

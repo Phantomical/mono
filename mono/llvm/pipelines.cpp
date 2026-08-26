@@ -1,5 +1,6 @@
 #include "pipelines.hpp"
 #include "arch/arch.hpp"
+#include "jit.hpp"
 #include "passes/array-address.hpp"
 #include "passes/array-shape.hpp"
 #include "passes/clamp-frame-align.hpp"
@@ -17,6 +18,7 @@
 #include "passes/vtable-func.hpp"
 #include <llvm/IR/PassManager.h>
 #include <llvm/ADT/Statistic.h>
+#include <llvm/IR/ProfileSummary.h>
 #include <llvm/Pass.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
@@ -77,6 +79,89 @@ namespace {
 
 /// Where buildPgoUsePipeline () mounts the counts for the reader to open.
 constexpr const char *profile_file = "/mono.profdata";
+
+/// The summary a body whose entry reads \p entry is weighed against.
+///
+/// ProfileSummaryInfo takes its two thresholds off percentiles of the counts a
+/// summary describes: the hot one at the cutoff LLVM calls
+/// profile-summary-cutoff-hot and the cold one at profile-summary-cutoff-cold.
+/// Naming a count at each cutoff is what sets them, and the counts here are the
+/// entry and nothing else, so a block is read against the body it is in:
+/// anything a tenth as often as the entry is cold, and anything ten times as
+/// often is hot. An entry is neither, so a body is not hot for being in this
+/// pipeline.
+///
+/// It has to be built from \p entry alone. A summary is a module flag, and the
+/// tier-2 inliner links a candidate's module into the root's, where two flags
+/// that disagree are a hard error. Both modules share one LLVMContext, so a
+/// summary that names the same numbers uniques to the same node and the two
+/// agree.
+std::unique_ptr<llvm::ProfileSummary>
+summary_for (uint64_t entry)
+{
+	uint64_t hot = entry * 10;
+	uint64_t cold = std::max<uint64_t> (entry / 10, 1);
+
+	// Ordered by cutoff, because getEntryForPercentile () answers with the
+	// first entry that reaches the percentile it is given.
+	llvm::SummaryEntryVector detailed {
+		{ 990000, hot, 1 },
+		{ 999999, cold, 2 },
+		{ 1000000, cold, 2 },
+	};
+
+	return std::make_unique<llvm::ProfileSummary> (
+		llvm::ProfileSummary::PSK_Instr, detailed, /*TotalCount=*/entry * 100,
+		/*MaxCount=*/hot, /*MaxInternalCount=*/hot, /*MaxFunctionCount=*/entry,
+		/*NumCounts=*/2, /*NumFunctions=*/1);
+}
+
+/// Gives every body that has counts the same entry count, and hands the
+/// thresholds a summary on the same scale.
+///
+/// BlockFrequencyInfo answers a block's count as the entry count times the
+/// block's frequency, so one entry count for every body scales the counts and
+/// leaves the frequencies where they were. What that takes out is the
+/// difference between a body tier 2 took for its calls and one it took for a
+/// loop: the second has an entry that is small beside its own loop, and a call
+/// site there reads cold and gets a budget almost nothing clears.
+///
+/// Both sides of that question have to move together. Every hot and cold answer
+/// weighs a block's count against a threshold the summary carries, and the
+/// summary PGOInstrumentationUse wrote describes the counts as they were
+/// counted. Leaving it puts an entry of ten thousand beside blocks in the
+/// millions, and what follows is a program laid out cold: 13 of 24 bodies moved
+/// from .text.hot to .text.unlikely, and every shape of one benchmark lost
+/// 5-10%.
+///
+/// A body with no counts keeps none. It is laid out on static frequencies, and
+/// an entry count would say the profile described it.
+class NormalizeProfilePass : public llvm::PassInfoMixin<NormalizeProfilePass> {
+	uint64_t entry_;
+
+public:
+	explicit NormalizeProfilePass (uint64_t entry) : entry_ (entry) {}
+
+	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &)
+	{
+		for (llvm::Function &f : m)
+			if (!f.isDeclaration () && f.getEntryCount ().has_value ())
+				f.setEntryCount (entry_);
+
+		/*
+		 * Whatever this module holds, and even where it holds no counts at all.
+		 * The summary is a module flag and the tier-2 inliner links a
+		 * candidate's module into the root's, so a module that kept the one
+		 * PGOInstrumentationUse wrote disagrees with a module that took this
+		 * one, and the link is a hard error rather than a merge.
+		 */
+		m.setProfileSummary (summary_for (entry_)->getMD (m.getContext ()),
+		                     llvm::ProfileSummary::PSK_Instr);
+
+		// The counts every later question reads are what this moves.
+		return llvm::PreservedAnalyses::none ();
+	}
+};
 
 /// A profile holding no records, in the format the reader opens.
 ///
@@ -345,6 +430,11 @@ MonoPassBuilder::buildPgoUsePipeline ()
 	 * the name below only has to be one the reader will open.
 	 */
 	MPM.addPass (llvm::PGOInstrumentationUse (profile_file, "", /*IsCS=*/false, ProfileFS));
+
+	// Behind the reader, which is what writes the entry counts this replaces,
+	// and in front of the summary the thresholds are read against.
+	if (uint64_t entry = profile_entry_count ())
+		MPM.addPass (NormalizeProfilePass (entry));
 
 	/*
 	 * The summary the weights are read against. LLVM caches it here for the
