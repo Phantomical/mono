@@ -225,12 +225,7 @@ MethodLLVMEmitter::emit_array_type_check (MonoIrBuilder &builder, llvm::Value *a
 {
 	emit_null_check (builder, array);
 
-	llvm::Value *slot = builder.CreateGEP (
-		builder.getInt8Ty (), array,
-		builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable)));
-	llvm::Value *vtable = builder.CreateAlignedLoad (
-		llvm::PointerType::get (context (), 0), slot,
-		llvm::Align (TARGET_SIZEOF_VOID_P));
+	llvm::Value *vtable = load_vtable (builder, array);
 	llvm::Expected<llvm::Value *> wanted =
 		class_operand (builder, array_class, "mono_vtable_");
 
@@ -561,11 +556,7 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 	} else {
 		emit_null_check (builder, array.value);
 
-		llvm::Value *array_vtable = builder.CreateAlignedLoad (
-			ptr,
-			builder.CreateGEP (builder.getInt8Ty (), array.value,
-		                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-			llvm::Align (TARGET_SIZEOF_VOID_P), "array_vtable");
+		llvm::Value *array_vtable = load_vtable (builder, array.value, "array_vtable");
 		llvm::Value *array_class = builder.CreateAlignedLoad (
 			ptr,
 			builder.CreateGEP (builder.getInt8Ty (), array_vtable,
@@ -583,11 +574,7 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 		trace_stelem_check (method, "tests the array's element class");
 	}
 
-	llvm::Value *value_vtable = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), stored,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-		llvm::Align (TARGET_SIZEOF_VOID_P), "value_vtable");
+	llvm::Value *value_vtable = load_vtable (builder, stored, "value_vtable");
 	llvm::Value *value_class = builder.CreateAlignedLoad (
 		ptr,
 		builder.CreateGEP (builder.getInt8Ty (), value_vtable,
@@ -1124,11 +1111,7 @@ MethodLLVMEmitter::emit_array_rank (MonoIrBuilder &builder)
 
 	emit_null_check (builder, array.value);
 
-	llvm::Value *vtable = builder.CreateAlignedLoad (
-		llvm::PointerType::get (context (), 0),
-		builder.CreateGEP (builder.getInt8Ty (), array.value,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-		llvm::Align (TARGET_SIZEOF_VOID_P));
+	llvm::Value *vtable = load_vtable (builder, array.value);
 	llvm::Value *rank = builder.CreateLoad (
 		builder.getInt8Ty (),
 		builder.CreateGEP (builder.getInt8Ty (), vtable,

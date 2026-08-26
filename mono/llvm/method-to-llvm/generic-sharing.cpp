@@ -146,11 +146,8 @@ MethodLLVMEmitter::open_sharing (MonoIrBuilder &builder)
 	 * checked.
 	 */
 	llvm::Value *self = builder.CreateAlignedLoad (ptr, args[0].alloca, align);
-	llvm::Value *slot = builder.CreateGEP (
-		builder.getInt8Ty (), self,
-		builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable)));
 
-	rgctx = builder.CreateAlignedLoad (ptr, slot, align);
+	rgctx = load_vtable (builder, self);
 	pin_context_slot (builder, args[0].alloca);
 }
 

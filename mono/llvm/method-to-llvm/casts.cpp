@@ -179,11 +179,7 @@ MethodLLVMEmitter::emit_subtype_test (MonoIrBuilder &builder, MonoClass *klass,
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 	uint16_t depth = m_class_get_idepth (klass);
 
-	llvm::Value *vtable = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), obj,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-		llvm::Align (TARGET_SIZEOF_VOID_P));
+	llvm::Value *vtable = load_vtable (builder, obj);
 	llvm::Value *its_class = builder.CreateAlignedLoad (
 		ptr,
 		builder.CreateGEP (builder.getInt8Ty (), vtable,
@@ -242,11 +238,7 @@ MethodLLVMEmitter::emit_interface_test (MonoIrBuilder &builder, MonoClass *klass
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 	uint32_t iid = m_class_get_interface_id (klass);
 
-	llvm::Value *vtable = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), obj,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-		llvm::Align (TARGET_SIZEOF_VOID_P), "obj_vtable");
+	llvm::Value *vtable = load_vtable (builder, obj, "obj_vtable");
 
 	/*
 	 * The bitmap holds one bit for each id up to the bound, so a bound below
@@ -403,11 +395,7 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 
 	llvm::Value *cached = builder.CreateAlignedLoad (
 		ptr, cache, llvm::Align (TARGET_SIZEOF_VOID_P), "cached_vtable");
-	llvm::Value *vtable = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), obj.value,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-		llvm::Align (TARGET_SIZEOF_VOID_P), "obj_vtable");
+	llvm::Value *vtable = load_vtable (builder, obj.value, "obj_vtable");
 
 	// The word holds the vtable that last answered here, with bit 0 set when that
 	// answer was no. Only isinst caches a no; castclass throws instead, so its

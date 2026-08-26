@@ -920,6 +920,8 @@ private:
 	llvm::Expected<std::vector<llvm::Value *>>
 	pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig,
 	                    bool native = false);
+	llvm::Value *load_vtable (MonoIrBuilder &builder, llvm::Value *object,
+	                          const llvm::Twine &name = "");
 	llvm::Value *vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver,
 	                           int32_t offset);
 	llvm::Value *virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
@@ -931,6 +933,7 @@ private:
 	llvm::Constant *method_symbol (MonoMethod *target);
 	llvm::Expected<llvm::Constant *> code_address_symbol (MonoMethod *target);
 	MonoMethod *synchronized_target (MonoMethod *target);
+	static bool allocation_can_be_a_proxy (MonoClass *klass);
 	MonoClass *exact_receiver_class (const StackValue &receiver);
 	MonoMethod *exact_virtual_target (const StackValue &receiver, MonoMethod *callee);
 	bool is_own_this (llvm::Value *value);

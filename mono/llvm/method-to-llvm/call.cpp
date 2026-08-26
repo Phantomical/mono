@@ -21,6 +21,8 @@
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Type.h>
 
 #include <string_view>
@@ -274,18 +276,42 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 	return args;
 }
 
+/// Loads the vtable of object.
+///
+/// The load is `!invariant.load`. The allocator writes the word before managed
+/// code can reach the object, and no other write follows. A reader can then keep
+/// the value across a call. That is what lets a dispatch site see the class of an
+/// object this body allocated.
+///
+/// SGen writes a forwarding pointer over this word when it moves an object. The
+/// stack scan is conservative here, so an object a compiled frame holds is pinned
+/// rather than moved.
+///
+/// The tag does not make the load speculatable, so the load stays under the null
+/// check on object. mark_array_header_load () has the mechanism.
+llvm::Value *
+MethodLLVMEmitter::load_vtable (MonoIrBuilder &builder, llvm::Value *object,
+                                const llvm::Twine &name)
+{
+	llvm::LoadInst *load = builder.CreateAlignedLoad (
+		llvm::PointerType::get (context (), 0),
+		builder.CreateGEP (builder.getInt8Ty (), object,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+		llvm::Align (TARGET_SIZEOF_VOID_P), name);
+
+	load->setMetadata (llvm::LLVMContext::MD_invariant_load,
+	                   llvm::MDNode::get (context (), {}));
+	return load;
+}
+
 llvm::Value *
 MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver, int32_t offset)
 {
-	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
-	llvm::Value *vtable = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), receiver,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-		llvm::Align (TARGET_SIZEOF_VOID_P));
+	llvm::Value *vtable = load_vtable (builder, receiver);
 
 	return builder.CreateAlignedLoad (
-		ptr, builder.CreateGEP (builder.getInt8Ty (), vtable, builder.getInt32 (offset)),
+		llvm::PointerType::get (context (), 0),
+		builder.CreateGEP (builder.getInt8Ty (), vtable, builder.getInt32 (offset)),
 		llvm::Align (TARGET_SIZEOF_VOID_P));
 }
 
@@ -414,6 +440,19 @@ MethodLLVMEmitter::synchronized_target (MonoMethod *target)
 	return mono_marshal_get_synchronized_wrapper (target);
 }
 
+/// Whether an allocation of klass can answer with something other than an
+/// instance of klass.
+///
+/// mono_object_new_specific_checked () builds a transparent proxy when the vtable
+/// is marked remotely activated, or when the class is a COM object. Activation
+/// writes that mark while the program runs, so the class does not carry it, and a
+/// sealed class still has a proxy to be.
+bool
+MethodLLVMEmitter::allocation_can_be_a_proxy (MonoClass *klass)
+{
+	return m_class_get_marshalbyref (klass) || mono_class_is_com_object (klass);
+}
+
 /// The class the receiver has at run time, or null where the IL leaves it open.
 ///
 /// Two shapes settle it, and both are exact. A sealed class has no subclass for
@@ -443,11 +482,8 @@ MethodLLVMEmitter::exact_receiver_class (const StackValue &receiver)
 		return nullptr;
 
 	// A transparent proxy stands in for a class of its own, so neither shape
-	// below settles a remotable receiver. A sealed class still has a proxy to
-	// be, and mono_object_new_specific_checked () answers a newobj with one
-	// whenever the vtable is marked remotely activated. Activation writes that
-	// mark while the program runs, so the class does not carry it.
-	if (m_class_get_marshalbyref (klass) || mono_class_is_com_object (klass))
+	// below settles a remotable receiver.
+	if (allocation_can_be_a_proxy (klass))
 		return nullptr;
 
 	if (!mono_class_is_sealed (klass) && allocated_here.count (receiver.value) == 0)
@@ -1113,11 +1149,7 @@ MethodLLVMEmitter::emit_get_type (MonoIrBuilder &builder, bool receiver_by_refer
 
 	emit_null_check (builder, object);
 
-	llvm::Value *vtable = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), object,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-		align);
+	llvm::Value *vtable = load_vtable (builder, object);
 	/*
 	 * mono_class_create_runtime_vtable () fills in `type` before it publishes
 	 * the vtable, so an object that exists has one. RuntimeType is the

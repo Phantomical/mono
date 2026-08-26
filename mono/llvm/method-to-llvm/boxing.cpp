@@ -45,6 +45,7 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 
 	int32_t size = mono_class_instance_size (klass);
 	MonoMethod *allocator = nullptr;
+	llvm::Value *object = nullptr;
 
 	// The caller handles a string constructor before it gets here.
 	if (m_class_get_byval_arg (klass)->type == MONO_TYPE_STRING)
@@ -81,20 +82,40 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 				context (), 1, std::nullopt));
 		// The allocator raises OutOfMemoryException instead of answering null.
 		(*fast)->addRetAttr (llvm::Attribute::NonNull);
-		return emit_protected_call (
+		object = emit_protected_call (
 			builder, *fast,
 			adapt_to_callee (
 				builder, *fast,
 				{*vtable, builder.getIntN (TARGET_SIZEOF_VOID_P * 8, size)}));
+	} else {
+		llvm::Expected<llvm::Function *> slow = object_new_decl ();
+
+		if (!slow)
+			return slow.takeError ();
+
+		object = emit_protected_call (builder, *slow,
+		                              adapt_to_callee (builder, *slow, {*vtable}));
 	}
 
-	llvm::Expected<llvm::Function *> slow = object_new_decl ();
+	/*
+	 * The allocator wrote this word already, so this store is redundant. What it
+	 * adds is the class of a fresh object, stated in the IR. Without it the
+	 * optimizer sees an opaque pointer. A dispatch site then keeps its lookup,
+	 * even where the allocation is in the same block.
+	 *
+	 * A class whose allocation can answer with a proxy gets no store. What comes
+	 * back then carries the proxy's vtable rather than this one, and a store
+	 * there names a class the object does not have.
+	 */
+	if (!allocation_can_be_a_proxy (klass))
+		builder.CreateAlignedStore (
+			*vtable,
+			builder.CreateGEP (
+				builder.getInt8Ty (), object,
+				builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+			llvm::Align (TARGET_SIZEOF_VOID_P));
 
-	if (!slow)
-		return slow.takeError ();
-
-	return emit_protected_call (builder, *slow,
-	                            adapt_to_callee (builder, *slow, {*vtable}));
+	return object;
 }
 
 /// Returns the address of the value held inside obj. Throws
@@ -109,11 +130,7 @@ MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, Mono
 
 	emit_null_check (builder, obj);
 
-	llvm::Value *vtable = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), obj,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-		llvm::Align (TARGET_SIZEOF_VOID_P));
+	llvm::Value *vtable = load_vtable (builder, obj);
 	// An array of T and a boxed T have the same element class, so the rank is
 	// what tells them apart.
 	llvm::Value *rank = builder.CreateLoad (
