@@ -826,12 +826,19 @@ TEST_F (TranslatorTest, OnlyAnOverridableCallvirtReadsTheVtable)
 
 	ASSERT_NE (overridable.function, nullptr) << overridable.error;
 	EXPECT_EQ (overridable.count ("Base:Virt"), 0u) << overridable.text ();
+	/*
+	 * The lookup is a mono.vtable.func call rather than the load it stands for,
+	 * so the vtable and the slot stay operands for a later pass to read.
+	 */
+	EXPECT_EQ (overridable.count ("@mono.vtable.func"), 1u) << overridable.text ();
 
 	ASSERT_NE (final_method.function, nullptr) << final_method.error;
 	EXPECT_GE (final_method.count ("Base:Sealed"), 1u);
+	EXPECT_EQ (final_method.count ("@mono.vtable.func"), 0u) << final_method.text ();
 
 	ASSERT_NE (instance.function, nullptr) << instance.error;
 	EXPECT_GE (instance.count ("Base:Inst"), 1u);
+	EXPECT_EQ (instance.count ("@mono.vtable.func"), 0u) << instance.text ();
 }
 
 // An interface call reaches its target through the IMT rather than the vtable,
@@ -1002,8 +1009,13 @@ TEST_F (TranslatorTest, BoxAllocatesWithTheVtableAndStoresTheValue)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_EQ (t.count ("object:AllocSmall"), 1u) << t.text ();
-	/* mono_type_full_name spells System.Int32 as "int". */
-	EXPECT_EQ (t.count ("mono_vtable_int"), 1u);
+	/*
+	 * mono_type_full_name spells System.Int32 as "int". The allocator takes the
+	 * vtable and the box writes it back over the header, so the symbol is named
+	 * at both.
+	 */
+	EXPECT_EQ (t.count ("mono_vtable_int"), 2u) << t.text ();
+	EXPECT_EQ (t.count ("store ptr @\"mono_vtable_int"), 1u) << t.text ();
 }
 
 // A reference type's boxed form is itself, so nothing may be allocated.
@@ -1250,7 +1262,9 @@ TEST_F (TranslatorTest, ConstrainedCallOnANonOverridingStructBoxes)
 
 	ASSERT_NE (plain.function, nullptr) << plain.error;
 	EXPECT_EQ (plain.count ("object:AllocSmall"), 1u) << plain.text ();
-	EXPECT_EQ (plain.count ("mono_vtable_Bare"), 1u);
+	/* The allocator takes the vtable, and the box writes it back over the header. */
+	EXPECT_EQ (plain.count ("mono_vtable_Bare"), 2u) << plain.text ();
+	EXPECT_EQ (plain.count ("store ptr @\"mono_vtable_Bare"), 1u) << plain.text ();
 	/* Dispatch stays virtual: the target comes off the box's vtable, never named. */
 	EXPECT_EQ (plain.count ("call ptr @\"System.Object:ToString"), 0u);
 
@@ -1358,7 +1372,9 @@ TEST_F (TranslatorTest, NewobjAllocatesThenCallsTheConstructor)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_EQ (t.count ("object:AllocSmall"), 1u) << t.text ();
-	EXPECT_EQ (t.count ("mono_vtable_Counter"), 1u);
+	/* The allocator takes the vtable, and newobj writes it back over the header. */
+	EXPECT_EQ (t.count ("mono_vtable_Counter"), 2u) << t.text ();
+	EXPECT_EQ (t.count ("store ptr @\"mono_vtable_Counter"), 1u) << t.text ();
 	EXPECT_GE (t.count ("Counter:.ctor"), 1u);
 }
 

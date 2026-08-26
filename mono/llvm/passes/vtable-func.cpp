@@ -61,11 +61,6 @@ namespace {
 void
 lower (CallBase *site)
 {
-	auto *index = dyn_cast<ConstantInt> (site->getArgOperand (1));
-
-	if (index == nullptr)
-		report_fatal_error (Twine (vtable_func_name) + " has a slot that is not a constant");
-
 	/*
 	 * The declaration cannot unwind, so the translator writes a call. An invoke
 	 * has destinations this rewrite does not carry over, and erasing one leaves
@@ -74,17 +69,24 @@ lower (CallBase *site)
 	if (isa<InvokeInst> (site))
 		report_fatal_error (Twine (vtable_func_name) + " was called by an invoke");
 
+	IRBuilder<> b (site);
+
 	/*
+	 * The translator writes a constant slot, and the slot reaching here is a
+	 * value all the same: SimplifyCFG sinks two calls that differ in one operand
+	 * into their common successor and gives that operand a phi. The builder
+	 * folds the arithmetic back to a constant offset wherever the slot still is
+	 * one.
+	 *
 	 * Signed, because mono_method_get_vtable_index () answers -1 for a method
 	 * that has no slot. A caller that asks anyway gets the read it wrote, which
 	 * is what it got when this site was arithmetic.
 	 */
-	int64_t offset = MONO_STRUCT_OFFSET (MonoVTable, vtable)
-	                 + index->getSExtValue () * static_cast<int64_t> (sizeof (void *));
-
-	IRBuilder<> b (site);
-	Value *slot = b.CreateGEP (b.getInt8Ty (), site->getArgOperand (0),
-	                           b.getInt32 (static_cast<int32_t> (offset)));
+	Value *index = b.CreateSExt (site->getArgOperand (1), b.getInt64Ty ());
+	Value *offset = b.CreateAdd (
+		b.CreateMul (index, b.getInt64 (sizeof (void *))),
+		b.getInt64 (MONO_STRUCT_OFFSET (MonoVTable, vtable)));
+	Value *slot = b.CreateGEP (b.getInt8Ty (), site->getArgOperand (0), offset);
 	Value *entry = b.CreateAlignedLoad (PointerType::get (site->getContext (), 0), slot,
 	                                    Align (sizeof (void *)));
 
