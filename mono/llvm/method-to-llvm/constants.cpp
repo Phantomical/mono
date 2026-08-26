@@ -261,6 +261,54 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 	return llvm::Error::success ();
 }
 
+/// The symbol standing for the `System.Type` object of \p type, or null where
+/// the object is not one a compile can name.
+///
+/// Every caller that wants the object as a constant goes through this, so the
+/// object and the symbol are the same pair everywhere. That is what lets a
+/// `typeof` and a `GetType ()` on one class compare equal after folding.
+llvm::Expected<llvm::Constant *>
+MethodLLVMEmitter::typeof_symbol (MonoType *type)
+{
+	/*
+	 * mono_type_get_object_checked () allocates the object with
+	 * mono_object_new_pinned (), because the runtime already stores it in
+	 * vtables and in compiled code. So the address does not move and the
+	 * constant stays correct.
+	 *
+	 * The object belongs to the domain the code compiles for, and the domain
+	 * holds it for as long as it holds the code.
+	 */
+	ERROR_DECL (reflection_error);
+	MonoReflectionType *object =
+		mono_type_get_object_checked (cfg->domain, type, reflection_error);
+
+	if (object == nullptr)
+		return runtime_error (reflection_error);
+
+	/*
+	 * A type built through Reflection.Emit gets the builder's own object, which
+	 * is not pinned. mono_class_create_runtime_vtable () registers a moving root
+	 * for the vtable slot that holds one, and a constant in code can have no
+	 * such root.
+	 *
+	 * Only a collector that moves needs that root, which is the same question
+	 * MONO_GC_REGISTER_ROOT_IF_MOVING () asks before it registers one. The
+	 * object stays reachable either way: the class holds a strong handle to it
+	 * (mono_class_set_ref_info ()) until deregister_reflection_info_roots ()
+	 * drops it, and that is the domain teardown this code goes with.
+	 */
+	if (mono_gc_is_moving ()
+	    && mono_object_class (object) != mono_defaults.runtimetype_class)
+		return nullptr;
+
+	char *name = mono_type_full_name (type);
+	std::string symbol = identity_symbol (std::string ("mono_typeof_") + name, object);
+
+	g_free (name);
+	return address_symbol (symbol, object);
+}
+
 /// Folds `ldtoken` and the `Type::GetTypeFromHandle` call behind it into the
 /// System.Type the pair produces, and says whether it did.
 ///
@@ -340,45 +388,14 @@ MethodLLVMEmitter::fold_type_from_handle (MonoIrBuilder &builder, MonoType *type
 
 		value = *fetched;
 	} else {
-		/*
-		 * mono_type_get_object_checked () allocates the object with
-		 * mono_object_new_pinned (), because the runtime already stores it in
-		 * vtables and in compiled code. So the address does not move and the
-		 * constant stays correct.
-		 *
-		 * The object belongs to the domain the code compiles for, and the
-		 * domain holds it for as long as it holds the code.
-		 */
-		ERROR_DECL (reflection_error);
-		MonoReflectionType *object =
-			mono_type_get_object_checked (cfg->domain, type, reflection_error);
+		llvm::Expected<llvm::Constant *> named = typeof_symbol (type);
 
-		if (object == nullptr)
-			return runtime_error (reflection_error);
-
-		/*
-		 * A type built through Reflection.Emit gets the builder's own
-		 * object, which is not pinned. mono_class_create_runtime_vtable ()
-		 * registers a moving root for the vtable slot that holds one, and a
-		 * constant in code can have no such root.
-		 *
-		 * Only a collector that moves needs that root, which is the same
-		 * question MONO_GC_REGISTER_ROOT_IF_MOVING () asks before it registers
-		 * one. The object stays reachable either way: the class holds a strong
-		 * handle to it (mono_class_set_ref_info ()) until
-		 * deregister_reflection_info_roots () drops it, and that is the domain
-		 * teardown this code goes with.
-		 */
-		if (mono_gc_is_moving ()
-		    && mono_object_class (object) != mono_defaults.runtimetype_class)
+		if (!named)
+			return named.takeError ();
+		if (*named == nullptr)
 			return false;
 
-		char *name = mono_type_full_name (type);
-		std::string symbol =
-			identity_symbol (std::string ("mono_typeof_") + name, object);
-
-		g_free (name);
-		value = address_symbol (symbol, object);
+		value = *named;
 	}
 
 	ip = at + 4;

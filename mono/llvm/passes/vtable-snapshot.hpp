@@ -53,10 +53,12 @@ void mark_vtable_snapshot (llvm::GlobalVariable &snapshot);
 
 /// What a snapshot states about a class's vtable.
 ///
-/// \p klass is a symbol rather than an address, so a type test comparing the
-/// class word against the same symbol folds.
+/// Both pointers are symbols rather than addresses, so a comparison against the
+/// same symbol folds: a type test reads the class word, and `typeof` names the
+/// `System.Type` object under the symbol `type` carries here.
 struct VTableFacts {
 	llvm::Constant *klass = nullptr;
+	llvm::Constant *type = nullptr;
 	uint8_t rank = 0;
 };
 

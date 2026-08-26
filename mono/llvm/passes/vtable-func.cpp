@@ -82,22 +82,6 @@ imt_func_decl (Module &m)
 		GlobalValue::ExternalLinkage, imt_func_name, m));
 }
 
-Function *
-vtable_type_decl (Module &m)
-{
-	if (Function *existing = m.getFunction (vtable_type_name))
-		return existing;
-
-	Type *ptr = PointerType::get (m.getContext (), 0);
-
-	// The same attributes a slot read carries, and for a stronger reason: the
-	// field takes its one value while the vtable is built, which is before any
-	// compiled code can hold the vtable to read it.
-	return describe_slot_read (Function::Create (FunctionType::get (ptr, { ptr }, false),
-	                                             GlobalValue::ExternalLinkage,
-	                                             vtable_type_name, m));
-}
-
 namespace {
 
 /// Rewrites site into the load it stands for, \p first_word bytes from the
@@ -138,23 +122,6 @@ lower (CallBase *site, int64_t first_word, int64_t slot_bias)
 	site->eraseFromParent ();
 }
 
-/// Rewrites site into the load of the field \p at bytes into the vtable.
-void
-lower_field (CallBase *site, int64_t at)
-{
-	if (isa<InvokeInst> (site))
-		report_fatal_error (Twine (site->getCalledFunction ()->getName ())
-		                    + " was called by an invoke");
-
-	IRBuilder<> b (site);
-	Value *field = b.CreateGEP (b.getInt8Ty (), site->getArgOperand (0), b.getInt64 (at));
-	Value *held = b.CreateAlignedLoad (PointerType::get (site->getContext (), 0), field,
-	                                   Align (sizeof (void *)));
-
-	site->replaceAllUsesWith (held);
-	site->eraseFromParent ();
-}
-
 /// Lowers every call to the declaration \p name holds in m with \p rewrite, and
 /// erases the declaration.
 void
@@ -186,8 +153,7 @@ PreservedAnalyses
 LowerVTableFuncPass::run (Module &m, ModuleAnalysisManager &)
 {
 	if (m.getFunction (vtable_func_name) == nullptr
-	    && m.getFunction (imt_func_name) == nullptr
-	    && m.getFunction (vtable_type_name) == nullptr)
+	    && m.getFunction (imt_func_name) == nullptr)
 		return PreservedAnalyses::all ();
 
 	lower_all (m, vtable_func_name, [] (CallBase *site) {
@@ -198,10 +164,6 @@ LowerVTableFuncPass::run (Module &m, ModuleAnalysisManager &)
 	// from the base rather than on from the method array.
 	lower_all (m, imt_func_name,
 	           [] (CallBase *site) { lower (site, 0, -MONO_IMT_SIZE); });
-
-	lower_all (m, vtable_type_name, [] (CallBase *site) {
-		lower_field (site, MONO_STRUCT_OFFSET (MonoVTable, type));
-	});
 
 	return PreservedAnalyses::none ();
 }

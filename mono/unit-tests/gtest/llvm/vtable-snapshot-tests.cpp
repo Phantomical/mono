@@ -90,13 +90,15 @@ TEST (VTableSnapshot, TheLayoutIsMonoVTablesOwn)
 	           MONO_SIZEOF_VTABLE + test_slots * sizeof (gpointer));
 }
 
-TEST (VTableSnapshot, TheInventoryIsTheFieldsWrittenFromTheClassAlone)
+TEST (VTableSnapshot, TheInventoryIsTheFieldsFixedWhenTheVtableIsBuilt)
 {
-	// mono_class_create_runtime_vtable () takes both of these off the class, so
-	// a compile states them without a vtable to read.
+	// mono_class_create_runtime_vtable () writes each of these once, while it
+	// builds the vtable, and nothing writes them again.
 	EXPECT_TRUE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, klass),
 	                                     test_slots));
 	EXPECT_TRUE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, rank),
+	                                     test_slots));
+	EXPECT_TRUE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, type),
 	                                     test_slots));
 
 	// The collector writes gc_bits, and the three fields beside it share its
@@ -106,10 +108,8 @@ TEST (VTableSnapshot, TheInventoryIsTheFieldsWrittenFromTheClassAlone)
 	EXPECT_FALSE (vtable_snapshot_states (
 		MONO_STRUCT_OFFSET (MonoVTable, runtime_generic_context), test_slots));
 
-	// The System.Type object moves, and a slot holds an address the runtime
-	// chooses. Each is read through a declaration rather than stated.
-	EXPECT_FALSE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, type),
-	                                      test_slots));
+	// A slot holds an address the runtime chooses, and the first call through
+	// it patches the entry in.
 	EXPECT_FALSE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, vtable),
 	                                      test_slots));
 }

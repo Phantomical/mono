@@ -1510,15 +1510,19 @@ TEST_F (TranslatorTest, TypeOfDoesNotFoldAcrossABranch)
 }
 
 // object.GetType () is the System.Type on the receiver's vtable, so the site is a
-// null check and a read of that vtable rather than a call into an icall wrapper.
-// LowerVTableFuncPass turns the read back into the load it stands for.
+// null check and two loads rather than a call into an icall wrapper. The second
+// is `!invariant.load`, which is what folds it away against a vtable the
+// snapshot states.
 TEST_F (TranslatorTest, GetTypeReadsTheVtable)
 {
 	const Translation &t = translate ("tokens", "Tokens:TypeOfObject");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_EQ (t.count ("object:GetType"), 0u) << t.text ();
-	EXPECT_EQ (t.count ("%obj_type = call ptr @mono.vtable.type"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("%obj_type = load ptr"), 1u) << t.text ();
+
+	// The receiver's vtable and the field on it, both tagged.
+	EXPECT_EQ (t.count ("!invariant.load"), 2u) << t.text ();
 	EXPECT_GT (t.count ("NullReferenceException"), 0u) << t.text ();
 }
 

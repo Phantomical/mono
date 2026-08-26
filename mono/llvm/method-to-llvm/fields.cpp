@@ -293,11 +293,26 @@ MethodLLVMEmitter::vtable_symbol (MonoClass *klass, const std::string &symbol)
 	if (!vtable_snapshots ())
 		return global;
 
-	// The class word is the symbol a type test compares against, so the two
-	// have to be one value for the comparison to fold.
+	// Each pointer is the symbol something else compares against: a type test
+	// reads the class word, and typeof names the System.Type object. The two
+	// sides have to be one value for the comparison to fold.
 	VTableFacts facts;
+	llvm::Expected<llvm::Constant *> named =
+		typeof_symbol (m_class_get_byval_arg (klass));
+
+	// A class whose System.Type a compile cannot name gets no snapshot rather
+	// than a snapshot with a hole in it, because a plain load of the field
+	// would fold to whatever stood there.
+	if (!named) {
+		llvm::consumeError (named.takeError ());
+		return global;
+	}
+
+	if (*named == nullptr)
+		return global;
 
 	facts.klass = class_symbol (klass, "mono_class_");
+	facts.type = *named;
 	facts.rank = uint8_t (m_class_get_rank (klass));
 
 	global->setInitializer (vtable_snapshot_init (*module, facts));

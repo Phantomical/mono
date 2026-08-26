@@ -35,20 +35,27 @@ struct StatedField {
 
 /// Which field each entry of the inventory below is, for the value builder to
 /// name rather than count to.
-enum StatedIndex { stated_klass, stated_rank, stated_count };
+enum StatedIndex { stated_klass, stated_type, stated_rank, stated_count };
 
 /*
- * The inventory. mono_class_create_runtime_vtable () writes both of these at
- * object.c:2183-2184, from the class and from nothing else, and nothing writes
- * them again. That is what lets a compile state them without a vtable to read.
+ * The inventory. mono_class_create_runtime_vtable () writes each of these once,
+ * while it builds the vtable, and nothing writes them again.
  *
- * The fields between them are withheld, so what an initializer holds there has
- * to stay unobservable. An emitter reads such a field through a mono.vtable.*
- * declaration, which is lowered past the strip. type is the one with a reader,
- * and mono.vtable.type is it.
+ * klass and rank come off the class alone (object.c:2183-2184), so a compile
+ * states them with no vtable to read. type is the System.Type object at
+ * object.c:2355, which mono_type_get_object_checked () allocates pinned
+ * (reflection.c:536) because the runtime stores it in vtables and in compiled
+ * code. So its address is one a compile can write down. A type built through
+ * Reflection.Emit is the exception: its object is the builder's own and is not
+ * pinned, and vtable_symbol () gives such a class no snapshot at all.
+ *
+ * A withheld field is one an emitter must not read as a plain load, because
+ * what an initializer holds there is padding. The strip refuses one that
+ * survives to it.
  */
 const StatedField stated[stated_count] = {
 	{ MONO_STRUCT_OFFSET (MonoVTable, klass), sizeof (MonoClass *), true },
+	{ MONO_STRUCT_OFFSET (MonoVTable, type), sizeof (gpointer), true },
 	{ MONO_STRUCT_OFFSET (MonoVTable, rank), sizeof (guint8), false },
 };
 
@@ -227,6 +234,9 @@ vtable_snapshot_init (Module &m, const VTableFacts &facts)
 			switch (i) {
 			case stated_klass:
 				members.push_back (facts.klass);
+				return;
+			case stated_type:
+				members.push_back (facts.type);
 				return;
 			case stated_rank:
 				members.push_back (ConstantInt::get (
