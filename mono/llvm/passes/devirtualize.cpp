@@ -161,7 +161,7 @@ imt_target (MonoClass *klass, MonoMethod *asked)
 	 * raises AmbiguousImplementationException at the dispatch.
 	 * mono_class_get_virtual_method () answers with a candidate instead of
 	 * raising, so that verdict stays the dispatch's to give.
-	 * mono/tests/dim-diamondshape.cs is what asks for it.
+	 * mono/tests/dim-diamondshape.il is what asks for it.
 	 */
 	if (target != nullptr && mono_class_is_interface (target->klass))
 		return nullptr;

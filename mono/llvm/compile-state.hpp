@@ -27,8 +27,8 @@ class Function;
 namespace mono {
 
 struct CompileState {
-	/// The domain the code will run as - the owning linker's, never the
-	/// thread's current one. Null outside a compile.
+	/// The domain the code will run as, which is TranslationTarget::domain and
+	/// carries that field's rule. Null outside a compile.
 	MonoDomain *domain = nullptr;
 
 	/// Publishes \p decl's method and resolves the symbol, so that a call to

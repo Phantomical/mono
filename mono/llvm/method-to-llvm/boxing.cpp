@@ -103,9 +103,8 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 	 * optimizer sees an opaque pointer. A dispatch site then keeps its lookup,
 	 * even where the allocation is in the same block.
 	 *
-	 * A class whose allocation can answer with a proxy gets no store. What comes
-	 * back then carries the proxy's vtable rather than this one, and a store
-	 * there names a class the object does not have.
+	 * A class whose allocation can answer with a proxy gets no store, because
+	 * what comes back then carries the proxy's vtable rather than this one.
 	 */
 	if (!allocation_can_be_a_proxy (klass))
 		builder.CreateAlignedStore (

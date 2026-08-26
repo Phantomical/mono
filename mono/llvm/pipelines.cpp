@@ -175,8 +175,8 @@ MonoPassBuilder::MonoPassBuilder (llvm::TargetMachine *TM, OneFileFS *ProfileFS,
 	/*
 	 * Here rather than at a place in either pipeline, because what settles a
 	 * dispatch site is the simplification around it: SROA and EarlyCSE forward
-	 * the store at an allocation to the read of the vtable, and GVN reaches the
-	 * one a block boundary stands between. The peephole point sits behind each
+	 * the store at an allocation to the read of the vtable, and GVN forwards it
+	 * across a block boundary that separates the two. The peephole point sits behind each
 	 * of those rounds and in front of the SCCP and InstCombine runs that read
 	 * the direct call this leaves.
 	 *

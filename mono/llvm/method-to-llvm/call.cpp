@@ -1701,10 +1701,8 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			// instantiation.
 			keyed = true;
 
-			// Read before the lookup, because an interface site carries it
-			// into the lookup as well: the slot it reads is a bucket, and the
-			// key is what says which of the methods that reach it this site
-			// asked for.
+			// Read before the lookup, which an interface site takes it into
+			// as well.
 			llvm::Expected<llvm::Value *> key =
 				method_operand (builder, callee_method);
 
