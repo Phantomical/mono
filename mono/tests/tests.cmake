@@ -235,6 +235,7 @@ set(MONO_TESTS_CS_SRC
   interlocked.cs
   interp-entries.cs
   interp-calls-compiled.cs
+  interp-jit-call-wrappers.cs
   interp-tier1-promotion.cs
   interp-native-detour.cs
   trivial-inline.cs

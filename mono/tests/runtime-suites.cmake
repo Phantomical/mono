@@ -328,12 +328,26 @@ if(MONO_ENABLE_INTERPRETER)
 
   # The other direction: Interpreted's methods run in the interpreter while
   # their callees compile, so every call in Run () leaves the interpreter for
-  # native code. No other suite covers that crossing -- the suites above either
-  # compile everything or interpret everything, and by default every callee is
+  # native code. No suite above covers that crossing -- they either compile
+  # everything or interpret everything, and by default every callee is
   # interpreted too.
   mono_runtime_suite(runtime-interp-calls-compiled LABEL interp
                      TESTS interp-calls-compiled.exe
                      ENV "MONO_LLVM_JIT_TIER0=Interpreted")
+
+  # The same crossing into a wrapper. A dynamic method is the shape it is
+  # written for: tier 0 accepts that kind, so a compiled one used to be entered
+  # by interpreting its bytecode whenever an interpreted frame called it.
+  # Pinning tier 0 to Interpreted is what keeps Run () in the interpreter while
+  # its callees compile.
+  mono_runtime_suite(runtime-interp-jit-call-wrappers LABEL interp
+                     TESTS interp-jit-call-wrappers.exe
+                     ENV "MONO_LLVM_JIT_TIER0=Interpreted")
+
+  # And at the default tier, where the wrappers the test calls start in the
+  # interpreter instead of compiling on the thread that needed them.
+  mono_runtime_suite(runtime-tier0-jit-call-wrappers LABEL interp
+                     TESTS interp-jit-call-wrappers.exe)
 
   # Continuations at the default tier, where the frame that marked one is
   # interpreted and so has no native stack for Store () to copy. Mark () has to

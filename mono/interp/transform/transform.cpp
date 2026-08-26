@@ -4570,7 +4570,14 @@ interp_jit_call_refusal (MonoMethod *method, MonoMethodSignature *sig)
 		return "the callee still depends on type parameters";
 	if (method->string_ctor)
 		return "the callee is a string constructor";
-	if (method->wrapper_type != MONO_WRAPPER_NONE)
+	/*
+	 * A dynamic method carries IL of its own, so tier 0 already runs it. The
+	 * marshalling asks for no more than an ordinary method gives it. The
+	 * wrapper is built from the signature, and the target is the method's own
+	 * thunk.
+	 */
+	if (method->wrapper_type != MONO_WRAPPER_NONE
+	    && method->wrapper_type != MONO_WRAPPER_DYNAMIC_METHOD)
 		return "the callee is a wrapper";
 	/*
 	 * This test runs last, because only a wider jit_call_cb () removes the
