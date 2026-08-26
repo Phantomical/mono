@@ -28,40 +28,39 @@ cl::opt<bool> ImplicitNullCheckFree (
 	          "cost"));
 
 /*
- * Each bonus below is a count of calls the fold is expected to take away, times
- * what the model charges for one. Calls are the unit the win arrives in: a
- * dispatch this lets DevirtualizePass answer becomes a direct call the
- * simplification behind the inliner can fold again, and an allocation SROA
- * scalarizes takes its allocator call with it.
+ * Each bonus below counts the calls a fold removes, times what the model
+ * charges for one call. A dispatch DevirtualizePass then resolves becomes a
+ * direct call the simplification behind the inliner can fold again, and an
+ * allocation SROA scalarizes takes its allocator call with it.
  *
- * `mono-inline-call-penalty` is the same charge from the other side, so moving
- * it moves what these are worth.
+ * `mono-inline-call-penalty` sets that per-call charge, so a change to it
+ * rescales every bonus here.
  */
 cl::opt<int> DevirtualizeReturnBonus (
 	"mono-inline-devirt-return-bonus", cl::Hidden, cl::init (100),
-	cl::desc ("Threshold bonus for a callee that answers with an object whose "
-	          "class the caller then dispatches on"));
+	cl::desc ("Threshold bonus for a callee that returns an object whose class "
+	          "the caller then dispatches on"));
 
 cl::opt<int> DevirtualizeArgumentBonus (
 	"mono-inline-devirt-arg-bonus", cl::Hidden, cl::init (50),
 	cl::desc ("Threshold bonus for a callee that dispatches on a parameter the "
-	          "site passes an object of a named class in"));
+	          "site fills with an object of a named class"));
 
 cl::opt<int> ScalarizeArgumentBonus (
 	"mono-inline-scalarize-arg-bonus", cl::Hidden, cl::init (50),
 	cl::desc ("Threshold bonus for a callee that does not capture a parameter "
-	          "the site passes a fresh allocation in"));
+	          "the site fills with a fresh allocation"));
 
 /// Whether \p v is an object this compile allocated under a class it names.
 ///
 /// `emit_object_alloc ()` stores the vtable into the object's first word right
-/// behind the allocation, and that store is what states the class in the IR. A
-/// class whose allocation can answer with a transparent proxy gets no such
-/// store, because what comes back then carries the proxy's vtable.
+/// behind the allocation, and that store states the class in the IR. A class
+/// whose allocation can return a transparent proxy gets no such store, because
+/// the object returned then carries the proxy's vtable.
 ///
-/// Reading the store rather than the alloc kind is what makes this answer the
-/// same under either collector. Boehm has no managed allocator
-/// (`mono_gc_get_managed_allocator ()` answers null there), so its allocations
+/// Reading the store rather than the alloc kind gives the same result under
+/// either collector. Boehm has no managed allocator
+/// (`mono_gc_get_managed_allocator ()` returns NULL there), so its allocations
 /// take the slow path, which carries no alloc kind for `erasable_allocation ()`
 /// below to read. Both paths take the vtable as an argument and both get the
 /// store.
@@ -86,8 +85,8 @@ allocated_under_a_named_class (const Value *v)
 
 /// Whether LLVM can erase \p v once nothing reads it.
 ///
-/// The alloc kind the translator marks a managed allocator with is what lets it
-/// go, and only SGen has one to mark.
+/// LLVM erases the call only if the allocator carries an alloc kind. The
+/// translator marks one on a managed allocator, and only SGen has one.
 bool
 erasable_allocation (const Value *v)
 {
@@ -97,9 +96,9 @@ erasable_allocation (const Value *v)
 	return allocator != nullptr && allocator->hasFnAttribute (Attribute::AllocKind);
 }
 
-/// Whether \p f answers with an object it allocated under a class it names.
+/// Whether \p f returns an object it allocated under a class it names.
 bool
-answers_with_a_named_allocation (const Function &f)
+returns_a_named_allocation (const Function &f)
 {
 	for (const BasicBlock &block : f) {
 		const auto *ret = dyn_cast<ReturnInst> (block.getTerminator ());
@@ -112,15 +111,15 @@ answers_with_a_named_allocation (const Function &f)
 	return false;
 }
 
-/// Whether a site in \p in reads a dispatch table out of \p object and cannot
-/// name what stands in the slot.
+/// Whether a site in \p f reads a dispatch table out of \p object and cannot
+/// name the method in the slot.
 ///
-/// A site whose vtable operand is already a global has its answer, and a body
-/// folded in front of it buys nothing.
+/// A site whose vtable operand is already a global is resolved, and folding a
+/// body in front of it changes nothing.
 bool
-dispatches_unresolved_on (const Value *object, const Function &in)
+dispatches_unresolved_on (const Value *object, const Function &f)
 {
-	const Module *m = in.getParent ();
+	const Module *m = f.getParent ();
 	const Value *dispatched_on = object->stripPointerCasts ();
 
 	for (StringRef name : { vtable_func_name, imt_func_name }) {
@@ -132,7 +131,7 @@ dispatches_unresolved_on (const Value *object, const Function &in)
 		for (const User *user : decl->users ()) {
 			const auto *site = dyn_cast<CallBase> (user);
 
-			if (site == nullptr || site->getFunction () != &in
+			if (site == nullptr || site->getFunction () != &f
 			    || site->arg_size () < 1)
 				continue;
 
@@ -198,11 +197,11 @@ call_site_bonus (const CallBase &call, const Function &callee)
 
 	int bonus = 0;
 
-	// The caller asks the answer for a method and cannot say which, and the
-	// body it is weighing allocates what it answers with. Folding it in puts a
-	// class where the site reads a pointer.
+	// The caller dispatches on what this call returns and cannot name the
+	// target. The callee returns an object it allocated, so the fold puts a
+	// class where the dispatch reads a pointer.
 	if (dispatches_unresolved_on (&call, *caller)
-	    && answers_with_a_named_allocation (callee))
+	    && returns_a_named_allocation (callee))
 		bonus += DevirtualizeReturnBonus;
 
 	unsigned shared =
@@ -214,20 +213,20 @@ call_site_bonus (const CallBase &call, const Function &callee)
 
 		const Argument *param = callee.getArg (i);
 
-		// The class travels in with the argument, so a dispatch the body cannot
-		// answer on its own has an operand once the body is here.
+		// The class arrives with the argument, so a dispatch the body cannot
+		// resolve on its own gets an operand once the body is folded in.
 		if (dispatches_unresolved_on (param, callee))
 			bonus += DevirtualizeArgumentBonus;
 
 		/*
-		 * SROA scalarizes an allocation whose accesses it can all see, and a
-		 * call is what hides those accesses, so a parameter the body does not
-		 * capture is one the fold hands over.
+		 * SROA scalarizes an allocation only when it can see every access, and
+		 * a call hides the accesses inside the callee. The fold uncovers them
+		 * for a parameter the body does not capture.
 		 *
-		 * Provenance alone, because taking the address is not what keeps an
-		 * object in memory. A dereference of the argument compares it against
-		 * null first, and LLVM counts that comparison as a capture of the
-		 * address.
+		 * The test asks about provenance alone, because taking the address does
+		 * not keep an object in memory. A dereference of the argument compares
+		 * it against null first, and LLVM counts that comparison as a capture
+		 * of the address.
 		 */
 		if (erasable_allocation (call.getArgOperand (i))
 		    && capturesNothing (PointerMayBeCaptured (
