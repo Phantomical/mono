@@ -406,6 +406,13 @@ and the note says which split:
 - `MONO_LLVM_JIT_RECOMPILE=<substr>` — translate matching methods afresh on every
   request instead of answering from the cache, so they end up with several live bodies.
   No other setting produces one, and the code that has to cope has no other exerciser.
+- `MONO_LLVM_JIT_FOLD_CASTS=<0|false|empty>` — turn the type-test fold off, so every
+  `isinst` and `castclass` is lowered to the probe and the icall whatever the IR says
+  about the operand. On by default. The translator writes the same call either way, so
+  the two arms differ in one pass, which is what separates a wrong answer from a wrong
+  probe. It is also the negative control for what the fold is worth: on `linq-devirt`'s
+  `LinqOne` at the wide inline gates, off gives 9 icalls in 932 lines and on gives 3 in
+  483.
 
 Inlining. `MONO_LLVM_JIT_TRACE=1` prints a line for each fold, which is the only place a
 fold is visible from outside:
@@ -468,9 +475,10 @@ as well as by `amd64.hpp`, so it holds nothing but `#define`s.
 - **`arch/`** — everything that names a register, encodes an instruction or restates the
   runtime's calling convention, behind `arch/arch.hpp`. A port is a new sibling of
   `arch/amd64/`, not a hunt through the backend for the amd64 in it.
-- **`passes/`** — `array-address` and `lower-builtins` rewrite the symbolic calls the
-  front end leaves standing. `restore-tail-position` puts back the tail position
-  SimplifyCFG merged away. `top-down-inline` is tier 2's cost model and `inline-copies`
+- **`passes/`** — `array-address`, `lower-builtins` and `cast-func` rewrite the symbolic
+  calls the front end leaves standing. `restore-tail-position` puts back the tail position
+  SimplifyCFG merged away. `devirtualize` and `fold-cast` answer a site whose operands
+  the optimizer settled. `top-down-inline` is tier 2's cost model and `inline-copies`
   the sweep behind it. `eh-gather` and `finally-range` are `MachineFunctionPass`es that
   emit nothing and instead fill in the side channel the EH sections are written from.
 
@@ -615,6 +623,20 @@ a fault clause over the whole of it, if it calls anything that can unwind. That 
 pad charges the turns when a callee's exception unwinds through the frame. The calls that
 can unwind become invokes on to the pad, and `mono_lsda.cpp` reads the set back as one
 clause, so what the runtime holds does not grow with the calls.
+
+**A type test is one call until late.** `emit_cast ()` writes `mono.cast.isinst` or
+`mono.cast.castclass` carrying the class, the site's cache and the wrapper behind it, and
+`LowerCastFuncPass` writes the probe and the icall back for every site nothing answered.
+In between, `FoldCastPass` answers a site from what the IR says the operand is: an
+allocation states its class, and a parameter states the class its slot is declared with.
+A declared class is a bound, so an answer needs every class that slot admits to agree,
+and `cast_answer ()` (`passes/fold-cast.cpp`) is that rule, with the argument for each
+arm beside it. Two of them are worth knowing from outside, because both are places an
+obvious rule is wrong: an interface target can be answered no only for an array operand,
+since any subclass may implement an interface; and the single-inheritance
+argument that two unrelated classes share no instance does not reach arrays, because
+covariance puts `Derived[]` under both `Base[]` and `IMarker[]`. `mono/tests/cast-fold.cs`
+gates both.
 
 Beyond taking a site the IL already settled — non-virtual, `final`, or resolved by
 `constrained.` — the JIT does not devirtualize. If devirtualization does arrive, it is

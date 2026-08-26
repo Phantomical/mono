@@ -326,8 +326,9 @@ MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 
 	llvm::Constant *symbolic = extern_symbol (symbol);
 
-	// A pass that answers a dispatch site has the vtable and needs the class.
-	if (kind == ExternalSymbol::Kind::VTable)
+	// A pass that answers a dispatch site has the vtable and needs the class. A
+	// pass that answers a type test has the class the test names.
+	if (kind == ExternalSymbol::Kind::VTable || kind == ExternalSymbol::Kind::Class)
 		mark_class_reference (*llvm::cast<llvm::GlobalValue> (symbolic), klass);
 
 	return symbolic;

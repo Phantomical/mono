@@ -15,6 +15,7 @@
 // IR, because the sibling it has to refuse has no reachable call site to
 // translate.
 #include "method-to-llvm.hpp"
+#include "operand-class.hpp"
 
 #include "config.h"
 #include <glib.h>
@@ -1558,67 +1559,48 @@ TEST_F (TranslatorTest, EachCastSiteGetsItsOwnCacheSlot)
 }
 
 /*
- * The generated code reads the cache itself, and calls the helper only when the
- * answer is not in it. mono_object_castclass_with_cache () keeps the bare
- * vtable of an object that passed, so the test here is one comparison.
+ * The translator writes one call and no test at all. What decides the answer -
+ * the class, the site's cache and the wrapper behind it - are its operands, and
+ * LowerCastFuncPass writes the probe once nothing has answered the site.
+ * cast-func-tests.cpp covers what it writes.
  */
-TEST_F (TranslatorTest, CastclassReadsItsCacheBeforeItCalls)
+TEST_F (TranslatorTest, ACastIsOneCallCarryingWhatDecidesIt)
 {
 	const Translation &t = translate ("casts", "Casts:CastString");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 
-	EXPECT_EQ (t.count ("load ptr, ptr @cast_cache"), 1u) << t.text ();
-	// The cached vtable against the object's, which is the whole fast path.
-	EXPECT_EQ (t.count ("icmp eq i64"), 1u) << t.text ();
-	// The helper stays, on the path the cache did not answer.
+	EXPECT_EQ (t.count ("call ptr @mono.cast.castclass"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("@\"mono_class_string"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("ptr @cast_cache"), 1u) << t.text ();
 	EXPECT_EQ (t.count ("mono_object_castclass_with_cache"), 1u) << t.text ();
-	// A castclass reads the slot as it stands, with nothing masked off.
-	EXPECT_EQ (t.count ("and i64"), 0u) << t.text ();
+
+	// None of the probe. A site the translator wrote a test in front of is a
+	// site no pass can answer.
+	EXPECT_EQ (t.count ("obj_idepth"), 0u) << t.text ();
+	EXPECT_EQ (t.count ("cached_vtable"), 0u) << t.text ();
+	EXPECT_EQ (t.count ("icmp eq ptr"), 0u) << t.text ();
 }
 
-/*
- * isinst caches a refusal as well as a pass, in bit 0 of the same slot, so its
- * fast path masks that bit off before it compares and then reads it to choose
- * between the object and null.
- */
-TEST_F (TranslatorTest, IsinstReadsTheRefusalBitFromItsCache)
+// The two forms answer a failed test differently, so each has a declaration of
+// its own and the lowering reads which one it is off the name.
+TEST_F (TranslatorTest, IsinstAndCastclassAreDifferentDeclarations)
 {
-	const Translation &t = translate ("casts", "Casts:IsString");
+	const Translation &cast = translate ("casts", "Casts:CastString");
+	const Translation &test = translate ("casts", "Casts:IsString");
 
-	ASSERT_NE (t.function, nullptr) << t.error;
+	ASSERT_NE (cast.function, nullptr) << cast.error;
+	ASSERT_NE (test.function, nullptr) << test.error;
 
-	EXPECT_EQ (t.count ("load ptr, ptr @cast_cache"), 1u) << t.text ();
-	EXPECT_EQ (t.count ("and i64"), 1u) << t.text ();
-	EXPECT_EQ (t.count ("-2"), 1u) << t.text ();
-	EXPECT_EQ (t.count ("trunc i64"), 1u) << t.text ();
-	EXPECT_EQ (t.count ("select i1"), 1u) << t.text ();
-	EXPECT_EQ (t.count ("mono_object_isinst_with_cache"), 1u) << t.text ();
+	EXPECT_EQ (cast.count ("call ptr @mono.cast.castclass"), 1u) << cast.text ();
+	EXPECT_EQ (cast.count ("mono.cast.isinst"), 0u) << cast.text ();
+	EXPECT_EQ (test.count ("call ptr @mono.cast.isinst"), 1u) << test.text ();
+	EXPECT_EQ (test.count ("mono.cast.castclass"), 0u) << test.text ();
 }
 
 /*
- * A cast to a class ends at mono_class_has_parent () in the runtime, so the
- * generated code makes that test itself. The object's class must reach at
- * least as deep as the target, and the supertype it holds at the target's
- * depth must be the target. Where that holds the answer needs neither the
- * cache nor the wrapper.
- */
-TEST_F (TranslatorTest, ACastToAClassReadsTheSupertypesInline)
-{
-	const Translation &t = translate ("casts", "Casts:CastString");
-
-	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("%obj_idepth = load"), 1u) << t.text ();
-	EXPECT_EQ (t.count ("icmp uge i16"), 1u) << t.text ();
-	EXPECT_EQ (t.count ("%supertype = load"), 1u) << t.text ();
-	// The wrapper stays, for the answers this test does not give.
-	EXPECT_EQ (t.count ("mono_object_castclass_with_cache"), 1u) << t.text ();
-}
-
-/*
- * An interface is not in the supertypes array. The runtime reads the interface
- * bitmap for one, which is a test of its own, so the cast keeps the cache and
- * the wrapper and gains nothing in front of them.
+ * An interface target reaches the same declaration. Which test stands in front
+ * of the wrapper is the lowering's to pick, and the site says nothing about it.
  */
 TEST_F (TranslatorTest, ACastToAnInterfaceKeepsTheHelper)
 {
@@ -1629,16 +1611,22 @@ TEST_F (TranslatorTest, ACastToAnInterfaceKeepsTheHelper)
 	EXPECT_EQ (t.count ("mono_object_castclass_with_cache"), 1u) << t.text ();
 }
 
-// Neither form reads the cache for a null reference, because the fast path
-// loads the object's vtable and both helpers answer null without one.
-TEST_F (TranslatorTest, ACastTestsForNullBeforeItReadsAVtable)
+/*
+ * A reference parameter's declared class is recorded on the function, which is
+ * what lets a fold answer a test on an argument once inlining has brought the
+ * two together. operand-class.hpp has the format.
+ */
+TEST_F (TranslatorTest, AMethodRecordsItsReferenceParameterClasses)
 {
 	const Translation &t = translate ("casts", "Casts:CastString");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("icmp eq ptr %0, null"), 1u) << t.text ();
-	// Null, the object itself, and whatever the helper answered.
-	EXPECT_EQ (t.count ("phi ptr [ null,"), 1u) << t.text ();
+
+	const llvm::MDNode *listed = t.function->getMetadata (mono::param_classes_md);
+
+	ASSERT_NE (listed, nullptr) << t.text ();
+	// The one argument, which is an object reference.
+	EXPECT_EQ (listed->getNumOperands (), 1u) << t.text ();
 }
 
 TEST_F (TranslatorTest, UnboxAnyOnAReferenceTypeIsACast)

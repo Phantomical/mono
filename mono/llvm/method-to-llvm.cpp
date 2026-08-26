@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
 #include "domain-method.hpp"
+#include "operand-class.hpp"
 #include "passes/tier-counter.hpp"
 #include "runtime/options.hpp"
 #include "runtime-error.hpp"
@@ -2028,6 +2029,27 @@ MethodLLVMEmitter::emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer
 	                     llvm::MDNode::get (context (), {}));
 }
 
+/// The class an argument declared \p type is bounded by, or null where the
+/// declared type bounds nothing a pass can read.
+///
+/// Only a type that is always an object reference bounds anything. A byref
+/// does not, and neither does a value type, a pointer or a generic parameter.
+/// A class the context settles is not this body's to name, because a shared
+/// body serves every instantiation and each of them has a different one.
+MonoClass *
+MethodLLVMEmitter::parameter_class (MonoType *type)
+{
+	if (type->byref || !MONO_TYPE_IS_REFERENCE (type))
+		return nullptr;
+
+	MonoClass *klass = mono_class_from_mono_type_internal (type);
+
+	if (klass == nullptr || depends_on_context (klass))
+		return nullptr;
+
+	return klass;
+}
+
 llvm::Error
 MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 {
@@ -2045,6 +2067,7 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 	// size. The body reads the native fields straight out of it, beyond where the
 	// managed layout ends.
 	bool native = native_signature ();
+	llvm::SmallVector<std::pair<unsigned, MonoClass *>, 8> classes;
 
 	for (unsigned i = 0; i < nargs; ++i) {
 		auto mtype = mono_arg_type (method, i);
@@ -2054,11 +2077,13 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 		auto ltype = ltyper.get ();
 
 		auto alloca = builder.CreateAlloca (ltype, nullptr, names[i]);
+		unsigned at = natural_parameter_index (i, function);
 
 		alloca->setAlignment (type_alignment (mtype, native));
-		builder.CreateAlignedStore (
-			function->getArg (natural_parameter_index (i, function)), alloca,
-			alloca->getAlign ());
+		builder.CreateAlignedStore (function->getArg (at), alloca, alloca->getAlign ());
+
+		if (MonoClass *declared = parameter_class (mtype))
+			classes.push_back ({ at, declared });
 
 		args.push_back ({
 			.alloca = alloca,
@@ -2066,6 +2091,10 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 			.native = native,
 		});
 	}
+
+	// SROA takes the slot away for an argument nothing writes to, and the class
+	// then belongs to the incoming value itself, which is what a pass reads.
+	mark_parameter_classes (*function, classes);
 
 	// The trailing parameter of a vararg method is the caller's cookie buffer, which
 	// `arglist` hands straight to ArgIterator. It gets no slot of its own. Nothing

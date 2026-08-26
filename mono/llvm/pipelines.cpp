@@ -5,7 +5,9 @@
 #include "passes/array-shape.hpp"
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init.hpp"
+#include "passes/cast-func.hpp"
 #include "passes/devirtualize.hpp"
+#include "passes/fold-cast.hpp"
 #include "passes/inline-copies.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/profile-counter-promoter.hpp"
@@ -270,6 +272,9 @@ MonoPassBuilder::MonoPassBuilder (llvm::TargetMachine *TM, OneFileFS *ProfileFS,
 	 */
 	registerPeepholeEPCallback (
 		[] (llvm::FunctionPassManager &FPM, llvm::OptimizationLevel) {
+			// In front of DevirtualizePass, because answering a type test is
+			// what delivers the allocation a chain's receiver comes from.
+			FPM.addPass (mono::FoldCastPass ());
 			FPM.addPass (mono::DevirtualizePass ());
 		});
 }
@@ -455,6 +460,17 @@ MonoPassBuilder::buildTier1Pipeline ()
 	if (PTO.EnablePGO)
 		MPM.addPass (buildPgoInstrumentationPipeline ());
 
+	/*
+	 * Behind the instrumentation, so that both tiers hash a CFG with the type
+	 * tests still one call each. Tier 2 lowers behind its inliner instead, and
+	 * neither tier has lowered by the time it takes the hash.
+	 *
+	 * In front of TierCounterPass, which turns the calls that can unwind into
+	 * invokes on to the counter's own pad. The wrapper this writes is one of
+	 * them.
+	 */
+	MPM.addPass (mono::LowerCastFuncPass ());
+
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RgctxDedupPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RestoreTailPositionPass ()));
@@ -535,6 +551,14 @@ MonoPassBuilder::buildTier2Pipeline ()
 	                                       buildTier2FunctionSimplificationPipeline ()));
 
 	MPM.addPass (mono::StripInlineCopiesPass ());
+
+	/*
+	 * Behind the inliner, so the cost model weighs a callee with its type tests
+	 * still one call each, and so a test the inliner made answerable has been
+	 * answered. In front of the optimization pipeline, which then reads the
+	 * probe this writes as ordinary IR.
+	 */
+	MPM.addPass (mono::LowerCastFuncPass ());
 
 	/*
 	 * InstCombine sinks a load only into a block whose unique predecessor is

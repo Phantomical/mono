@@ -240,6 +240,7 @@ set(MONO_TESTS_CS_SRC
   trivial-inline.cs
   stack-merge-class.cs
   tier2-inline-override.cs
+  cast-fold.cs
   reflection-element-type.cs
   tier2-narrow-arg.cs
   pinvoke-narrow-arg.cs

@@ -247,6 +247,18 @@ tier2_enabled ()
 	return on;
 }
 
+bool
+fold_casts ()
+{
+	static bool on = [] {
+		const char *value = g_getenv ("MONO_LLVM_JIT_FOLD_CASTS");
+
+		return value == nullptr || is_truthy_env_var (value);
+	}();
+
+	return on;
+}
+
 llvm::FastMathFlags
 relaxed_float_flags ()
 {

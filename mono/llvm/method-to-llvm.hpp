@@ -982,6 +982,7 @@ private:
 	                      void *object);
 	std::string identity_symbol (const std::string &name, const void *object);
 	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
+	MonoClass *parameter_class (MonoType *type);
 	llvm::Constant *field_symbol (MonoClassField *field);
 	llvm::Constant *address_symbol (const std::string &name, void *address);
 
@@ -1157,11 +1158,6 @@ private:
 	llvm::Error emit_unbox (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_unbox_any (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw_on_fail);
-	void emit_subtype_test (MonoIrBuilder &builder, MonoClass *klass, llvm::Value *obj,
-	                        llvm::Value *target, llvm::BasicBlock *yes,
-	                        llvm::BasicBlock *otherwise);
-	void emit_interface_test (MonoIrBuilder &builder, MonoClass *klass, llvm::Value *obj,
-	                          llvm::BasicBlock *yes, llvm::BasicBlock *otherwise);
 	llvm::Error emit_castclass (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_isinst (MonoIrBuilder &builder, uint32_t token);
 	llvm::Expected<llvm::Value *> block_size (MonoIrBuilder &builder, StackValue size);

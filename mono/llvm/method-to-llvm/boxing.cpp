@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "operand-class.hpp"
 #include "runtime-error.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-abi-details.h"
@@ -106,13 +107,19 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 	 * A class whose allocation can answer with a proxy gets no store, because
 	 * what comes back then carries the proxy's vtable rather than this one.
 	 */
-	if (!allocation_can_be_a_proxy (klass))
+	if (!allocation_can_be_a_proxy (klass)) {
 		builder.CreateAlignedStore (
 			*vtable,
 			builder.CreateGEP (
 				builder.getInt8Ty (), object,
 				builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
 			llvm::Align (TARGET_SIZEOF_VOID_P));
+
+		// The same fact for a reader that has the object rather than its vtable,
+		// which is what a type test on a fresh object has.
+		if (auto *made = llvm::dyn_cast<llvm::Instruction> (object))
+			mark_allocated_class (*made, klass);
+	}
 
 	return object;
 }

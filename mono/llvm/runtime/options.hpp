@@ -101,6 +101,13 @@ std::chrono::milliseconds compile_worker_idle_timeout ();
 /// On unless MONO_LLVM_JIT_TIER2 turns it off.
 bool tier2_enabled ();
 
+/// Whether MONO_LLVM_JIT_FOLD_CASTS left the type-test fold on.
+///
+/// A false value leaves every cast for the lowering to write as the probe and
+/// the wrapper, which is what separates a wrong answer from a wrong probe. The
+/// translator writes the same IR either way, so the two arms differ in one pass.
+bool fold_casts ();
+
 /// The fast-math flags the float operations a method asks for carry.
 ///
 /// Empty unless --ffast-math is on the command line, which is the only way to
