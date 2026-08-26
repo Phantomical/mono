@@ -527,6 +527,35 @@ method_table_holds_offset (MonoVTable *vtable, int offset)
 	return offset < m_class_get_vtable_size (vtable->klass);
 }
 
+/**
+ * Asserts that a method table entry names an InterpMethod of the table's own
+ * domain.
+ *
+ * The table comes out of the receiver's memory manager and the entry out of the
+ * caller's. An entry of another domain outlives its own memory: the unload of
+ * that domain frees the InterpMethod, and the slot keeps the pointer. A later
+ * call then enters freed memory, which reads its old bytes and dispatches until
+ * another domain takes the memory back. So the fault appears far from here.
+ *
+ * The domain branch in get_virtual_method_fast () is what holds this, because
+ * get_virtual_method () resolves in imethod->domain. A domain is fixed for the
+ * life of both an InterpMethod and a MonoVTable. So only the write can break the
+ * invariant, and two compares on the cache-miss arm cover it.
+ *
+ * No workload reaches that write today. Every crossing lands on a corlib vtable
+ * whose slot the receiver's own domain filled during setup, so the entry is
+ * already there and of the right domain.
+ */
+static void
+assert_entry_domain (MonoVTable *vtable, InterpMethod *entry, int offset)
+{
+	g_assertf (entry->domain == vtable->domain,
+	           "method table of %s.%s in domain %d took %s:%s of domain %d at slot %d",
+	           m_class_get_name_space (vtable->klass), m_class_get_name (vtable->klass),
+	           vtable->domain->domain_id, m_class_get_name (entry->method->klass),
+	           entry->method->name, entry->domain->domain_id, offset);
+}
+
 static InterpMethod *
 get_virtual_method_fast (InterpMethod *imethod, MonoVTable *vtable, int offset)
 {
@@ -569,6 +598,8 @@ get_virtual_method_fast (InterpMethod *imethod, MonoVTable *vtable, int offset)
 
 	if (!table[offset]) {
 		InterpMethod *target_imethod = get_virtual_method (imethod, vtable);
+		assert_entry_domain (vtable, imethod, offset);
+		assert_entry_domain (vtable, target_imethod, offset);
 		/* Lazily initialize the method table slot */
 		mono_mem_manager_lock (memory_manager);
 		if (!table[offset]) {
@@ -590,6 +621,8 @@ get_virtual_method_fast (InterpMethod *imethod, MonoVTable *vtable, int offset)
 
 		if (!target_imethod) {
 			target_imethod = get_virtual_method (imethod, vtable);
+			assert_entry_domain (vtable, imethod, offset);
+			assert_entry_domain (vtable, target_imethod, offset);
 			mono_mem_manager_lock (memory_manager);
 			if (!get_target_imethod (static_cast<GSList *> (table[offset]), imethod))
 				table[offset] = append_imethod (
