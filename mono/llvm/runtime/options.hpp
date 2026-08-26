@@ -108,19 +108,6 @@ bool tier2_enabled ();
 /// translator writes the same IR either way, so the two arms differ in one pass.
 bool fold_casts ();
 
-/// Whether MONO_LLVM_JIT_VTABLE_SNAPSHOT left the vtable constant on.
-///
-/// A false value leaves every class's vtable an external symbol, so every read
-/// through one stays a load whatever the IR says the receiver is. The
-/// translator writes the same reads either way, so the two arms differ in what
-/// one global carries.
-///
-/// It is the arm that separates a wrong answer from a wrong constant, and it
-/// costs more than the fold: a dispatch is a plain load of a slot, so turning
-/// the constant off leaves every virtual call indirect. Reach for it to explain
-/// a fault, not to measure.
-bool vtable_snapshots ();
-
 /// The fast-math flags the float operations a method asks for carry.
 ///
 /// Empty unless --ffast-math is on the command line, which is the only way to

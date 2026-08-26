@@ -7,6 +7,7 @@
 #ifndef MONO_LLVM_PASSES_VTABLE_SNAPSHOT_HPP
 #define MONO_LLVM_PASSES_VTABLE_SNAPSHOT_HPP
 
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Support/Error.h>
@@ -51,12 +52,13 @@ constexpr llvm::StringRef vtable_snapshot_metadata = "mono.vtable.snapshot";
 /// and alignment one carries.
 void mark_vtable_snapshot (llvm::GlobalVariable &snapshot);
 
-/// What a snapshot states about a class's vtable.
+/// The values a snapshot states about a class's vtable, one for each stated
+/// field.
 ///
 /// Both pointers are symbols rather than addresses, so a comparison against the
 /// same symbol folds. A type test reads the class word, and `typeof` names the
 /// `System.Type` object under the symbol `type` carries here.
-struct VTableFacts {
+struct VTableConstants {
 	llvm::Constant *klass = nullptr;
 	llvm::Constant *type = nullptr;
 	uint8_t rank = 0;
@@ -68,12 +70,12 @@ struct VTableFacts {
 	///
 	/// Every slot the class has, or none at all: a load past the last entry
 	/// folds against whatever the constant ends with.
-	llvm::ArrayRef<llvm::Constant *> slots;
+	llvm::SmallVector<llvm::Constant *, 16> slots;
 };
 
-/// The initializer a snapshot carries, laid out for as many slots as \p facts
+/// The initializer a snapshot carries, laid out for as many slots as \p held
 /// gives.
-llvm::Constant *vtable_snapshot_init (llvm::Module &m, const VTableFacts &facts);
+llvm::Constant *vtable_snapshot_init (llvm::Module &m, const VTableConstants &held);
 
 /// The type a snapshot of a vtable with \p slots dispatch slots is laid out as.
 ///

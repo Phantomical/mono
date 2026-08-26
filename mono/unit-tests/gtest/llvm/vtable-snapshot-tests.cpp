@@ -132,12 +132,12 @@ TEST (VTableSnapshot, TheInitializerStatesTheClassAsASymbol)
 	auto *klass = new GlobalVariable (*m.module, Type::getInt8Ty (c), false,
 	                                  GlobalValue::ExternalLinkage, nullptr,
 	                                  "mono_class_Some.Class@0x1234");
-	VTableFacts facts;
+	VTableConstants states;
 
-	facts.klass = klass;
-	facts.rank = 3;
+	states.klass = klass;
+	states.rank = 3;
 
-	Constant *held = vtable_snapshot_init (*m.module, facts);
+	Constant *held = vtable_snapshot_init (*m.module, states);
 	const DataLayout &dl = m.module->getDataLayout ();
 	auto *laid_out = cast<StructType> (held->getType ());
 	const StructLayout *where = dl.getStructLayout (laid_out);

@@ -71,11 +71,16 @@ nameable (MonoMethod *target)
 
 	/*
 	 * A virtual generic method's slot holds a trampoline that reads the
-	 * asked-for instantiation out of the IMT register, so no one method is what
-	 * the site enters.
+	 * asked-for instantiation out of the IMT register. So a site reading the
+	 * slot alone enters no one method. A site that carries the key names an
+	 * instantiation, and that is the method this answers with.
 	 */
-	if (sig->generic_param_count != 0)
-		return nullptr;
+	if (sig->generic_param_count != 0) {
+		MonoGenericContext *bound = mono_method_get_context (target);
+
+		if (bound == nullptr || bound->method_inst == nullptr)
+			return nullptr;
+	}
 
 	// An icall, a pinvoke or a runtime-implemented method is declared in the C
 	// convention, which is not the shape the site calls with.
@@ -167,6 +172,29 @@ imt_target (MonoClass *klass, MonoMethod *asked)
 	 */
 	if (target != nullptr && mono_class_is_interface (target->klass))
 		return nullptr;
+
+	return nameable (target);
+}
+
+/// The method \p klass implements the virtual generic \p asked with, or null
+/// where a caller cannot name it.
+///
+/// The slot holds a trampoline, because one slot serves every instantiation.
+/// asked is the instantiation the call site named, so the two together settle
+/// what that trampoline would have picked.
+MonoMethod *
+generic_virtual_target (MonoClass *klass, MonoMethod *asked)
+{
+	if (!laid_out (klass))
+		return nullptr;
+
+	ERROR_DECL (error);
+	MonoMethod *target = mono_class_get_virtual_method (klass, asked, FALSE, error);
+
+	if (!is_ok (error)) {
+		mono_error_cleanup (error);
+		return nullptr;
+	}
 
 	return nameable (target);
 }
@@ -307,12 +335,13 @@ entry_for (Module &m, MonoMethod *target, FunctionType *shape, const CompileStat
 	return entry;
 }
 
+/// Which declaration a set of sites calls, which decides where the method comes
+/// from and whether the calls carry a key to drop.
+enum class Lookup { vtable, imt, generic_virtual };
+
 /// Answers what it can of the sites in \p f that call \p decl.
-///
-/// \p through_imt says which declaration decl is, which is what decides where
-/// the method comes from and whether the calls carry a key to drop.
 bool
-answer_sites (Function &f, Function *decl, const CompileState &compile, bool through_imt)
+answer_sites (Function &f, Function *decl, const CompileState &compile, Lookup lookup)
 {
 	if (decl == nullptr)
 		return false;
@@ -343,7 +372,7 @@ answer_sites (Function &f, Function *decl, const CompileState &compile, bool thr
 
 		MonoMethod *target = nullptr;
 
-		if (!through_imt) {
+		if (lookup == Lookup::vtable) {
 			target = slot_target (klass,
 			                      static_cast<int32_t> (index->getSExtValue ()));
 		} else {
@@ -356,7 +385,8 @@ answer_sites (Function &f, Function *decl, const CompileState &compile, bool thr
 			if (asked == nullptr || shape->getNumParams () < 1)
 				continue;
 
-			target = imt_target (klass, asked);
+			target = lookup == Lookup::imt ? imt_target (klass, asked)
+			                               : generic_virtual_target (klass, asked);
 			shape = FunctionType::get (shape->getReturnType (),
 			                           shape->params ().drop_back (),
 			                           shape->isVarArg ());
@@ -377,7 +407,8 @@ answer_sites (Function &f, Function *decl, const CompileState &compile, bool thr
 		 * the entry wants stepped and a key it does not take are the two cases
 		 * that have to reach the calls.
 		 */
-		enter_directly (site, entry, publishes_unbox_entry (target), through_imt);
+		enter_directly (site, entry, publishes_unbox_entry (target),
+		                lookup != Lookup::vtable);
 		site->eraseFromParent ();
 		changed = true;
 	}
@@ -396,9 +427,12 @@ DevirtualizePass::run (Function &f, FunctionAnalysisManager &)
 	if (compile.domain == nullptr || !compile.publish)
 		return PreservedAnalyses::all ();
 
-	bool changed = answer_sites (f, m.getFunction (vtable_func_name), compile, false);
+	bool changed =
+		answer_sites (f, m.getFunction (vtable_func_name), compile, Lookup::vtable);
 
-	changed |= answer_sites (f, m.getFunction (imt_func_name), compile, true);
+	changed |= answer_sites (f, m.getFunction (imt_func_name), compile, Lookup::imt);
+	changed |= answer_sites (f, m.getFunction (vtable_gfunc_name), compile,
+	                         Lookup::generic_virtual);
 
 	return changed ? PreservedAnalyses::none () : PreservedAnalyses::all ();
 }

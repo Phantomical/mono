@@ -36,9 +36,21 @@ constexpr llvm::StringRef vtable_func_name = "mono.vtable.func";
 /// asked for. The lowering drops it. Only the translator writes a call to this.
 constexpr llvm::StringRef imt_func_name = "mono.imt.func";
 
+/// `ptr @mono.vtable.gfunc (ptr vtable, i32 index, ptr key)` answers the entry
+/// in slot index of vtable for a virtual generic method.
+///
+/// The slot itself can never hold one instantiation's code, so what stands
+/// there is a trampoline that reads the asked-for method out of the IMT
+/// register. key is that method, and it is what makes the site resolvable: the
+/// slot alone serves every instantiation, while the class and the key together
+/// name one. Written as a call rather than as the load so both stay operands
+/// for DevirtualizePass to read.
+constexpr llvm::StringRef vtable_gfunc_name = "mono.vtable.gfunc";
+
 /// The declarations in m, created on first use and carrying their attributes.
 llvm::Function *vtable_func_decl (llvm::Module &m);
 llvm::Function *imt_func_decl (llvm::Module &m);
+llvm::Function *vtable_gfunc_decl (llvm::Module &m);
 
 /// Rewrites every `mono.vtable.func` and `mono.imt.func` call into the load it
 /// stands for, and erases the declarations.

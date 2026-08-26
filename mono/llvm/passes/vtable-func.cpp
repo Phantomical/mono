@@ -82,6 +82,20 @@ imt_func_decl (Module &m)
 		GlobalValue::ExternalLinkage, imt_func_name, m));
 }
 
+Function *
+vtable_gfunc_decl (Module &m)
+{
+	if (Function *existing = m.getFunction (vtable_gfunc_name))
+		return existing;
+
+	LLVMContext &c = m.getContext ();
+	Type *ptr = PointerType::get (c, 0);
+
+	return describe_slot_read (Function::Create (
+		FunctionType::get (ptr, { ptr, Type::getInt32Ty (c), ptr }, false),
+		GlobalValue::ExternalLinkage, vtable_gfunc_name, m));
+}
+
 namespace {
 
 /// Rewrites site into the load it stands for, \p first_word bytes from the
@@ -153,7 +167,8 @@ PreservedAnalyses
 LowerVTableFuncPass::run (Module &m, ModuleAnalysisManager &)
 {
 	if (m.getFunction (vtable_func_name) == nullptr
-	    && m.getFunction (imt_func_name) == nullptr)
+	    && m.getFunction (imt_func_name) == nullptr
+	    && m.getFunction (vtable_gfunc_name) == nullptr)
 		return PreservedAnalyses::all ();
 
 	lower_all (m, vtable_func_name, [] (CallBase *site) {
@@ -164,6 +179,12 @@ LowerVTableFuncPass::run (Module &m, ModuleAnalysisManager &)
 	// from the base rather than on from the method array.
 	lower_all (m, imt_func_name,
 	           [] (CallBase *site) { lower (site, 0, -MONO_IMT_SIZE); });
+
+	// The key is the trampoline's to read out of its own register, so the load
+	// this leaves is the plain slot read.
+	lower_all (m, vtable_gfunc_name, [] (CallBase *site) {
+		lower (site, MONO_STRUCT_OFFSET (MonoVTable, vtable), 0);
+	});
 
 	return PreservedAnalyses::none ();
 }

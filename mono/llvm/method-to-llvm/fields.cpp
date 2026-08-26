@@ -287,59 +287,53 @@ MethodLLVMEmitter::vtable_symbol (MonoClass *klass, const std::string &symbol)
 	if (llvm::GlobalValue *existing = module->getNamedValue (symbol))
 		return existing;
 
-	// Everything the snapshot states is gathered before the global exists. The
-	// slot count decides its type, and a global's type is fixed once it is
-	// built.
-	VTableFacts facts;
-	llvm::SmallVector<llvm::Constant *, 16> slots;
-	bool state_it = vtable_snapshots () && vtable_facts (klass, facts, slots);
-	uint32_t count = state_it ? uint32_t (slots.size ()) : 0;
+	// Read before the global exists, because the slot count decides its type
+	// and a global's type is fixed once it is built.
+	std::optional<VTableConstants> held = vtable_constants (klass);
+	uint32_t count = held ? uint32_t (held->slots.size ()) : 0;
 
 	auto *global = new llvm::GlobalVariable (*module,
 	                                         vtable_snapshot_type (*module, count),
 	                                         false, llvm::GlobalValue::ExternalLinkage,
 	                                         nullptr, symbol);
 
-	if (!state_it)
+	if (!held)
 		return global;
 
-	global->setInitializer (vtable_snapshot_init (*module, facts));
+	global->setInitializer (vtable_snapshot_init (*module, *held));
 	mark_vtable_snapshot (*global);
 
 	return global;
 }
 
-/// Gathers what a snapshot of klass's vtable states, and says whether all of it
-/// could be gathered.
+/// The values a snapshot of klass's vtable states, or nothing where the compile
+/// cannot produce all of them.
 ///
-/// \p slots owns the entries \p facts points at, so it has to outlive facts.
-///
-/// A false answer leaves the class with no snapshot at all rather than one with
-/// a hole in it. A field the initializer does not state still folds a plain load
-/// of it, and to whatever stood there.
-bool
-MethodLLVMEmitter::vtable_facts (MonoClass *klass, VTableFacts &facts,
-                                 llvm::SmallVectorImpl<llvm::Constant *> &slots)
+/// Nothing leaves the class with no snapshot at all rather than one with a hole
+/// in it.
+std::optional<VTableConstants>
+MethodLLVMEmitter::vtable_constants (MonoClass *klass)
 {
 	llvm::Expected<llvm::Constant *> named =
 		typeof_symbol (m_class_get_byval_arg (klass));
 
 	if (!named) {
 		llvm::consumeError (named.takeError ());
-		return false;
+		return std::nullopt;
 	}
 
-	if (*named == nullptr || !vtable_slots (klass, slots))
-		return false;
+	VTableConstants held;
+
+	if (*named == nullptr || !vtable_slots (klass, held.slots))
+		return std::nullopt;
 
 	// Each pointer is the symbol something else compares against: a type test
 	// reads the class word, and typeof names the System.Type object. The two
 	// sides have to be one value for the comparison to fold.
-	facts.klass = class_symbol (klass, "mono_class_");
-	facts.type = *named;
-	facts.rank = uint8_t (m_class_get_rank (klass));
-	facts.slots = slots;
-	return true;
+	held.klass = class_symbol (klass, "mono_class_");
+	held.type = *named;
+	held.rank = uint8_t (m_class_get_rank (klass));
+	return held;
 }
 
 /// A body that steps a boxed receiver past its header and hands the frame to
@@ -391,15 +385,14 @@ MethodLLVMEmitter::unbox_shim (llvm::Function *callee)
 }
 
 /// Fills \p slots with what each of klass's dispatch slots holds, and says
-/// whether every one of them could be stated.
+/// whether every one of them was stated.
 ///
 /// A slot this compile can name gets the callee's own declaration, so a folded
 /// dispatch is a direct call. Any other gets the address standing in the
-/// runtime's own slot. That is the shared vcall trampoline
-/// mini_get_vtable_trampoline () keys on the slot index alone, until the first
-/// call through it patches the method's entry in. Both are right whatever the
-/// slot holds later, because every value it takes enters the method the site
-/// named.
+/// runtime's own slot, which is the shared vcall trampoline
+/// mini_get_vtable_trampoline () keys on the slot index alone. Both stay right
+/// whatever the slot holds later, for the reason describe_slot_read ()
+/// (passes/vtable-func.cpp) gives.
 bool
 MethodLLVMEmitter::vtable_slots (MonoClass *klass,
                                  llvm::SmallVectorImpl<llvm::Constant *> &slots)

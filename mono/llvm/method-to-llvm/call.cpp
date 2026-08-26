@@ -343,14 +343,12 @@ MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver, 
 /// which weighs a candidate against what its caller settled and cannot run a
 /// pass of ours.
 ///
-/// The load is `!invariant.load` even though the slot does change: it holds the
-/// shared vcall trampoline until the first call through it patches the entry in,
-/// and an override moves it again. Every value it takes enters the method the
-/// site named, so a reader that keeps an older one calls the same method.
+/// The load is `!invariant.load` for the reason describe_slot_read ()
+/// (passes/vtable-func.cpp) gives the declaration this replaces: the slot does
+/// change, and every value it takes enters the method the site named.
 ///
-/// A method with no slot of its own carries an index of -1, which reads back
-/// into the interface method table rather than the slots. Such a site keeps the
-/// declaration, whose lowering does that arithmetic signed.
+/// A method the runtime could give no slot carries an index of -1. Such a site
+/// keeps the declaration, whose lowering does the arithmetic signed.
 llvm::Value *
 MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
                                    MonoMethod *target)
@@ -372,6 +370,23 @@ MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver
 	entry->setMetadata (llvm::LLVMContext::MD_invariant_load,
 	                    llvm::MDNode::get (context (), {}));
 	return entry;
+}
+
+/// Loads the callee out of target's vtable slot for a virtual generic call.
+///
+/// The site keeps the declaration rather than the plain load, because the slot
+/// serves every instantiation and the key is what picks one. A snapshot states
+/// such a slot as the trampoline standing in it, so folding the load first would
+/// take the class and the slot away before anything could put them together with
+/// the key.
+llvm::Value *
+MethodLLVMEmitter::generic_virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
+                                           MonoMethod *target, llvm::Value *key)
+{
+	return builder.CreateCall (
+		vtable_gfunc_decl (*module),
+		{ load_vtable (builder, receiver),
+	          builder.getInt32 (mono_method_get_vtable_index (target)), key });
 }
 
 /// Loads the callee out of target's IMT slot in the object receiver points at.
@@ -1767,7 +1782,8 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 			llvm::Value *code =
 				is_interface
 					? interface_callee (builder, (*args)[0], callee_method, *key)
-					: virtual_callee (builder, (*args)[0], callee_method);
+					: generic_virtual_callee (builder, (*args)[0],
+				                                  callee_method, *key);
 			std::vector<llvm::Type *> params (slot_type->param_begin (),
 			                                  slot_type->param_end ());
 

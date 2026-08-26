@@ -43,7 +43,7 @@ enum StatedIndex { stated_klass, stated_type, stated_rank, stated_count };
  *
  * klass and rank come off the class alone (object.c:2183-2184), so a compile
  * states them with no vtable to read. type is the System.Type object at
- * object.c:2355, which mono_type_get_object_checked () allocates pinned
+ * object.c:2357, which mono_type_get_object_checked () allocates pinned
  * (reflection.c:536) because the runtime stores it in vtables and in compiled
  * code. So its address is one a compile can write down. A type built through
  * Reflection.Emit is the exception: its object is the builder's own and is not
@@ -232,9 +232,9 @@ vtable_snapshot_type (Module &m, uint32_t slots)
 }
 
 Constant *
-vtable_snapshot_init (Module &m, const VTableFacts &facts)
+vtable_snapshot_init (Module &m, const VTableConstants &held)
 {
-	uint32_t slots = uint32_t (facts.slots.size ());
+	uint32_t slots = uint32_t (held.slots.size ());
 	auto *laid_out = cast<StructType> (vtable_snapshot_type (m, slots));
 	LLVMContext &c = m.getContext ();
 	SmallVector<Constant *, 8> members;
@@ -244,14 +244,14 @@ vtable_snapshot_init (Module &m, const VTableFacts &facts)
 		[&] (StatedIndex i) {
 			switch (i) {
 			case stated_klass:
-				members.push_back (facts.klass);
+				members.push_back (held.klass);
 				return;
 			case stated_type:
-				members.push_back (facts.type);
+				members.push_back (held.type);
 				return;
 			case stated_rank:
 				members.push_back (ConstantInt::get (
-					IntegerType::get (c, stated[i].width * 8), facts.rank));
+					IntegerType::get (c, stated[i].width * 8), held.rank));
 				return;
 			case stated_count:
 				break;
@@ -268,7 +268,7 @@ vtable_snapshot_init (Module &m, const VTableFacts &facts)
 		[&] (uint32_t count) {
 			members.push_back (ConstantArray::get (
 				ArrayType::get (PointerType::get (c, 0), count),
-				facts.slots));
+				held.slots));
 		});
 
 	return ConstantStruct::get (laid_out, members);

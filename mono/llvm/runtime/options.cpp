@@ -260,18 +260,6 @@ fold_casts ()
 	return on;
 }
 
-bool
-vtable_snapshots ()
-{
-	static bool on = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_VTABLE_SNAPSHOT");
-
-		return value == nullptr || is_truthy_env_var (value);
-	}();
-
-	return on;
-}
-
 llvm::FastMathFlags
 relaxed_float_flags ()
 {

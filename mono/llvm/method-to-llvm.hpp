@@ -34,6 +34,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -935,6 +936,8 @@ private:
 	                           int32_t offset);
 	llvm::Value *virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
 	                             MonoMethod *target);
+	llvm::Value *generic_virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
+	                                     MonoMethod *target, llvm::Value *key);
 	llvm::Value *interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
 	                               MonoMethod *target, llvm::Value *key);
 	llvm::Value *delegate_invoke_callee (MonoIrBuilder &builder, llvm::Value *receiver,
@@ -984,8 +987,7 @@ private:
 	std::string identity_symbol (const std::string &name, const void *object);
 	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
 	llvm::Constant *vtable_symbol (MonoClass *klass, const std::string &symbol);
-	bool vtable_facts (MonoClass *klass, VTableFacts &facts,
-	                   llvm::SmallVectorImpl<llvm::Constant *> &slots);
+	std::optional<VTableConstants> vtable_constants (MonoClass *klass);
 	bool vtable_slots (MonoClass *klass,
 	                   llvm::SmallVectorImpl<llvm::Constant *> &slots);
 	llvm::Function *unbox_shim (llvm::Function *callee);
