@@ -8,12 +8,15 @@
 #include "mini.h"
 #include <mono/utils/mono-stack-unwinding.h>
 
-#define MONO_DBG_CALLBACKS_VERSION (3)
+#define MONO_DBG_CALLBACKS_VERSION (4)
 // 2. debug_log parameters changed from MonoString* to MonoStringHandle
 // 3. debug_log parameters changed from MonoStringHandle back to MonoString*
+// 4. is_enabled added
 
 struct _MonoDebuggerCallbacks {
 	int version;
+	/* Says whether the agent is on. The runtime asks before it does work only the agent reads. */
+	gboolean (*is_enabled) (void);
 	void (*parse_options) (char *options);
 	void (*init) (void);
 	void (*breakpoint_hit) (void *sigctx);

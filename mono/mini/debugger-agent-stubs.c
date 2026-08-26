@@ -68,6 +68,12 @@ stub_debugger_agent_debug_log (int level, MonoString *category, MonoString *mess
 }
 
 static gboolean
+stub_debugger_agent_is_enabled (void)
+{
+	return FALSE;
+}
+
+static gboolean
 stub_debugger_agent_debug_log_is_enabled (void)
 {
 	return FALSE;
@@ -103,6 +109,7 @@ mono_debugger_agent_stub_init (void)
 
 	memset (&cbs, 0, sizeof (MonoDebuggerCallbacks));
 	cbs.version = MONO_DBG_CALLBACKS_VERSION;
+	cbs.is_enabled = stub_debugger_agent_is_enabled;
 	cbs.parse_options = stub_debugger_agent_parse_options;
 	cbs.init = stub_debugger_agent_init;
 	cbs.breakpoint_hit = stub_debugger_agent_breakpoint_hit;

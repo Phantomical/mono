@@ -2656,8 +2656,8 @@ build_native_trace (MonoError *error)
 #define TRACE_IPS_INLINE_FRAMES 16
 
 /*
- * The frames a first pass has walked, in the order MonoException.trace_ips
- * keeps them. One frame takes TRACE_IP_ENTRY_SIZE words.
+ * The frames a first pass walked, in the order MonoException.trace_ips keeps
+ * them. One frame takes TRACE_IP_ENTRY_SIZE words.
  *
  * The words start inside the struct, so a throw over an ordinary stack records
  * its frames without an allocation. Beyond that the buffer moves to the heap,
@@ -2756,7 +2756,7 @@ trace_ips_to_array (TraceIps *trace, gboolean remove_wrappers, MonoError *error)
 	return res;
 }
 
-/* This can be called more than once on a MonoException, so it leaves the trace as it found it. */
+/* A caller can call this more than once on one MonoException, so it leaves the trace as it found it. */
 static void
 setup_stack_trace (MonoException *mono_ex, GSList **dynamic_methods, TraceIps *trace_ips, gboolean remove_wrappers)
 {
@@ -2805,19 +2805,25 @@ typedef enum {
 } MonoFirstPassResult;
 
 /*
- * The IL offset the handler of EI runs from, where EI is JI's clause number
- * INDEX. This is the IL clause's own offset rather than anything derived from
+ * The IL offset the handler of ei runs from, where ei is ji's clause number
+ * index. This is the IL clause's own offset rather than anything derived from
  * ei->handler_start: several clauses can be published against a single landing
  * pad, so an address does not identify which handler is about to run, and the
  * debugger needs to know that to step to a catch site.
  *
- * Returns -1 if the method's header cannot be read.
+ * Returns -1 where the debugger agent is off, and where the method's header
+ * cannot be read. Each call parses that header and frees it again, and the
+ * agent is the only reader of the answer.
  */
 static int
 handler_il_offset (MonoJitInfo *ji, MonoJitExceptionInfo *ei, int index)
 {
 	ERROR_DECL (error);
 	MonoMethodHeader *header;
+
+	if (!mini_get_dbg_callbacks ()->is_enabled ())
+		return -1;
+
 	/* Only an LLVM-compiled jinfo records the IL clause a published entry came from. */
 	int clause = ji->from_llvm ? ei->clause_index : index;
 	int il_offset = -1;

@@ -5396,10 +5396,16 @@ debugger_agent_debug_log (int level, MonoString *category, MonoString *message)
 }
 
 static gboolean
+debugger_agent_is_enabled (void)
+{
+	return agent_config.enabled;
+}
+
+static gboolean
 debugger_agent_debug_log_is_enabled (void)
 {
 	/* Treat this as true even if there is no event request for EVENT_KIND_USER_LOG */
-	return agent_config.enabled;
+	return debugger_agent_is_enabled ();
 }
 
 static void
@@ -10719,6 +10725,7 @@ mono_debugger_agent_init (void)
 
 	memset (&cbs, 0, sizeof (cbs));
 	cbs.version = MONO_DBG_CALLBACKS_VERSION;
+	cbs.is_enabled = debugger_agent_is_enabled;
 	cbs.parse_options = debugger_agent_parse_options;
 	cbs.init = debugger_agent_init;
 	cbs.breakpoint_hit = debugger_agent_breakpoint_hit;
