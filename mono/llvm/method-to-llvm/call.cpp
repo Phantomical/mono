@@ -514,10 +514,14 @@ MethodLLVMEmitter::exact_receiver_class (const StackValue &receiver)
 	if (klass == nullptr || depends_on_context (klass))
 		return nullptr;
 
-	// Array covariance puts a class here that the static type does not name: a
-	// variable of type object[] can hold a string[], and neither array class
-	// derives from the other. The runtime marks both sealed, so the test below
-	// says yes to a proof that does not hold.
+	// Array covariance puts a class here that the static type does not name.
+	// It takes two forms. A variable of type object[] can hold a string[], and
+	// neither array class derives from the other. A variable of type int[] can
+	// hold a uint[] or an enum array over int. class_composite_fixup_cast_class ()
+	// (mono/metadata/class-init.c) folds element types like these onto one cast
+	// class. mono_class_is_assignable_from_general () then compares that class.
+	// The runtime marks every array sealed, so the test below says yes to a
+	// proof that does not hold.
 	if (m_class_get_rank (klass) != 0)
 		return nullptr;
 
