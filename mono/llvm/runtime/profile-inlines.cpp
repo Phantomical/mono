@@ -14,6 +14,7 @@
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallPtrSet.h>
+#include <llvm/Analysis/InlineCost.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Module.h>
 
@@ -53,6 +54,40 @@ ProfileInliner::folded (Function &caller, Function &callee)
 		fprintf (stderr, "[llvm-jit] folding %s into %s\n", folded, host);
 	}
 	g_free (folded);
+	g_free (host);
+}
+
+void
+ProfileInliner::declined (Function &caller, Function &callee, const InlineCost &cost,
+                          uint64_t count)
+{
+	if (!is_jit_trace_enabled ())
+		return;
+
+	MonoMethod *into = marked_method (caller);
+	MonoMethod *what = marked_method (callee);
+
+	if (into == nullptr || what == nullptr)
+		return;
+
+	char *host = mono_method_full_name (into, TRUE);
+	char *declined = mono_method_full_name (what, TRUE);
+
+	MONO_LOCK (jit_trace_mutex ())
+	{
+		fprintf (stderr, "[llvm-jit] declining %s into %s at a site counted %"
+		                 G_GUINT64_FORMAT " times: ",
+		         declined, host, count);
+
+		// A cost the model reached is a pair of numbers. The other answers are
+		// a verdict it took without weighing, and those carry the words.
+		if (cost.isVariable ())
+			fprintf (stderr, "costs %d against a budget of %d\n", cost.getCost (),
+			         cost.getThreshold ());
+		else
+			fprintf (stderr, "%s\n", cost.getReason ());
+	}
+	g_free (declined);
 	g_free (host);
 }
 

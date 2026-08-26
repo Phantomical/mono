@@ -8,10 +8,12 @@
 
 #include <llvm/IR/PassManager.h>
 
+#include <cstdint>
 #include <utility>
 
 namespace llvm {
 class Function;
+class InlineCost;
 class TargetMachine;
 } // namespace llvm
 
@@ -45,6 +47,21 @@ public:
 	virtual llvm::Function *materialize (llvm::Function &decl, llvm::Module &into) = 0;
 
 	virtual void folded (llvm::Function &caller, llvm::Function &callee) = 0;
+
+	/// Says that the cost model weighed \p callee at a site in \p caller and
+	/// declined it.
+	///
+	/// The site keeps its call and StripInlineCopiesPass erases the body behind
+	/// the pass, so no other output says the candidate was translated at all.
+	///
+	/// \p count is what the profile gives the site's block, and it is what
+	/// decides the budget: LLVM reads a site cold against the rest of the
+	/// caller and hands a cold one much less. \p cost holds the two numbers
+	/// where the model reached one. A cost equal to the budget is a count that
+	/// stopped there, because the model gives up as soon as a candidate is
+	/// over.
+	virtual void declined (llvm::Function &caller, llvm::Function &callee,
+	                       const llvm::InlineCost &cost, uint64_t count) = 0;
 
 	/// How many folds deep past the root a chain can go. Without a limit a call
 	/// graph with a cycle in it never runs out of sites.

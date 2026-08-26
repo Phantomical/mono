@@ -287,8 +287,10 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			                                 fam.getResult<TargetIRAnalysis> (*callee),
 			                                 get_ac, get_tli, get_bfi, &psi);
 
-			if (!cost)
+			if (!cost) {
+				candidates->declined (*root, *callee, cost, site.count);
 				continue;
+			}
 
 			/*
 			 * No BFI on either side, so InlineFunction () scales nothing: the

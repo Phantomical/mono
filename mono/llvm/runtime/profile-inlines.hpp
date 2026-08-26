@@ -54,6 +54,8 @@ public:
 
 	llvm::Function *materialize (llvm::Function &decl, llvm::Module &into) override;
 	void folded (llvm::Function &caller, llvm::Function &callee) override;
+	void declined (llvm::Function &caller, llvm::Function &callee,
+	               const llvm::InlineCost &cost, uint64_t count) override;
 	unsigned depth_limit () const override;
 
 private:
