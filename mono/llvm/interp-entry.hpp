@@ -8,13 +8,18 @@
 
 #include "arch/arch.hpp"
 
-typedef struct _MonoMethod MonoMethod;
+#include <llvm/Support/Error.h>
 
 namespace mono {
 
-/// Returns how to enter method in the calling thread's domain. The layout is
-/// null when that domain is not prepared to interpret it.
-arch::InterpEntryPoint interp_entry_for (MonoMethod *method);
+class MonoDomainMethod;
+
+/// Returns how to enter the method whose thunk published carries.
+///
+/// The calling thread's domain is preferred over published's own, so a call
+/// that crossed a domain runs where that domain's interpreter state is. The
+/// error says why the interpreter refused the body.
+llvm::Expected<arch::InterpEntryPoint> interp_entry_for (MonoDomainMethod *published);
 
 } // namespace mono
 

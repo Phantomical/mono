@@ -374,7 +374,13 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 
 	dm.name = stub_symbol (method);
 
-	llvm::Expected<Thunk> thunk = Thunk::allocate (&domain.code, method);
+	/*
+	 * The record, not the method: the interp entry thunk needs the domain this
+	 * thunk was published in as well as the method. A caller reaches a method
+	 * through whichever domain's thunk its own code was compiled against, and
+	 * the method alone cannot name that domain.
+	 */
+	llvm::Expected<Thunk> thunk = Thunk::allocate (&domain.code, &dm);
 
 	if (!thunk) {
 		domain.callbacks->release (*trampoline);

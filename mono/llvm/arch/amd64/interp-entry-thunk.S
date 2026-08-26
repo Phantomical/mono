@@ -3,7 +3,9 @@
  *
  * A caller makes this call the same way it calls a compiled body: this
  * backend's own convention, with the arguments wherever LLVM put them. %r11
- * carries the MonoMethod *, loaded by the method's own stub.
+ * carries the MonoDomainMethod * the thunk stands for, loaded by the method's
+ * own stub. %r10 is left as the caller set it, because a dispatched call site
+ * puts the key naming the method it asked for there.
  *
  * This thunk does not know the prototype, so it spills rather than reads. The
  * helper takes the arguments out of the context once it has looked the method

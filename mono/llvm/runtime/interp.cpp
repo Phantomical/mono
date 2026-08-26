@@ -205,28 +205,31 @@ interp_entry (MonoDomainMethod &dm)
 	return arch::InterpEntryPoint { layout, imethod };
 }
 
-arch::InterpEntryPoint
-interp_entry_for (MonoMethod *method)
+Expected<arch::InterpEntryPoint>
+interp_entry_for (MonoDomainMethod *published)
 {
 	/*
-	 * This runs the method in the calling thread's domain, not the one that
-	 * published the stub. A call that arrived here after a domain switch must
-	 * run in the domain it switched to, since that domain owns the method's
-	 * interpreter state.
+	 * The calling thread's domain is preferred over the one that published the
+	 * thunk. A call that arrived here after a domain switch must run in the
+	 * domain it switched to, since that domain owns the method's interpreter
+	 * state.
+	 *
+	 * The publishing record answers when that domain holds none, which is the
+	 * only thing that can name a domain here. A caller reaches a method through
+	 * whichever domain's thunk its own code was compiled against, and that is
+	 * not always its own: an icall wrapper has a single copy in the root domain,
+	 * because mono_jit_compile_method_with_opt () gives it MONO_OPT_SHARED, and
+	 * a root-compiled caller of System.AppDomain:InternalSetDomain reaches the
+	 * root thunk while the thread runs in another domain.
 	 */
-	MonoDomainMethod *dm = domain_method_find (mono_domain_get (), method);
+	MonoDomain *domain = mono_domain_get ();
+	MonoDomainMethod *dm = published;
 
-	if (dm == nullptr)
-		return {};
+	if (domain != published->domain)
+		if (MonoDomainMethod *local = domain_method_find (domain, published->method))
+			dm = local;
 
-	Expected<arch::InterpEntryPoint> entry = interp_entry (*dm);
-
-	if (!entry) {
-		consumeError (entry.takeError ());
-		return {};
-	}
-
-	return *entry;
+	return interp_entry (*dm);
 }
 
 } // namespace mono

@@ -59,7 +59,7 @@ mono_llvm_load_error_exception (MonoErrorBoxed *failure)
 
 /* Defined beside the code that emits the call to it. */
 void mono_llvm_seq_point_nop (void);
-void mono_llvm_interp_entry_from_context (MonoMethod *method,
+void mono_llvm_interp_entry_from_context (mono::MonoDomainMethod *published,
                                           mono::arch::InterpArgContext *ctx);
 
 } // extern "C"

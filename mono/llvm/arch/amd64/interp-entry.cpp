@@ -31,6 +31,7 @@
 #include "hidden-return.hpp"
 #include "interp-entry.hpp"
 
+#include "domain-method.hpp"
 #include "mini.h"
 #include "mini-runtime.h"
 
@@ -53,7 +54,7 @@
 using namespace llvm;
 
 extern "C" {
-void mono_llvm_interp_entry_from_context (MonoMethod *method,
+void mono_llvm_interp_entry_from_context (mono::MonoDomainMethod *published,
                                           mono::arch::InterpArgContext *ctx);
 
 extern char mono_llvm_interp_entry_thunk[];
@@ -439,16 +440,18 @@ using namespace mono::arch;
  * What interp-entry-thunk.S calls once it has spilled the call.
  */
 extern "C" void
-mono_llvm_interp_entry_from_context (MonoMethod *method, InterpArgContext *ctx)
+mono_llvm_interp_entry_from_context (mono::MonoDomainMethod *published, InterpArgContext *ctx)
 {
-	InterpEntryPoint entry = interp_entry_for (method);
+	llvm::Expected<InterpEntryPoint> found = interp_entry_for (published);
 
-	if (entry.layout == nullptr) {
-		char *name = mono_method_full_name (method, TRUE);
+	if (!found) {
+		char *name = mono_method_full_name (published->method, TRUE);
+		std::string why = llvm::toString (found.takeError ());
 
-		g_error ("no interpreter entry for %s in this domain", name);
+		g_error ("no interpreter entry for %s: %s", name, why.c_str ());
 	}
 
+	InterpEntryPoint entry = *found;
 	const InterpEntryLayout &layout = *entry.layout;
 	SmallVector<void *, 16> args (layout.args.size ());
 	SmallVector<uint8_t, 256> scratch (layout.scratch_size);
