@@ -279,6 +279,14 @@ struct MathIntrinsic {
 	const char *libm;
 };
 
+/// Which direction an element accessor on System.Array moves its element.
+enum class ArrayGenericAccess {
+	/// Array.GetGenericValueImpl<T>, which reads the element.
+	get,
+	/// Array.SetGenericValueImpl<T>, which writes it.
+	set,
+};
+
 /// What a call to a raw memory copy compiles to in place of the call.
 struct BufferCopy {
 	/// Whether the two ranges can overlap, which is what decides between
@@ -1090,6 +1098,8 @@ private:
 	                                                      llvm::ArrayRef<llvm::Value *> indices);
 	llvm::Error emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod *accessor,
 	                                      MonoMethodSignature *sig);
+	llvm::Error emit_array_generic_access (MonoIrBuilder &builder, MonoMethodSignature *sig,
+	                                       ArrayGenericAccess what);
 	llvm::Error emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature *sig);
 	llvm::Error emit_array_rank (MonoIrBuilder &builder);
 	llvm::Error emit_array_total_length (MonoIrBuilder &builder);
@@ -1311,6 +1321,14 @@ MonoMethod *icall_wrapper_target (MonoMethod *method);
 /// A site that names a dimension can still end up as a call: ArrayShapePass
 /// puts back the ones whose dimension it cannot read.
 bool answers_array_shape (MonoMethod *target, MonoMethodSignature *sig);
+
+/// Which element accessor on System.Array target is, or nothing when it is
+/// neither. sig is the signature the call site was written against.
+///
+/// The translator answers such a call out of the array instead of entering the
+/// method.
+std::optional<ArrayGenericAccess> array_generic_access_for (MonoMethod *target,
+                                                            MonoMethodSignature *sig);
 
 /// Whether the translator answers a call to target out of the MonoType the
 /// argument names instead of entering the icall. sig is the signature the call

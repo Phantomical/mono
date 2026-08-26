@@ -848,6 +848,78 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 	return llvm::Error::success ();
 }
 
+/// A call to Array.GetGenericValueImpl<T> or Array.SetGenericValueImpl<T>.
+///
+/// Each moves one element between the array and a location its caller names.
+/// The element type comes from the call site rather than from the array. That
+/// is the same width, because an array implements a generic collection
+/// interface at its own element type and at the reference types that element
+/// converts to.
+///
+/// Each caller in corlib tests the index first. This emits the test again, and
+/// an inliner that folds the caller in takes one of the two back out.
+llvm::Error
+MethodLLVMEmitter::emit_array_generic_access (MonoIrBuilder &builder,
+                                              MonoMethodSignature *sig,
+                                              ArrayGenericAccess what)
+{
+	constexpr size_t depth = 3;     // the array, the index, the caller's location
+
+	if (stack.size () < depth)
+		return unbalanced_stack (depth);
+
+	MonoType *element =
+		m_class_get_byval_arg (mono_class_from_mono_type_internal (sig->params[1]));
+	llvm::Expected<llvm::Value *> address =
+		element_address (builder, get_stack (2), get_stack (1), element);
+
+	if (!address)
+		return address.takeError ();
+
+	llvm::Expected<llvm::Value *> slot = indirect_address (builder, get_stack (0));
+
+	if (!slot)
+		return slot.takeError ();
+
+	pop_stack (depth);
+
+	bool is_set = what == ArrayGenericAccess::set;
+	ManagedAccess access = ManagedAccess::of_element (element, 1);
+	llvm::Value *source = is_set ? *slot : *address;
+	llvm::Value *value = source;
+
+	// emit_memory_store () copies a value class out of the address it gets, and
+	// takes anything else as the value itself.
+	if (!held_in_memory (element)) {
+		llvm::Expected<llvm::Type *> type = convert_type (element);
+
+		if (!type)
+			return type.takeError ();
+
+		value = emit_memory_load (builder, *type, source, element,
+		                          is_set ? ManagedAccess::untagged () : access);
+	}
+
+	if (is_set)
+		return emit_memory_store (builder, value, *address, element, access);
+
+	/*
+	 * A store into this frame needs no card, because the collector scans a
+	 * thread's stack conservatively. Each caller in corlib names a local, so
+	 * this is the path a foreach over an array takes, and the plain store is
+	 * what lets SROA promote that local away.
+	 */
+	if (llvm::isa<llvm::AllocaInst> ((*slot)->stripPointerCasts ())) {
+		if (held_in_memory (element))
+			copy_vtype (builder, *slot, value, element, /*native=*/false);
+		else
+			builder.CreateAlignedStore (value, *slot, access_alignment (element));
+		return llvm::Error::success ();
+	}
+
+	return emit_memory_store (builder, value, *slot, element);
+}
+
 /// Whether UnsafeMov can reinterpret from as to. Both must be reference
 /// types, blittable value types of equal size, or scalars in the same
 /// register class.

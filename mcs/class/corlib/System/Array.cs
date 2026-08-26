@@ -236,14 +236,17 @@ namespace System
 		[MethodImplAttribute (MethodImplOptions.InternalCall)]
 		extern static void SetGenericValue_icall<T> (ref Array self, int pos, ref T value);
 
-		// This is a special case in the runtime.
+		// The JIT answers a call to this out of the array itself, so the icall
+		// below is what the interpreter calls. See emit_array_generic_access ()
+		// in mono/llvm/method-to-llvm/arrays.cpp.
 		internal void GetGenericValueImpl<T> (int pos, out T value)
 		{
 			var self = this;
 			GetGenericValue_icall (ref self, pos, out value);
 		}
 
-		// This is a special case in the runtime.
+		// The JIT answers a call to this out of the array too, and marks the
+		// card a reference element needs.
 		internal void SetGenericValueImpl<T> (int pos, ref T value)
 		{
 			var self = this;

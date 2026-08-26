@@ -70,6 +70,23 @@ answers_array_shape (MonoMethod *target, MonoMethodSignature *sig)
 	       && (what == "GetLength" || what == "GetLowerBound");
 }
 
+std::optional<ArrayGenericAccess>
+array_generic_access_for (MonoMethod *target, MonoMethodSignature *sig)
+{
+	if (target->klass != mono_defaults.array_class || !sig->hasthis
+	    || sig->param_count != 2)
+		return std::nullopt;
+
+	std::string_view what = target->name;
+
+	if (what == "GetGenericValueImpl")
+		return ArrayGenericAccess::get;
+	if (what == "SetGenericValueImpl")
+		return ArrayGenericAccess::set;
+
+	return std::nullopt;
+}
+
 llvm::Expected<MonoMethod *>
 MethodLLVMEmitter::resolve_method (uint32_t token)
 {
@@ -1398,6 +1415,13 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (callee_method->klass == mono_defaults.array_class
 	    && std::string_view (callee_method->name) == "UnsafeMov")
 		return emit_unsafe_mov (builder, sig);
+
+	// The body corlib gives these two is a call to an icall that reads the
+	// element size off the array and moves that many bytes. The element type is
+	// known here, so the site becomes an address and one access.
+	if (std::optional<ArrayGenericAccess> access =
+		    array_generic_access_for (callee_method, sig))
+		return emit_array_generic_access (builder, sig, *access);
 
 	if (callee_method->klass == mono_defaults.string_class
 	    && std::string_view (callee_method->name) == "get_Length"
