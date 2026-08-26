@@ -165,6 +165,27 @@ private:
 	TransformData *td_;
 };
 
+/*
+ * Refuses an opcode this transform does not implement.
+ *
+ * tier0_entry () (`mono/llvm/runtime/backend.cpp`) reads a refusal as "the
+ * interpreter does not run this method" and compiles the method instead. So
+ * runs_at_tier0 () can admit a wrapper kind without proof that the interpreter
+ * runs every body of that kind. The backend compiles a method that stops here
+ * like any other.
+ */
+static gboolean
+refuse_opcode (MonoMethod *method, const char *opcode, int il_offset, MonoError *error)
+{
+	char *name = mono_method_full_name (method, TRUE);
+
+	mono_error_set_not_supported (
+		error, "The interpreter does not implement opcode %s, at IL offset 0x%x of %s",
+		opcode, il_offset, name);
+	g_free (name);
+	return FALSE;
+}
+
 gboolean
 TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
                               MonoGenericContext *generic_context, MonoError *error)
@@ -3578,9 +3599,12 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				interp_ins_set_dreg (last_ins, sp[-1].local);
 				++ip;
 				break;
-			default:
-				g_error ("transform.c: Unimplemented opcode: 0xF0 %02x at 0x%x\n", *ip,
-				         ip - header->code);
+			default: {
+				char opcode[32];
+
+				g_snprintf (opcode, sizeof (opcode), "0xF0 %02x", *ip);
+				return refuse_opcode (method, opcode, ip - header->code, error);
+			}
 			}
 			break;
 #if 0
@@ -4007,13 +4031,21 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 				interp_ins_set_dreg (last_ins, sp[-1].local);
 				++ip;
 				break;
-			default:
-				g_error ("transform.c: Unimplemented opcode: 0xFE %02x (%s) at 0x%x\n", *ip,
-				         mono_opcode_name (256 + *ip), ip - header->code);
+			default: {
+				char opcode[64];
+
+				g_snprintf (opcode, sizeof (opcode), "0xFE %02x (%s)", *ip,
+				            mono_opcode_name (256 + *ip));
+				return refuse_opcode (method, opcode, ip - header->code, error);
+			}
 			}
 			break;
-		default:
-			g_error ("transform.c: Unimplemented opcode: %02x at 0x%x\n", *ip, ip - header->code);
+		default: {
+			char opcode[32];
+
+			g_snprintf (opcode, sizeof (opcode), "%02x", *ip);
+			return refuse_opcode (method, opcode, ip - header->code, error);
+		}
 		}
 		// No IR instructions were added as part of a bb_start IL instruction. Add a MINT_NOP
 		// so we always have an instruction associated with a bb_start. This is simple and avoids
