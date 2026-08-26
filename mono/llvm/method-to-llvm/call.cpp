@@ -1206,11 +1206,8 @@ MethodLLVMEmitter::emit_get_type (MonoIrBuilder &builder, bool receiver_by_refer
 	 * vtable is a copy of the real class's, and mono_class_proxy_vtable ()
 	 * overwrites `type` with the interface for an interface proxy.
 	 */
-	llvm::Value *type = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), vtable,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, type))),
-		align, "obj_type");
+	llvm::Value *type =
+		builder.CreateCall (vtable_type_decl (*module), { vtable }, "obj_type");
 
 	pop_stack (1);
 	push_stack (type, m_class_get_byval_arg (mono_defaults.systemtype_class));

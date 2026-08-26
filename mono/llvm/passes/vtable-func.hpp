@@ -36,12 +36,21 @@ constexpr llvm::StringRef vtable_func_name = "mono.vtable.func";
 /// asked for. The lowering drops it. Only the translator writes a call to this.
 constexpr llvm::StringRef imt_func_name = "mono.imt.func";
 
+/// `ptr @mono.vtable.type (ptr vtable)` answers the `System.Type` object that
+/// stands for vtable's class.
+///
+/// Written as a call rather than as the load, so the object survives constant
+/// propagation as one value. Two sites reading one vtable then answer the same
+/// object. The load the runtime needs comes back at the lowering.
+constexpr llvm::StringRef vtable_type_name = "mono.vtable.type";
+
 /// The declarations in m, created on first use and carrying their attributes.
 llvm::Function *vtable_func_decl (llvm::Module &m);
 llvm::Function *imt_func_decl (llvm::Module &m);
+llvm::Function *vtable_type_decl (llvm::Module &m);
 
-/// Rewrites every `mono.vtable.func` and `mono.imt.func` call into the load it
-/// stands for, and erases the declarations.
+/// Rewrites every call to one of the declarations above into the load it stands
+/// for, and erases the declarations.
 ///
 /// Codegen has no lowering for either, so both tiers run this behind everything
 /// that reads the calls.
