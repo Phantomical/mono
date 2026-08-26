@@ -232,8 +232,8 @@ failure. The fix is "Records that…", **not** deletion.
 **3. A good comment is allowed to break register rules.**
 
 `compile-queue.hpp` states its rule before the reasoning and names the tempting change that
-breaks it — the most useful sentence a design comment can carry, because it is aimed at the
-person about to make that change. It also uses `would` twice and one "nothing here". That
+breaks it — which is what makes the block necessary rather than merely informative, because
+it is aimed at the person about to make that change. It also uses `would` twice and one "nothing here". That
 is the right severity ranking: flag those as register nits and do not suggest touching the
 substance.
 

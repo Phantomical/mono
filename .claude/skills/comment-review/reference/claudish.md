@@ -65,7 +65,8 @@ approval-gated release path".
 ## The dictionary is the trap
 
 The word lists above are diagnoses, not substitutions. Half the vocabulary that marks
-Claudish elsewhere is this tree's own: a fast **path**, a **cold** block, the **surface**
+Claudish elsewhere is this domain's own name for the thing: a fast **path**, a **cold**
+block, the **surface**
 `runtime.h` publishes, a ctest **gate**, a commit that **landed**, profile **drift**
 across a rebuild. Each of those is the clearest name for the thing, and rewriting one
 costs a reader the term the code uses (G12).

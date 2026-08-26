@@ -341,8 +341,9 @@ and promote its owner.
 **G20. A synonym for `return`.** "Answers the record …" → "Returns the record …". A
 function does not answer, and a reader deciding whether *answers* means something
 different from *returns* has been given work for nothing. **Grep a suspected tic before
-filing it as a one-line fix**: this one ran 63 times against 157 uses of `returns`, which
-made it a sweep and a style-guide entry rather than a review comment.
+filing it as a one-line fix**: this one ran 63 times, which made it a sweep and a
+style-guide entry rather than a review comment. The count sized the fix. It did not make
+the tic defensible.
 
 **The sweep has been done.** What is left is not the tic, and re-flagging it is the
 mistake to avoid now. `answer` carries four other senses here, all of them correct:

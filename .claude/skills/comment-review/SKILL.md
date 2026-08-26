@@ -1,6 +1,6 @@
 ---
 name: comment-review
-description: Review the comments and doc comments in this tree's C/C++ sources against the house rules — cut what a caller cannot act on, catch false claims, move rationale to the line it justifies, translate assistant-written prose back into plain English, and fix register. Use when asked to review, sweep, tighten, de-slop or write comments in mono/llvm, mono/mini, mono/interp or the CMake files, or before committing a change that adds doc comments. Not a code review: it reads the comments, and the code only to check them.
+description: Review the comments and doc comments in this tree's C/C++ sources against the house rules — cut every block that cannot be proven necessary, catch false claims, move rationale to the line it justifies, translate assistant-written prose back into plain English, and fix register. Use when asked to review, sweep, tighten, de-slop or write comments in mono/llvm, mono/mini, mono/interp or the CMake files, or before committing a change that adds doc comments. Not a code review: it reads the comments, and the code only to check them.
 ---
 
 # Comment review
@@ -18,7 +18,13 @@ pairs and the two fixtures that look like false positives and are not. Read
 ## The governing test
 
 **Can the caller do something differently because of this sentence?** If not, cut it.
-True, interesting, and relevant to the implementation are all failing grades.
+True, interesting, and relevant to the implementation are all failing grades. So is
+useful. The test is necessity: the comment stays only where the code cannot carry the
+fact and a reader without it gets something wrong.
+
+**The burden of proof is on the comment.** Do not ask what a block gives a reader. Ask
+which reader goes wrong without it and what they do, and answer with both. A block you
+cannot make that case for goes, however well it reads and however much it taught you.
 
 Length is evidence against a comment, not for it. Every correction in the record made
 the text shorter. A comment that teaches you a lot about the implementation is the
@@ -31,8 +37,8 @@ degenerate case.
 as if they were. A comment cut wrongly costs one reader one trip to the code, which is
 what they came to read anyway. A comment kept wrongly costs every reader after it, and it
 is the kept ones that go stale, get restated in the next file, and have to be re-checked
-by every sweep that follows. So a block you cannot argue for goes, and "I could not decide"
-resolves to a cut.
+by every sweep that follows. So "I could not decide" resolves to a cut, and so does "it
+seems helpful".
 
 **The default answer to "should this say more?" is no.** Before adding a sentence, ask
 whether the code can carry the fact instead — a name, a type, an assert, a static
@@ -43,6 +49,22 @@ keeping and cutting.
 This bias does **not** reach the four keeps: a quotation, a live hazard, a specification,
 and rationale that still has code to justify. Those are decided by their own rules below,
 and F1 and F2 are what happens when a bias runs over them.
+
+## The tree is not the standard
+
+**The style guide outranks the comments in the tree, always.** A block is measured against
+`CLAUDE.md` and the references beside this file, and against nothing else. Most of the
+comments here were written by an assistant and most of them fail those rules, so the tree
+is a body of defects rather than a body of examples.
+
+**Never keep a block, a phrasing or a convention because the code around it does the same
+thing.** Sixty instances of a defect are sixty findings, not a house style. A file that
+breaks a rule from top to bottom is wrong from top to bottom. A block an earlier sweep
+left standing is not evidence either — it was reviewed under whatever these rules said
+then, or not reviewed at all.
+
+A grep over the tree says how wide a defect is, which decides whether the fix is one edit
+or a sweep. It never decides whether the thing is a defect.
 
 ## Procedure
 
@@ -225,7 +247,7 @@ The four moves, and the carve-outs that stop each of them over-firing, are in
   for, where the sentence never states that relationship
 
 The word lists are diagnoses and not substitutions. A **path**, a **cold** block, a
-**gate** and the **surface** a header publishes are this tree's own terms, and *rather
+**gate** and the **surface** a header publishes are the domain's own terms, and *rather
 than* here is nearly always factual contrast against the alternative a reader would
 otherwise assume. Rewrite one only where it stands in for a relationship the sentence
 never makes.
@@ -300,10 +322,10 @@ register.
 - Ask **doc or remark** before you ask anything about length. A doc comment sits above a
   declaration and is `///`, or `/** */` when it runs to paragraphs — never `/* */`,
   however long it is; that one is unambiguous and always worth fixing. A remark inside a
-  body is `//` for a line or two and `/* */` once it runs to paragraphs, and **the middle
-  is decided by the file**: `mono/llvm/` holds 90 multi-line `//` runs against 32
-  single-paragraph `/* */` blocks, so there is no tree-wide answer to apply. Match what
-  the file around you already does, and leave a uniform file alone
+  body is `//`, and `/* */` only once it runs to several paragraphs, which is what
+  `CLAUDE.md` states. What the file around you already does decides nothing: fix the
+  marker in the blocks you are rewriting anyway, and report the rest as a sweep with the
+  count
 - Filler out: simply, just, note that, essentially, basically, obviously
 - **Do not flag plain passives.** The diagnosis is almost always circumlocution instead,
   and the preferred rewrites in the record use passives freely
@@ -438,11 +460,12 @@ success.
 
 ## A tic is a sweep, not a review comment
 
-Grep a suspected house tic before filing it. `answers` for `returns` ran 63 times
-against 157 uses of `returns` in `mono/llvm/`, which read as deliberate. Sixty instances
-is a sweep and a style-guide entry; one review comment on one site is noise. That one has
-since been swept — `reference/catalogue.md` G20 has the four senses of *answer* that are
-not the tic and must not be re-flagged.
+Grep a suspected house tic before filing it. `answers` for `returns` ran 63 times in
+`mono/llvm/`. Sixty instances is a sweep and a style-guide entry; one review comment on
+one site is noise. The count decides the shape of the fix. It never decides whether the
+thing is a defect: that one was, and it has since been swept.
+`reference/catalogue.md` G20 has the four senses of *answer* that are not the tic and
+must not be re-flagged.
 
 **Counting the word is not counting the tic.** The grep found 309 uses and 30 of them
 were the defect. *Answers to*, *answers for*, *answers X with Y* and the plain noun are
@@ -450,9 +473,10 @@ all correct, and a sweep run off the raw count would have rewritten ten right se
 for every wrong one. Narrow the pattern until it selects the defect, then count that.
 
 This holds for a **convention** as much as for a word — comment markers, summary mood,
-`\brief` against a bare first line. Where a file is uniformly on the older side of a
-convention, converting all of it buries the substance findings in churn, and the diff
-stops being reviewable.
+`\brief` against a bare first line. A file can break one of these from top to bottom, and
+that makes it a wide defect rather than a local style. What bounds the fix is churn:
+converting every block in a file you opened for one false claim buries the substance
+findings, and the diff stops being reviewable.
 
 The rule: **fix the convention in blocks you are already rewriting, and report the rest
 as a sweep** with the count. A block you touched for a false claim gets its marker and
@@ -461,6 +485,5 @@ not.
 
 **The boundary is between files, not inside one.** If finishing the convention across the
 file you are reviewing costs a handful of lines, finish it. Leaving five summaries
-indicative and two imperative reads as carelessness, and the next reader cannot tell
-which mood the file wants. Report a sweep when the rest of it lives in files you were not
-asked about.
+indicative and two imperative reads as carelessness. Report a sweep when the rest of it
+lives in files you were not asked about.
