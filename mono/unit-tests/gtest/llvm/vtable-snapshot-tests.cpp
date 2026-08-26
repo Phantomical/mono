@@ -90,31 +90,56 @@ TEST (VTableSnapshot, TheLayoutIsMonoVTablesOwn)
 	           MONO_SIZEOF_VTABLE + test_slots * sizeof (gpointer));
 }
 
-TEST (VTableSnapshot, TheInventoryCoversTheFieldsACastAndAnUnboxRead)
+TEST (VTableSnapshot, TheInventoryIsTheFieldsWrittenFromTheClassAlone)
 {
-	// Each of these is read by IR the translator or a lowering writes.
+	// mono_class_create_runtime_vtable () takes both of these off the class, so
+	// a compile states them without a vtable to read.
 	EXPECT_TRUE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, klass),
 	                                     test_slots));
 	EXPECT_TRUE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, rank),
 	                                     test_slots));
-	EXPECT_TRUE (vtable_snapshot_states (
-		MONO_STRUCT_OFFSET (MonoVTable, max_interface_id), test_slots));
-	EXPECT_TRUE (vtable_snapshot_states (
-		MONO_STRUCT_OFFSET (MonoVTable, interface_bitmap), test_slots));
 
-	// The collector writes gc_bits, which shares its storage unit with three
-	// more fields, so the whole word is withheld.
+	// The collector writes gc_bits, and the three fields beside it share its
+	// storage unit. The rest here is written after the vtable exists.
 	EXPECT_FALSE (vtable_snapshot_states (
 		MONO_STRUCT_OFFSET (MonoVTable, imt_collisions_bitmap), test_slots));
 	EXPECT_FALSE (vtable_snapshot_states (
 		MONO_STRUCT_OFFSET (MonoVTable, runtime_generic_context), test_slots));
 
 	// The System.Type object moves, and a slot holds an address the runtime
-	// chooses. Each takes a form of its own rather than a stated value.
+	// chooses. Each is read through a declaration rather than stated.
 	EXPECT_FALSE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, type),
 	                                      test_slots));
 	EXPECT_FALSE (vtable_snapshot_states (MONO_STRUCT_OFFSET (MonoVTable, vtable),
 	                                      test_slots));
+}
+
+TEST (VTableSnapshot, TheInitializerStatesTheClassAsASymbol)
+{
+	SnapshotModule m;
+	LLVMContext &c = *m.context;
+	auto *klass = new GlobalVariable (*m.module, Type::getInt8Ty (c), false,
+	                                  GlobalValue::ExternalLinkage, nullptr,
+	                                  "mono_class_Some.Class@0x1234");
+	VTableFacts facts;
+
+	facts.klass = klass;
+	facts.rank = 3;
+
+	Constant *held = vtable_snapshot_init (*m.module, facts);
+	const DataLayout &dl = m.module->getDataLayout ();
+	auto *laid_out = cast<StructType> (held->getType ());
+	const StructLayout *where = dl.getStructLayout (laid_out);
+
+	// A type test compares the class word against the same symbol, so the two
+	// have to be one value for the comparison to fold.
+	unsigned at = where->getElementContainingOffset (
+		MONO_STRUCT_OFFSET (MonoVTable, klass));
+
+	EXPECT_EQ (held->getAggregateElement (at), klass);
+
+	at = where->getElementContainingOffset (MONO_STRUCT_OFFSET (MonoVTable, rank));
+	EXPECT_EQ (held->getAggregateElement (at), ConstantInt::get (Type::getInt8Ty (c), 3));
 }
 
 TEST (VTableSnapshot, ASnapshotGoesBackToTheSymbolUnderItsOwnName)

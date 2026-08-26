@@ -14,6 +14,7 @@
 #include <cstdint>
 
 namespace llvm {
+class Constant;
 class GlobalVariable;
 class Module;
 class Type;
@@ -49,6 +50,18 @@ constexpr llvm::StringRef vtable_snapshot_metadata = "mono.vtable.snapshot";
 /// Marks \p snapshot as a vtable a compile can read, and gives it the linkage
 /// and alignment one carries.
 void mark_vtable_snapshot (llvm::GlobalVariable &snapshot);
+
+/// What a snapshot states about a class's vtable.
+///
+/// \p klass is a symbol rather than an address, so a type test comparing the
+/// class word against the same symbol folds.
+struct VTableFacts {
+	llvm::Constant *klass = nullptr;
+	uint8_t rank = 0;
+};
+
+/// The initializer a snapshot of a vtable with no slots carries.
+llvm::Constant *vtable_snapshot_init (llvm::Module &m, const VTableFacts &facts);
 
 /// The type a snapshot of a vtable with \p slots dispatch slots is laid out as.
 ///

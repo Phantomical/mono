@@ -23,30 +23,33 @@ namespace mono {
 namespace {
 
 /// One field a snapshot states, at the offset `MonoVTable` puts it.
+///
+/// A pointer field keeps a pointer type, because the value it states is a symbol
+/// and a reader loads it as a pointer. Folding one through an integer of the
+/// same width goes through a reinterpretation that answers nothing useful.
 struct StatedField {
 	uint64_t at;
 	uint64_t width;
+	bool pointer;
 };
 
+/// Which field each entry of the inventory below is, for the value builder to
+/// name rather than count to.
+enum StatedIndex { stated_klass, stated_rank, stated_count };
+
 /*
- * The inventory. mono_class_create_runtime_vtable () writes each of these
- * between object.c:2183 and :2314 and nothing writes them again. initialized is
- * the one that moves after that, and it moves once: it rises when the type
- * initializer returns and never falls.
+ * The inventory. mono_class_create_runtime_vtable () writes both of these at
+ * object.c:2183-2184, from the class and from nothing else, and nothing writes
+ * them again. That is what lets a compile state them without a vtable to read.
  *
- * type and the dispatch slots are left out, and both are fixed for the vtable's
- * life too. Neither is a value a compile can write down. The System.Type object
- * moves, and a slot holds an address the runtime chooses, so each takes a form
- * of its own.
+ * The fields between them are withheld, so what an initializer holds there has
+ * to stay unobservable. An emitter reads such a field through a mono.vtable.*
+ * declaration, which is lowered past the strip. type is the one with a reader,
+ * and mono.vtable.type is it.
  */
-const StatedField stated[] = {
-	{ MONO_STRUCT_OFFSET (MonoVTable, klass), sizeof (MonoClass *) },
-	{ MONO_STRUCT_OFFSET (MonoVTable, gc_descr), sizeof (MonoGCDescriptor) },
-	{ MONO_STRUCT_OFFSET (MonoVTable, domain), sizeof (MonoDomain *) },
-	{ MONO_STRUCT_OFFSET (MonoVTable, interface_bitmap), sizeof (guint8 *) },
-	{ MONO_STRUCT_OFFSET (MonoVTable, max_interface_id), sizeof (guint32) },
-	{ MONO_STRUCT_OFFSET (MonoVTable, rank), sizeof (guint8) },
-	{ MONO_STRUCT_OFFSET (MonoVTable, initialized), sizeof (guint8) },
+const StatedField stated[stated_count] = {
+	{ MONO_STRUCT_OFFSET (MonoVTable, klass), sizeof (MonoClass *), true },
+	{ MONO_STRUCT_OFFSET (MonoVTable, rank), sizeof (guint8), false },
 };
 
 /// The bytes a vtable with \p slots dispatch slots occupies.
@@ -58,6 +61,31 @@ uint64_t
 vtable_bytes (uint32_t slots)
 {
 	return MONO_SIZEOF_VTABLE + uint64_t (slots) * sizeof (gpointer);
+}
+
+/// Walks a snapshot's members in layout order. \p field takes each stated
+/// field's index and \p gap the width of each run between them.
+///
+/// The type and the initializer are both built from this walk, which is what
+/// keeps a field and its value in step.
+template <typename Field, typename Gap>
+void
+walk_members (uint32_t slots, Field field, Gap gap)
+{
+	uint64_t at = 0;
+	auto pad_to = [&] (uint64_t offset) {
+		if (offset > at)
+			gap (offset - at);
+		at = offset;
+	};
+
+	for (unsigned i = 0; i < stated_count; ++i) {
+		pad_to (stated[i].at);
+		field (StatedIndex (i));
+		at += stated[i].width;
+	}
+
+	pad_to (vtable_bytes (slots));
 }
 
 /// The snapshots \p m defines.
@@ -140,12 +168,22 @@ mark_vtable_snapshot (GlobalVariable &snapshot)
 	snapshot.setMetadata (vtable_snapshot_metadata, MDNode::get (c, {}));
 	snapshot.setAlignment (Align (alignof (MonoVTable)));
 
-	// The link resolves the name to the real vtable once the strip has run, so
-	// the linkage stays what the translator gave it. `constant` is what makes a
-	// load fold. hasDefinitiveInitializer () wants an initializer the module
-	// owns and a linkage no other module can interpose, and external is one.
+	/*
+	 * `available_externally` says the body is here to be read and belongs to
+	 * somebody else, which is what a snapshot is. Three things follow, and each
+	 * is one the plainer linkages get wrong. hasDefinitiveInitializer () holds,
+	 * so a load folds. Two modules can each carry the constant, which the
+	 * inliner's link needs - two definitions of one name do not merge. And a
+	 * definition left standing is dropped rather than emitted. A strip that
+	 * missed one then costs the fold, instead of publishing bytes the runtime
+	 * never wrote.
+	 *
+	 * Not dso_local. That says the symbol lands in this object, so codegen
+	 * reaches it with a PC-relative fixup rather than asking the linker. JITLink
+	 * then resolves the real vtable's name against the object itself.
+	 */
 	snapshot.setConstant (true);
-	snapshot.setDSOLocal (true);
+	snapshot.setLinkage (GlobalValue::AvailableExternallyLinkage);
 }
 
 Type *
@@ -154,21 +192,17 @@ vtable_snapshot_type (Module &m, uint32_t slots)
 	LLVMContext &c = m.getContext ();
 	Type *byte = Type::getInt8Ty (c);
 	SmallVector<Type *, 16> members;
-	uint64_t at = 0;
 
-	auto pad_to = [&] (uint64_t offset) {
-		if (offset > at)
-			members.push_back (ArrayType::get (byte, offset - at));
-		at = offset;
-	};
-
-	for (const StatedField &field : stated) {
-		pad_to (field.at);
-		members.push_back (IntegerType::get (c, field.width * 8));
-		at += field.width;
-	}
-
-	pad_to (vtable_bytes (slots));
+	walk_members (
+		slots,
+		[&] (StatedIndex i) {
+			members.push_back (stated[i].pointer
+			                           ? static_cast<Type *> (PointerType::get (c, 0))
+			                           : IntegerType::get (c, stated[i].width * 8));
+		},
+		[&] (uint64_t width) {
+			members.push_back (ArrayType::get (byte, width));
+		});
 
 	// Packed, so each field sits where the offset above put it rather than
 	// where LLVM's own alignment rules would.
@@ -178,6 +212,40 @@ vtable_snapshot_type (Module &m, uint32_t slots)
 		report_fatal_error ("the vtable snapshot layout is not MonoVTable's");
 
 	return built;
+}
+
+Constant *
+vtable_snapshot_init (Module &m, const VTableFacts &facts)
+{
+	auto *laid_out = cast<StructType> (vtable_snapshot_type (m, 0));
+	LLVMContext &c = m.getContext ();
+	SmallVector<Constant *, 8> members;
+
+	walk_members (
+		0,
+		[&] (StatedIndex i) {
+			switch (i) {
+			case stated_klass:
+				members.push_back (facts.klass);
+				return;
+			case stated_rank:
+				members.push_back (ConstantInt::get (
+					IntegerType::get (c, stated[i].width * 8), facts.rank));
+				return;
+			case stated_count:
+				break;
+			}
+
+			llvm_unreachable ("a stated field with no value");
+		},
+		// A withheld offset holds no fact, and zero is what reads most
+		// clearly in a dump.
+		[&] (uint64_t width) {
+			members.push_back (Constant::getNullValue (
+				ArrayType::get (Type::getInt8Ty (c), width)));
+		});
+
+	return ConstantStruct::get (laid_out, members);
 }
 
 bool
@@ -210,6 +278,7 @@ StripVTableSnapshotPass::run (Module &m, ModuleAnalysisManager &)
 		snapshot->setInitializer (nullptr);
 		snapshot->setConstant (false);
 		snapshot->setLinkage (GlobalValue::ExternalLinkage);
+		snapshot->setDSOLocal (false);
 		snapshot->eraseMetadata (
 			m.getContext ().getMDKindID (vtable_snapshot_metadata));
 	}

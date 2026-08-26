@@ -2,6 +2,8 @@
 #include "method-symbols.hpp"
 #include "runtime-error.hpp"
 #include "../passes/class-init.hpp"
+#include "../passes/vtable-snapshot.hpp"
+#include "../runtime/options.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
@@ -270,6 +272,40 @@ MethodLLVMEmitter::extern_symbol (const std::string &name)
 	                                 llvm::GlobalValue::ExternalLinkage, nullptr, name);
 }
 
+/// The global a class's vtable is named by, standing as a constant a compile can
+/// read where the snapshot is on.
+///
+/// The symbol is the same either way and the link resolves it to the real
+/// MonoVTable, because StripVTableSnapshotPass drops the initializer before
+/// codegen. So a use that escapes - the allocator's argument, an object header
+/// store - is what it was before the snapshot.
+llvm::Constant *
+MethodLLVMEmitter::vtable_symbol (MonoClass *klass, const std::string &symbol)
+{
+	if (llvm::GlobalValue *existing = module->getNamedValue (symbol))
+		return existing;
+
+	llvm::Type *laid_out = vtable_snapshot_type (*module, 0);
+	auto *global = new llvm::GlobalVariable (*module, laid_out, false,
+	                                         llvm::GlobalValue::ExternalLinkage,
+	                                         nullptr, symbol);
+
+	if (!vtable_snapshots ())
+		return global;
+
+	// The class word is the symbol a type test compares against, so the two
+	// have to be one value for the comparison to fold.
+	VTableFacts facts;
+
+	facts.klass = class_symbol (klass, "mono_class_");
+	facts.rank = uint8_t (m_class_get_rank (klass));
+
+	global->setInitializer (vtable_snapshot_init (*module, facts));
+	mark_vtable_snapshot (*global);
+
+	return global;
+}
+
 void
 MethodLLVMEmitter::record_external (const std::string &name, ExternalSymbol::Kind kind,
                                     void *object)
@@ -324,7 +360,9 @@ MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 	g_free (name);
 	record_external (symbol, kind, klass);
 
-	llvm::Constant *symbolic = extern_symbol (symbol);
+	llvm::Constant *symbolic = kind == ExternalSymbol::Kind::VTable
+	                                   ? vtable_symbol (klass, symbol)
+	                                   : extern_symbol (symbol);
 
 	// A pass that answers a dispatch site has the vtable and needs the class. A
 	// pass that answers a type test has the class the test names.
