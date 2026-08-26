@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
 #include "mini-runtime.h"
+#include "passes/vtable-func.hpp"
 #include "runtime-error.hpp"
 #include "runtime/naming.hpp"
 #include "mono/metadata/abi-details.h"
@@ -315,14 +316,21 @@ MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver, 
 		llvm::Align (TARGET_SIZEOF_VOID_P));
 }
 
+/// Loads the callee out of target's vtable slot in the object receiver points
+/// at.
+///
+/// The site is a `mono.vtable.func` call rather than the load it stands for, so
+/// the vtable and the slot stay operands. A receiver whose class the optimizer
+/// settles then leaves both constant, which is what a later pass answers from.
+/// LowerVTableFuncPass writes the load back for every site nothing answered.
 llvm::Value *
 MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
                                    MonoMethod *target)
 {
-	return vtable_entry (builder, receiver,
-	                     MONO_STRUCT_OFFSET (MonoVTable, vtable)
-	                             + mono_method_get_vtable_index (target)
-	                                       * TARGET_SIZEOF_VOID_P);
+	return builder.CreateCall (
+		vtable_func_decl (*module),
+		{ load_vtable (builder, receiver),
+	          builder.getInt32 (mono_method_get_vtable_index (target)) });
 }
 
 /// Loads the callee out of target's IMT slot in the object receiver points at.

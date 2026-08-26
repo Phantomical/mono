@@ -13,6 +13,7 @@
 #include "passes/rgctx-fetch.hpp"
 #include "passes/tier-counter.hpp"
 #include "passes/top-down-inline.hpp"
+#include "passes/vtable-func.hpp"
 #include <llvm/IR/PassManager.h>
 #include <llvm/ADT/Statistic.h>
 #include <llvm/Pass.h>
@@ -368,6 +369,10 @@ MonoPassBuilder::buildTier1Pipeline ()
 		MPM.addPass (mono::TierCounterPass ());
 
 	MPM.addPass (mono::RgctxFetchPass ());
+
+	// In front of the ABI lowering, which rewrites the calls this leaves, and of
+	// codegen, which has no lowering for the declaration at all.
+	MPM.addPass (mono::LowerVTableFuncPass ());
 	MPM.addPass (arch::MonoAbiPass ());
 
 	// Behind the ABI lowering, which makes an alloca of its own for a value the
@@ -453,6 +458,9 @@ MonoPassBuilder::buildTier2Pipeline ()
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (std::move (FPM)));
 
 	MPM.addPass (mono::RgctxFetchPass ());
+
+	// In front of the ABI lowering, for the reason tier 1 gives.
+	MPM.addPass (mono::LowerVTableFuncPass ());
 	MPM.addPass (arch::MonoAbiPass ());
 
 	// Behind the ABI lowering, for the reason tier 1 gives.
