@@ -188,7 +188,17 @@ account (Phase phase, uint64_t elapsed, uint64_t children)
 	Bucket &b = g_buckets[(size_t) phase];
 
 	b.total.fetch_add (elapsed, std::memory_order_relaxed);
-	b.self.fetch_add (elapsed - children, std::memory_order_relaxed);
+	/*
+	 * A span that begins on one thread and ends on another is charged to
+	 * whichever scope is open where it ends, and under the thread CPU clock its
+	 * two readings come from different clocks. Such a span can therefore be
+	 * longer than the scope holding it, and an unsigned subtraction turns that
+	 * into a self time of several thousand years. Charge no self time instead:
+	 * the phase's total is still right, and a row short of a few readings beats
+	 * a row that is a wrap.
+	 */
+	b.self.fetch_add (children > elapsed ? 0 : elapsed - children,
+	                  std::memory_order_relaxed);
 	b.count.fetch_add (1, std::memory_order_relaxed);
 }
 
