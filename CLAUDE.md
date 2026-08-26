@@ -556,8 +556,11 @@ frames through the pads.
 `mini_init ()`, and every method it accepts is entered by interpreting its bytecode.
 `runs_at_tier0 ()` refuses the methods that would be wrong there rather than merely
 slow: no IL of its own, a wrapper, or a body this backend writes itself (`is_intrinsic
-()`, which is `ByReference<T>`, whose IL only throws). `--interpreter` is a different
-thing and still means the interpreter as the whole engine, with no tier to leave for.
+()`, which is `ByReference<T>`, whose IL only throws). A `MONO_WRAPPER_DYNAMIC_METHOD`
+is the one wrapper it accepts, because it carries IL of its own from Reflection.Emit
+and `create_delegate_method_ptr ()` otherwise compiles it on the thread that makes the
+delegate over it. `--interpreter` is a different thing and still means the interpreter
+as the whole engine, with no tier to leave for.
 
 A tier-0 method leaves for tier 1 by being called. The counter is a word on
 `InterpMethod`, set from the method's record when the `InterpMethod` is built, then

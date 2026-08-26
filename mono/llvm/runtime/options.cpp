@@ -536,7 +536,8 @@ tier0_enabled ()
  *    them;
  *  - a wrapper is generated for the runtime to enter natively. The
  *    interpreter answers for several kinds of them with something that is
- *    not a callable address at all;
+ *    not a callable address at all. A dynamic method is the exception, and
+ *    the test below says why;
  *  - a method this backend writes the body of has IL that only throws, so
  *    any tier that runs the IL runs the throw.
  *
@@ -552,8 +553,21 @@ runs_at_tier0 (MonoMethod *method)
 	    || mono_ee_features.force_use_interpreter)
 		return false;
 
-	if (implemented_outside_il (method) || is_intrinsic (method)
-	    || method->wrapper_type != MONO_WRAPPER_NONE)
+	if (implemented_outside_il (method) || is_intrinsic (method))
+		return false;
+
+	/*
+	 * A dynamic method carries IL of its own, and the interpreter's transform
+	 * reads the wrapper data its tokens name. What makes the exception worth
+	 * having is what writes one. Reflection.Emit does, and a program that
+	 * generates code generates many: IronJS writes a dynamic method for each
+	 * JavaScript function. create_delegate_method_ptr () then compiles each of
+	 * them where the delegate over it is made, on that thread, before the first
+	 * call. Tier 0 is what keeps the ones that never get hot out of the
+	 * compiler.
+	 */
+	if (method->wrapper_type != MONO_WRAPPER_NONE
+	    && method->wrapper_type != MONO_WRAPPER_DYNAMIC_METHOD)
 		return false;
 
 	if (setting.substring == nullptr)
