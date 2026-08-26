@@ -19,17 +19,20 @@
 
 #include "mini.h"
 
+#include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-init.h"
 #include "mono/metadata/class-inlines.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/marshal.h"
 #include "mono/metadata/metadata.h"
+#include "mono/metadata/object-internals.h"
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalValue.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
@@ -87,13 +90,6 @@ slot_target (MonoClass *klass, int32_t index)
 		return nullptr;
 
 	/*
-	 * A boxed receiver arrives at the unbox entry, which steps it past the
-	 * object header. Naming the body here hands it the box instead.
-	 */
-	if (publishes_unbox_entry (target))
-		return nullptr;
-
-	/*
 	 * A method whose entry needs a context is one no caller enters directly: it
 	 * would arrive with the receiver of some other instantiation, or none.
 	 */
@@ -122,6 +118,9 @@ slot_target (MonoClass *klass, int32_t index)
 /// case. A use of another kind - the select a delegate's Invoke reads its entry
 /// through is one - leaves the site alone, because what the entry is for there
 /// is not this pass's to say.
+///
+/// A call with no arguments is refused as well. Only a method with a receiver
+/// reaches a vtable slot, so one is a shape this pass does not understand.
 FunctionType *
 called_shape (CallBase *site)
 {
@@ -130,7 +129,8 @@ called_shape (CallBase *site)
 	for (User *user : site->users ()) {
 		auto *call = dyn_cast<CallBase> (user);
 
-		if (call == nullptr || call->getCalledOperand () != site)
+		if (call == nullptr || call->getCalledOperand () != site
+		    || call->arg_size () < 1)
 			return nullptr;
 		if (shape != nullptr && shape != call->getFunctionType ())
 			return nullptr;
@@ -138,6 +138,37 @@ called_shape (CallBase *site)
 	}
 
 	return shape;
+}
+
+/// Points every call that reads \p site at \p entry instead.
+///
+/// A value type's slot holds the unbox entry, which steps the receiver past the
+/// object header before it runs into the body. \p steps_receiver names an entry
+/// that expects the step to have happened, so the call has to do here what that
+/// prologue did - mono/mini/thunk.cpp asserts the same size the arch stub is
+/// baked with.
+void
+enter_directly (CallBase *site, Function *entry, bool steps_receiver)
+{
+	if (!steps_receiver) {
+		site->replaceAllUsesWith (entry);
+		return;
+	}
+
+	SmallVector<CallBase *, 2> calls;
+
+	for (User *user : site->users ())
+		calls.push_back (cast<CallBase> (user));
+
+	for (CallBase *call : calls) {
+		IRBuilder<> builder (call);
+		Value *unboxed =
+			builder.CreateGEP (builder.getInt8Ty (), call->getArgOperand (0),
+		                           builder.getInt64 (MONO_ABI_SIZEOF (MonoObject)));
+
+		call->setArgOperand (0, unboxed);
+		call->setCalledFunction (entry);
+	}
 }
 
 /// The entry a call of \p shape enters \p target through, declared in \p m.
@@ -154,14 +185,24 @@ entry_for (Module &m, MonoMethod *target, FunctionType *shape, const CompileStat
 
 	mark_method_reference (*decl, target);
 
+	/*
+	 * decl is not this function's any more. Naming folds it into a declaration
+	 * the module already held for the method and erases the loser, so reading
+	 * it back - even to see whether it is worth erasing - is a read of freed
+	 * memory. What is left standing when the publish fails is a declaration
+	 * nothing calls, which no relocation and no code comes of.
+	 */
 	Function *entry = compile.publish (*decl, target);
 
 	/*
-	 * The method's own metadata will not load. The site keeps its lookup, and
-	 * the runtime raises where it always did.
+	 * A declaration the module already held carries the shape its own site
+	 * calls it with, and this site's shape is what the IL settled here. The two
+	 * agree for an override, which has the signature it overrides. Where they
+	 * do not, the site keeps its lookup rather than calling one prototype
+	 * through the other.
 	 */
-	if (entry == nullptr && decl->use_empty ())
-		decl->eraseFromParent ();
+	if (entry != nullptr && entry->getFunctionType () != shape)
+		return nullptr;
 
 	return entry;
 }
@@ -214,9 +255,10 @@ DevirtualizePass::run (Function &f, FunctionAnalysisManager &)
 		/*
 		 * The entry replaces the value the site answered rather than the calls
 		 * that read it. Each of those is then a call of a constant, which the
-		 * simplification behind this pass turns into a direct one.
+		 * simplification behind this pass turns into a direct one. A receiver
+		 * the entry wants stepped is the one case that has to reach the calls.
 		 */
-		site->replaceAllUsesWith (entry);
+		enter_directly (site, entry, publishes_unbox_entry (target));
 		site->eraseFromParent ();
 		changed = true;
 	}
