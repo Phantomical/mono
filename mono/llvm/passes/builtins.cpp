@@ -5,6 +5,7 @@
 #include "array-shape.hpp"
 #include "cast-func.hpp"
 #include "devirtualize.hpp"
+#include "fold-barrier.hpp"
 #include "fold-cast.hpp"
 #include "fold-vtable.hpp"
 #include "gc-barrier.hpp"
@@ -101,6 +102,11 @@ MonoBuiltinConstProp::run (Function &f, FunctionAnalysisManager &)
 		again |= fold_vtable_fields (f);
 		again |= fold_dispatch_sites (f);
 		again |= fold_array_shapes (f);
+
+		// Placed with the folds, ahead of the first SROA and of the
+		// post_optimization lowering, which turns a barrier into open code no
+		// pass reads back.
+		again |= fold_stack_barriers (f);
 
 		if (!again)
 			break;

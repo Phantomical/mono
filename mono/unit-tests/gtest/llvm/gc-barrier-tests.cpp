@@ -1,12 +1,14 @@
 /*
  * Tests for lower_gc_barriers (), which writes a write barrier back as the card
- * the collector reads.
+ * the collector reads, and for fold_stack_barriers (), which takes a barrier
+ * off a store into the frame.
  *
  * Pure LLVM. Each case stamps a layout of its own on the declaration, so the
  * three card shapes and the helper are all reachable whatever collector the
  * harness links.
  */
 
+#include "passes/fold-barrier.hpp"
 #include "passes/gc-barrier.hpp"
 
 #include <llvm/IR/BasicBlock.h>
@@ -15,6 +17,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -232,6 +235,115 @@ TEST (GcBarrierTest, TheDeclarationClaimsTheCardTableAndReadsItsArguments)
 	EXPECT_FALSE (isModSet (effects.getModRef (IRMemLocation::ArgMem)));
 	EXPECT_TRUE (isModSet (effects.getModRef (IRMemLocation::InaccessibleMem)));
 	EXPECT_EQ (effects.getModRef (IRMemLocation::Other), ModRefInfo::NoModRef);
+}
+
+/// A module holding a caller with a local of its own.
+struct StackModule {
+	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
+	std::unique_ptr<Module> module;
+	Function *caller = nullptr;
+	AllocaInst *local = nullptr;
+	IRBuilder<> b;
+
+	StackModule () : b (*context)
+	{
+		module = std::make_unique<Module> ("stack barriers", *context);
+
+		Type *ptr = PointerType::get (*context, 0);
+
+		caller = Function::Create (
+			FunctionType::get (Type::getVoidTy (*context),
+		                           { ptr, ptr, Type::getInt1Ty (*context) }, false),
+			GlobalValue::ExternalLinkage, "caller", module.get ());
+
+		b.SetInsertPoint (BasicBlock::Create (*context, "entry", caller));
+		local = b.CreateAlloca (ArrayType::get (Type::getInt8Ty (*context), 32));
+	}
+
+	Value *value () { return caller->getArg (0); }
+
+	Value *elsewhere () { return caller->getArg (1); }
+
+	void store_through (Value *address)
+	{
+		b.CreateAlignedStore (value (), address, Align (8));
+		b.CreateCall (gc_barrier_decl (*module, GcBarrierLayout ()),
+		              { address, value () });
+	}
+
+	unsigned barriers () const
+	{
+		Function *decl = module->getFunction (gc_barrier_name);
+
+		return decl == nullptr ? 0 : unsigned (decl->getNumUses ());
+	}
+
+	unsigned stores () const
+	{
+		unsigned seen = 0;
+
+		for (Instruction &in : instructions (*caller))
+			seen += isa<StoreInst> (&in) ? 1 : 0;
+
+		return seen;
+	}
+
+	bool fold ()
+	{
+		b.CreateRetVoid ();
+
+		bool changed = fold_stack_barriers (*caller);
+
+		EXPECT_FALSE (verifyModule (*module, &errs ()));
+		return changed;
+	}
+};
+
+TEST (StackBarrierTest, ALocalsFieldNeedsNoCard)
+{
+	StackModule m;
+
+	m.store_through (m.b.CreateConstInBoundsGEP1_32 (m.b.getInt8Ty (), m.local, 8));
+
+	EXPECT_TRUE (m.fold ());
+	EXPECT_EQ (m.barriers (), 0u);
+
+	// The fold owes the store nothing: it is the reference the local holds.
+	EXPECT_EQ (m.stores (), 1u);
+}
+
+TEST (StackBarrierTest, AnAddressFromOutsideKeepsItsBarrier)
+{
+	StackModule m;
+
+	m.store_through (m.elsewhere ());
+
+	EXPECT_FALSE (m.fold ());
+	EXPECT_EQ (m.barriers (), 1u);
+}
+
+TEST (StackBarrierTest, ADestinationOfTwoObjectsKeepsItsBarrier)
+{
+	StackModule m;
+	BasicBlock *on_stack = BasicBlock::Create (*m.context, "on_stack", m.caller);
+	BasicBlock *on_heap = BasicBlock::Create (*m.context, "on_heap", m.caller);
+	BasicBlock *join = BasicBlock::Create (*m.context, "join", m.caller);
+
+	m.b.CreateCondBr (m.caller->getArg (2), on_stack, on_heap);
+	m.b.SetInsertPoint (on_stack);
+	m.b.CreateBr (join);
+	m.b.SetInsertPoint (on_heap);
+	m.b.CreateBr (join);
+	m.b.SetInsertPoint (join);
+
+	PHINode *address = m.b.CreatePHI (PointerType::get (*m.context, 0), 2);
+
+	address->addIncoming (m.local, on_stack);
+	address->addIncoming (m.elsewhere (), on_heap);
+	m.store_through (address);
+
+	EXPECT_FALSE (m.fold ());
+	EXPECT_EQ (m.barriers (), 1u);
 }
 
 } // namespace
