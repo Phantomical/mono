@@ -297,19 +297,23 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 
 /// Reads the vtable of object.
 ///
-/// The site is a `mono.object.vtable` call rather than the load it stands for,
-/// which keeps the object an operand. That is the form fold_object_vtables ()
-/// (passes/fold-vtable.cpp) reads, and it reaches a receiver whose class the IR
-/// gives without any store naming it.
-///
-/// SGen writes a forwarding pointer over this word when it moves an object. The
-/// stack scan is conservative here, so an object a compiled frame holds is pinned
-/// rather than moved.
+/// The read is a load, and mark_object_vtable_read () (passes/vtable-func.cpp)
+/// states on it that the word is invariant. fold_object_vtables ()
+/// (passes/fold-vtable.cpp) names the vtable from the class the IR gives object.
+/// It reaches a receiver no store names: one a sealed slot declares, or one read
+/// out of an initonly static. Where a store does name it, LLVM forwards that
+/// store itself.
 llvm::Value *
 MethodLLVMEmitter::load_vtable (MonoIrBuilder &builder, llvm::Value *object,
                                 const llvm::Twine &name)
 {
-	return builder.CreateCall (object_vtable_decl (*module), { object }, name);
+	llvm::Value *at =
+		builder.CreateGEP (builder.getInt8Ty (), object,
+	                           builder.getInt64 (MONO_STRUCT_OFFSET (MonoObject, vtable)));
+
+	return mark_object_vtable_read (
+		builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0), at,
+	                                   llvm::Align (sizeof (void *)), name));
 }
 
 /// Loads the callee out of target's vtable slot in the object receiver points

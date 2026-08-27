@@ -166,11 +166,10 @@ returns_a_named_allocation (const Function &f)
 bool
 reads_the_vtable_of (const Value *vtable, const Value *dispatched_on)
 {
-	const auto *read = dyn_cast<CallBase> (vtable->stripPointerCasts ());
-	const Function *decl = read != nullptr ? read->getCalledFunction () : nullptr;
+	Value *object =
+		object_vtable_read (const_cast<Value *> (vtable->stripPointerCasts ()));
 
-	return decl != nullptr && decl->getName () == object_vtable_name
-	       && read->getArgOperand (0)->stripPointerCasts () == dispatched_on;
+	return object != nullptr && object->stripPointerCasts () == dispatched_on;
 }
 
 /// Whether a site in \p f reads a dispatch table out of \p object.
@@ -313,9 +312,32 @@ lowers_to_a_load (const Function &f)
 	StringRef name = f.getName ();
 
 	return name == vtable_func_name || name == imt_func_name
-	       || name == vtable_gfunc_name || name == object_vtable_name
-	       || name == vtable_klass_name || name == vtable_type_name
-	       || name == vtable_rank_name;
+	       || name == vtable_gfunc_name || name == vtable_klass_name
+	       || name == vtable_type_name || name == vtable_rank_name;
+}
+
+Value *
+folded_object_vtable (LoadInst &load, SettledValue settled)
+{
+	if (!FoldVTableFields)
+		return nullptr;
+
+	Value *object = object_vtable_read (&load);
+
+	if (object == nullptr)
+		return nullptr;
+
+	object = const_cast<Value *> (strip_casts (object));
+
+	if (Value *caller_side = settled (object))
+		object = const_cast<Value *> (strip_casts (caller_side));
+
+	/*
+	 * This walks the store at an allocation rather than asking `exact_class ()`.
+	 * Naming a class's vtable records an external and lays the class out, and a
+	 * candidate this model goes on to refuse is owed neither.
+	 */
+	return stored_vtable (object, load.getModule ()->getDataLayout ());
 }
 
 Value *
@@ -327,9 +349,8 @@ folded_vtable_read (CallBase &call, SettledValue settled)
 		return nullptr;
 
 	StringRef name = decl->getName ();
-	bool object = name == object_vtable_name;
 
-	if (!object && name != vtable_klass_name && name != vtable_type_name
+	if (name != vtable_klass_name && name != vtable_type_name
 	    && name != vtable_rank_name)
 		return nullptr;
 
@@ -337,14 +358,6 @@ folded_vtable_read (CallBase &call, SettledValue settled)
 
 	if (Value *caller_side = settled (operand))
 		operand = const_cast<Value *> (strip_casts (caller_side));
-
-	/*
-	 * The object read walks the store at an allocation rather than asking
-	 * `exact_class ()`. Naming a class's vtable records an external and lays the
-	 * class out, and a candidate this model goes on to refuse is owed neither.
-	 */
-	if (object)
-		return stored_vtable (operand, call.getModule ()->getDataLayout ());
 
 	auto *named = dyn_cast<GlobalObject> (operand);
 	std::optional<VTableFacts> facts =

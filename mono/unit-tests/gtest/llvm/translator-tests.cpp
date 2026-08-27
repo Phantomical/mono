@@ -1519,9 +1519,10 @@ TEST_F (TranslatorTest, GetTypeReadsTheVtable)
 	EXPECT_EQ (t.count ("object:GetType"), 0u) << t.text ();
 	EXPECT_EQ (t.count ("%obj_type = call ptr @mono.vtable.type"), 1u) << t.text ();
 
-	// Both reads are declarations, which carry as attributes what the loads
-	// they lower to carry as `!invariant.load`.
-	EXPECT_EQ (t.count ("call ptr @mono.object.vtable"), 1u) << t.text ();
+	// The read off the object is a load, because the store an allocation
+	// carries is what gives that word its value. `!invariant.load` on it is the
+	// claim the vtable declaration carries as attributes.
+	EXPECT_EQ (t.count ("!invariant.load"), 1u) << t.text ();
 	EXPECT_GT (t.count ("NullReferenceException"), 0u) << t.text ();
 }
 

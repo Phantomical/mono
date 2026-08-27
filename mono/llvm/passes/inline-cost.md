@@ -18,7 +18,7 @@ mechanical, there to let one process hold two copies of the same code, and moves
 no number. The boost is a policy choice, and its own note says why.
 
 Everything under "What the copy asks mono" is the point of taking a copy at all.
-Each is one call into `inline-policy.cpp`, which holds the policy, so a hunk
+Each calls into `inline-policy.cpp`, which holds the policy, so a hunk
 that reasons about managed metadata inside this file belongs somewhere else.
 
 ## What the copy changes
@@ -95,18 +95,20 @@ writes a dispatch read as a call to a declaration, and
 declaration without reading an attribute. So a read that lowers to one load was
 charged a call penalty and an argument setup on top of it.
 
-**`CallAnalyzer::visitLoad ()` asks `folded_vtable_read ()` first.** A class's
-vtable is a defined constant while a compile optimizes, and the fields and slots
-it states fold. The walk has no memory model of its own, so the answer follows
-the vtable store an allocation carries — one step no other simplification here
-takes. It goes in front of the SROA question, which otherwise consumes the load.
+**`CallAnalyzer::visitLoad ()` asks `folded_object_vtable ()` first.** Mono
+writes the read of an object's vtable word as a load. The walk has no
+memory model of its own, so the answer follows the vtable store an allocation
+carries — one step no other simplification here takes. It goes in front of the
+SROA question, which otherwise consumes the load.
 
-**`CallAnalyzer::visitCallBase ()` asks `folded_type_test ()`.** A type test is
-one call each until `lower_type_tests ()`, which runs behind the inliner, so the
-model sees the form `cast_answer ()` settles. It goes behind
-`simplifyCallSite ()`, which is where a call that is really a value belongs. The
-tests are cheap and the arms they rule out are not: a cascade picking one
-implementation out of five measured 850 unanswered and 100 answered.
+**`CallAnalyzer::visitCallBase ()` asks `folded_type_test ()` and then
+`folded_vtable_read ()`.** A type test is one call each until
+`lower_type_tests ()`, which runs behind the inliner, so the model sees the form
+`cast_answer ()` settles. A class's vtable is a defined constant while a compile
+optimizes, so the fields it states fold once the walk has that symbol. Both go
+behind `simplifyCallSite ()`, which is where a call that is really a value
+belongs. The tests are cheap and the arms they rule out are not: a cascade
+picking one implementation out of five measured 850 unanswered and 100 answered.
 
 `inline-policy.hpp` documents what each answer means. Each answer is gated by an
 option of its own, so a run can be put back on LLVM's own answers without a
@@ -125,10 +127,10 @@ needs the `mono-` prefix, and a new definition in `namespace llvm` needs the
 same decision the ones above got: drop it when a header declares it, keep it when
 no header does. Watch the block walk in `analyze ()`, the tail of
 `updateThreshold ()`, the head of `isLoweredToCall ()`, the head of
-`visitLoad ()`, and the heads of `isColdCallSite ()` and
-`getHotCallSiteThreshold ()`, because that is where the mono calls sit.
-`isLoweredToCall ()` and `visitLoad ()` churn upstream more than the rest do, so
-budget for them at each bump.
+`visitLoad ()`, the head of `visitCallBase ()`, and the heads of
+`isColdCallSite ()` and `getHotCallSiteThreshold ()`, because that is where the
+mono calls sit. `isLoweredToCall ()` and `visitLoad ()` churn upstream more than
+the rest do, so budget for them at each bump.
 
 A cost and a budget that `MONO_LLVM_JIT_TRACE` prints are not what an upstream
 build gives for the same pair, so a comparison against clang or against LLVM's

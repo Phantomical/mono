@@ -6,11 +6,14 @@
 #include "vtable-facts.hpp"
 #include "vtable-func.hpp"
 
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalObject.h>
+#include <llvm/IR/InstIterator.h>
 #include <llvm/IR/InstrTypes.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/Support/ErrorHandling.h>
 
 #include <optional>
@@ -70,10 +73,18 @@ fold_object_vtables (Function &f)
 	if (compile.domain == nullptr || !compile.vtable_of)
 		return false;
 
+	// The reads are collected before any is erased, because erasing one moves
+	// the iterator this walks with.
+	SmallVector<LoadInst *, 8> reads;
+
+	for (Instruction &i : instructions (f))
+		if (object_vtable_read (&i) != nullptr)
+			reads.push_back (cast<LoadInst> (&i));
+
 	bool changed = false;
 
-	for (CallBase *site : builtin_sites (f, object_vtable_name)) {
-		MonoClass *klass = exact_class (site->getArgOperand (0), f);
+	for (LoadInst *read : reads) {
+		MonoClass *klass = exact_class (object_vtable_read (read), f);
 
 		if (klass == nullptr)
 			continue;
@@ -83,8 +94,8 @@ fold_object_vtables (Function &f)
 		if (vtable == nullptr)
 			continue;
 
-		site->replaceAllUsesWith (vtable);
-		site->eraseFromParent ();
+		read->replaceAllUsesWith (vtable);
+		read->eraseFromParent ();
 		changed = true;
 	}
 

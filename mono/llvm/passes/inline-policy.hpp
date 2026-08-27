@@ -58,11 +58,18 @@ using SettledValue = llvm::function_ref<llvm::Value *(llvm::Value *)>;
 /// argument setup for work that is one instruction.
 bool lowers_to_a_load (const llvm::Function &f);
 
-/// What a read off an object or its vtable gives, where the call site settles
-/// what is read, or null.
+/// The vtable \p load reads, where the call site settles which object it reads
+/// off, or null.
 ///
-/// So a caller gets the receiver's vtable, its class and its `System.Type`
-/// object, none of which an IR pointer carries.
+/// So a caller gets the receiver's vtable, which an IR pointer does not carry.
+/// Null covers a load that is not a read of an object's vtable word.
+llvm::Value *folded_object_vtable (llvm::LoadInst &load, SettledValue settled);
+
+/// What a read off a vtable gives, where the call site settles which vtable is
+/// read, or null.
+///
+/// So a caller gets the receiver's class and its `System.Type` object, neither
+/// of which an IR pointer carries.
 llvm::Value *folded_vtable_read (llvm::CallBase &call, SettledValue settled);
 
 /// What a type test answers, where the class the call site settled its operand

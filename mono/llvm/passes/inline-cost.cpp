@@ -2378,6 +2378,16 @@ bool CallAnalyzer::visitFNeg(UnaryOperator &I) {
 }
 
 bool CallAnalyzer::visitLoad(LoadInst &I) {
+  // A read of the receiver's vtable word, which mono writes as a load. The
+  // walk reaches a class's vtable symbol through the store an allocation
+  // carries, and that is one step no other simplification here takes. It goes
+  // in front of the SROA question, which otherwise consumes the load.
+  auto Settled = [this](Value *V) { return getSimplifiedValueUnchecked(V); };
+  if (Value *Held = mono::folded_object_vtable(I, Settled)) {
+    SimplifiedValues[&I] = Held;
+    return true;
+  }
+
   if (handleSROA(I.getPointerOperand(), I.isSimple()))
     return true;
 
@@ -2556,9 +2566,8 @@ bool CallAnalyzer::visitCallBase(CallBase &Call) {
     return true;
   }
 
-  // A read off the receiver mono writes as a call. The walk reaches a class's
-  // vtable symbol through the object this site passes, and the facts beside
-  // that symbol answer the rest.
+  // A read off a vtable mono writes as a call. The walk has the vtable symbol
+  // this site passes, and the facts beside that symbol answer what is read.
   if (Value *Held = mono::folded_vtable_read(Call, Settled)) {
     SimplifiedValues[&Call] = Held;
     return true;

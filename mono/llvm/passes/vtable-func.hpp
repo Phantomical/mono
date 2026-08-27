@@ -15,7 +15,9 @@
 
 namespace llvm {
 class Function;
+class LoadInst;
 class Module;
+class Value;
 } // namespace llvm
 
 namespace mono {
@@ -46,15 +48,6 @@ constexpr llvm::StringRef imt_func_name = "mono.imt.func";
 /// for fold_dispatch_sites () to read.
 constexpr llvm::StringRef vtable_gfunc_name = "mono.vtable.gfunc";
 
-/// `ptr @mono.object.vtable (ptr obj)` returns the vtable of the object obj
-/// points at.
-///
-/// A call rather than the load, so that `fold_object_vtables ()` can name the
-/// vtable from the class the IR gives obj. That reaches a receiver no store
-/// names - one a sealed slot declares, or an object read out of an initonly
-/// static. Only the translator writes a call to it.
-constexpr llvm::StringRef object_vtable_name = "mono.object.vtable";
-
 /// `ptr @mono.vtable.klass (ptr vtable)` returns the class the vtable stands
 /// for, `ptr @mono.vtable.type (ptr vtable)` that class's `System.Type` object,
 /// and `i8 @mono.vtable.rank (ptr vtable)` its rank.
@@ -66,18 +59,46 @@ constexpr llvm::StringRef vtable_klass_name = "mono.vtable.klass";
 constexpr llvm::StringRef vtable_type_name = "mono.vtable.type";
 constexpr llvm::StringRef vtable_rank_name = "mono.vtable.rank";
 
-/// The declarations in m, created on first use and carrying their attributes.
+/// The declarations named above, created in m on first use and carrying their
+/// attributes.
 llvm::Function *vtable_func_decl (llvm::Module &m);
 llvm::Function *imt_func_decl (llvm::Module &m);
 llvm::Function *vtable_gfunc_decl (llvm::Module &m);
-llvm::Function *object_vtable_decl (llvm::Module &m);
 llvm::Function *vtable_klass_decl (llvm::Module &m);
 llvm::Function *vtable_type_decl (llvm::Module &m);
 llvm::Function *vtable_rank_decl (llvm::Module &m);
 
-/// Rewrites every call to the three declarations above into the load it stands
+/// Rewrites every call to the declarations named above into the load it stands
 /// for, erases the declarations, and says whether it changed anything.
 bool lower_vtable_reads (llvm::Module &m);
+
+/*
+ * A read off an object is an ordinary load, where each read off a vtable above
+ * is a declaration. The word it reads is one the module itself writes, at the
+ * store `emit_object_alloc ()` puts behind an allocation. A load keeps that
+ * store live for the memory passes and lets LLVM forward it, which answers a
+ * fresh allocation before any pass here runs.
+ */
+
+/// Marks \p load as the read of an object's vtable word.
+///
+/// `!invariant.load` says the word holds one value wherever it can be read.
+/// SGen writes a forwarding pointer over it when it moves an object. The stack
+/// scan is conservative here, so an object a compiled frame holds is pinned
+/// rather than moved.
+///
+/// That metadata grants no dereferenceability, so the read stays under the null
+/// check on the object. `fold_object_vtables ()` needs that check to dominate
+/// the read before it can take a sealed slot's declared class for the class the
+/// object is.
+llvm::LoadInst *mark_object_vtable_read (llvm::LoadInst *load);
+
+/// The object whose vtable \p v reads, or null where \p v is not such a read.
+///
+/// What identifies a read is the declaration it feeds. So a read whose every use
+/// is folded already is one this no longer answers for, and nothing is left to
+/// fold there.
+llvm::Value *object_vtable_read (llvm::Value *v);
 
 } // namespace mono
 

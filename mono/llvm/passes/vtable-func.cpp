@@ -1,11 +1,15 @@
 /**
  * \file
- * \brief The declarations a vtable is read through, and the loads they lower to.
+ * \brief The declarations a vtable is read through, the loads they lower to, and
+ * the load an object's vtable is read with.
  *
  * The layout comes from mono's own headers: a slot is a word into
  * `MonoVTable.vtable`, and each field sits where `MonoVTable` puts it. What a
  * declaration carries is what no header states, which is that its operands
  * settle what the read gives between them.
+ *
+ * A read off an object is a load from the start, because the store an
+ * allocation carries is what gives that word its value.
  */
 
 #include "vtable-func.hpp"
@@ -59,24 +63,6 @@ describe_vtable_read (Function *decl)
 	return decl;
 }
 
-/// Puts on decl the attributes a read of an object's vtable word carries.
-///
-/// `memory(none)` for the reason `load_vtable ()` (method-to-llvm/call.cpp)
-/// gives: the allocator writes the word before managed code can reach the
-/// object, and no later writer of it reaches an object a compiled frame holds.
-///
-/// Not `speculatable`, which is what keeps the read under the null check on the
-/// object. That check dominating every such read is what lets a fold take a
-/// sealed slot's declared class for the class the object is.
-Function *
-describe_object_read (Function *decl)
-{
-	decl->setDoesNotAccessMemory ();
-	decl->setDoesNotThrow ();
-	decl->addFnAttr (Attribute::WillReturn);
-	return decl;
-}
-
 } // namespace
 
 Function *
@@ -112,13 +98,61 @@ vtable_gfunc_decl (Module &m)
 		FunctionType::get (ptr, { ptr, Type::getInt32Ty (c), ptr }, false)));
 }
 
-Function *
-object_vtable_decl (Module &m)
+LoadInst *
+mark_object_vtable_read (LoadInst *load)
 {
-	Type *ptr = PointerType::get (m.getContext (), 0);
+	load->setMetadata (LLVMContext::MD_invariant_load,
+	                   MDNode::get (load->getContext (), {}));
+	return load;
+}
 
-	return describe_object_read (
-		builtin_decl (m, object_vtable_name, FunctionType::get (ptr, { ptr }, false)));
+namespace {
+
+/// Whether \p user reads off \p vtable through one of the declarations
+/// `vtable-func.hpp` names.
+bool
+reads_off_the_vtable (const User *user, const Value *vtable)
+{
+	const auto *site = dyn_cast<CallBase> (user);
+	const Function *decl = site != nullptr ? site->getCalledFunction () : nullptr;
+
+	if (decl == nullptr || site->arg_size () < 1 || site->getArgOperand (0) != vtable)
+		return false;
+
+	StringRef name = decl->getName ();
+
+	return name == vtable_func_name || name == imt_func_name
+	       || name == vtable_gfunc_name || name == vtable_klass_name
+	       || name == vtable_type_name || name == vtable_rank_name;
+}
+
+} // namespace
+
+Value *
+object_vtable_read (Value *v)
+{
+	auto *load = dyn_cast<LoadInst> (v);
+
+	if (load == nullptr || load->getMetadata (LLVMContext::MD_invariant_load) == nullptr)
+		return nullptr;
+
+	// What says the load is this read is the declaration it feeds, because a
+	// transformation that merges or clones an instruction keeps only the
+	// metadata kinds LLVM knows. A marker of our own does not survive the CSE
+	// that gives two reads off one receiver a single load.
+	bool feeds_a_read = false;
+
+	for (const User *user : load->users ())
+		feeds_a_read |= reads_off_the_vtable (user, load);
+
+	if (!feeds_a_read)
+		return nullptr;
+
+	APInt at (64, 0);
+	Value *object = load->getPointerOperand ()->stripAndAccumulateConstantOffsets (
+		load->getModule ()->getDataLayout (), at, /*AllowNonInbounds=*/true);
+
+	return at == MONO_STRUCT_OFFSET (MonoObject, vtable) ? object : nullptr;
 }
 
 Function *
@@ -199,8 +233,9 @@ lower (CallBase *site, int64_t first_word, int64_t slot_bias)
 /// own result.
 ///
 /// The load is `!invariant.load`, which is the same claim the declaration's
-/// `memory(none)` makes: the field takes its value before compiled code can
-/// reach the object it sits in.
+/// `memory(none)` makes: the field takes its value while
+/// `mono_class_create_runtime_vtable ()` builds the vtable it sits in, which is
+/// before compiled code can hold that vtable.
 void
 lower_field (CallBase *site, int64_t offset)
 {
@@ -260,10 +295,6 @@ lower_vtable_reads (Module &m)
 
 	changed |= lower_all (m, vtable_rank_name, [] (CallBase *site) {
 		lower_field (site, MONO_STRUCT_OFFSET (MonoVTable, rank));
-	});
-
-	changed |= lower_all (m, object_vtable_name, [] (CallBase *site) {
-		lower_field (site, MONO_STRUCT_OFFSET (MonoObject, vtable));
 	});
 
 	return changed;
