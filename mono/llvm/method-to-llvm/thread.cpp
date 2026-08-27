@@ -41,12 +41,6 @@ is_current_managed_thread_id (MonoMethod *target, MonoMethodSignature *sig)
 }
 
 /// Pushes the calling thread's managed id, in place of a call to the property.
-///
-/// The property is Thread.CurrentThread.ManagedThreadId, and every hop of it
-/// costs a call: Thread.CurrentThread reads a [ThreadStatic] field, which
-/// static_field_address () sends through mono_domain_get () and the
-/// mono_class_static_field_address icall, and ManagedThreadId reads a field
-/// get_Internal () builds on demand.
 llvm::Error
 MethodLLVMEmitter::emit_current_managed_thread_id (MonoIrBuilder &builder,
                                                    MonoMethodSignature *sig)
@@ -58,13 +52,10 @@ MethodLLVMEmitter::emit_current_managed_thread_id (MonoIrBuilder &builder,
 	if (!tls)
 		return tls.takeError ();
 
-	/*
-	 * The MonoInternalThread is the same for as long as the thread is attached,
-	 * and managed code runs on no other kind of thread. So LLVM can share one
-	 * call between the sites the IL wrote, and move one onto a path that had
-	 * none. A moved call still answers about the thread that reached it, because
-	 * LLVM never runs a call on a thread other than that one.
-	 */
+	// The MonoInternalThread is the same for as long as the thread is attached,
+	// and managed code runs on no other kind of thread. So LLVM can share one
+	// call between the sites the IL wrote, and move one onto a path that had
+	// none. Both stay on the thread the site was reached from.
 	if (auto *decl = llvm::dyn_cast<llvm::Function> (tls->getCallee ())) {
 		decl->setDoesNotThrow ();
 		decl->setWillReturn ();

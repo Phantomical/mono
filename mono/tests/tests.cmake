@@ -246,6 +246,7 @@ set(MONO_TESTS_CS_SRC
   vtable-fold.cs
   reflection-element-type.cs
   tier2-narrow-arg.cs
+  managed-thread-id.cs
   pinvoke-narrow-arg.cs
   eh-stack-args.cs
   tbaa-aliasing.cs
