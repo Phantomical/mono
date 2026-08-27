@@ -7,6 +7,7 @@
 #include "devirtualize.hpp"
 #include "fold-cast.hpp"
 #include "fold-vtable.hpp"
+#include "gc-barrier.hpp"
 #include "lower-builtins.hpp"
 #include "vtable-func.hpp"
 
@@ -129,6 +130,7 @@ MonoBuiltinLower::run (Module &m, ModuleAnalysisManager &)
 		changed = lower_type_tests (m);
 		changed |= lower_vtable_reads (m);
 		changed |= lower_allocations (m);
+		changed |= lower_gc_barriers (m);
 		break;
 	}
 

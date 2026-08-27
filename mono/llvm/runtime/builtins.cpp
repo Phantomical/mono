@@ -81,8 +81,8 @@ get_runtime_builtins (std::vector<MonoBuiltin> &builtins)
 		{"mono_domain_get", (void *) &mono_domain_get},
 		{"mono_llvm_jit_tier2_promote", (void *) &mono_llvm_jit_tier2_promote},
 		{"mono_marshal_set_last_error", (void *) &mono_marshal_set_last_error},
-		{"mono_gc_wbarrier_generic_store_internal",
-	         (void *) &mono_gc_wbarrier_generic_store_internal},
+		{"mono_gc_wbarrier_generic_nostore_internal",
+	         (void *) &mono_gc_wbarrier_generic_nostore_internal},
 		{"mono_gc_wbarrier_value_copy_internal",
 	         (void *) &mono_gc_wbarrier_value_copy_internal},
 

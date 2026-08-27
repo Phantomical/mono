@@ -19,7 +19,7 @@ set(MONO_LLVM_TEST_SOURCES
     profile-counters-tests.cpp profile-counter-promoter-tests.cpp
     rgctx-fetch-tests.cpp rgctx-dedup-tests.cpp clamp-frame-align-tests.cpp
     array-address-tests.cpp array-shape-tests.cpp ir-dump-tests.cpp
-    cast-func-tests.cpp inline-heat-tests.cpp)
+    cast-func-tests.cpp inline-heat-tests.cpp gc-barrier-tests.cpp)
 
 if(MONO_CORPUS_ENABLED)
   # RELATIVE, because mono_corpus_il resolves its source against the current

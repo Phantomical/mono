@@ -16,6 +16,7 @@
 // translate.
 #include "method-to-llvm.hpp"
 #include "operand-class.hpp"
+#include "passes/gc-barrier.hpp"
 
 #include "config.h"
 #include <glib.h>
@@ -29,7 +30,9 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/GlobalVariable.h>
+#include <llvm/IR/InstIterator.h>
 #include <llvm/IR/InstrTypes.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
@@ -485,31 +488,44 @@ TEST_F (TranslatorTest, InstanceFieldAccessNullChecks)
 	EXPECT_GE (t.count ("make.implicit"), 1u);
 }
 
-// The store is the method's own and the card mark sits behind a test of the
-// destination, so the collector's call is gone. The harness links sgen, whose
-// major collector marks cards. A collector that marks none keeps the call.
-TEST_F (TranslatorTest, StoringAReferenceMarksItsOwnCard)
+// The store the method asked for is an instruction of its own and the barrier
+// stands beside it, so what the field holds is visible until the lowering. The
+// card itself is that lowering's, and gc-barrier-tests.cpp reads it there.
+TEST_F (TranslatorTest, AReferenceStoreStandsBesideItsBarrier)
 {
 	const Translation &field = translate ("fields", "Fields:SetRef");
 	const Translation &statics = translate ("fields", "Fields:SetStaticRef");
 
 	ASSERT_NE (field.function, nullptr) << field.error;
-	EXPECT_EQ (field.count ("wbarrier_generic_store"), 0u) << field.text ();
-	EXPECT_EQ (field.count ("store i8 1"), 1u);
-	EXPECT_GE (field.count ("wb_mark"), 1u);
-	EXPECT_GE (field.count ("@mono_gc_card_table"), 1u) << field.text ();
+	EXPECT_EQ (field.count ("call void @mono.gc.wbarrier"), 1u) << field.text ();
+	EXPECT_EQ (field.count ("wb_mark"), 0u) << field.text ();
+	EXPECT_EQ (field.count ("@mono_gc_card_table"), 0u) << field.text ();
 
 	ASSERT_NE (statics.function, nullptr) << statics.error;
-	EXPECT_EQ (statics.count ("wbarrier_generic_store"), 0u) << statics.text ();
-	EXPECT_EQ (statics.count ("store i8 1"), 1u);
-	EXPECT_GE (statics.count ("wb_mark"), 1u);
+	EXPECT_EQ (statics.count ("call void @mono.gc.wbarrier"), 1u) << statics.text ();
+
+	llvm::CallBase *site = nullptr;
+
+	for (llvm::Instruction &in : llvm::instructions (*field.function))
+		if (auto *call = llvm::dyn_cast<llvm::CallBase> (&in))
+			if (call->getCalledFunction () != nullptr
+			    && call->getCalledFunction ()->getName () == mono::gc_barrier_name)
+				site = call;
+
+	ASSERT_NE (site, nullptr);
+
+	auto *store = llvm::dyn_cast_or_null<llvm::StoreInst> (site->getPrevNode ());
+
+	ASSERT_NE (store, nullptr) << field.text ();
+	EXPECT_EQ (store->getPointerOperand (), site->getArgOperand (0));
+	EXPECT_EQ (store->getValueOperand (), site->getArgOperand (1));
 }
 
-// A concurrent major collector wants a card under every old destination, and only
-// while it runs. The mark therefore sits behind a read of the collector's own flag
-// as well as behind the value test, which is what keeps an old-to-old store off
-// the card table for the rest of the program.
-TEST_F (TranslatorTest, AConcurrentCollectorsFlagDecidesAtRuntime)
+// The collector runs for the life of the process, so the shape of its card path
+// is one fact about the module rather than one about each site. A concurrent
+// major collector is the arm that reads a flag as well as the value, and the
+// address of that flag is what says so.
+TEST_F (TranslatorTest, AConcurrentCollectorsFlagRidesOnTheDeclaration)
 {
 	if (mono_gc_card_table_nursery_check ()
 	    || mono_gc_get_concurrent_collection_flag () == nullptr)
@@ -518,11 +534,13 @@ TEST_F (TranslatorTest, AConcurrentCollectorsFlagDecidesAtRuntime)
 	const Translation &field = translate ("fields", "Fields:SetRef");
 
 	ASSERT_NE (field.function, nullptr) << field.error;
-	EXPECT_EQ (
-		field.count ("load volatile i32, ptr @mono_gc_concurrent_collection_flag"),
-		1u)
-		<< field.text ();
-	EXPECT_GE (field.count ("wb_value_is_young"), 1u) << field.text ();
+
+	llvm::Function *decl = field.module->getFunction (mono::gc_barrier_name);
+
+	ASSERT_NE (decl, nullptr) << field.text ();
+	EXPECT_TRUE (decl->hasFnAttribute ("mono-gc-card-table"));
+	EXPECT_TRUE (decl->hasFnAttribute ("mono-gc-concurrent-flag"));
+	EXPECT_FALSE (decl->hasFnAttribute ("mono-gc-value-decides"));
 }
 
 // A struct with a reference inside cannot be stored as bytes: the copy has to go
@@ -1201,7 +1219,7 @@ TEST_F (TranslatorTest, VolatileScalarAccessesCarryTheirOrdering)
 }
 
 // An access no single atomic instruction covers keeps the older shape: a plain
-// volatile access with a fence beside it. A reference carries a card mark, a value
+// volatile access with a fence beside it. A reference carries a barrier, a value
 // class is a copy, and an access the unaligned. prefix gave up the alignment of
 // cannot be atomic at all.
 TEST_F (TranslatorTest, VolatileFallsBackToAFence)
@@ -1212,7 +1230,7 @@ TEST_F (TranslatorTest, VolatileFallsBackToAFence)
 
 	ASSERT_NE (ref.function, nullptr) << ref.error;
 	EXPECT_EQ (ref.count ("fence release"), 1u) << ref.text ();
-	EXPECT_EQ (ref.count ("store i8 1"), 1u);
+	EXPECT_EQ (ref.count ("call void @mono.gc.wbarrier"), 1u);
 
 	ASSERT_NE (vtype.function, nullptr) << vtype.error;
 	EXPECT_EQ (vtype.count ("fence acquire"), 1u) << vtype.text ();

@@ -985,7 +985,6 @@ private:
 	llvm::Error emit_refanyval (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_refanytype (MonoIrBuilder &builder);
 
-	llvm::FunctionCallee wbarrier_decl ();
 	void emit_reference_store (MonoIrBuilder &builder, llvm::Value *address,
 	                           llvm::Value *value, llvm::Align align,
 	                           ManagedAccess access = ManagedAccess::untagged ());
