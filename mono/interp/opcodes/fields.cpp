@@ -335,15 +335,18 @@ MONO_INTERP_OP_IMPL (MINT_LDSFLDA_DYN)
 
 /*
  * The thread statics. Instead of one address the transform can bake in, the
- * field has a packed offset: the low 6 bits pick a block out of the thread's
- * static_data and the rest is the offset into that block.
+ * field has a packed offset that names a block of the thread's static_data and
+ * an offset into it. mono/metadata/threads-types.h has the packing.
  */
 
 static inline gpointer
 thread_static_address (guint32 offset)
 {
 	MonoInternalThread *thread = mono_thread_internal_current ();
-	return static_cast<char *> (thread->static_data[offset & 0x3f]) + (offset >> 6);
+	guint32 index = ACCESS_SPECIAL_STATIC_OFFSET (offset, index);
+
+	return static_cast<char *> (thread->static_data[index])
+	       + ACCESS_SPECIAL_STATIC_OFFSET (offset, offset);
 }
 
 /*

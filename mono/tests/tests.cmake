@@ -247,6 +247,7 @@ set(MONO_TESTS_CS_SRC
   reflection-element-type.cs
   tier2-narrow-arg.cs
   managed-thread-id.cs
+  thread-static-fast-path.cs
   pinvoke-narrow-arg.cs
   eh-stack-args.cs
   tbaa-aliasing.cs

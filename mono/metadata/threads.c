@@ -562,32 +562,6 @@ is_threadabort_exception (MonoClass *klass)
 	return klass == mono_defaults.threadabortexception_class;
 }
 
-/*
- * A special static data offset (guint32) consists of 3 parts:
- *
- * [0]   6-bit index into the array of chunks.
- * [6]   25-bit offset into the array.
- * [31]  Bit indicating thread or context static.
- */
-
-typedef union {
-	struct {
-#if G_BYTE_ORDER != G_LITTLE_ENDIAN
-		guint32 type : 1;
-		guint32 offset : 25;
-		guint32 index : 6;
-#else
-		guint32 index : 6;
-		guint32 offset : 25;
-		guint32 type : 1;
-#endif
-	} fields;
-	guint32 raw;
-} SpecialStaticOffset;
-
-#define SPECIAL_STATIC_OFFSET_TYPE_THREAD 0
-#define SPECIAL_STATIC_OFFSET_TYPE_CONTEXT 1
-
 static guint32
 MAKE_SPECIAL_STATIC_OFFSET (guint32 index, guint32 offset, guint32 type)
 {
@@ -599,8 +573,36 @@ MAKE_SPECIAL_STATIC_OFFSET (guint32 index, guint32 offset, guint32 type)
 	return special_static_offset.raw;
 }
 
-#define ACCESS_SPECIAL_STATIC_OFFSET(x,f) \
-	(((SpecialStaticOffset *) &(x))->fields.f)
+/**
+ * mono_special_static_field_offset:
+ * \param domain the domain to read the field's storage out of
+ * \param field a field \c mono_class_field_is_special_static accepts
+ * \param offset where the packed offset is written, untouched on a false answer
+ *
+ * Reads the packed \c SpecialStaticOffset a special static has in \p domain.
+ *
+ * \returns FALSE where \p domain has no offset for \p field. Creating the
+ * declaring class's vtable is what assigns one, so a false answer means "not
+ * yet" rather than "never": ask again after \c mono_class_vtable_checked.
+ */
+gboolean
+mono_special_static_field_offset (MonoDomain *domain, MonoClassField *field, guint32 *offset)
+{
+	guint32 packed = 0;
+
+	mono_domain_lock (domain);
+	if (domain->special_static_fields)
+		packed = GPOINTER_TO_UINT (g_hash_table_lookup (domain->special_static_fields, field));
+	mono_domain_unlock (domain);
+
+	// mono_alloc_static_data_slot () steps the first offset past the array of
+	// block pointers, so no field gets offset zero and zero reads as absent.
+	if (packed == 0)
+		return FALSE;
+
+	*offset = packed;
+	return TRUE;
+}
 
 static gpointer
 get_thread_static_data (MonoInternalThread *thread, guint32 offset)

@@ -261,6 +261,18 @@ fold_casts ()
 }
 
 bool
+thread_static_fast_path ()
+{
+	static bool on = [] {
+		const char *value = g_getenv ("MONO_LLVM_JIT_THREAD_STATIC");
+
+		return value == nullptr || is_truthy_env_var (value);
+	}();
+
+	return on;
+}
+
+bool
 dyn_calls ()
 {
 	static bool on = [] {

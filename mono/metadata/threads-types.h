@@ -60,6 +60,41 @@ typedef enum {
 #define SPECIAL_STATIC_THREAD 1
 #define SPECIAL_STATIC_CONTEXT 2
 
+/*
+ * A special static data offset (guint32) consists of 3 parts:
+ *
+ * [0]   6-bit index into the array of blocks.
+ * [6]   25-bit offset into the array.
+ * [31]  Bit indicating thread or context static.
+ *
+ * Both engines decode this packing instead of always asking the runtime for the
+ * address: the interpreter on each thread-static access, and the compiled back
+ * end on the fast path thread_static_slot () gates
+ * (mono/llvm/method-to-llvm/fields.cpp). Take an offset apart with
+ * ACCESS_SPECIAL_STATIC_OFFSET rather than with a shift and a mask.
+ */
+
+typedef union {
+	struct {
+#if G_BYTE_ORDER != G_LITTLE_ENDIAN
+		guint32 type : 1;
+		guint32 offset : 25;
+		guint32 index : 6;
+#else
+		guint32 index : 6;
+		guint32 offset : 25;
+		guint32 type : 1;
+#endif
+	} fields;
+	guint32 raw;
+} SpecialStaticOffset;
+
+#define SPECIAL_STATIC_OFFSET_TYPE_THREAD 0
+#define SPECIAL_STATIC_OFFSET_TYPE_CONTEXT 1
+
+#define ACCESS_SPECIAL_STATIC_OFFSET(x,f) \
+	(((SpecialStaticOffset *) &(x))->fields.f)
+
 /* It's safe to access System.Threading.InternalThread from native code via a
  * raw pointer because all instances should be pinned.  But for uniformity of
  * icall wrapping, let's declare a MonoInternalThreadHandle anyway.
@@ -413,6 +448,9 @@ MonoException* mono_thread_force_interruption_checkpoint_noraise (void);
 extern gint32 mono_thread_interruption_request_flag;
 
 uint32_t mono_alloc_special_static_data (uint32_t static_type, uint32_t size, uint32_t align, uintptr_t *bitmap, int numbits);
+
+G_EXTERN_C
+gboolean mono_special_static_field_offset (MonoDomain *domain, MonoClassField *field, guint32 *offset);
 
 G_EXTERN_C
 void*    mono_get_special_static_data   (uint32_t offset);

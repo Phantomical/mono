@@ -16,6 +16,7 @@
 #include <mono/metadata/metadata-update.h>
 #include <mono/metadata/mono-endian.h>
 #include <mono/metadata/tabledefs.h>
+#include <mono/metadata/threads-types.h>
 #include <mono/utils/mono-memory-model.h>
 
 #include <mono/mini/mini.h>
@@ -1010,12 +1011,10 @@ TransformData::interp_emit_ldsflda (MonoClassField *field, MonoError *error)
 	push_simple_type (StackType::MP);
 	if (mono_class_field_is_special_static (field)) {
 		guint32 offset;
+		gboolean found = mono_special_static_field_offset (domain, field, &offset);
 
-		mono_domain_lock (domain);
-		g_assert (domain->special_static_fields);
-		offset = GPOINTER_TO_UINT (g_hash_table_lookup (domain->special_static_fields, field));
-		mono_domain_unlock (domain);
-		g_assert (offset);
+		// The vtable above is what assigns the offset.
+		g_assert (found);
 
 		interp_add_ins (MINT_LDSSFLDA);
 		interp_ins_set_dreg (last_ins, sp[-1].local);
@@ -1110,12 +1109,10 @@ TransformData::interp_emit_sfld_access (MonoClassField *field, MonoClass *field_
 
 	if (mono_class_field_is_special_static (field)) {
 		guint32 offset;
+		gboolean found = mono_special_static_field_offset (domain, field, &offset);
 
-		mono_domain_lock (domain);
-		g_assert (domain->special_static_fields);
-		offset = GPOINTER_TO_UINT (g_hash_table_lookup (domain->special_static_fields, field));
-		mono_domain_unlock (domain);
-		g_assert (offset);
+		// The vtable above is what assigns the offset.
+		g_assert (found);
 
 		/*
 		 * The vtable rides along in the last operand because the offset alone
@@ -1126,9 +1123,8 @@ TransformData::interp_emit_sfld_access (MonoClassField *field, MonoClass *field_
 		 */
 		int vtable_index = get_data_item_index (vtable);
 
-		// Offset is SpecialStaticOffset
-		if ((offset & 0x80000000) == 0 && mt != MintType::VT) {
-			// This field is thread static
+		if (ACCESS_SPECIAL_STATIC_OFFSET (offset, type) == SPECIAL_STATIC_OFFSET_TYPE_THREAD
+		    && mt != MintType::VT) {
 			if (is_load) {
 				interp_add_ins (op_for_mint_type (MINT_LDTSFLD_I1, mt));
 				WRITE32_INS (last_ins, 0, &offset);

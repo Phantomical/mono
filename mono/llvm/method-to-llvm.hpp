@@ -1089,6 +1089,7 @@ private:
 	bool cctor_already_ran (MonoClass *klass);
 	bool invariant_static_read (MonoClassField *field);
 	llvm::Error emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
+	std::optional<std::pair<uint32_t, uint32_t> > thread_static_slot (MonoClassField *field);
 	llvm::Expected<llvm::Value *> static_field_address (MonoIrBuilder &builder,
 	                                                    MonoClassField *field);
 	static MonoType *builtin_element_type (int opcode);
@@ -1146,6 +1147,9 @@ private:
 	                                    MonoMethodSignature *sig, MonoJitICallId helper);
 	llvm::Error emit_current_managed_thread_id (MonoIrBuilder &builder,
 	                                            MonoMethodSignature *sig);
+	llvm::Expected<llvm::Value *> emit_internal_thread (MonoIrBuilder &builder);
+	llvm::Expected<llvm::Value *> thread_static_address (MonoIrBuilder &builder,
+	                                                     uint32_t index, uint32_t offset);
 
 	llvm::Expected<llvm::Value *> indirect_address (MonoIrBuilder &builder,
 	                                                StackValue address);

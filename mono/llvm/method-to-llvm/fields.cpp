@@ -17,6 +17,7 @@
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/remoting.h"
+#include "mono/metadata/threads-types.h"
 #include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -461,8 +462,9 @@ MethodLLVMEmitter::invariant_static_read (MonoClassField *field)
 	if (prefixes.volatile_)
 		return false;
 
-	// A thread- or context-local static takes its address from the runtime on each
-	// access, so one thread's value says nothing about the next thread's.
+	// Each thread or context gets storage of its own, and the type initializer
+	// writes only the copy belonging to whichever one ran it. So the value one
+	// reads says nothing about what the next reads, whatever initonly claims.
 	if (mono_class_field_is_special_static (field))
 		return false;
 
@@ -600,15 +602,53 @@ MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
 	return builder.CreateGEP (builder.getInt8Ty (), base, builder.getInt32 (offset));
 }
 
+/// The block index and offset a thread static has in the domain this method
+/// compiles for, or nothing where this compile cannot read one.
+///
+/// A shared body serves several instantiations and reaches its fields through the
+/// run-time generic context, so there is no one offset to burn in. A context static
+/// lives on the MonoAppContext instead of the thread, so its offset addresses the
+/// wrong object. Both keep the icall.
+std::optional<std::pair<uint32_t, uint32_t> >
+MethodLLVMEmitter::thread_static_slot (MonoClassField *field)
+{
+	guint32 packed;
+
+	if (!thread_static_fast_path () || depends_on_context (field))
+		return std::nullopt;
+
+	/*
+	 * Creating the declaring class's vtable is what assigns the offset, and this
+	 * asks without creating one. A method reaches tier 1 by being interpreted
+	 * first, and the interpreter's own transform creates that vtable at the same
+	 * site, so what this misses is a site tier 0 never ran - a cold arm, where
+	 * the icall costs nothing.
+	 */
+	if (!mono_special_static_field_offset (cfg->domain, field, &packed))
+		return std::nullopt;
+
+	if (ACCESS_SPECIAL_STATIC_OFFSET (packed, type) != SPECIAL_STATIC_OFFSET_TYPE_THREAD)
+		return std::nullopt;
+
+	return std::make_pair (
+		static_cast<uint32_t> (ACCESS_SPECIAL_STATIC_OFFSET (packed, index)),
+		static_cast<uint32_t> (ACCESS_SPECIAL_STATIC_OFFSET (packed, offset)));
+}
+
 /// Where field lives in its class's statics block.
 ///
 /// An RVA field lives there too: creating the vtable copies the image data into the
 /// block at the field's offset. A thread- or context-local static does not get a fixed
-/// offset into that block, so its address must come from the runtime on every access.
+/// offset into that block. thread_static_slot () answers for a thread static this
+/// compile can reach off the thread; every special static it refuses takes its address
+/// from the runtime on each access.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::static_field_address (MonoIrBuilder &builder, MonoClassField *field)
 {
 	if (mono_class_field_is_special_static (field)) {
+		if (std::optional<std::pair<uint32_t, uint32_t> > slot = thread_static_slot (field))
+			return thread_static_address (builder, slot->first, slot->second);
+
 		llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 		llvm::Value *domain = builder.CreateCall (
 			module->getOrInsertFunction ("mono_domain_get", ptr));

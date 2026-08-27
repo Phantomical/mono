@@ -108,6 +108,14 @@ bool tier2_enabled ();
 /// translator writes the same IR either way, so the two arms differ in one pass.
 bool fold_casts ();
 
+/// Whether MONO_LLVM_JIT_THREAD_STATIC left the thread-static fast path on.
+///
+/// A false value sends every thread static back through mono_domain_get () and
+/// the mono_class_static_field_address icall, which is what separates a wrong
+/// slot from a wrong value. Both arms address the same storage, so a program
+/// that answers differently between them has a defect in the fast path.
+bool thread_static_fast_path ();
+
 /// Whether MONO_LLVM_JIT_DYN_CALL left the interpreter's dyn calls on.
 ///
 /// A false value takes every jit call back to a gsharedvt_out_sig wrapper
