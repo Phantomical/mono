@@ -129,6 +129,33 @@ public class CastFold {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool FreshBaseIsDerived () => new Base () is Derived;
 
+	/*
+	 * A fresh array is exact as well, which is the one array operand the bound
+	 * arms above do not cover. Each test goes through `object` so that C#
+	 * answers none of them itself.
+	 *
+	 * `uint[]` is the arm that tests assignability itself. The two classes
+	 * differ but share a cast class, so comparing them directly answers no,
+	 * while the runtime answers yes.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool FreshIntArrayIsIList () => (object) new int[2] is IList<int>;
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool FreshIntArrayIsUIntArray () => (object) new int[2] is uint[];
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool FreshIntArrayIsComparable () => (object) new int[2] is IComparable;
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool FreshIntArrayIsUnrelated () => (object) new int[2] is Unrelated;
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool FreshDerivedArrayIsMarkerArray () => (object) new Derived[1] is IMarker[];
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool FreshBaseArrayIsMarkerArray () => (object) new Base[1] is IMarker[];
+
 	static void Round ()
 	{
 		int[] ints = new int[2];
@@ -220,13 +247,24 @@ public class CastFold {
 
 		Check ("fresh Derived is Base", FreshDerivedIsBase (), true);
 		Check ("fresh Base is Derived", FreshBaseIsDerived (), false);
+
+		Check ("fresh int[] is IList<int>", FreshIntArrayIsIList (), true);
+		Check ("fresh int[] is uint[]", FreshIntArrayIsUIntArray (), true);
+		Check ("fresh int[] is IComparable", FreshIntArrayIsComparable (), false);
+		Check ("fresh int[] is Unrelated", FreshIntArrayIsUnrelated (), false);
+		Check ("fresh Derived[] is IMarker[]", FreshDerivedArrayIsMarkerArray (), true);
+		Check ("fresh Base[] is IMarker[]", FreshBaseArrayIsMarkerArray (), false);
 	}
 
 	public static int Main ()
 	{
 		// The first rounds run interpreted, and the later ones run whatever the
 		// thresholds promoted. Both answer through this same code.
-		for (int i = 0; i < 200; ++i)
+		//
+		// The count reaches tier 2, which is where the fold answers these
+		// tests. A tier-1 body keeps the icall at each of them, so a count that
+		// stops at tier 1 gates the runtime alone.
+		for (int i = 0; i < 25000; ++i)
 			Round ();
 
 		if (failures != 0) {

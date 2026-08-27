@@ -100,11 +100,63 @@ class AllocElide {
 			new Finalized ();
 	}
 
+	/*
+	 * An array carries the same attribute, so the arms below are the array side
+	 * of the two answers above. A dead array goes, and one that is read stays.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int DeadArrayStep (int n)
+	{
+		int[] unused = new int[n & 7];
+
+		return n + 1;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int KeptArrayStep (int n)
+	{
+		int[] a = new int[4];
+
+		a[n & 3] = n;
+		return (a[n & 3] == n ? 1 : 0) + (a.Length == 4 ? 1 : 0);
+	}
+
+	/*
+	 * A negative length raises even where the array itself is dead. This is the
+	 * arm that regressed when arrays first took the attribute: the raise lived
+	 * inside the allocator, so erasing the call took the exception with it.
+	 *
+	 * Nothing may read the array. One read keeps the allocation alive, the
+	 * allocator raises as it always did, and the arm stops testing anything.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool RefusesNegativeDead (int n)
+	{
+		try {
+			int[] unused = new int[n];
+
+			return false;
+		} catch (OverflowException) {
+			return true;
+		}
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool RefusesNegativeRead (int n)
+	{
+		try {
+			return new int[n].Length < 0;
+		} catch (OverflowException) {
+			return true;
+		}
+	}
+
 	public static int Main ()
 	{
 		long zero = 0;
 		int kept = 0;
 		double dot = 0;
+		int dead = 0, keptArray = 0, refusedDead = 0, refusedRead = 0;
 		Vec a = new Vec (3, 4, 5), b = new Vec (1, 2, 3);
 
 		/* Enough entries to leave the interpreter and both compiled tiers. */
@@ -112,12 +164,25 @@ class AllocElide {
 			zero += ZeroStep ();
 			kept += KeptStep (i);
 			dot += ElidedStep (a, b);
+			dead += DeadArrayStep (i);
+			keptArray += KeptArrayStep (i);
+
+			if (RefusesNegativeDead (-1))
+				refusedDead++;
+			if (RefusesNegativeRead (-1))
+				refusedRead++;
 		}
 
 		Check ("untouched fields read as zero", zero == 0);
 		Check ("a used object keeps its identity", kept == 2 * N);
 		/* Sub gives (2,2,2), so the sum of squares is 12 each time. */
 		Check ("scalarized arithmetic is unchanged", dot == 12.0 * N);
+
+		/* The sum of i + 1 over the loop, which the erased array cannot change. */
+		Check ("a dead array changes no answer", dead == (long) N * (N + 1) / 2);
+		Check ("a used array keeps its elements", keptArray == 2 * N);
+		Check ("a dead array's negative length still raises", refusedDead == N);
+		Check ("a read array's negative length still raises", refusedRead == N);
 
 		MakeGarbage ();
 		GC.Collect ();
