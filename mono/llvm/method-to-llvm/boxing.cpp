@@ -1,7 +1,9 @@
 #include "method-to-llvm.hpp"
 #include "operand-class.hpp"
 #include "runtime-error.hpp"
+#include "../passes/alloc-func.hpp"
 #include "../passes/vtable-func.hpp"
+#include "mini-runtime.h"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-abi-details.h"
 #include "mono/metadata/class-internals.h"
@@ -37,6 +39,35 @@ MethodLLVMEmitter::object_new_decl ()
 	return wrapper;
 }
 
+/// Whether the program can tell that an allocation of klass did not happen.
+///
+/// A finalizer runs after the collector finds the object unreachable, and a
+/// weak field needs the collector to record where the field is. A class whose
+/// allocation can answer with a proxy has the runtime register that proxy. Each
+/// of those is work an erased allocation does not do. A debugger adds a case of
+/// its own: it hands any object a frame holds to a method it is asked to call,
+/// so with one attached every class answers yes.
+///
+/// None of these reads the collector, so SGen and Boehm answer the same.
+/// `mono_gc_get_managed_allocator ()` asks the class half of this for SGen, by
+/// refusing the fast path.
+///
+/// A collector that acts on each allocation, as under
+/// `--gc-debug=collect-before-allocs`, does not make one observable. A tool
+/// that shows where the allocations are must show the ones the optimizer took
+/// away.
+bool
+MethodLLVMEmitter::allocation_is_observable (MonoClass *klass)
+{
+	// The flag is read at each compile, so a body compiled before the debugger
+	// arrived keeps the allocations it erased.
+	if (mini_get_debug_options ()->gen_sdb_seq_points)
+		return true;
+
+	return mono_class_has_finalizer (klass) || m_class_has_weak_fields (klass)
+	       || allocation_can_be_a_proxy (klass);
+}
+
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, bool for_box)
 {
@@ -47,7 +78,7 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 
 	int32_t size = mono_class_instance_size (klass);
 	MonoMethod *allocator = nullptr;
-	llvm::Value *object = nullptr;
+	llvm::Function *serves = nullptr;
 
 	// The caller handles a string constructor before it gets here.
 	if (m_class_get_byval_arg (klass)->type == MONO_TYPE_STRING)
@@ -69,14 +100,6 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 			return fast.takeError ();
 
 		(*fast)->addRetAttr (llvm::Attribute::NoAlias);
-		// allockind lets LLVM erase an allocation that nothing uses, which is
-		// what SROA leaves behind once it scalarizes a temporary object.
-		// mono_gc_get_managed_allocator () keeps the classes an erased
-		// allocation is observable on out of this branch: a finalizer,
-		// MarshalByRefObject, weak fields and collect-before-allocs all send it
-		// to object_new_decl () below.
-		(*fast)->addFnAttr (
-			llvm::Attribute::getWithAllocKind (context (), llvm::AllocFnKind::Alloc));
 		// Argument 0 is the vtable. An allocator that takes a second argument
 		// takes the instance size there.
 		if ((*fast)->arg_size () == 2)
@@ -84,20 +107,26 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 				context (), 1, std::nullopt));
 		// The allocator raises OutOfMemoryException instead of answering null.
 		(*fast)->addRetAttr (llvm::Attribute::NonNull);
-		object = emit_protected_call (
-			builder, *fast,
-			adapt_to_callee (
-				builder, *fast,
-				{*vtable, builder.getIntN (TARGET_SIZEOF_VOID_P * 8, size)}));
+		serves = *fast;
 	} else {
 		llvm::Expected<llvm::Function *> slow = object_new_decl ();
 
 		if (!slow)
 			return slow.takeError ();
 
-		object = emit_protected_call (builder, *slow,
-		                              adapt_to_callee (builder, *slow, {*vtable}));
+		serves = *slow;
 	}
+
+	llvm::Value *object = emit_protected_call (
+		builder,
+		alloc_func_decl (*module, AllocShape::object, !allocation_is_observable (klass)),
+		{*vtable, builder.getIntN (TARGET_SIZEOF_VOID_P * 8, size), serves});
+
+	// Only the fast path raises rather than answering null, so only its site
+	// says the answer is not null.
+	if (allocator != nullptr)
+		if (auto *site = llvm::dyn_cast<llvm::CallBase> (object))
+			site->addRetAttr (llvm::Attribute::NonNull);
 
 	/*
 	 * The allocator wrote this word already, so this store is redundant. What it

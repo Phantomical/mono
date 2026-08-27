@@ -1,5 +1,6 @@
 #include "builtins.hpp"
 
+#include "alloc-func.hpp"
 #include "array-address.hpp"
 #include "array-shape.hpp"
 #include "cast-func.hpp"
@@ -127,6 +128,7 @@ MonoBuiltinLower::run (Module &m, ModuleAnalysisManager &)
 	case LowerStage::post_inline:
 		changed = lower_type_tests (m);
 		changed |= lower_vtable_reads (m);
+		changed |= lower_allocations (m);
 		break;
 	}
 

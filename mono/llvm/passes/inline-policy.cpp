@@ -105,13 +105,6 @@ cl::opt<unsigned> PromotedColdPercent (
 /// behind the allocation, and that store states the class in the IR. A class
 /// whose allocation can return a transparent proxy gets no such store, because
 /// the object returned then carries the proxy's vtable.
-///
-/// Reading the store rather than the alloc kind gives the same result under
-/// either collector. Boehm has no managed allocator
-/// (`mono_gc_get_managed_allocator ()` returns NULL there), so its allocations
-/// take the slow path, which carries no alloc kind for `erasable_allocation ()`
-/// below to read. Both paths take the vtable as an argument and both get the
-/// store.
 bool
 allocated_under_a_named_class (const Value *v)
 {
@@ -133,8 +126,9 @@ allocated_under_a_named_class (const Value *v)
 
 /// Whether LLVM can erase \p v once nothing reads it.
 ///
-/// LLVM erases the call only if the allocator carries an alloc kind. The
-/// translator marks one on a managed allocator, and only SGen has one.
+/// LLVM erases the call only if it carries an alloc kind, and `mono.alloc.*`
+/// carries one for every class an erasure is invisible on. That declaration is
+/// the same under either collector, so this answers the same as well.
 bool
 erasable_allocation (const Value *v)
 {

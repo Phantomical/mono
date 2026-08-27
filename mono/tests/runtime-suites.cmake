@@ -268,6 +268,14 @@ mono_runtime_suite(runtime-tailcall TESTS ${_tailcall}
 
 mono_runtime_suite(gshared LABEL gshared TESTS ${_gshared})
 
+# Every allocation is kept while sequence points are on, because a debugger stops
+# at one and can hand any object a frame holds to a method it is asked to call.
+# allocation_is_observable () answers yes for every class there, so this arm is
+# the one that reaches mono.alloc.object.kept for a class nothing else marks, and
+# the only one that reaches mono.alloc.vector.kept at all.
+mono_runtime_suite(runtime-alloc-kept TESTS alloc-elide.exe
+                   ENV "MONO_LLVM_JIT_TIER0=0" "MONO_DEBUG=gen-seq-points")
+
 # Continuations, whose two outcomes want naming rather than accepting either.
 # With everything compiled and a collector that keeps the saved stack out of the
 # heap, they work. Boehm is the collector that does not, and the tier-0 arm

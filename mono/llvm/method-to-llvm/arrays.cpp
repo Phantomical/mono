@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "operand-class.hpp"
 #include "runtime-error.hpp"
+#include "../passes/alloc-func.hpp"
 #include "../passes/array-address.hpp"
 #include "../passes/array-shape.hpp"
 #include "../passes/vtable-func.hpp"
@@ -1063,11 +1064,11 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 		return vtable.takeError ();
 
 	/*
-	 * The allocator raises this itself, and that is not enough. `allockind`
-	 * below lets LLVM erase an allocation nothing reads, which takes the raise
-	 * away with it: `newobj int32[]::.ctor(-1)` under a `pop` then answers an
-	 * array instead of OverflowException. The test has to sit outside the call
-	 * that the attribute makes erasable.
+	 * The allocator raises this itself, and that is not enough. The `allockind`
+	 * on `mono.alloc.vector` lets LLVM erase an allocation nothing reads, which
+	 * takes the raise away with it: `newobj int32[]::.ctor(-1)` under a `pop`
+	 * then answers an array instead of OverflowException. The test has to sit
+	 * outside the call that the attribute makes erasable.
 	 */
 	emit_cond_exception (
 		builder,
@@ -1075,7 +1076,7 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 		"OverflowException");
 
 	MonoMethod *allocator = mono_gc_get_managed_array_allocator (array);
-	llvm::Value *created = nullptr;
+	llvm::Function *serves = nullptr;
 
 	if (allocator != nullptr) {
 		llvm::Expected<llvm::Function *> fast = create_method_decl (allocator);
@@ -1084,29 +1085,9 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 			return fast.takeError ();
 
 		(*fast)->addRetAttr (llvm::Attribute::NoAlias);
-		// allockind lets LLVM erase an array that nothing reads.
-		// mono_gc_get_managed_array_allocator () keeps an erasure the program can
-		// observe out of this branch: it answers null while
-		// sgen_has_per_allocation_action is set. verify-before-allocs and
-		// collect-before-allocs are what set that flag, and the icall below
-		// serves the call instead.
-		//
-		// allocsize names a size in bytes, and argument 1 is the element count,
-		// so this allocator gets the kind alone.
-		(*fast)->addFnAttr (
-			llvm::Attribute::getWithAllocKind (context (), llvm::AllocFnKind::Alloc));
 		// The allocator raises OutOfMemoryException instead of answering null.
 		(*fast)->addRetAttr (llvm::Attribute::NonNull);
-
-		// Argument 0 is the vtable and argument 1 the element count. The count
-		// is a signed native int: the allocator tells a negative length from an
-		// oversized one by its sign.
-		llvm::Type *native = builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8);
-
-		created = emit_protected_call (
-			builder, *fast,
-			adapt_to_callee (builder, *fast,
-		                         {*vtable, builder.CreateSExtOrTrunc (length, native)}));
+		serves = *fast;
 	} else {
 		llvm::Expected<llvm::Function *> slow =
 			icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_array_new_specific);
@@ -1115,14 +1096,17 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 			return slow.takeError ();
 
 		(*slow)->addRetAttr (llvm::Attribute::NoAlias);
-
-		created = emit_protected_call (
-			builder, *slow,
-			adapt_to_callee (
-				builder, *slow,
-				{*vtable,
-			         builder.CreateSExtOrTrunc (length, builder.getInt32Ty ())}));
+		serves = *slow;
 	}
+
+	// The count is a signed native int: the allocator tells a negative length
+	// from an oversized one by its sign. The icall behind it takes an int32,
+	// and the lowering narrows the operand for that one.
+	llvm::Type *native = builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8);
+	llvm::Value *created = emit_protected_call (
+		builder,
+		alloc_func_decl (*module, AllocShape::vector, !allocation_is_observable (array)),
+		{*vtable, builder.CreateSExtOrTrunc (length, native), serves});
 
 	/*
 	 * Both branches make an array of this class and no other. A proxy stands in
@@ -1135,8 +1119,8 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 	if (auto *made = llvm::dyn_cast<llvm::Instruction> (created))
 		mark_exact_class (*made, array);
 
-	// Only the fast branch marks its allocator nonnull. The icall's answer
-	// therefore needs the `_or_null` form.
+	// Only the fast branch raises rather than answering null, so the icall's
+	// answer needs the `_or_null` form.
 	if (auto *site = llvm::dyn_cast<llvm::CallBase> (created))
 		site->addRetAttr (array_extent (allocator == nullptr, array, length));
 

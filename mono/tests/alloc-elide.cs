@@ -4,19 +4,30 @@ using System.Runtime.CompilerServices;
 /*
  * What an erased allocation must not change.
  *
- * The fast allocator is declared with allockind(alloc), which lets LLVM erase
- * an allocation that nothing uses. SROA leaves one of those behind when it
- * scalarizes a temporary object, and the arms below are the three answers that
- * has to give: erase the temporary, keep an object that something reads, and
- * keep an object whose fields are read straight out of fresh memory.
+ * `mono.alloc.object` and `mono.alloc.vector` carry allockind(alloc), which
+ * lets LLVM erase an allocation that nothing uses. SROA leaves one of those
+ * behind when it scalarizes a temporary object, and the arms below are the
+ * three answers that has to give: erase the temporary, keep an object that
+ * something reads, and keep an object whose fields are read straight out of
+ * fresh memory.
  *
  * ZeroStep pins that a field the constructor leaves alone reads as zero, and
  * KeptStep that a load at offset 0 still reads the vtable. An allocation
  * attribute describing the memory as zeroed or as uninitialized folds one of
  * those loads to a constant, and these two arms are what catches it.
  *
- * A finalizable class never reaches the fast allocator, so Finalized covers the
- * boundary from the other side.
+ * A finalizable class allocates through `mono.alloc.object.kept`, which carries
+ * no alloc kind, so Finalized covers the boundary from the other side. The
+ * `runtime-alloc-kept` arm runs the whole program with sequence points on,
+ * where every class takes that form.
+ *
+ * StraddleStep covers what the declaration claims about memory rather than the
+ * erasure. Under `memory(argmem: read, inaccessiblemem: readwrite)` a load
+ * below an allocation reads the store above it, so the arm answers wrong where
+ * an allocation writes a field its caller named.
+ *
+ * Both collectors run every arm against the same declaration, so an arm that
+ * answers differently under the two names the collector.
  *
  * Each arm is one call of a small method, driven from a loop in Main. A method
  * holding its own loop is entered once, and both counters count entries, so the
@@ -42,6 +53,10 @@ class Escapes {
 class Finalized {
 	public static volatile int collected;
 	~Finalized () { collected++; }
+}
+
+class Cell {
+	public int value;
 }
 
 class Vec {
@@ -141,6 +156,21 @@ class AllocElide {
 		}
 	}
 
+	/*
+	 * The store and the load straddle an allocation that stands, because the
+	 * length is read. The field is an int, so no write barrier sits between
+	 * them and this arm answers on the allocation alone.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int StraddleStep (Cell c, int n)
+	{
+		c.value = n;
+
+		int[] a = new int[4];
+
+		return c.value + a.Length;
+	}
+
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool RefusesNegativeRead (int n)
 	{
@@ -157,7 +187,9 @@ class AllocElide {
 		int kept = 0;
 		double dot = 0;
 		int dead = 0, keptArray = 0, refusedDead = 0, refusedRead = 0;
+		long straddle = 0;
 		Vec a = new Vec (3, 4, 5), b = new Vec (1, 2, 3);
+		Cell cell = new Cell ();
 
 		/* Enough entries to leave the interpreter and both compiled tiers. */
 		for (int i = 0; i < N; ++i) {
@@ -166,6 +198,7 @@ class AllocElide {
 			dot += ElidedStep (a, b);
 			dead += DeadArrayStep (i);
 			keptArray += KeptArrayStep (i);
+			straddle += StraddleStep (cell, i);
 
 			if (RefusesNegativeDead (-1))
 				refusedDead++;
@@ -183,6 +216,10 @@ class AllocElide {
 		Check ("a used array keeps its elements", keptArray == 2 * N);
 		Check ("a dead array's negative length still raises", refusedDead == N);
 		Check ("a read array's negative length still raises", refusedRead == N);
+
+		/* Each step answers i + 4, so the sum is the sum of i plus 4 for each. */
+		Check ("a field read below an allocation reads the store above it",
+		       straddle == (long) N * (N - 1) / 2 + 4 * (long) N);
 
 		MakeGarbage ();
 		GC.Collect ();

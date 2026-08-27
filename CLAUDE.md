@@ -483,8 +483,8 @@ as well as by `amd64.hpp`, so it holds nothing but `#define`s.
 - **`arch/`** — everything that names a register, encodes an instruction or restates the
   runtime's calling convention, behind `arch/arch.hpp`. A port is a new sibling of
   `arch/amd64/`, not a hunt through the backend for the amd64 in it.
-- **`passes/`** — `array-address`, `lower-builtins` and `cast-func` rewrite the symbolic
-  calls the front end leaves standing. `restore-tail-position` puts back the tail position
+- **`passes/`** — `array-address`, `lower-builtins`, `cast-func` and `alloc-func` rewrite
+  the symbolic calls the front end leaves standing. `restore-tail-position` puts back the tail position
   SimplifyCFG merged away. `devirtualize` and `fold-cast` answer a site whose operands
   the optimizer settled. `top-down-inline` is tier 2's cost model and `inline-copies`
   the sweep behind it. `eh-gather` and `finally-range` are `MachineFunctionPass`es that
@@ -646,6 +646,31 @@ argument that two unrelated classes share no instance does not reach arrays, bec
 covariance puts `Derived[]` under both `Base[]` and `IMarker[]`. `mono/tests/cast-fold.cs`
 gates both.
 
+**An allocation is one call until late as well.** `emit_object_alloc ()` and
+`emit_vector_alloc ()` write `mono.alloc.object` or `mono.alloc.vector` carrying the
+vtable, the size or the element count, and the allocator behind it, and
+`lower_allocations ()` (`passes/alloc-func.cpp`) writes that call back at
+`LowerStage::post_inline`. The allocator is the collector's own managed allocator where
+it has one, and the runtime's new-object or array-new icall where it does not, so the
+collector reaches the IR as an operand rather than as the shape of the site.
+
+Two attributes ride on the declaration, and both are what the one shape buys:
+
+- `memory(argmem: read, inaccessiblemem: readwrite)`, so a store into a field reaches a
+  load below an allocation. A call with no memory effects clobbers every location
+  instead. The argument that the claim holds while SGen moves objects sits at the
+  attribute, and it rests on `mini_gc_init ()` setting no `thread_mark_func`. A precise
+  mark function, or a major collector that compacts, makes it wrong with no build error.
+- `allockind("alloc")`, so LLVM erases an allocation nothing reads. A class the program
+  can tell an erasure on — a finalizer, weak fields, or an allocation that can answer
+  with a proxy — takes `mono.alloc.object.kept` instead, which carries no alloc kind, and
+  so does every class while sequence points are on, because a debugger hands any object a
+  frame holds to a method it is asked to call. `allocation_is_observable ()` is that rule.
+  A collector acting on each allocation, as under `--gc-debug=collect-before-allocs`, is
+  deliberately not part of it: a tool showing where the allocations are has to show the
+  ones the optimizer took away. `mono/tests/alloc-elide.cs` gates both attributes, and its
+  `runtime-alloc-kept` arm is what reaches the kept forms for a class nothing else marks.
+
 Beyond taking a site the IL already settled — non-virtual, `final`, or resolved by
 `constrained.` — the JIT does not devirtualize. If devirtualization does arrive, it is
 exact-only. A rewrite must prove the receiver's class exactly, so the failure mode is a
@@ -754,9 +779,9 @@ of its own, which puts a run back on LLVM's own answers without a rebuild:
   parameter the callee dispatches on.
 - `-mono-inline-scalarize-arg-bonus` — the site passes a fresh allocation into a
   parameter the callee does not capture, so the fold hands SROA the accesses a call was
-  hiding. **SGen only**, because what lets LLVM erase the allocation behind the
-  scalarized fields is the alloc kind on a managed allocator, and
-  `mono_gc_get_managed_allocator ()` answers null under Boehm.
+  hiding. What lets LLVM erase the allocation behind the scalarized fields is the alloc
+  kind on `mono.alloc.object`, which both collectors emit, so this answers the same
+  under either.
 
 The three bonuses are threshold bonuses rather than cost discounts, and each is priced
 as a count of calls the fold takes away. They go in behind `SingleBBBonus` and
@@ -765,8 +790,7 @@ which is what lets one reach a cold site at all. A hot site is weighed against
 `HotCallSiteThreshold`, which is large enough that none of them decides anything there.
 
 What states a fresh object's class in the IR is the vtable store `emit_object_alloc ()`
-writes, not the alloc kind the managed allocator alone carries, so the two
-devirtualization bonuses answer the same under either collector. `passes/inline-policy.hpp` says what each one recognizes
+writes, rather than anything the allocation itself carries. `passes/inline-policy.hpp` says what each one recognizes
 and `mono/tests/tier2-inline-policy.cs` gates the two that a threshold can be calibrated
 against.
 

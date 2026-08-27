@@ -955,6 +955,7 @@ private:
 	llvm::Expected<llvm::Constant *> code_address_symbol (MonoMethod *target);
 	MonoMethod *synchronized_target (MonoMethod *target);
 	static bool allocation_can_be_a_proxy (MonoClass *klass);
+	static bool allocation_is_observable (MonoClass *klass);
 	MonoClass *exact_receiver_class (const StackValue &receiver);
 	MonoMethod *exact_virtual_target (const StackValue &receiver, MonoMethod *callee);
 	bool is_own_this (llvm::Value *value);
