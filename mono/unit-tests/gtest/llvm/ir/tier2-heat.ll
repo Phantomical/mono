@@ -1,5 +1,6 @@
 ; The shapes a promoted body arrives at the tier-2 inliner in, with the counts
-; the profile leaves on them. inline-heat-tests.cpp ranks a call site in each.
+; the profile leaves on them. inline-heat-tests.cpp reads that ranking for a
+; call site in each.
 ;
 ; Every body is entered 1000 times, so a count below is a share of that and the
 ; verdict can be read off the ratio. "mono-tier-threshold" is what marks a body
@@ -45,8 +46,7 @@ done:
   ret i32 %b
 }
 
-; No loop, so every block runs each time the body is entered. What promoted such
-; a body is the calls it took.
+; No loop, so every block runs each time the body is entered.
 define i32 @loopless(i32 %n) #0 !prof !0 {
 entry:
   %a = call i32 @callee(i32 %n)

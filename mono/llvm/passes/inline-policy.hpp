@@ -27,11 +27,9 @@ class Value;
 namespace mono {
 
 /// How often a call site runs, against the body it sits in.
-///
-/// tier2_site_heat () decides which of these a site gets.
 enum class SiteHeat { cold, ordinary, hot };
 
-/// Where \p call sits in the promoted body around it, or nothing.
+/// How hot \p call runs in the promoted body around it, or nothing.
 ///
 /// A tier-2 compile holds one promoted body, so the module's profile summary is
 /// built from that body's own counters. Its percentiles then land on that

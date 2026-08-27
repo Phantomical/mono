@@ -525,9 +525,8 @@ tier2_site_heat (const CallBase &call, BlockFrequencyInfo *caller_bfi)
 
 	/*
 	 * No block of the body runs much more often than the body is entered, so
-	 * nothing in it stands out as the work. What promoted such a body is the
-	 * calls it took, and every block it runs each time is then as hot as the
-	 * body.
+	 * nothing in it stands out as the work. Every block it runs each time is
+	 * then as hot as the body.
 	 */
 	if (*site >= *entry && !a_block_runs_at (*caller, *caller_bfi, bar))
 		return SiteHeat::hot;

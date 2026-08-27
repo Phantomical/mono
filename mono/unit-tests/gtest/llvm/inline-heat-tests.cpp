@@ -1,9 +1,10 @@
 /*
  * Tests for tier2_site_heat (), which ranks a call site inside the promoted
- * body around it, and for the two places the cost model asks it.
+ * body around it, and for isColdCallSite () and getHotCallSiteThreshold (),
+ * which ask it first.
  *
  * Pure LLVM: the answer reads a function attribute and the profile counts BFI
- * carries, so neither is metadata and neither is a runtime.
+ * carries, so neither of these needs metadata or a runtime.
  *
  * The shapes and their counts are in ir/tier2-heat.ll, and that file says what
  * each body is for.
@@ -121,7 +122,7 @@ struct HeatModule {
 			.value_or (0);
 	}
 
-	/// What the ranking says about the call in \p in's block \p name.
+	/// What the ranking says about the call in block \p name of function \p in.
 	std::optional<SiteHeat> heat_of (StringRef in, StringRef name)
 	{
 		Function &root = function (in);
@@ -155,8 +156,8 @@ struct HeatModule {
 
 /*
  * The counts every case below rests on. A weight in the file that stopped
- * giving these would leave each of them testing a ratio of its own, and a
- * verdict that still held for the wrong reason.
+ * giving these would leave each case testing a ratio of its own. The verdict
+ * would still come out the same, but for the wrong reason.
  */
 TEST (InlineHeat, TheFileLeavesTheCountsItsShapesName)
 {
@@ -233,8 +234,9 @@ TEST (InlineHeat, ABodyWithNoCountsIsNotRanked)
 }
 
 /*
- * What the two calls in inline-cost.cpp decide. A verdict above passes whether
- * or not those calls are there, so the budget is read here as well.
+ * What isColdCallSite () and getHotCallSiteThreshold () decide. A verdict above
+ * passes whether or not those calls are there, so the budget is read here as
+ * well.
  */
 TEST (InlineHeat, TheEntryBlockOfAPromotedBodyGetsTheDefaultBudget)
 {

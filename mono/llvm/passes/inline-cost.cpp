@@ -18,8 +18,8 @@
 // outside LLVM, and how to read the copy against a later release.
 //
 // What this backend knows that the model does not is asked for through
-// inline-policy.hpp, so the copy carries the calls into it and none of the
-// policy.
+// inline-policy.hpp. The copy makes those calls and holds none of the policy
+// itself.
 
 #include "inline-cost.hpp"
 
@@ -2046,9 +2046,9 @@ bool CallAnalyzer::allowSizeGrowth(CallBase &Call) {
 
 bool InlineCostCallAnalyzer::isColdCallSite(CallBase &Call,
                                             BlockFrequencyInfo *CallerBFI) {
-  // A tier-2 module holds one promoted body, so its summary cannot say how this
-  // site compares with the rest of the program. Mono ranks the site inside that
-  // body instead.
+  // The summary's cold percentile lands on this body's own entry count, so a
+  // site the body always runs reads cold. tier2_site_heat () ranks it inside
+  // the body instead.
   if (std::optional<mono::SiteHeat> Heat =
           mono::tier2_site_heat(Call, CallerBFI))
     return *Heat == mono::SiteHeat::cold;

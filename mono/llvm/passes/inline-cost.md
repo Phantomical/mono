@@ -13,8 +13,9 @@ every hunk into one of them:
     diff -u ~/projects/llvm-project/llvm/lib/Analysis/InlineCost.cpp \
             mono/llvm/passes/inline-cost.cpp
 
-Everything under "What the copy changes" is mechanical. Each is there to let one
-process hold two copies of the same code, and none of them moves a number.
+Every item under "What the copy changes" but the indirect-call boost is
+mechanical, there to let one process hold two copies of the same code, and moves
+no number. The boost is a policy choice, and its own note says why.
 
 Everything under "What the copy asks mono" is the point of taking a copy at all.
 Each is one call into `inline-policy.cpp`, which holds the policy, so a hunk
