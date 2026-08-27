@@ -1007,6 +1007,12 @@ set(MONO_TESTS_TIER2_INLINE_DISPATCH_SRC
   tier2-inline-dispatch.cs
 )
 
+# What the cost model answers about a type test over a parameter. Two arms the
+# same way, and the file says why it names a threshold of its own.
+set(MONO_TESTS_TIER2_INLINE_CASTS_SRC
+  tier2-inline-casts.cs
+)
+
 # The tailcall suite, including the corpus imported from coreclr.
 set(MONO_TESTS_TAILCALL_CS_SRC
   tailcall/coreclr/JIT/CodeGenBringUpTests/RecursiveTailCall.cs

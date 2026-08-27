@@ -1,5 +1,10 @@
 #include "inline-policy.hpp"
 
+#include "cast-func.hpp"
+#include "compile-state.hpp"
+#include "fold-cast.hpp"
+#include "method-symbols.hpp"
+#include "operand-class.hpp"
 #include "strip-casts.hpp"
 #include "vtable-func.hpp"
 #include "vtable-snapshot.hpp"
@@ -50,6 +55,11 @@ cl::opt<bool> FoldVTableFields (
 cl::opt<bool> FoldVTableSlots (
 	"mono-inline-fold-vtable-slots", cl::Hidden, cl::init (true),
 	cl::desc ("Answer a read of a dispatch slot a vtable snapshot states"));
+
+cl::opt<bool> AnswerTypeTests (
+	"mono-inline-answer-casts", cl::Hidden, cl::init (true),
+	cl::desc ("Answer a type test from the class the call site settled its "
+	          "operand to"));
 
 /*
  * Each bonus below counts the calls a fold removes, times what the model
@@ -265,6 +275,31 @@ stored_vtable_snapshot (Value *object, const DataLayout &dl)
 	return found;
 }
 
+/// The class the IR gives \p v, and whether that is the class it is rather than
+/// a bound on it.
+///
+/// \p walked is the function being weighed, and it is what answers for a value
+/// the call site settled nothing about.
+///
+/// `operand_class ()` reads a parameter's class off the function that declares
+/// it, so the function it is handed has to own the value. Handing it the caller
+/// for a callee's argument reads whatever class the caller declares at the same
+/// index, which is a wrong answer that looks like a right one.
+std::pair<MonoClass *, bool>
+settled_class (Value *v, const Function &walked, SettledValue settled)
+{
+	v = const_cast<Value *> (strip_casts (v));
+
+	if (Value *caller_side = settled (v)) {
+		if (const auto *arg = dyn_cast<Argument> (caller_side))
+			return operand_class (caller_side, *arg->getParent ());
+		if (const auto *made = dyn_cast<Instruction> (caller_side))
+			return operand_class (caller_side, *made->getFunction ());
+	}
+
+	return operand_class (v, walked);
+}
+
 } // namespace
 
 bool
@@ -323,6 +358,48 @@ folded_vtable_read (LoadInst &load, SettledValue settled)
 		return nullptr;
 
 	return stored_vtable_snapshot (base, dl);
+}
+
+Value *
+folded_type_test (CallBase &call, SettledValue settled)
+{
+	const Function *decl = call.getCalledFunction ();
+
+	if (!AnswerTypeTests || decl == nullptr)
+		return nullptr;
+
+	StringRef name = decl->getName ();
+	bool raises = name == cast_castclass_name;
+
+	if (!raises && name != cast_isinst_name)
+		return nullptr;
+
+	/*
+	 * Both classes are pointers the translator wrote into this compile's own
+	 * metadata, so they mean nothing to anything reading the module later.
+	 */
+	if (current_compile ().domain == nullptr)
+		return nullptr;
+
+	auto *named = dyn_cast<GlobalValue> (call.getArgOperand (1));
+	MonoClass *target = named != nullptr ? marked_class (*named) : nullptr;
+	Value *object = call.getArgOperand (0);
+	std::pair<MonoClass *, bool> held =
+		settled_class (object, *call.getFunction (), settled);
+
+	switch (cast_answer (target, held.first, held.second)) {
+	case CastAnswer::Yes:
+		return object;
+	case CastAnswer::No:
+		// castclass raises where isinst answers null, and a throw is not a
+		// value the walk can carry. The site keeps its cost.
+		return raises ? nullptr : ConstantPointerNull::get (
+			               cast<PointerType> (call.getType ()));
+	case CastAnswer::Unknown:
+		return nullptr;
+	}
+
+	return nullptr;
 }
 
 BasicBlock *

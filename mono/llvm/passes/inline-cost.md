@@ -88,6 +88,13 @@ it states fold. The walk has no memory model of its own, so the answer follows
 the vtable store an allocation carries — one step no other simplification here
 takes. It goes in front of the SROA question, which otherwise consumes the load.
 
+**`CallAnalyzer::visitCallBase ()` asks `folded_type_test ()`.** A type test is
+one call each until `LowerCastFuncPass`, which runs behind the inliner, so the
+model sees the form `cast_answer ()` settles. It goes behind
+`simplifyCallSite ()`, which is where a call that is really a value belongs. The
+tests are cheap and the arms they rule out are not: a cascade picking one
+implementation out of five measured 850 unanswered and 100 answered.
+
 `inline-policy.hpp` documents what each answer means. Each answer is gated by an
 option of its own, so a run can be put back on LLVM's own answers without a
 rebuild.
@@ -112,8 +119,9 @@ A cost and a budget that `MONO_LLVM_JIT_TRACE` prints are not what an upstream
 build gives for the same pair, so a comparison against clang or against LLVM's
 own pipeline needs the options off first. Setting each `mono-inline-*-bonus` to
 zero, turning off `-mono-inline-implicit-null-free`,
-`-mono-inline-dispatch-is-a-load`, `-mono-inline-fold-vtable-fields` and
-`-mono-inline-fold-vtable-slots`, and turning **on**
+`-mono-inline-dispatch-is-a-load`, `-mono-inline-fold-vtable-fields`,
+`-mono-inline-fold-vtable-slots` and `-mono-inline-answer-casts`, and turning
+**on**
 `-mono-inline-boost-indirect-calls` is what gets LLVM's own answers back. Every
 answer this file adds owes an option here, so that this list stays the whole of
 it. LLVM's `getInlineCost ()` is linked in and still reachable as well, so one

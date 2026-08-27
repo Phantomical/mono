@@ -2543,6 +2543,14 @@ bool CallAnalyzer::visitCallBase(CallBase &Call) {
   if (simplifyCallSite(F, Call))
     return true;
 
+  // A type test mono writes as a call, which the class this site settled its
+  // operand to can answer. The branch behind it then settles as well.
+  auto Settled = [this](Value *V) { return getSimplifiedValueUnchecked(V); };
+  if (Value *Answer = mono::folded_type_test(Call, Settled)) {
+    SimplifiedValues[&Call] = Answer;
+    return true;
+  }
+
   // Next check if it is an intrinsic we know about.
   // FIXME: Lift this into part of the InstVisitor.
   if (IntrinsicInst *II = dyn_cast<IntrinsicInst>(&Call)) {

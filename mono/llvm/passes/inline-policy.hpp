@@ -45,6 +45,14 @@ bool lowers_to_a_load (const llvm::Function &f);
 /// inference was wrong rather than that generated code is.
 llvm::Value *folded_vtable_read (llvm::LoadInst &load, SettledValue settled);
 
+/// What a type test answers, where the class the call site settled its operand
+/// to decides it, or null.
+///
+/// A test the operand's own function could settle is already answered, so what
+/// is left is the one a caller decides. Null covers a test that fails for
+/// certain and raises rather than answering, which is a throw and not a value.
+llvm::Value *folded_type_test (llvm::CallBase &call, SettledValue settled);
+
 /// The successor of \p branch that a run reaches, or null if \p branch is not
 /// a null check that codegen folds.
 ///

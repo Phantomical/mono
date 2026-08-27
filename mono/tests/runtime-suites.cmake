@@ -636,6 +636,21 @@ mono_runtime_suite(runtime-tier2-inline-dispatch-off TESTS ${_tier2_inline_dispa
                        "MONO_INLINE_POLICY=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=190 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false --llvm-opt=-mono-inline-fold-vtable-slots=false")
 
+# What the cost model answers about a type test over a parameter. The off arm
+# turns that answer off alone, so what it separates is the answered cascade.
+_mono_exe_list(_tier2_inline_casts ${MONO_TESTS_TIER2_INLINE_CASTS_SRC})
+mono_runtime_suite(runtime-tier2-inline-casts TESTS ${_tier2_inline_casts}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=512"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=400")
+mono_runtime_suite(runtime-tier2-inline-casts-off TESTS ${_tier2_inline_casts}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=512"
+                       "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=400 --llvm-opt=-mono-inline-answer-casts=false")
+
 # MONO_ENV_OPTIONS has to reach the runtime before it parses its own argv.
 foreach(_gc IN LISTS _mono_gcs)
   _mono_gc_env(_gc_env "${_gc}")
