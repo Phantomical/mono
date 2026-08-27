@@ -132,10 +132,12 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 	 * The allocator wrote this word already, so this store is redundant. What it
 	 * adds is the class of a fresh object, stated in the IR. Without it the
 	 * optimizer sees an opaque pointer. A dispatch site then keeps its lookup,
-	 * even where the allocation is in the same block.
+	 * even where the allocation is in the same block. It is also what keeps
+	 * `zeroed` from folding a read of the word to null.
 	 *
 	 * A class whose allocation can answer with a proxy gets no store, because
-	 * what comes back then carries the proxy's vtable rather than this one.
+	 * what comes back then carries the proxy's vtable rather than this one. Its
+	 * allocation takes the kept declaration, which makes no `zeroed` claim.
 	 */
 	if (!allocation_can_be_a_proxy (klass)) {
 		builder.CreateAlignedStore (

@@ -139,8 +139,19 @@ alloc_func_decl (Module &m, AllocShape shape, bool erasable)
 	decl->setMemoryEffects (MemoryEffects::argMemOnly (ModRefInfo::Ref)
 	                        | MemoryEffects::inaccessibleMemOnly (ModRefInfo::ModRef));
 
+	/*
+	 * `zeroed` says every byte of the block comes back zero. SGen bumps a TLAB
+	 * that `zero_tlab_if_necessary ()` (`mono/sgen/sgen-alloc.c`) already
+	 * cleared. Boehm clears every block but the atomic one, which
+	 * `mono_gc_alloc_obj ()` memsets itself. A collector that hands back dirty
+	 * memory makes this wrong with no build error.
+	 *
+	 * `emit_object_alloc ()` and `emit_vector_alloc ()` store the words an
+	 * allocator writes itself again, right beside the call.
+	 */
 	if (erasable)
-		decl->addFnAttr (Attribute::getWithAllocKind (c, AllocFnKind::Alloc));
+		decl->addFnAttr (Attribute::getWithAllocKind (
+			c, AllocFnKind::Alloc | AllocFnKind::Zeroed));
 
 	return decl;
 }

@@ -276,6 +276,11 @@ mono_runtime_suite(gshared LABEL gshared TESTS ${_gshared})
 mono_runtime_suite(runtime-alloc-kept TESTS alloc-elide.exe
                    ENV "MONO_LLVM_JIT_TIER0=0" "MONO_DEBUG=gen-seq-points")
 
+# GVN and DSE read allockind(zeroed), and tier 1 runs neither. The threshold is
+# low enough that each arm promotes inside the loop in Main.
+mono_runtime_suite(runtime-alloc-zeroed TESTS alloc-elide.exe
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=100000")
+
 # Continuations, whose two outcomes want naming rather than accepting either.
 # With everything compiled and a collector that keeps the saved stack out of the
 # heap, they work. Boehm is the collector that does not, and the tier-0 arm

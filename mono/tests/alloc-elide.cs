@@ -11,10 +11,14 @@ using System.Runtime.CompilerServices;
  * something reads, and keep an object whose fields are read straight out of
  * fresh memory.
  *
- * ZeroStep pins that a field the constructor leaves alone reads as zero, and
- * KeptStep that a load at offset 0 still reads the vtable. An allocation
- * attribute describing the memory as zeroed or as uninitialized folds one of
- * those loads to a constant, and these two arms are what catches it.
+ * The same two declarations carry allockind(zeroed), so a load of a word nothing
+ * wrote answers zero without reading memory. ZeroStep reads such a word, and
+ * FreshElementStep reads one twice: once where the read can fold, and once
+ * through a call where it cannot.
+ *
+ * The words an allocator writes itself are stored again beside the call.
+ * KeptStep and LengthStep catch either store going missing: a fresh object then
+ * reads a null vtable, and a fresh array a length of zero.
  *
  * A finalizable class allocates through `mono.alloc.object.kept`, which carries
  * no alloc kind, so Finalized covers the boundary from the other side. The
@@ -33,7 +37,8 @@ using System.Runtime.CompilerServices;
  * holding its own loop is entered once, and both counters count entries, so the
  * arm would stay in the interpreter. The loop count gets the arms to tier 1.
  * Reaching tier 2 as well wants MONO_LLVM_JIT_TIER2_THRESHOLD lowered, because
- * these bodies are short enough that the program ends first.
+ * these bodies are short enough that the program ends first. The
+ * `runtime-alloc-zeroed` arm lowers it, which is what reaches GVN and DSE.
  */
 
 class Untouched {
@@ -137,6 +142,39 @@ class AllocElide {
 	}
 
 	/*
+	 * The length is no constant, so what the read answers is the store
+	 * emit_vector_alloc () writes behind the call. Without it the read folds to
+	 * zero.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int LengthStep (int n)
+	{
+		int[] a = new int[n & 7];
+
+		return a.Length;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int ReadsElement (int[] a, int at)
+	{
+		return a[at];
+	}
+
+	/*
+	 * The read here can fold from the allocation and the one in ReadsElement
+	 * cannot, so the two disagree where a block comes back dirty. Both indexes
+	 * are constants, so the store above does not clobber the read.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int FreshElementStep (int n)
+	{
+		int[] a = new int[8];
+
+		a[0] = n;
+		return a[1] - ReadsElement (a, 1);
+	}
+
+	/*
 	 * A negative length raises even where the array itself is dead. This is the
 	 * arm that regressed when arrays first took the attribute: the raise lived
 	 * inside the allocator, so erasing the call took the exception with it.
@@ -187,6 +225,7 @@ class AllocElide {
 		int kept = 0;
 		double dot = 0;
 		int dead = 0, keptArray = 0, refusedDead = 0, refusedRead = 0;
+		int length = 0, expectedLength = 0, freshElement = 0;
 		long straddle = 0;
 		Vec a = new Vec (3, 4, 5), b = new Vec (1, 2, 3);
 		Cell cell = new Cell ();
@@ -198,6 +237,9 @@ class AllocElide {
 			dot += ElidedStep (a, b);
 			dead += DeadArrayStep (i);
 			keptArray += KeptArrayStep (i);
+			length += LengthStep (i);
+			expectedLength += i & 7;
+			freshElement += FreshElementStep (i);
 			straddle += StraddleStep (cell, i);
 
 			if (RefusesNegativeDead (-1))
@@ -214,6 +256,8 @@ class AllocElide {
 		/* The sum of i + 1 over the loop, which the erased array cannot change. */
 		Check ("a dead array changes no answer", dead == (long) N * (N + 1) / 2);
 		Check ("a used array keeps its elements", keptArray == 2 * N);
+		Check ("a fresh array reads back its length", length == expectedLength);
+		Check ("an element nothing wrote reads as zero", freshElement == 0);
 		Check ("a dead array's negative length still raises", refusedDead == N);
 		Check ("a read array's negative length still raises", refusedRead == N);
 

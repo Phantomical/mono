@@ -1103,10 +1103,11 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 	// from an oversized one by its sign. The icall behind it takes an int32,
 	// and the lowering narrows the operand for that one.
 	llvm::Type *native = builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8);
+	llvm::Value *count = builder.CreateSExtOrTrunc (length, native);
 	llvm::Value *created = emit_protected_call (
 		builder,
 		alloc_func_decl (*module, AllocShape::vector, !allocation_is_observable (array)),
-		{*vtable, builder.CreateSExtOrTrunc (length, native), serves});
+		{*vtable, count, serves});
 
 	/*
 	 * Both branches make an array of this class and no other. A proxy stands in
@@ -1123,6 +1124,20 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 	// answer needs the `_or_null` form.
 	if (auto *site = llvm::dyn_cast<llvm::CallBase> (created))
 		site->addRetAttr (array_extent (allocator == nullptr, array, length));
+
+	/*
+	 * The allocator wrote this word already. The store states the length in the
+	 * IR, at the width array_length () loads, so `zeroed` does not fold that
+	 * read to zero.
+	 */
+	constexpr unsigned bytes = sizeof (mono_array_size_t);
+
+	builder.CreateAlignedStore (
+		builder.CreateSExtOrTrunc (count, builder.getIntNTy (bytes * 8)),
+		builder.CreateGEP (
+			builder.getInt8Ty (), created,
+			builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, max_length))),
+		llvm::Align (bytes));
 
 	return created;
 }
