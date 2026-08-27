@@ -26,6 +26,9 @@ class Unrelated { }
 
 sealed class Sealed : Base { }
 
+class Holder<T> { }
+class IntHolder : Holder<int>, IMarker { }
+
 public class CastFold {
 	static int failures;
 
@@ -82,6 +85,33 @@ public class CastFold {
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static object CastToDerived (Base b) => (Derived) b;
+
+	// A closed generic instance bounds its slot the way an ordinary class does,
+	// and assignability carries down to the interfaces it implements.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool ListIsCollection (List<int> l) => l is ICollection<int>;
+
+	// Two instantiations of one generic are unrelated classes, and no class is
+	// under both.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool HolderIntIsHolderString (Holder<int> h) => h is Holder<string>;
+
+	// A bound says nothing about a class under it.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool HolderIntIsIntHolder (Holder<int> h) => h is IntHolder;
+
+	// A subclass may implement any interface, whether or not the bound is a
+	// generic instance.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool HolderIntIsMarker (Holder<int> h) => h is IMarker;
+
+	/*
+	 * One shared body serves both calls below, so its `Holder<T>` parameter
+	 * states no class at all. A body that answered off the shared signature
+	 * would answer the two the same, and the two disagree.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool IsHolderOfObject<T> (Holder<T> h) => h is Holder<object>;
 
 	// The class of a fresh object is exact, so both directions are answerable.
 	[MethodImpl (MethodImplOptions.NoInlining)]
@@ -152,6 +182,27 @@ public class CastFold {
 		}
 
 		Check ("cast Base(Base) to Derived throws", threw, true);
+
+		Holder<int> held = new Holder<int> ();
+		Holder<int> held_derived = new IntHolder ();
+
+		Check ("List<int> is ICollection<int>", ListIsCollection (new List<int> ()), true);
+		Check ("null List<int> is ICollection<int>", ListIsCollection (null), false);
+
+		Check ("Holder<int> is Holder<string>", HolderIntIsHolderString (held), false);
+		Check ("Holder<int>(IntHolder) is Holder<string>",
+		       HolderIntIsHolderString (held_derived), false);
+
+		Check ("Holder<int>(IntHolder) is IntHolder", HolderIntIsIntHolder (held_derived), true);
+		Check ("Holder<int>(Holder<int>) is IntHolder", HolderIntIsIntHolder (held), false);
+
+		Check ("Holder<int>(IntHolder) is IMarker", HolderIntIsMarker (held_derived), true);
+		Check ("Holder<int>(Holder<int>) is IMarker", HolderIntIsMarker (held), false);
+
+		Check ("shared Holder<object> is Holder<object>",
+		       IsHolderOfObject<object> (new Holder<object> ()), true);
+		Check ("shared Holder<string> is Holder<object>",
+		       IsHolderOfObject<string> (new Holder<string> ()), false);
 
 		Check ("fresh Derived is Base", FreshDerivedIsBase (), true);
 		Check ("fresh Base is Derived", FreshBaseIsDerived (), false);
