@@ -18,7 +18,8 @@
 // outside LLVM, and how to read the copy against a later release.
 //
 // What this backend knows that the model does not is asked for through
-// inline-policy.hpp, so the copy carries the two calls and none of the policy.
+// inline-policy.hpp, so the copy carries the calls into it and none of the
+// policy.
 
 #include "inline-cost.hpp"
 
@@ -2045,6 +2046,13 @@ bool CallAnalyzer::allowSizeGrowth(CallBase &Call) {
 
 bool InlineCostCallAnalyzer::isColdCallSite(CallBase &Call,
                                             BlockFrequencyInfo *CallerBFI) {
+  // A tier-2 module holds one promoted body, so its summary cannot say how this
+  // site compares with the rest of the program. Mono ranks the site inside that
+  // body instead.
+  if (std::optional<mono::SiteHeat> Heat =
+          mono::tier2_site_heat(Call, CallerBFI))
+    return *Heat == mono::SiteHeat::cold;
+
   // If global profile summary is available, then callsite's coldness is
   // determined based on that.
   if (PSI && PSI->hasProfileSummary())
@@ -2069,6 +2077,14 @@ bool InlineCostCallAnalyzer::isColdCallSite(CallBase &Call,
 std::optional<int>
 InlineCostCallAnalyzer::getHotCallSiteThreshold(CallBase &Call,
                                                 BlockFrequencyInfo *CallerBFI) {
+
+  // See isColdCallSite (). The same summary answers hotness, and in a promoted
+  // body with no loop it reads every block as hot.
+  if (std::optional<mono::SiteHeat> Heat =
+          mono::tier2_site_heat(Call, CallerBFI))
+    return *Heat == mono::SiteHeat::hot
+               ? std::optional<int>(Params.HotCallSiteThreshold)
+               : std::nullopt;
 
   // If global profile summary is available, then callsite's hotness is
   // determined based on that.

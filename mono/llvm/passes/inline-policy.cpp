@@ -6,6 +6,7 @@
 #include "method-symbols.hpp"
 #include "operand-class.hpp"
 #include "strip-casts.hpp"
+#include "tier-counter.hpp"
 #include "vtable-facts.hpp"
 #include "vtable-func.hpp"
 
@@ -14,6 +15,7 @@
 
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Analysis/BlockFrequencyInfo.h>
 #include <llvm/Analysis/CaptureTracking.h>
 #include <llvm/Analysis/ConstantFolding.h>
 #include <llvm/IR/DataLayout.h>
@@ -29,6 +31,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Operator.h>
 #include <llvm/Support/CommandLine.h>
+#include <llvm/Support/MathExtras.h>
 
 #include <algorithm>
 
@@ -80,6 +83,21 @@ cl::opt<int> ScalarizeArgumentBonus (
 	"mono-inline-scalarize-arg-bonus", cl::Hidden, cl::init (50),
 	cl::desc ("Threshold bonus for a callee that does not capture a parameter "
 	          "the site fills with a fresh allocation"));
+
+cl::opt<bool> RankSitesInPromotedBody (
+	"mono-inline-tier2-site-heat", cl::Hidden, cl::init (true),
+	cl::desc ("Rank a call site against the entry count of the promoted body it "
+	          "is in, rather than against the module's profile summary"));
+
+cl::opt<unsigned> PromotedHotMultiple (
+	"mono-inline-tier2-hot-multiple", cl::Hidden, cl::init (5),
+	cl::desc ("Times the entry count a block must run before a site in it is hot "
+	          "in a promoted body"));
+
+cl::opt<unsigned> PromotedColdPercent (
+	"mono-inline-tier2-cold-percent", cl::Hidden, cl::init (2),
+	cl::desc ("Share of the entry count, as a percentage, a block must run to be "
+	          "more than cold in a promoted body"));
 
 /// Whether \p v is an object this compile allocated under a class it names.
 ///
@@ -271,6 +289,17 @@ settled_class (Value *v, const Function &walked, SettledValue settled)
 	return operand_class (v, walked);
 }
 
+/// Whether the profile counted any block of \p f at \p bar or above.
+bool
+a_block_runs_at (const Function &f, BlockFrequencyInfo &bfi, uint64_t bar)
+{
+	for (const BasicBlock &bb : f)
+		if (bfi.getBlockProfileCount (&bb).value_or (0) >= bar)
+			return true;
+
+	return false;
+}
+
 } // namespace
 
 bool
@@ -454,6 +483,56 @@ call_site_bonus (const CallBase &call, const Function &callee)
 	}
 
 	return bonus;
+}
+
+std::optional<SiteHeat>
+tier2_site_heat (const CallBase &call, BlockFrequencyInfo *caller_bfi)
+{
+	const Function *caller = call.getCaller ();
+
+	if (!RankSitesInPromotedBody || caller_bfi == nullptr || caller == nullptr
+	    || !caller->hasFnAttribute (tier_counter_attribute))
+		return std::nullopt;
+
+	/*
+	 * The profile counts rather than the block frequencies LLVM ranks a site by.
+	 * Through the frequencies the two collectors ranked one shape differently,
+	 * where the counts they gathered agreed. The counts are also what the decline
+	 * trace prints, so a reader can check a verdict against the log.
+	 */
+	std::optional<uint64_t> site =
+		caller_bfi->getBlockProfileCount (call.getParent ());
+	std::optional<uint64_t> entry =
+		caller_bfi->getBlockProfileCount (&caller->getEntryBlock ());
+
+	// Without counts there is nothing to rank the site against, so LLVM decides.
+	if (!site || !entry || *entry == 0)
+		return std::nullopt;
+
+	/*
+	 * A body arrives here only once its tier-2 counter has run out. So a block is
+	 * weighed against the body around it, not against the rest of the program.
+	 * Cold is then the block that body hardly ever takes. LLVM applies that same
+	 * rule where it has no summary to read.
+	 */
+	if (*site * 100 < *entry * std::min<unsigned> (PromotedColdPercent, 100))
+		return SiteHeat::cold;
+
+	uint64_t bar = SaturatingMultiply (*entry, uint64_t (PromotedHotMultiple));
+
+	if (*site >= bar)
+		return SiteHeat::hot;
+
+	/*
+	 * No block of the body runs much more often than the body is entered, so
+	 * nothing in it stands out as the work. What promoted such a body is the
+	 * calls it took, and every block it runs each time is then as hot as the
+	 * body.
+	 */
+	if (*site >= *entry && !a_block_runs_at (*caller, *caller_bfi, bar))
+		return SiteHeat::hot;
+
+	return SiteHeat::ordinary;
 }
 
 } // namespace mono

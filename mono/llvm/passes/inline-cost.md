@@ -13,10 +13,10 @@ every hunk into one of them:
     diff -u ~/projects/llvm-project/llvm/lib/Analysis/InlineCost.cpp \
             mono/llvm/passes/inline-cost.cpp
 
-The four under "What the copy changes" are mechanical. Each is there to let one
+Everything under "What the copy changes" is mechanical. Each is there to let one
 process hold two copies of the same code, and none of them moves a number.
 
-The two under "What the copy asks mono" are the point of taking a copy at all.
+Everything under "What the copy asks mono" is the point of taking a copy at all.
 Each is one call into `inline-policy.cpp`, which holds the policy, so a hunk
 that reasons about managed metadata inside this file belongs somewhere else.
 
@@ -76,6 +76,18 @@ It goes in behind `SingleBBBonus` and `VectorBonus`, which are shares of the
 threshold, and behind the target's multiplier, because what it adds is an
 absolute count rather than a proportion.
 
+**`InlineCostCallAnalyzer::isColdCallSite ()` and `getHotCallSiteThreshold ()`
+ask `tier2_site_heat ()` first.** Both otherwise rank the site against the
+module's `ProfileSummary`, and a tier-2 compile holds one promoted body, so that
+summary is built from that body's own counters. The percentile each threshold is
+taken at then lands on one of that body's own count levels, and the ranking
+degenerates in opposite directions: in a body with a loop the cold threshold
+lands on the entry count, so every call the body always makes reads cold; in a
+body without one every counter holds the same value, so every block reads hot.
+`tier2_site_heat ()` answers against the caller's entry count instead. It
+answers nothing for a caller that carries no tier-2 counter, and the summary
+then decides as before.
+
 **`CallAnalyzer::isLoweredToCall ()` asks `lowers_to_a_load ()` first.** Mono
 writes a dispatch read as a call to a declaration, and
 `TargetTransformInfoImpl::isLoweredToCall ()` answers true for any named
@@ -109,18 +121,20 @@ only object size. Cutting them makes the next diff against upstream longer.
 The copy drifts at every LLVM bump. On a bump, diff the new upstream file
 against the old one and apply what it says to the copy by hand. A new `cl::opt`
 needs the `mono-` prefix, and a new definition in `namespace llvm` needs the
-same decision the two above got: drop it when a header declares it, keep it when
+same decision the ones above got: drop it when a header declares it, keep it when
 no header does. Watch the block walk in `analyze ()`, the tail of
-`updateThreshold ()`, the head of `isLoweredToCall ()` and the head of
-`visitLoad ()`, because that is where the mono calls sit. The last two churn
-upstream more than the first two do, so budget for them at each bump.
+`updateThreshold ()`, the head of `isLoweredToCall ()`, the head of
+`visitLoad ()`, and the heads of `isColdCallSite ()` and
+`getHotCallSiteThreshold ()`, because that is where the mono calls sit.
+`isLoweredToCall ()` and `visitLoad ()` churn upstream more than the rest do, so
+budget for them at each bump.
 
 A cost and a budget that `MONO_LLVM_JIT_TRACE` prints are not what an upstream
 build gives for the same pair, so a comparison against clang or against LLVM's
 own pipeline needs the options off first. Setting each `mono-inline-*-bonus` to
 zero, turning off `-mono-inline-implicit-null-free`,
-`-mono-inline-dispatch-is-a-load`, `-mono-inline-fold-vtable-fields`
-and `-mono-inline-answer-casts`, and turning
+`-mono-inline-dispatch-is-a-load`, `-mono-inline-fold-vtable-fields`,
+`-mono-inline-answer-casts` and `-mono-inline-tier2-site-heat`, and turning
 **on**
 `-mono-inline-boost-indirect-calls` is what gets LLVM's own answers back. Every
 answer this file adds owes an option here, so that this list stays the whole of

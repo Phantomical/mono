@@ -12,8 +12,11 @@
 
 #include <llvm/ADT/STLFunctionalExtras.h>
 
+#include <optional>
+
 namespace llvm {
 class BasicBlock;
+class BlockFrequencyInfo;
 class BranchInst;
 class CallBase;
 class Function;
@@ -22,6 +25,30 @@ class Value;
 } // namespace llvm
 
 namespace mono {
+
+/// How often a call site runs, against the body it sits in.
+///
+/// tier2_site_heat () decides which of these a site gets.
+enum class SiteHeat { cold, ordinary, hot };
+
+/// Where \p call sits in the promoted body around it, or nothing.
+///
+/// A tier-2 compile holds one promoted body, so the module's profile summary is
+/// built from that body's own counters. Its percentiles then land on that
+/// body's own count levels, and it cannot rank a site against the rest of the
+/// program. That is the question LLVM asks it.
+///
+/// The answer here is against the caller's entry count instead. A block the
+/// body hardly ever takes is cold. A block that runs far more often than the
+/// body is entered is hot. Where no block of the body runs much more often,
+/// every block the body runs each time it is entered is hot instead. The rest
+/// is ordinary.
+///
+/// Nothing comes back for a caller that carries no tier-2 counter, for one
+/// whose profile counts were dropped, and where \p caller_bfi is null. LLVM's
+/// own ranking decides those.
+std::optional<SiteHeat> tier2_site_heat (const llvm::CallBase &call,
+                                         llvm::BlockFrequencyInfo *caller_bfi);
 
 /// Reports what a walk settled a value to, or null. The answer may belong to
 /// the function the call site is in rather than to the one being walked.

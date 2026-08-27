@@ -19,7 +19,7 @@ set(MONO_LLVM_TEST_SOURCES
     profile-counters-tests.cpp profile-counter-promoter-tests.cpp
     rgctx-fetch-tests.cpp rgctx-dedup-tests.cpp clamp-frame-align-tests.cpp
     array-address-tests.cpp array-shape-tests.cpp ir-dump-tests.cpp
-    cast-func-tests.cpp)
+    cast-func-tests.cpp inline-heat-tests.cpp)
 
 if(MONO_CORPUS_ENABLED)
   # RELATIVE, because mono_corpus_il resolves its source against the current
@@ -45,7 +45,10 @@ mono_gtest_binary(test-llvm
   DEFINITIONS
     MONO_LLVM_TESTS_DIR="${CMAKE_CURRENT_BINARY_DIR}"
     MONO_LLVM_TESTS_ASSEMBLIES="${MONO_CORPUS_CLASS_DIR}"
-    MONO_LLVM_TESTS_CFG_DIR="${CMAKE_BINARY_DIR}/runtime/etc")
+    MONO_LLVM_TESTS_CFG_DIR="${CMAKE_BINARY_DIR}/runtime/etc"
+    # The `.ll` shapes a pass test parses. Nothing builds them, so they are read
+    # where they are written rather than copied.
+    MONO_LLVM_TESTS_IR_DIR="${CMAKE_CURRENT_SOURCE_DIR}/ir")
 
 # Tier 2 off, which is not the runtime's default. These cases read the shape
 # of a tier-1 body and link one against a jit of their own. With tier 2 on,
