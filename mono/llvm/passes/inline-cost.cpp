@@ -170,12 +170,9 @@ static cl::opt<int> CallPenalty(
     "mono-inline-call-penalty", cl::Hidden, cl::init(25),
     cl::desc("Call penalty that is applied per callsite when inlining"));
 
-// Off, where LLVM has it on. The boost weighs the callee a resolved site names
-// and takes the slack off the cost, and a resolved managed dispatch names a
-// declaration this module holds no body for. analyze() sets the threshold
-// before it returns on an empty body, so such a callee reports the whole
-// threshold as slack. A site the walk resolved concretely is charged the
-// ordinary call penalty instead.
+// Off, where LLVM has it on: a resolved managed dispatch names a bodyless
+// declaration, so the boost would discount the site by the whole threshold
+// rather than by a real callee's cost. See inline-cost.md.
 static cl::opt<bool> BoostIndirectCallSites(
     "mono-inline-boost-indirect-calls", cl::Hidden, cl::init(false),
     cl::desc("Weigh the callee a resolved indirect call names and discount the "

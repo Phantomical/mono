@@ -255,15 +255,15 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			/*
 			 * A round ends when the queue runs out. What a fold buys is the
 			 * caller's arguments as constants inside the folded body and the
-			 * branches that kills, so simplification runs over what the round
+			 * branches that kill, so simplification runs over what the round
 			 * took. Here rather than as a pipeline row behind the pass, so a
 			 * compile that folded nothing pays nothing.
 			 *
 			 * The sites are then read again. Those constants settle what a
 			 * dispatch below the fold reads, and the simplification answers it
-			 * with a direct call - a site nothing offered before, and the only
-			 * way an interface dispatch becomes a site at all, since it enters
-			 * the root as a load rather than as a call of a function.
+			 * with a direct call - a site nothing offered before. An interface
+			 * dispatch enters the root as a load rather than as a call of a
+			 * function, so this is the only way it becomes a site at all.
 			 *
 			 * A round that folded nothing has nothing to expose, so the loop
 			 * stops there. What bounds the work is the engine's budget, which

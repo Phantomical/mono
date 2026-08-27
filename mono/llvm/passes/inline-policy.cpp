@@ -318,7 +318,7 @@ lowers_to_a_load (const Function &f)
 
 /*
  * Word zero of a MonoObject and word zero of a MonoVTable are both at offset
- * zero, so the offset tells the two reads apart in neither direction. What does
+ * zero, so the offset alone cannot tell the two reads apart. What does
  * is the base: this is the only thing that settles a value to a snapshot, so a
  * base that is one is a vtable, and a base that is not is an object.
  */

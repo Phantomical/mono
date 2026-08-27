@@ -23,8 +23,8 @@ class Value;
 
 namespace mono {
 
-/// What a walk settled a value to, or null. The answer may belong to the
-/// function the call site is in rather than to the one being walked.
+/// Reports what a walk settled a value to, or null. The answer may belong to
+/// the function the call site is in rather than to the one being walked.
 using SettledValue = llvm::function_ref<llvm::Value *(llvm::Value *)>;
 
 /// Whether a call to \p f is one load rather than a call.
