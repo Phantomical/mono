@@ -641,6 +641,14 @@ public:
 	/// when it was translated without any.
 	const SeqPointGraph &sequence_points () const { return seq_point_graph; }
 
+	/// The symbol standing for \p klass's vtable, carrying the facts a fold
+	/// reads off it, or null for a class this compile cannot name.
+	///
+	/// It records an external, which the caller has to resolve. A fold reaches
+	/// this through `CompileState::vtable_of` for a class the body itself never
+	/// mentioned.
+	llvm::Constant *vtable_for (MonoClass *klass);
+
 private:
 	typedef llvm::IRBuilder<> MonoIrBuilder;
 

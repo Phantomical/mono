@@ -2047,6 +2047,15 @@ MethodLLVMEmitter::parameter_class (MonoType *type)
 	if (klass == nullptr || depends_on_context (klass))
 		return nullptr;
 
+	/*
+	 * A shared body's signature names the shared instantiation - List<object>
+	 * where the source said List<T> - and no receiver ever has that class.
+	 * Which of the two a generic instance is cannot be read off the signature
+	 * this body was built from, so neither is stated.
+	 */
+	if (mono_class_is_ginst (klass))
+		return nullptr;
+
 	return klass;
 }
 

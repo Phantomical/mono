@@ -2362,14 +2362,6 @@ bool CallAnalyzer::visitFNeg(UnaryOperator &I) {
 }
 
 bool CallAnalyzer::visitLoad(LoadInst &I) {
-  // A read the call site settles: the walk reaches a class's vtable symbol
-  // through the receiver this site passes.
-  auto Settled = [this](Value *V) { return getSimplifiedValueUnchecked(V); };
-  if (Value *Held = mono::folded_vtable_read(I, Settled)) {
-    SimplifiedValues[&I] = Held;
-    return true;
-  }
-
   if (handleSROA(I.getPointerOperand(), I.isSimple()))
     return true;
 
@@ -2548,9 +2540,10 @@ bool CallAnalyzer::visitCallBase(CallBase &Call) {
     return true;
   }
 
-  // A vtable field mono writes as a call, which the vtable this site settled
-  // its receiver to carries beside it.
-  if (Value *Held = mono::folded_vtable_field(Call, Settled)) {
+  // A read off the receiver mono writes as a call. The walk reaches a class's
+  // vtable symbol through the object this site passes, and the facts beside
+  // that symbol answer the rest.
+  if (Value *Held = mono::folded_vtable_read(Call, Settled)) {
     SimplifiedValues[&Call] = Held;
     return true;
   }

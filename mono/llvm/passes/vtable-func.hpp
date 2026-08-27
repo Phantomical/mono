@@ -46,6 +46,15 @@ constexpr llvm::StringRef imt_func_name = "mono.imt.func";
 /// for fold_dispatch_sites () to read.
 constexpr llvm::StringRef vtable_gfunc_name = "mono.vtable.gfunc";
 
+/// `ptr @mono.object.vtable (ptr obj)` returns the vtable of the object obj
+/// points at.
+///
+/// A call rather than the load, so that `fold_object_vtables ()` can name the
+/// vtable from the class the IR gives obj. That reaches a receiver no store
+/// names - one a sealed slot declares, or an object read out of an initonly
+/// static. Only the translator writes a call to it.
+constexpr llvm::StringRef object_vtable_name = "mono.object.vtable";
+
 /// `ptr @mono.vtable.klass (ptr vtable)` returns the class the vtable stands
 /// for, `ptr @mono.vtable.type (ptr vtable)` that class's `System.Type` object,
 /// and `i8 @mono.vtable.rank (ptr vtable)` its rank.
@@ -61,6 +70,7 @@ constexpr llvm::StringRef vtable_rank_name = "mono.vtable.rank";
 llvm::Function *vtable_func_decl (llvm::Module &m);
 llvm::Function *imt_func_decl (llvm::Module &m);
 llvm::Function *vtable_gfunc_decl (llvm::Module &m);
+llvm::Function *object_vtable_decl (llvm::Module &m);
 llvm::Function *vtable_klass_decl (llvm::Module &m);
 llvm::Function *vtable_type_decl (llvm::Module &m);
 llvm::Function *vtable_rank_decl (llvm::Module &m);

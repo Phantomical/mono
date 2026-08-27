@@ -16,6 +16,7 @@
 
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/object-internals.h"
 
 #include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/SmallVector.h>
@@ -58,6 +59,22 @@ describe_vtable_read (Function *decl)
 	return decl;
 }
 
+/// Puts on decl the attributes a read of an object's vtable word carries.
+///
+/// `memory(none)` for the reason a vtable read carries it. The allocator writes
+/// the word before managed code can reach the object, and nothing writes it
+/// again. Not `speculatable`, which is what keeps the read under the null check
+/// on the object. That check dominating every such read is what lets a fold
+/// take a sealed slot's declared class for the class the object is.
+Function *
+describe_object_read (Function *decl)
+{
+	decl->setDoesNotAccessMemory ();
+	decl->setDoesNotThrow ();
+	decl->addFnAttr (Attribute::WillReturn);
+	return decl;
+}
+
 } // namespace
 
 Function *
@@ -91,6 +108,15 @@ vtable_gfunc_decl (Module &m)
 	return describe_vtable_read (builtin_decl (
 		m, vtable_gfunc_name,
 		FunctionType::get (ptr, { ptr, Type::getInt32Ty (c), ptr }, false)));
+}
+
+Function *
+object_vtable_decl (Module &m)
+{
+	Type *ptr = PointerType::get (m.getContext (), 0);
+
+	return describe_object_read (
+		builtin_decl (m, object_vtable_name, FunctionType::get (ptr, { ptr }, false)));
 }
 
 Function *
@@ -171,7 +197,8 @@ lower (CallBase *site, int64_t first_word, int64_t slot_bias)
 /// own result.
 ///
 /// The load is `!invariant.load`, which is the same claim the declaration's
-/// `memory(none)` makes: each field takes its value while the vtable is built.
+/// `memory(none)` makes: the field takes its value before compiled code can
+/// reach the object it sits in.
 void
 lower_field (CallBase *site, int64_t offset)
 {
@@ -231,6 +258,10 @@ lower_vtable_reads (Module &m)
 
 	changed |= lower_all (m, vtable_rank_name, [] (CallBase *site) {
 		lower_field (site, MONO_STRUCT_OFFSET (MonoVTable, rank));
+	});
+
+	changed |= lower_all (m, object_vtable_name, [] (CallBase *site) {
+		lower_field (site, MONO_STRUCT_OFFSET (MonoObject, vtable));
 	});
 
 	return changed;

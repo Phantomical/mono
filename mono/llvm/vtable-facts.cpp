@@ -36,9 +36,15 @@ vtable_facts (const GlobalObject &vtable)
 	if (node == nullptr || node->getNumOperands () != fact_count)
 		return std::nullopt;
 
-	auto *klass = mdconst::dyn_extract<Constant> (node->getOperand (fact_klass));
-	auto *type = mdconst::dyn_extract<Constant> (node->getOperand (fact_type));
-	auto *rank = mdconst::dyn_extract<ConstantInt> (node->getOperand (fact_rank));
+	/*
+	 * An operand reads back null once the symbol it named is gone: nothing but
+	 * this metadata refers to a class symbol, so GlobalDCE drops one and LLVM
+	 * clears the reference. A fold past that point declines rather than reading
+	 * a symbol the module no longer defines.
+	 */
+	auto *klass = mdconst::dyn_extract_or_null<Constant> (node->getOperand (fact_klass));
+	auto *type = mdconst::dyn_extract_or_null<Constant> (node->getOperand (fact_type));
+	auto *rank = mdconst::dyn_extract_or_null<ConstantInt> (node->getOperand (fact_rank));
 
 	if (klass == nullptr || type == nullptr || rank == nullptr)
 		return std::nullopt;

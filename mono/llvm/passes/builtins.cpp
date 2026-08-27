@@ -95,6 +95,7 @@ MonoBuiltinConstProp::run (Function &f, FunctionAnalysisManager &)
 		// chain's receiver comes from.
 		bool again = fold_type_tests (f);
 
+		again |= fold_object_vtables (f);
 		again |= fold_vtable_fields (f);
 		again |= fold_dispatch_sites (f);
 		again |= fold_array_shapes (f);

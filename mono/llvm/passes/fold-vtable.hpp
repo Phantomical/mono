@@ -16,6 +16,15 @@ class Function;
 
 namespace mono {
 
+/// Replaces each object vtable read in \p f whose class the IR settles with
+/// that class's own vtable symbol. Says whether it changed anything.
+///
+/// A read stands under the null check on its object, and the declaration is not
+/// speculatable, so nothing moves one above that check. That is what lets a
+/// sealed slot's declared class stand for the class the object is. The null
+/// such a slot also admits cannot reach the read.
+bool fold_object_vtables (llvm::Function &f);
+
 /// Replaces each vtable field read in \p f whose vtable is a marked symbol with
 /// the value that symbol carries. Says whether it changed anything.
 bool fold_vtable_fields (llvm::Function &f);

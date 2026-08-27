@@ -24,6 +24,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "mini.h"
@@ -296,7 +297,41 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		return holder.getFunction (published);
 	};
 
-	CompileScope compiling ({ target.domain, publish_declaration });
+	/*
+	 * A fold that settles a receiver's class needs that class's vtable named,
+	 * and the class can be one the body never mentioned. So it is minted here
+	 * and resolved at once, the way a devirtualized callee is published above.
+	 *
+	 * The emitter is built for the module it is handed and thrown away, because
+	 * the cost model translates a candidate into a module of its own and links
+	 * that away again. A symbol from one module means nothing in another, and
+	 * neither does an emitter holding the first. What is kept across the compile
+	 * is which classes the runtime already refused.
+	 */
+	std::unordered_set<MonoClass *> refused_vtables;
+	auto name_vtable = [&] (llvm::Module &holder, MonoClass *klass) -> Constant * {
+		if (refused_vtables.count (klass) != 0)
+			return nullptr;
+
+		MethodLLVMEmitter namer (&holder, cfg->get (), method, &externals);
+		size_t from = externals.size ();
+		Constant *symbol = namer.vtable_for (klass);
+		Error named = symbol != nullptr
+		                      ? resolve (ArrayRef (externals).slice (
+					      from, externals.size () - from))
+		                      : Error::success ();
+
+		if (symbol == nullptr || named) {
+			consumeError (std::move (named));
+			externals.resize (from);
+			refused_vtables.insert (klass);
+			return nullptr;
+		}
+
+		return symbol;
+	};
+
+	CompileScope compiling ({ target.domain, publish_declaration, name_vtable });
 
 	std::vector<ProfileCounters> layout = MonoJit::optimize (
 		*module, target.tier, target.profile,

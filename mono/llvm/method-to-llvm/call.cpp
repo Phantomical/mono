@@ -295,32 +295,21 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 	return args;
 }
 
-/// Loads the vtable of object.
+/// Reads the vtable of object.
 ///
-/// The load is `!invariant.load`. The allocator writes the word before managed
-/// code can reach the object, and no other write follows. A reader can then keep
-/// the value across a call. That is what lets a dispatch site see the class of an
-/// object this body allocated.
+/// The site is a `mono.object.vtable` call rather than the load it stands for,
+/// which keeps the object an operand. That is the form fold_object_vtables ()
+/// (passes/fold-vtable.cpp) reads, and it reaches a receiver whose class the IR
+/// gives without any store naming it.
 ///
 /// SGen writes a forwarding pointer over this word when it moves an object. The
 /// stack scan is conservative here, so an object a compiled frame holds is pinned
 /// rather than moved.
-///
-/// The tag does not make the load speculatable, so the load stays under the null
-/// check on object. mark_array_header_load () has the mechanism.
 llvm::Value *
 MethodLLVMEmitter::load_vtable (MonoIrBuilder &builder, llvm::Value *object,
                                 const llvm::Twine &name)
 {
-	llvm::LoadInst *load = builder.CreateAlignedLoad (
-		llvm::PointerType::get (context (), 0),
-		builder.CreateGEP (builder.getInt8Ty (), object,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-		llvm::Align (TARGET_SIZEOF_VOID_P), name);
-
-	load->setMetadata (llvm::LLVMContext::MD_invariant_load,
-	                   llvm::MDNode::get (context (), {}));
-	return load;
+	return builder.CreateCall (object_vtable_decl (*module), { object }, name);
 }
 
 /// Loads the callee out of target's vtable slot in the object receiver points

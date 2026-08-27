@@ -144,16 +144,15 @@ returns_a_named_allocation (const Function &f)
 /// Whether \p vtable is the vtable of \p dispatched_on, read rather than named.
 ///
 /// A vtable operand that is already a global is resolved, and folding a body in
-/// front of such a site changes nothing. MonoObject holds its vtable first, so
-/// the read is a load of the object's own address once the zero offset is
-/// folded away.
+/// front of such a site changes nothing.
 bool
 reads_the_vtable_of (const Value *vtable, const Value *dispatched_on)
 {
-	const auto *read = dyn_cast<LoadInst> (vtable->stripPointerCasts ());
+	const auto *read = dyn_cast<CallBase> (vtable->stripPointerCasts ());
+	const Function *decl = read != nullptr ? read->getCalledFunction () : nullptr;
 
-	return read != nullptr
-	       && read->getPointerOperand ()->stripPointerCasts () == dispatched_on;
+	return decl != nullptr && decl->getName () == object_vtable_name
+	       && read->getArgOperand (0)->stripPointerCasts () == dispatched_on;
 }
 
 /// Whether a site in \p f reads a dispatch table out of \p object.
@@ -285,33 +284,13 @@ lowers_to_a_load (const Function &f)
 	StringRef name = f.getName ();
 
 	return name == vtable_func_name || name == imt_func_name
-	       || name == vtable_gfunc_name || name == vtable_klass_name
-	       || name == vtable_type_name || name == vtable_rank_name;
+	       || name == vtable_gfunc_name || name == object_vtable_name
+	       || name == vtable_klass_name || name == vtable_type_name
+	       || name == vtable_rank_name;
 }
 
 Value *
-folded_vtable_read (LoadInst &load, SettledValue settled)
-{
-	if (!FoldVTableFields || !load.getType ()->isPointerTy ())
-		return nullptr;
-
-	const DataLayout &dl = load.getModule ()->getDataLayout ();
-	APInt at (64, 0);
-	Value *base = load.getPointerOperand ()->stripAndAccumulateConstantOffsets (
-		dl, at, /*AllowNonInbounds=*/true);
-
-	if (Value *caller_side = settled (base))
-		base = caller_side->stripAndAccumulateConstantOffsets (
-			dl, at, /*AllowNonInbounds=*/true);
-
-	if (at != MONO_STRUCT_OFFSET (MonoObject, vtable))
-		return nullptr;
-
-	return stored_vtable (base, dl);
-}
-
-Value *
-folded_vtable_field (CallBase &call, SettledValue settled)
+folded_vtable_read (CallBase &call, SettledValue settled)
 {
 	const Function *decl = call.getCalledFunction ();
 
@@ -319,17 +298,26 @@ folded_vtable_field (CallBase &call, SettledValue settled)
 		return nullptr;
 
 	StringRef name = decl->getName ();
+	bool object = name == object_vtable_name;
 
-	if (name != vtable_klass_name && name != vtable_type_name
+	if (!object && name != vtable_klass_name && name != vtable_type_name
 	    && name != vtable_rank_name)
 		return nullptr;
 
-	Value *vtable = const_cast<Value *> (strip_casts (call.getArgOperand (0)));
+	Value *operand = const_cast<Value *> (strip_casts (call.getArgOperand (0)));
 
-	if (Value *caller_side = settled (vtable))
-		vtable = const_cast<Value *> (strip_casts (caller_side));
+	if (Value *caller_side = settled (operand))
+		operand = const_cast<Value *> (strip_casts (caller_side));
 
-	auto *named = dyn_cast<GlobalObject> (vtable);
+	/*
+	 * The object read walks the store at an allocation rather than asking
+	 * `exact_class ()`. Naming a class's vtable records an external and lays the
+	 * class out, and a candidate this model goes on to refuse is owed neither.
+	 */
+	if (object)
+		return stored_vtable (operand, call.getModule ()->getDataLayout ());
+
+	auto *named = dyn_cast<GlobalObject> (operand);
 	std::optional<VTableFacts> facts =
 		named != nullptr ? vtable_facts (*named) : std::nullopt;
 

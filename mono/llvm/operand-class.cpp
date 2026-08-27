@@ -7,6 +7,8 @@
 
 #include "passes/strip-casts.hpp"
 
+#include "mono/metadata/class-internals.h"
+
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Argument.h>
 #include <llvm/IR/Constants.h>
@@ -108,6 +110,21 @@ operand_class (const Value *v, const Function &f)
 	}
 
 	return { nullptr, false };
+}
+
+MonoClass *
+exact_class (const Value *v, const Function &f)
+{
+	auto [klass, exact] = operand_class (v, f);
+
+	if (klass == nullptr || exact)
+		return klass;
+
+	if (!m_class_is_sealed (klass) || m_class_get_rank (klass) != 0
+	    || mono_class_is_marshalbyref (klass))
+		return nullptr;
+
+	return klass;
 }
 
 } // namespace mono

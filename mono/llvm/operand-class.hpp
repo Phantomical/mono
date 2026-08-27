@@ -59,6 +59,20 @@ void mark_parameter_classes (llvm::Function &f,
 /// recorded there.
 std::pair<MonoClass *, bool> operand_class (const llvm::Value *v, const llvm::Function &f);
 
+/// The class \p v is, or null where the IR gives only a bound this cannot
+/// sharpen. \p f carries the same rule as above.
+///
+/// A sealed class admits itself alone, so a bound on one is the class the value
+/// is. Two shapes are marked sealed and are not exact all the same. An array
+/// is, because covariance puts `Derived[]` under a `Base[]` slot. So is a
+/// marshal-by-ref class, because such a slot can hold a transparent proxy,
+/// whose vtable is not the class's.
+///
+/// A bound holds for a null reference as well, which no class answers for. A
+/// caller that reads memory off the value therefore needs the null check that
+/// dominates it to rule that out.
+MonoClass *exact_class (const llvm::Value *v, const llvm::Function &f);
+
 } // namespace mono
 
 #endif

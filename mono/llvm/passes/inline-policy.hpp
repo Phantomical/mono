@@ -33,20 +33,12 @@ using SettledValue = llvm::function_ref<llvm::Value *(llvm::Value *)>;
 /// argument setup for work that is one instruction.
 bool lowers_to_a_load (const llvm::Function &f);
 
-/// The vtable symbol \p load reads out of an object the call site settled, or
-/// null.
+/// What a read off an object or its vtable gives, where the call site settles
+/// what is read, or null.
 ///
-/// A shape this cannot place is left alone rather than reported. The base is
-/// reached by inference, so an offset that is not the vtable word says the
-/// inference was wrong rather than that generated code is.
-llvm::Value *folded_vtable_read (llvm::LoadInst &load, SettledValue settled);
-
-/// What a read of a vtable field gives, where the call site settles which
-/// vtable it reads, or null.
-///
-/// So a caller gets the class and the `System.Type` object the receiver's own
-/// class settles, neither of which an IR pointer carries.
-llvm::Value *folded_vtable_field (llvm::CallBase &call, SettledValue settled);
+/// So a caller gets the receiver's vtable, its class and its `System.Type`
+/// object, none of which an IR pointer carries.
+llvm::Value *folded_vtable_read (llvm::CallBase &call, SettledValue settled);
 
 /// What a type test answers, where the class the call site settled its operand
 /// to decides it, or null.

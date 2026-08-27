@@ -17,12 +17,15 @@
 
 #include <llvm/ADT/STLFunctionalExtras.h>
 
+typedef struct _MonoClass MonoClass;
 typedef struct _MonoDomain MonoDomain;
 typedef struct _MonoMethod MonoMethod;
 
 namespace llvm {
+class Constant;
 class Function;
-}
+class Module;
+} // namespace llvm
 
 namespace mono {
 
@@ -42,6 +45,15 @@ struct CompileState {
 	/// Null means the method's own metadata will not load. decl is then not
 	/// worth calling and the caller has to leave its site as it was.
 	llvm::function_ref<llvm::Function *(llvm::Function &decl, MonoMethod *method)> publish;
+
+	/// The symbol standing for \p klass's vtable in \p m, resolved against this
+	/// compile's domain and carrying the facts a fold reads off it.
+	///
+	/// A pass reaches this for a class the body never mentioned, which is what
+	/// a fold off a receiver's declared class needs. Null means the runtime
+	/// cannot answer for the class: it is open, or laying it out failed. The
+	/// caller then has to leave its site as it was.
+	llvm::function_ref<llvm::Constant *(llvm::Module &m, MonoClass *klass)> vtable_of;
 };
 
 /// This thread's compile. Empty outside one, which every reader has to take as

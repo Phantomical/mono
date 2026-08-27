@@ -1,10 +1,13 @@
 #include "fold-vtable.hpp"
 
 #include "builtins.hpp"
+#include "compile-state.hpp"
+#include "operand-class.hpp"
 #include "vtable-facts.hpp"
 #include "vtable-func.hpp"
 
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/Module.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalObject.h>
 #include <llvm/IR/InstrTypes.h>
@@ -58,6 +61,35 @@ fold_field (Function &f, StringRef name)
 }
 
 } // namespace
+
+bool
+fold_object_vtables (Function &f)
+{
+	const CompileState &compile = current_compile ();
+
+	if (compile.domain == nullptr || !compile.vtable_of)
+		return false;
+
+	bool changed = false;
+
+	for (CallBase *site : builtin_sites (f, object_vtable_name)) {
+		MonoClass *klass = exact_class (site->getArgOperand (0), f);
+
+		if (klass == nullptr)
+			continue;
+
+		Constant *vtable = compile.vtable_of (*f.getParent (), klass);
+
+		if (vtable == nullptr)
+			continue;
+
+		site->replaceAllUsesWith (vtable);
+		site->eraseFromParent ();
+		changed = true;
+	}
+
+	return changed;
+}
 
 bool
 fold_vtable_fields (Function &f)

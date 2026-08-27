@@ -7,6 +7,7 @@
 #include "../runtime/options.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class.h"
+#include "mono/metadata/class-inlines.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/gc-internals.h"
@@ -271,6 +272,20 @@ MethodLLVMEmitter::extern_symbol (const std::string &name)
 
 	return new llvm::GlobalVariable (*module, llvm::Type::getInt8Ty (context ()), false,
 	                                 llvm::GlobalValue::ExternalLinkage, nullptr, name);
+}
+
+llvm::Constant *
+MethodLLVMEmitter::vtable_for (MonoClass *klass)
+{
+	// An open class comes from the context rather than from a symbol, and a
+	// shared body has no one vtable to name. A generic type definition and an
+	// open constructed type both carry type parameters, which the runtime lays
+	// out no vtable over.
+	if (depends_on_context (klass) || mono_class_is_gtd (klass)
+	    || mono_class_is_open_constructed_type (m_class_get_byval_arg (klass)))
+		return nullptr;
+
+	return class_symbol (klass, "mono_vtable_");
 }
 
 /// The global a class's vtable is named by, carrying what the class alone
