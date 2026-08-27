@@ -195,6 +195,24 @@ bind_method_symbols (Module &m,
 		 * same value instead.
 		 */
 		if (GlobalValue *existing = m.getNamedValue (*name)) {
+			/*
+			 * A method gets one symbol, and where the two spellings meet it has
+			 * to be the callable one. An address use reads a Function as
+			 * readily as it reads a plain global, and a call cannot be made on
+			 * the global. So a Function arriving at a name an address symbol
+			 * already holds takes the name over instead of being folded away.
+			 *
+			 * The translator reaches this the other way round, because it binds
+			 * the functions before the globals. A pass that mints a callee for a
+			 * method some ldftn already took the address of does not.
+			 */
+			if (isa<Function> (value) && !isa<Function> (existing)) {
+				existing->replaceAllUsesWith (value);
+				existing->eraseFromParent ();
+				value->setName (*name);
+				continue;
+			}
+
 			value->replaceAllUsesWith (existing);
 			value->eraseFromParent ();
 			continue;
