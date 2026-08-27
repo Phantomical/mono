@@ -6,6 +6,7 @@
 #include "../vtable-facts.hpp"
 #include "../runtime/naming.hpp"
 #include "../runtime/options.hpp"
+#include "mini-runtime.h"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-inlines.h"
@@ -435,6 +436,46 @@ MethodLLVMEmitter::cctor_already_ran (MonoClass *klass)
 	MonoVTable *vtable = mono_class_try_get_vtable (cfg->domain, klass);
 
 	return vtable != nullptr && vtable->initialized != 0;
+}
+
+/// Whether a read of field answers the same for the rest of the program.
+///
+/// An ordinary program writes such a field only from the type initializer. ECMA-335
+/// III.4.15 says a store through the address has unpredictable behavior, and
+/// RuntimeFieldInfo.CheckStaticReadonly () refuses a write through FieldInfo. A
+/// debugger client goes under that check, so the answer is false while
+/// gen_sdb_seq_points is on.
+bool
+MethodLLVMEmitter::invariant_static_read (MonoClassField *field)
+{
+	MonoType *ftype = mono_field_get_type_internal (field);
+
+	if ((ftype->attrs & FIELD_ATTRIBUTE_INIT_ONLY) == 0)
+		return false;
+
+	if (mini_get_debug_options ()->gen_sdb_seq_points)
+		return false;
+
+	// I.12.6.7 forbids coalescing a volatile operation, which is the transform the
+	// mark exists to license.
+	if (prefixes.volatile_)
+		return false;
+
+	// A thread- or context-local static takes its address from the runtime on each
+	// access, so one thread's value says nothing about the next thread's.
+	if (mono_class_field_is_special_static (field))
+		return false;
+
+	/*
+	 * !invariant.load claims the value at every point the address is
+	 * dereferenceable. LLVM then moves a marked load above a class-init guard that
+	 * still stands, and reads the zeroed statics block. Dominance by the guard is
+	 * not enough. The initializer must be complete at translate time, which also
+	 * keeps the mark away from a method the initializer itself calls:
+	 * mono_runtime_class_init_full () lets that thread back past the guard while
+	 * the fields are still zero.
+	 */
+	return cctor_already_ran (field->parent);
 }
 
 /// Emits the check that runs klass's static constructor, unless it has already run.
@@ -1002,8 +1043,12 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 	if (!address)
 		return address.takeError ();
 
+	ManagedAccess access = ManagedAccess::of_field (*field);
+
+	access.invariant = invariant_static_read (*field);
+
 	if (llvm::Error error = push_from_location (builder, *address, ftype, /*native=*/false,
-	                                            ManagedAccess::of_field (*field)))
+	                                            access))
 		return error;
 
 	if (MonoClass *held = initonly_static_class (*field))

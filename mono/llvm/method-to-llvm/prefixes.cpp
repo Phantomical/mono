@@ -254,6 +254,10 @@ MethodLLVMEmitter::emit_memory_load (MonoIrBuilder &builder, llvm::Type *type, l
 	if (llvm::MDNode *tag = tbaa_tag (access, mini_type_is_reference (location)))
 		value->setMetadata (llvm::LLVMContext::MD_tbaa, tag);
 
+	if (access.invariant)
+		value->setMetadata (llvm::LLVMContext::MD_invariant_load,
+		                    llvm::MDNode::get (context (), {}));
+
 	/*
 	 * A volatile read has acquire semantics (I.12.6.7). Acquire on the load
 	 * itself orders only that access, which is all III.2.6 asks for. A fence is

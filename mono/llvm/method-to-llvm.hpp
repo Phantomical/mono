@@ -184,6 +184,9 @@ struct ManagedAccess {
 	/// The element type and the array's rank, when kind is element.
 	MonoType *element = nullptr;
 	int rank = 0;
+	/// Whether a load from this location answers the same for the rest of the
+	/// program, which is what !invariant.load states.
+	bool invariant = false;
 
 	static ManagedAccess untagged () { return ManagedAccess (); }
 	static ManagedAccess typed () { return { Kind::typed }; }
@@ -1084,6 +1087,7 @@ private:
 	llvm::Error emit_ldtoken (MonoIrBuilder &builder, uint32_t token);
 	llvm::Expected<bool> fold_type_from_handle (MonoIrBuilder &builder, MonoType *type);
 	bool cctor_already_ran (MonoClass *klass);
+	bool invariant_static_read (MonoClassField *field);
 	llvm::Error emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
 	llvm::Expected<llvm::Value *> static_field_address (MonoIrBuilder &builder,
 	                                                    MonoClassField *field);
