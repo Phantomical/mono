@@ -108,6 +108,15 @@ bool tier2_enabled ();
 /// translator writes the same IR either way, so the two arms differ in one pass.
 bool fold_casts ();
 
+/// Whether MONO_LLVM_JIT_DYN_CALL left the interpreter's dyn calls on.
+///
+/// A false value takes every jit call back to a gsharedvt_out_sig wrapper
+/// compiled for its signature, which is what separates a defect in the plan
+/// from one in the body it calls. The interpreter marshals the same values
+/// either way, so the two arms differ in how the call is made and in nothing
+/// else.
+bool dyn_calls ();
+
 /// The fast-math flags the float operations a method asks for carry.
 ///
 /// Empty unless --ffast-math is on the command line, which is the only way to

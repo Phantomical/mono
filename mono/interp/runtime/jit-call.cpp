@@ -202,6 +202,14 @@ jit_call_cb (gpointer arg)
 	}
 }
 
+/// Room do_jit_call () keeps on its own frame for a dyn call's scratch.
+///
+/// What a plan wants grows with the arguments that miss a register, and
+/// MONO_INTERP_JIT_CALL_MAX_ARGS caps how many arguments a call has at all. A
+/// plan that wants more than this is declined in favour of a wrapper, so
+/// raising that cap costs wrappers rather than correctness.
+#define INTERP_DYN_CALL_FRAME_MAX 256
+
 struct JitCallInfo {
 	gpointer addr = nullptr;
 	gpointer extra_arg = nullptr;
@@ -211,6 +219,10 @@ struct JitCallInfo {
 	gint32 res_size = 0;
 	/// Empty when the call returns void, and so writes nothing back to sp.
 	std::optional<MintType> ret_mt;
+	/// How the backend passes this signature, or NULL when it would not say
+	/// and the wrapper above is what carries the call.
+	gpointer dyn_plan = nullptr;
+	int dyn_frame_size = 0;
 };
 
 static MONO_NEVER_INLINE void
@@ -229,12 +241,6 @@ init_jit_call_info (InterpMethod *rmethod, MonoError *error)
 	sig = mono_method_signature_internal (method);
 	g_assert (sig);
 
-	MonoMethod *wrapper = mini_get_gsharedvt_out_sig_wrapper (sig);
-	//printf ("J: %s %s\n", mono_method_full_name (method, 1), mono_method_full_name (wrapper, 1));
-
-	gpointer jit_wrapper = mono_jit_compile_method_jit_only (wrapper, error);
-	mono_error_assert_ok (error);
-
 	gpointer addr = mono_jit_compile_method_jit_only (method, error);
 	return_if_nok (error);
 	g_assert (addr);
@@ -245,7 +251,26 @@ init_jit_call_info (InterpMethod *rmethod, MonoError *error)
 	else
 		cinfo->addr = addr;
 	cinfo->sig = sig;
-	cinfo->wrapper = jit_wrapper;
+
+	/*
+	 * A plan costs a descriptor where a wrapper costs a compile on this
+	 * thread, so it is what to ask for first. The backend declines a
+	 * signature whose convention it will not state, and the wrapper is what
+	 * carries those.
+	 */
+	cinfo->dyn_plan = mono_llvm_jit_dyn_call_prepare (sig);
+	if (cinfo->dyn_plan != nullptr) {
+		cinfo->dyn_frame_size = mono_llvm_jit_dyn_call_frame_size (cinfo->dyn_plan);
+		if (cinfo->dyn_frame_size > INTERP_DYN_CALL_FRAME_MAX)
+			cinfo->dyn_plan = nullptr;
+	}
+
+	if (cinfo->dyn_plan == nullptr) {
+		MonoMethod *wrapper = mini_get_gsharedvt_out_sig_wrapper (sig);
+
+		cinfo->wrapper = mono_jit_compile_method_jit_only (wrapper, error);
+		mono_error_assert_ok (error);
+	}
 
 	if (sig->ret->type != MONO_TYPE_VOID) {
 		MintType mt = mint_type (sig->ret);
@@ -309,48 +334,74 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 	static_assert (MONO_INTERP_JIT_CALL_MAX_ARGS <= 32,
 	               "args[] must hold one pointer for each argument jit_call_cb () reads");
 
-	/*
-	 * Convert the arguments on the interpreter stack to the format the
-	 * gsharedvt_out wrapper expects.
-	 */
-	gpointer args[32];
-	int pindex = 0;
-	int stack_index = 0;
-	if (rmethod->hasthis) {
-		args[pindex++] = sp[0].data.p;
-		stack_index++;
-	}
-	/* return address */
-	if (cinfo->ret_mt)
-		args[pindex++] = sp;
-	for (int i = 0; i < rmethod->param_count; ++i) {
-		stackval *sval = STACK_ADD_BYTES (sp, get_arg_offset_fast (rmethod, stack_index + i));
-		if (cinfo->arginfo[i] == JIT_ARG_BYVAL)
-			args[pindex++] = sval->data.p;
-		else
-			/* data is a union, so can use 'p' for all types */
-			args[pindex++] = sval;
-	}
-
-	/* Every field here is written below, and the padding is never read, so we
-	 * do not zero the struct first. gcc turns a 40-byte memset into a rep
-	 * stos, and its startup alone costs a tenth of the call. */
-	JitCallCbData cb_data;
-	cb_data.jit_wrapper = cinfo->wrapper;
-	cb_data.pindex = pindex;
-	cb_data.args = args;
-	cb_data.ftndesc.addr = cinfo->addr;
-	cb_data.ftndesc.arg = cinfo->extra_arg;
-
-	interp_push_lmf (&ext, frame);
 	gboolean thrown = FALSE;
-	if (mono_aot_mode == MONO_AOT_MODE_LLVMONLY_INTERP) {
-		/* Catch the exception thrown by the native code using a try-catch */
-		mono_llvm_cpp_catch_exception (jit_call_cb, &cb_data, &thrown);
+
+	if (cinfo->dyn_plan != nullptr) {
+		/*
+		 * The plan reads each argument through a pointer, and a stackval's
+		 * union starts at the slot itself, so the slot address is that
+		 * pointer whatever the argument's type. The return goes back to sp,
+		 * where the widening below expects it.
+		 */
+		gpointer args[32];
+		int pindex = 0;
+		int stack_index = 0;
+		if (rmethod->hasthis) {
+			args[pindex++] = sp;
+			stack_index++;
+		}
+		for (int i = 0; i < rmethod->param_count; ++i)
+			args[pindex++] = STACK_ADD_BYTES (sp, get_arg_offset_fast (rmethod, stack_index + i));
+
+		guint8 frame_buf[INTERP_DYN_CALL_FRAME_MAX];
+
+		interp_push_lmf (&ext, frame);
+		mono_llvm_jit_dyn_call (cinfo->dyn_plan, cinfo->addr, args, sp, frame_buf);
+		interp_pop_lmf (&ext);
 	} else {
-		jit_call_cb (&cb_data);
+		/*
+		 * Convert the arguments on the interpreter stack to the format the
+		 * gsharedvt_out wrapper expects.
+		 */
+		gpointer args[32];
+		int pindex = 0;
+		int stack_index = 0;
+		if (rmethod->hasthis) {
+			args[pindex++] = sp[0].data.p;
+			stack_index++;
+		}
+		/* return address */
+		if (cinfo->ret_mt)
+			args[pindex++] = sp;
+		for (int i = 0; i < rmethod->param_count; ++i) {
+			stackval *sval = STACK_ADD_BYTES (sp, get_arg_offset_fast (rmethod, stack_index + i));
+			if (cinfo->arginfo[i] == JIT_ARG_BYVAL)
+				args[pindex++] = sval->data.p;
+			else
+				/* data is a union, so can use 'p' for all types */
+				args[pindex++] = sval;
+		}
+
+		/* Every field here is written below, and the padding is never read, so we
+		 * do not zero the struct first. gcc turns a 40-byte memset into a rep
+		 * stos, and its startup alone costs a tenth of the call. */
+		JitCallCbData cb_data;
+		cb_data.jit_wrapper = cinfo->wrapper;
+		cb_data.pindex = pindex;
+		cb_data.args = args;
+		cb_data.ftndesc.addr = cinfo->addr;
+		cb_data.ftndesc.arg = cinfo->extra_arg;
+
+		interp_push_lmf (&ext, frame);
+		if (mono_aot_mode == MONO_AOT_MODE_LLVMONLY_INTERP) {
+			/* Catch the exception thrown by the native code using a try-catch */
+			mono_llvm_cpp_catch_exception (jit_call_cb, &cb_data, &thrown);
+		} else {
+			jit_call_cb (&cb_data);
+		}
+		interp_pop_lmf (&ext);
 	}
-	interp_pop_lmf (&ext);
+
 	if (thrown) {
 		MonoObject *obj = mono_llvm_load_exception ();
 		g_assert (obj);

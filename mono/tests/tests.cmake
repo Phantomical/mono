@@ -253,6 +253,7 @@ set(MONO_TESTS_CS_SRC
   tbaa-field-aliasing.cs
   math-intrinsics.cs
   buffer-copy-intrinsics.cs
+  dyn-call.cs
   implicit-null-checks.cs
   monitor-fast-path.cs
   array-shape-intrinsics.cs

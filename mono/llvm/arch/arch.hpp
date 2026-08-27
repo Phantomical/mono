@@ -34,6 +34,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 namespace llvm {
 class Function;
@@ -62,6 +63,26 @@ void *lazy_frame_leave (void *frame);
 void interp_frame_enter (void *frame, const InterpArgContext *args);
 
 void interp_frame_leave (void *frame);
+
+/// Plans how a call of \p sig is passed to a compiled body. The caller has no
+/// compiled code of its own to pass it from.
+///
+/// Returns null when the convention here cannot be stated as a plan, which a
+/// value type passed or returned by value is. The caller then has to reach the
+/// method another way, and \p why says what was refused.
+///
+/// The plan holds no metadata and never changes, so a caller that reaches
+/// several methods of one signature can share one.
+std::unique_ptr<DynCallPlan> plan_dyn_call (MonoMethodSignature *sig, llvm::StringRef *why);
+
+/// Calls \p target under \p plan, with \p args pointing at each argument's
+/// value and \p ret at room for the return.
+///
+/// \p frame is DynCallPlan::frame_size bytes and need not be initialized.
+///
+/// The call runs on this thread, so the caller owes it an LMF. An exception
+/// that leaves \p target unwinds past this without reading its frame.
+void dyn_call (const DynCallPlan &plan, void *target, void **args, void *ret, void *frame);
 
 /// Returns the slot holding the runtime's rethrow-preserving throw
 /// trampoline. The slot's value is read at throw time, so this can be called

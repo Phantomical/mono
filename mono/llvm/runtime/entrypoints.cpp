@@ -11,6 +11,7 @@
 
 #include "runtime.h"
 
+#include "arch/arch.hpp"
 #include "backend.hpp"
 #include "jit.hpp"
 #include "options.hpp"
@@ -185,4 +186,38 @@ mono_llvm_jit_verify_method (MonoMethod *method, MonoError *error)
 
 	report (std::move (invalid), error);
 	return FALSE;
+}
+
+void *
+mono_llvm_jit_dyn_call_prepare (MonoMethodSignature *sig)
+{
+	if (!mono::dyn_calls ())
+		return nullptr;
+
+	llvm::StringRef why;
+	std::unique_ptr<mono::arch::DynCallPlan> plan = mono::arch::plan_dyn_call (sig, &why);
+
+	if (mono::is_jit_trace_enabled ()) {
+		std::lock_guard<std::mutex> held (mono::jit_trace_mutex ());
+
+		if (plan == nullptr)
+			fprintf (stderr, "[llvm-jit] no dyn-call plan: %s\n", why.str ().c_str ());
+		else
+			fprintf (stderr, "[llvm-jit] dyn-call plan: %d args, %u stack\n",
+			         (int) plan->args.size (), plan->stack_words);
+	}
+
+	return plan.release ();
+}
+
+int
+mono_llvm_jit_dyn_call_frame_size (void *plan)
+{
+	return (int) ((const mono::arch::DynCallPlan *) plan)->frame_size;
+}
+
+void
+mono_llvm_jit_dyn_call (void *plan, void *target, void **args, void *ret, void *frame)
+{
+	mono::arch::dyn_call (*(const mono::arch::DynCallPlan *) plan, target, args, ret, frame);
 }

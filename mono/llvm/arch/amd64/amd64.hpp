@@ -9,6 +9,7 @@
 #ifndef MONO_LLVM_ARCH_AMD64_AMD64_HPP
 #define MONO_LLVM_ARCH_AMD64_AMD64_HPP
 
+#include "arch/amd64/dyn-call-offsets.h"
 #include "arch/amd64/interp-entry-offsets.h"
 #include "sidetables.hpp"
 
@@ -134,6 +135,76 @@ struct InterpEntryLayout {
 struct InterpEntryPoint {
 	const InterpEntryLayout *layout = nullptr;
 	void *imethod = nullptr; ///< InterpMethod *, opaque to this backend
+};
+
+/*
+ * The other direction across the same seam: a call the interpreter makes into
+ * a compiled body, whose prototype it only knows at run time.
+ *
+ * The convention restated here is the same one interp-entry.cpp reads a call
+ * out of - LLVM's own lowering of the backend's ccc declarations. For scalar
+ * arguments, that lowering runs the integer and SSE register files down in
+ * argument order and sends the overflow to the stack. place_scalar () in
+ * dyn-call.cpp is that rule.
+ */
+
+/// What dyn-call-thunk.S moves between the interpreter's storage and the
+/// registers a call is made in. The stack area is extended to hold
+/// DynCallPlan::stack_words.
+struct DynCallFrame {
+	uint64_t gregs[6]; ///< rdi rsi rdx rcx r8 r9
+	double fregs[8];   ///< xmm0 - xmm7; a float rides the low half of its slot
+	uint64_t has_fp;   ///< whether the call reads any of fregs
+	uint64_t nstack;   ///< words of stack the call passes
+	uint64_t ret_greg; ///< rax, as the call left it
+	double ret_freg;   ///< xmm0, as the call left it
+	uint64_t stack[];  ///< an image of the callee's incoming stack arguments
+};
+
+static_assert (offsetof (DynCallFrame, gregs) == MONO_DYN_CALL_GREGS);
+static_assert (offsetof (DynCallFrame, fregs) == MONO_DYN_CALL_FREGS);
+static_assert (offsetof (DynCallFrame, has_fp) == MONO_DYN_CALL_HAS_FP);
+static_assert (offsetof (DynCallFrame, nstack) == MONO_DYN_CALL_NSTACK);
+static_assert (offsetof (DynCallFrame, ret_greg) == MONO_DYN_CALL_RET_GREG);
+static_assert (offsetof (DynCallFrame, ret_freg) == MONO_DYN_CALL_RET_FREG);
+static_assert (offsetof (DynCallFrame, stack) == MONO_DYN_CALL_STACK);
+static_assert (sizeof (DynCallFrame) == MONO_DYN_CALL_SIZE);
+
+/// Where one argument goes, and what to read where it comes from.
+struct DynCallArg {
+	enum class File : uint8_t {
+		Greg,  ///< DynCallFrame::gregs, indexed by `at`
+		Freg,  ///< DynCallFrame::fregs, indexed by `at`
+		Stack, ///< DynCallFrame::stack, indexed by `at`
+	};
+
+	/// How wide the value is where the interpreter keeps it, and whether the
+	/// top of the register slot is a sign or a zero extension of it.
+	enum class Load : uint8_t { I1, U1, I2, U2, I4, U4, I8, R4, R8 };
+
+	File file = File::Greg;
+	Load load = Load::I8;
+	uint32_t at = 0;
+};
+
+/// How a dyn call's return value gets back to the interpreter.
+struct DynCallReturn {
+	enum class File : uint8_t { None, Greg, Freg };
+
+	File file = File::None;
+	/// Bytes written through the return pointer. The interpreter widens a
+	/// narrow integer itself, so this is the signature's own width.
+	uint8_t width = 0;
+};
+
+/// How a call of one signature is made. Shared by every method with that
+/// signature, and read on every call, so it holds no metadata.
+struct DynCallPlan {
+	std::vector<DynCallArg> args; ///< the receiver first, when there is one
+	DynCallReturn ret;
+	uint32_t stack_words = 0;
+	bool wants_fp = false;
+	uint32_t frame_size = 0; ///< bytes of DynCallFrame a call of this needs
 };
 
 /// How much code a context stub takes, and what it wants to be aligned to.

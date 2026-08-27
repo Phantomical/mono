@@ -260,6 +260,18 @@ fold_casts ()
 	return on;
 }
 
+bool
+dyn_calls ()
+{
+	static bool on = [] {
+		const char *value = g_getenv ("MONO_LLVM_JIT_DYN_CALL");
+
+		return value == nullptr || is_truthy_env_var (value);
+	}();
+
+	return on;
+}
+
 llvm::FastMathFlags
 relaxed_float_flags ()
 {

@@ -8,6 +8,7 @@ file(GLOB_RECURSE sources CONFIGURE_DEPENDS
 # The hand-written thunks, named rather than globbed: a sibling arch/ directory
 # is a different target's and must not be assembled for this one.
 list(APPEND sources
+    arch/amd64/dyn-call-thunk.S
     arch/amd64/interp-entry-thunk.S
 )
 

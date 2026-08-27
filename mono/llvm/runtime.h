@@ -16,6 +16,7 @@ MONO_BEGIN_DECLS
 typedef struct _MonoMethod MonoMethod;
 typedef struct _MonoDomain MonoDomain;
 typedef struct _MonoJitInfo MonoJitInfo;
+typedef struct _MonoMethodSignature MonoMethodSignature;
 
 /// Call this from runtime startup, before any method can be entered. The
 /// engine is otherwise built by whichever thread asks for the first compile or
@@ -160,6 +161,33 @@ mono_bool mono_llvm_jit_promote_now (MonoMethod *method, MonoDomain *domain, uin
 /// as VerificationException or MethodAccessException. Returns TRUE when no
 /// verifier mode was asked for, which is the default.
 mono_bool mono_llvm_jit_verify_method (MonoMethod *method, MonoError *error);
+
+/*
+ * Calling a compiled body from a caller with no compiled code of its own.
+ *
+ * The interpreter reaches compiled code this way. The plan states where this
+ * backend's convention puts each argument of one signature, and the call reads
+ * it, so a signature costs a plan rather than a compiled wrapper.
+ */
+
+/// Plans how a call of \p sig is passed, or returns NULL when the convention
+/// cannot be stated as a plan. A value type passed or returned by value is
+/// what that refuses, and such a call has to be made another way.
+///
+/// The caller owns the plan. It holds no metadata and never changes, so a
+/// caller that reaches several methods of one signature can share one.
+void *mono_llvm_jit_dyn_call_prepare (MonoMethodSignature *sig);
+
+/// Bytes of scratch a call under \p plan needs. The scratch holds no pointer
+/// the collector has to see, so a stack buffer is the right place for it.
+int mono_llvm_jit_dyn_call_frame_size (void *plan);
+
+/// Calls \p target under \p plan, with each entry of \p args pointing at one
+/// argument's value, the receiver first, and \p ret at room for the return.
+///
+/// The call runs on the calling thread, so the caller owes it an LMF: an
+/// exception leaving \p target unwinds past this without reading its frame.
+void mono_llvm_jit_dyn_call (void *plan, void *target, void **args, void *ret, void *frame);
 
 MONO_END_DECLS
 
