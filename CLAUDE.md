@@ -265,8 +265,8 @@ Dumping. Both engines print through `mono/mini/jit-dump.hpp`, so one variable se
 the stages and one filter selects the methods:
 - `MONO_JIT_DUMP=<points>` — the stages to print, separated by `;` or `,`. `all` names
   every one. A name nothing matches is reported on stderr with the list of names. The
-  points are `il`, `mint`, `unopt-ir`, `tier1-ir`, `tier2-ir`, `tier1-asm` and
-  `tier2-asm`.
+  points are `il`, `mint`, `unopt-ir`, `tier1-ir`, `tier2-inlined-ir`, `tier2-ir`,
+  `tier1-asm` and `tier2-asm`.
 - `MONO_JIT_DUMP_FILTER=<substr>` — dump only the methods whose name contains this. Every
   point matches it against the same string, `Class:Method (argtypes)@0xADDR`, so a filter
   that selects a method at one point selects it at all of them. Unset takes every method.
@@ -283,6 +283,12 @@ What each point prints:
 - `unopt-ir` — the IR the translator wrote, before any pipeline. A body the pre-pass
   folded in is still a function of its own here, so it prints after the caller.
 - `tier1-ir` / `tier2-ir` — that IR after its tier's pipeline.
+- `tier2-inlined-ir` — the IR the tier-2 inliners leave: behind `AlwaysInlinerPass`, the
+  cost model and the sweep that takes the copies neither folded in back off, and in
+  front of the lowering and the O3 pipeline. A type test and a vtable read are still
+  one call each here, which is the half `tier2-ir` no longer shows. The simplification
+  the cost model reads has already run in front of it, so this is not the translator's
+  own IR — `unopt-ir` is that.
 - `tier1-asm` / `tier2-asm` — the code the tier emits, side-table sections included,
   which is the half no offline `llc` run reproduces. Intel syntax, which `jit.cpp` asks
   for as a default; `--llvm-opt=-x86-asm-syntax=att` gets AT&T back. It costs a second

@@ -32,9 +32,12 @@ enum class DumpPoint : uint32_t {
 	mint = 1u << 1,      ///< `mint`: the bytecode the interpreter runs.
 	unopt_ir = 1u << 2,  ///< `unopt-ir`: the IR the translator wrote.
 	tier1_ir = 1u << 3,  ///< `tier1-ir`: that IR after the tier-1 pipeline.
-	tier2_ir = 1u << 4,  ///< `tier2-ir`: after the tier-2 pipeline.
-	tier1_asm = 1u << 5, ///< `tier1-asm`: the code tier 1 emits.
-	tier2_asm = 1u << 6, ///< `tier2-asm`: the code tier 2 emits.
+	/// `tier2-inlined-ir`: the IR the tier-2 inliners leave, in front of the
+	/// lowering and the optimization pipeline.
+	tier2_inlined_ir = 1u << 4,
+	tier2_ir = 1u << 5,  ///< `tier2-ir`: after the tier-2 pipeline.
+	tier1_asm = 1u << 6, ///< `tier1-asm`: the code tier 1 emits.
+	tier2_asm = 1u << 7, ///< `tier2-asm`: the code tier 2 emits.
 };
 
 /// Whether MONO_JIT_DUMP asked for this point, whatever the method is.

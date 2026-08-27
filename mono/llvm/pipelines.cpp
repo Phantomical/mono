@@ -5,6 +5,7 @@
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init.hpp"
 #include "passes/devirtualize.hpp"
+#include "passes/dump-ir.hpp"
 #include "passes/fold-delegate.hpp"
 #include "passes/inline-copies.hpp"
 #include "passes/profile-counter-promoter.hpp"
@@ -568,6 +569,14 @@ MonoPassBuilder::buildTier2Pipeline ()
 	                                       std::move (between)));
 
 	MPM.addPass (mono::StripInlineCopiesPass ());
+
+	/*
+	 * What the two inliners left: the symbolic calls still one call each, and
+	 * no optimization over them. In front of the lowering below, which is what
+	 * takes that shape away.
+	 */
+	if (dump_point_enabled (DumpPoint::tier2_inlined_ir))
+		MPM.addPass (mono::DumpIRPass (DumpPoint::tier2_inlined_ir));
 
 	/*
 	 * Behind the inliner, so the cost model weighs a callee with its sites still

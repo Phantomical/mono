@@ -48,6 +48,7 @@ const PointNames points[] = {
 	{ DumpPoint::mint, "mint", "mint" },
 	{ DumpPoint::unopt_ir, "unopt-ir", "ll" },
 	{ DumpPoint::tier1_ir, "tier1-ir", "ll" },
+	{ DumpPoint::tier2_inlined_ir, "tier2-inlined-ir", "ll" },
 	{ DumpPoint::tier2_ir, "tier2-ir", "ll" },
 	{ DumpPoint::tier1_asm, "tier1-asm", "s" },
 	{ DumpPoint::tier2_asm, "tier2-asm", "s" },
