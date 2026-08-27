@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "operand-class.hpp"
 #include "runtime-error.hpp"
 #include "../passes/array-address.hpp"
 #include "../passes/array-shape.hpp"
@@ -994,15 +995,58 @@ MethodLLVMEmitter::emit_unsafe_mov (MonoIrBuilder &builder, MonoMethodSignature 
 	return push_produced (builder, result, sig->ret);
 }
 
+namespace {
+
+/**
+ * Builds the return attribute stating how many bytes a caller can read at a
+ * fresh \p array of \p length elements.
+ *
+ * LLVM reads `dereferenceable` as a promise the pointer is not null.
+ * \p answers_null picks the `_or_null` form for an allocator that can answer
+ * null.
+ *
+ * `emit_object_alloc ()`'s allocator carries `allocsize` instead. Both of its
+ * operands are parameter numbers. The size of an element is a constant here,
+ * not an argument, so there is no parameter to name.
+ */
+llvm::Attribute
+array_extent (bool answers_null, MonoClass *array, llvm::Value *length)
+{
+	llvm::LLVMContext &c = length->getContext ();
+
+	// The header sits in front of the elements, so it is there whatever the
+	// length is. A constant length sizes the elements behind it as well.
+	uint64_t bytes = MONO_SIZEOF_MONO_ARRAY;
+	auto *count = llvm::dyn_cast<llvm::ConstantInt> (length);
+	int32_t element = mono_array_element_size (array);
+
+	// The elements are added only for a constant length that is in range. Any
+	// other length leaves the extent at the header alone, a safe floor whether
+	// the true array is larger or the call never returns. The same range check
+	// also keeps the multiply below from overflowing.
+	if (count != nullptr && element > 0 && count->getValue ().isNonNegative ()
+	    && count->getValue ().getActiveBits () <= 32)
+		bytes += count->getValue ().getZExtValue () * (uint64_t) element;
+
+	// The collector rounds the request up to its own alignment, so this is a
+	// floor rather than the size of the block.
+	return answers_null ? llvm::Attribute::getWithDereferenceableOrNullBytes (c, bytes)
+	                    : llvm::Attribute::getWithDereferenceableBytes (c, bytes);
+}
+
+} // namespace
+
 /// Allocates an array of length elements and answers it. array must be a
 /// szarray class, and length an integer of any width.
 ///
 /// The collector's array allocator serves the call where the collector has one,
-/// and the runtime's array-new icall where it does not. Both raise
-/// OverflowException for a negative length. The two disagree above
-/// MONO_ARRAY_MAX_INDEX: the allocator refuses with OutOfMemoryException and the
-/// icall with OverflowException. A caller that can present such a length must
-/// test it first.
+/// and the runtime's array-new icall where it does not.
+///
+/// A negative length raises OverflowException, which this emits rather than
+/// leaving to either allocator. The two disagree above MONO_ARRAY_MAX_INDEX:
+/// the allocator refuses with OutOfMemoryException and the icall with
+/// OverflowException. A caller that can present such a length must test it
+/// first.
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
                                       llvm::Value *length)
@@ -1018,7 +1062,20 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 	if (!vtable)
 		return vtable.takeError ();
 
+	/*
+	 * The allocator raises this itself, and that is not enough. `allockind`
+	 * below lets LLVM erase an allocation nothing reads, which takes the raise
+	 * away with it: `newobj int32[]::.ctor(-1)` under a `pop` then answers an
+	 * array instead of OverflowException. The test has to sit outside the call
+	 * that the attribute makes erasable.
+	 */
+	emit_cond_exception (
+		builder,
+		builder.CreateICmpSLT (length, llvm::ConstantInt::get (length->getType (), 0)),
+		"OverflowException");
+
 	MonoMethod *allocator = mono_gc_get_managed_array_allocator (array);
+	llvm::Value *created = nullptr;
 
 	if (allocator != nullptr) {
 		llvm::Expected<llvm::Function *> fast = create_method_decl (allocator);
@@ -1027,6 +1084,17 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 			return fast.takeError ();
 
 		(*fast)->addRetAttr (llvm::Attribute::NoAlias);
+		// allockind lets LLVM erase an array that nothing reads.
+		// mono_gc_get_managed_array_allocator () keeps an erasure the program can
+		// observe out of this branch: it answers null while
+		// sgen_has_per_allocation_action is set. verify-before-allocs and
+		// collect-before-allocs are what set that flag, and the icall below
+		// serves the call instead.
+		//
+		// allocsize names a size in bytes, and argument 1 is the element count,
+		// so this allocator gets the kind alone.
+		(*fast)->addFnAttr (
+			llvm::Attribute::getWithAllocKind (context (), llvm::AllocFnKind::Alloc));
 		// The allocator raises OutOfMemoryException instead of answering null.
 		(*fast)->addRetAttr (llvm::Attribute::NonNull);
 
@@ -1035,25 +1103,44 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 		// oversized one by its sign.
 		llvm::Type *native = builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8);
 
-		return emit_protected_call (
+		created = emit_protected_call (
 			builder, *fast,
 			adapt_to_callee (builder, *fast,
 		                         {*vtable, builder.CreateSExtOrTrunc (length, native)}));
+	} else {
+		llvm::Expected<llvm::Function *> slow =
+			icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_array_new_specific);
+
+		if (!slow)
+			return slow.takeError ();
+
+		(*slow)->addRetAttr (llvm::Attribute::NoAlias);
+
+		created = emit_protected_call (
+			builder, *slow,
+			adapt_to_callee (
+				builder, *slow,
+				{*vtable,
+			         builder.CreateSExtOrTrunc (length, builder.getInt32Ty ())}));
 	}
 
-	llvm::Expected<llvm::Function *> slow =
-		icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_array_new_specific);
+	/*
+	 * Both branches make an array of this class and no other. A proxy stands in
+	 * for no array, so this needs none of the guard emit_object_alloc () keeps.
+	 *
+	 * The mark is what lets fold_type_tests () answer a type test on a fresh
+	 * array. fold_object_vtables () reads it as well, which takes an interface
+	 * dispatch on one down to a direct call.
+	 */
+	if (auto *made = llvm::dyn_cast<llvm::Instruction> (created))
+		mark_exact_class (*made, array);
 
-	if (!slow)
-		return slow.takeError ();
+	// Only the fast branch marks its allocator nonnull. The icall's answer
+	// therefore needs the `_or_null` form.
+	if (auto *site = llvm::dyn_cast<llvm::CallBase> (created))
+		site->addRetAttr (array_extent (allocator == nullptr, array, length));
 
-	(*slow)->addRetAttr (llvm::Attribute::NoAlias);
-
-	return emit_protected_call (
-		builder, *slow,
-		adapt_to_callee (builder, *slow,
-	                         {*vtable,
-	                          builder.CreateSExtOrTrunc (length, builder.getInt32Ty ())}));
+	return created;
 }
 
 /*
@@ -1114,17 +1201,13 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
 		length = builder.CreatePtrToInt (length, native);
 
 	/*
-	 * The spec asks for OverflowException on a negative length, and the two
-	 * allocators disagree about which exception an oversized one draws. These
-	 * tests settle both answers here. They also keep a native-int length off
-	 * the icall's int32 count, where 2^32 truncates to a legal zero and
+	 * The two allocators disagree about which exception an oversized length
+	 * draws, so this settles the answer here. It also keeps a native-int length
+	 * off the icall's int32 count, where 2^32 truncates to a legal zero and
 	 * allocates an empty array instead of raising anything.
+	 *
+	 * emit_vector_alloc () raises the negative-length answer.
 	 */
-	emit_cond_exception (
-		builder,
-		builder.CreateICmpSLT (length, llvm::ConstantInt::get (length->getType (), 0)),
-		"OverflowException");
-
 	if (length->getType ()->getIntegerBitWidth () > 32) {
 		llvm::Value *narrowed = builder.CreateTrunc (length, builder.getInt32Ty ());
 
