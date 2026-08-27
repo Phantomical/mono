@@ -827,19 +827,17 @@ TEST_F (TranslatorTest, OnlyAnOverridableCallvirtReadsTheVtable)
 	ASSERT_NE (overridable.function, nullptr) << overridable.error;
 	EXPECT_EQ (overridable.count ("Base:Virt"), 0u) << overridable.text ();
 
-	// The lookup is the plain load of the slot, so a receiver whose class the
-	// optimizer settles reads a vtable snapshot and folds it to the callee.
-	EXPECT_EQ (overridable.count ("%vtable_entry = load ptr"), 1u)
-		<< overridable.text ();
+	// The lookup is a mono.vtable.func call, which keeps the vtable and the slot
+	// as operands for fold_dispatch_sites () to read.
+	EXPECT_EQ (overridable.count ("@mono.vtable.func"), 1u) << overridable.text ();
 
 	ASSERT_NE (final_method.function, nullptr) << final_method.error;
 	EXPECT_GE (final_method.count ("Base:Sealed"), 1u);
-	EXPECT_EQ (final_method.count ("%vtable_entry = load ptr"), 0u)
-		<< final_method.text ();
+	EXPECT_EQ (final_method.count ("@mono.vtable.func"), 0u) << final_method.text ();
 
 	ASSERT_NE (instance.function, nullptr) << instance.error;
 	EXPECT_GE (instance.count ("Base:Inst"), 1u);
-	EXPECT_EQ (instance.count ("%vtable_entry = load ptr"), 0u) << instance.text ();
+	EXPECT_EQ (instance.count ("@mono.vtable.func"), 0u) << instance.text ();
 }
 
 // An interface call reaches its target through the IMT rather than the vtable,
@@ -1407,7 +1405,8 @@ TEST_F (TranslatorTest, ValueTypeNewobjConstructsInATemp)
 // here: newobj asks the builtin for the object the constructor built. The method it
 // stands for is the wrapper the runtime publishes for a string constructor, which this
 // backend compiles. How that wrapper is reached - the null this
-// it never reads - is settled in LowerBuiltinsPass, and nothing about it is spelled here.
+// it never reads - is settled in lower_runtime_builtins (), and nothing about it is
+// spelled here.
 TEST_F (TranslatorTest, StringNewobjAsksTheBuiltinForTheObject)
 {
 	const Translation &t = translate ("objects", "Objects:MakeString");
@@ -1520,10 +1519,11 @@ TEST_F (TranslatorTest, GetTypeReadsTheVtable)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_EQ (t.count ("object:GetType"), 0u) << t.text ();
-	EXPECT_EQ (t.count ("%obj_type = load ptr"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("%obj_type = call ptr @mono.vtable.type"), 1u) << t.text ();
 
-	// The receiver's vtable and the field on it, both tagged.
-	EXPECT_EQ (t.count ("!invariant.load"), 2u) << t.text ();
+	// The receiver's vtable. The field on it is a call, which carries the same
+	// claim as an attribute.
+	EXPECT_EQ (t.count ("!invariant.load"), 1u) << t.text ();
 	EXPECT_GT (t.count ("NullReferenceException"), 0u) << t.text ();
 }
 
@@ -1567,7 +1567,7 @@ TEST_F (TranslatorTest, EachCastSiteGetsItsOwnCacheSlot)
 /*
  * The translator writes one call and no test at all. What decides the answer -
  * the class, the site's cache and the wrapper behind it - are its operands, and
- * LowerCastFuncPass writes the probe once nothing has answered the site.
+ * lower_type_tests () writes the probe once nothing has folded the site.
  * cast-func-tests.cpp covers what it writes.
  */
 TEST_F (TranslatorTest, ACastIsOneCallCarryingWhatDecidesIt)

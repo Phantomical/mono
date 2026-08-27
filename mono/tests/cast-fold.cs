@@ -5,7 +5,7 @@ using System.Runtime.CompilerServices;
 /*
  * A type test the compiler answers from what the IR says about the operand.
  *
- * FoldCastPass reads the class an argument's slot is declared with, or the
+ * fold_type_tests () reads the class an argument's slot is declared with, or the
  * class an allocation made, and answers the test for every class that slot
  * admits. Each case below is one arm of that rule, and each is written so that
  * a wrong answer is a wrong value rather than a slower one.

@@ -5,6 +5,7 @@
 
 #include "cast-func.hpp"
 
+#include "builtins.hpp"
 #include "method-symbols.hpp"
 
 #include "mono/metadata/abi-details.h"
@@ -393,26 +394,10 @@ lower (CallBase *site, bool throw_on_fail)
 bool
 lower_all (Module &m, StringRef name, bool throw_on_fail)
 {
-	Function *decl = m.getFunction (name);
-
-	if (decl == nullptr)
-		return false;
-
-	SmallVector<CallBase *, 8> sites;
-
-	for (User *user : decl->users ())
-		if (auto *site = dyn_cast<CallBase> (user))
-			sites.push_back (site);
-
-	for (CallBase *site : sites)
+	for (CallBase *site : builtin_sites (m, name))
 		lower (site, throw_on_fail);
 
-	// Anything left is a use this lowering does not understand.
-	if (!decl->use_empty ())
-		report_fatal_error (Twine ("unlowered use of ") + name);
-	decl->eraseFromParent ();
-
-	return true;
+	return erase_builtin (m, name);
 }
 
 } // namespace
@@ -421,25 +406,19 @@ Function *
 cast_func_decl (Module &m, bool throw_on_fail)
 {
 	StringRef name = throw_on_fail ? cast_castclass_name : cast_isinst_name;
-
-	if (Function *existing = m.getFunction (name))
-		return existing;
-
 	LLVMContext &c = m.getContext ();
 	Type *ptr = PointerType::get (c, 0);
 
-	return Function::Create (FunctionType::get (ptr, { ptr, ptr, ptr, ptr }, false),
-	                         GlobalValue::ExternalLinkage, name, m);
+	return builtin_decl (m, name,
+	                     FunctionType::get (ptr, { ptr, ptr, ptr, ptr }, false));
 }
 
-PreservedAnalyses
-LowerCastFuncPass::run (Module &m, ModuleAnalysisManager &)
+bool
+lower_type_tests (Module &m)
 {
 	bool changed = lower_all (m, cast_isinst_name, false);
 
-	changed |= lower_all (m, cast_castclass_name, true);
-
-	return changed ? PreservedAnalyses::none () : PreservedAnalyses::all ();
+	return lower_all (m, cast_castclass_name, true) || changed;
 }
 
 } // namespace mono

@@ -1,8 +1,8 @@
 /*
- * Tests for ArrayAddressPass, which turns a `mono.array.address.*` site into a
- * bounds check for each dimension.
+ * Tests for lower_array_addresses (), which turns a `mono.array.address.*` site
+ * into a bounds check for each dimension.
  *
- * The pass reads MonoArray's layout out of mono's own headers, so no case here
+ * The lowering reads MonoArray's layout out of mono's own headers, so no case here
  * states it. What each case writes is the rank, the element size and the bounded
  * flag, which is what the translator puts on the declaration.
  *
@@ -80,9 +80,7 @@ struct AddressModule {
 
 	void run ()
 	{
-		ModuleAnalysisManager mam;
-
-		ArrayAddressPass ().run (*module, mam);
+		lower_array_addresses (*module);
 		ASSERT_FALSE (verifyModule (*module, &errs ()));
 	}
 

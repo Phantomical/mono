@@ -1,11 +1,11 @@
 /*
- * Tests for ArrayShapePass, which answers a `mono.array.shape.*` site out of
- * the array where it names dimension zero and puts it back on the accessor
- * where it does not.
+ * Tests for the two halves of `mono.array.shape.*`: the fold reads such a site
+ * out of the array where it names dimension zero, and the lowering puts back on
+ * the accessor every site that is left.
  *
- * The pass reads MonoArray's layout out of mono's headers, which accessor and
+ * Both read MonoArray's layout out of mono's headers, which accessor and
  * which fallback method off the declaration, and the dimension and the exception
- * token off the site. None of that needs a runtime, so these drive it with none
+ * token off the site. None of that needs a runtime, so these cases run with none
  * under them. What each case counts is the header reads, not the offsets they
  * are made at.
  */
@@ -79,9 +79,7 @@ struct ShapeModule {
 
 	void run ()
 	{
-		ModuleAnalysisManager mam;
-
-		ArrayShapePass (/*finalize=*/true).run (*module, mam);
+		lower_array_shapes (*module);
 		ASSERT_FALSE (verifyModule (*module, &errs ()));
 		ASSERT_EQ (module->getFunction (decl_name), nullptr);
 	}
@@ -160,14 +158,13 @@ TEST (ArrayShape, OtherDimensionsKeepTheCall)
 	EXPECT_EQ (m.count_calls (), 1u);
 }
 
-/// A run that does not finalize leaves a site it cannot answer standing, so
-/// that the run behind the simplification still gets to read the dimension.
-TEST (ArrayShape, AnUnfinishedRunKeepsTheSite)
+/// A fold leaves a site it cannot read standing, so that a later round still
+/// gets to read the dimension.
+TEST (ArrayShape, AFoldKeepsASiteItCannotRead)
 {
 	ShapeModule m (array_shape_length, 1);
-	ModuleAnalysisManager mam;
 
-	ArrayShapePass (/*finalize=*/false).run (*m.module, mam);
+	fold_array_shapes (*m.module->getFunction ("caller"));
 	ASSERT_FALSE (verifyModule (*m.module, &errs ()));
 	EXPECT_NE (m.module->getFunction (m.decl_name), nullptr);
 	EXPECT_EQ (m.count_calls (), 0u);

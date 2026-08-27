@@ -13,7 +13,6 @@
 #include "naming.hpp"
 #include "options.hpp"
 #include "passes/inline-copies.hpp"
-#include "passes/vtable-snapshot.hpp"
 #include "profile-inlines.hpp"
 #include "timing.hpp"
 #include "trivial-inlines.hpp"
@@ -304,9 +303,6 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		inliner ? &*inliner : nullptr);
 
 	if (Error err = inline_copies_stripped (*module))
-		return std::move (err);
-
-	if (Error err = vtable_snapshots_stripped (*module))
 		return std::move (err);
 
 	dump_ir (optimized_ir_point (target.tier), *module, entry, dumped);

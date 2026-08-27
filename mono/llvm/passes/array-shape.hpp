@@ -19,7 +19,11 @@
 #define MONO_LLVM_PASSES_ARRAY_SHAPE_HPP
 
 #include <llvm/ADT/StringRef.h>
-#include <llvm/IR/PassManager.h>
+
+namespace llvm {
+class Function;
+class Module;
+} // namespace llvm
 
 namespace mono {
 
@@ -36,28 +40,21 @@ constexpr llvm::StringRef array_shape_target_attribute = "mono-array-shape-targe
 constexpr llvm::StringRef array_shape_length = "length";
 constexpr llvm::StringRef array_shape_lower_bound = "lower_bound";
 
-/// Rewrites a call to a `mono.array.shape.*` declaration into the header reads
-/// where the dimension is the constant zero.
+/// Rewrites each site in \p f whose dimension is the constant zero into the
+/// header reads, and says whether it changed anything.
 ///
-/// Runs twice in each tier's pipeline. A site the IL already settled is
-/// answered by the first run, in front of the simplification that then
-/// optimizes the reads. A site whose dimension arrives through an inlined
-/// parameter is a load until SROA has run, so it is the second run that reads
-/// it as a constant.
+/// A dimension the IL settled reads as a constant straight away. One that
+/// arrives through an inlined parameter is a load until SROA has run, which is
+/// why the folds take a function's sites up more than once.
+bool fold_array_shapes (llvm::Function &f);
+
+/// Rewrites every site left in \p m, erases the declarations, and says whether
+/// it changed anything.
 ///
-/// \param finalize  whether a site this run cannot answer goes back onto the
-///                  accessor. Only the last run in a pipeline may, since a
-///                  restored call is one no later run can answer.
-class ArrayShapePass : public llvm::PassInfoMixin<ArrayShapePass> {
-public:
-	explicit ArrayShapePass (bool finalize) : finalize (finalize) {}
-
-	llvm::PreservedAnalyses run (llvm::Module &m,
-	                             llvm::ModuleAnalysisManager &mam);
-
-private:
-	bool finalize;
-};
+/// A dimension this cannot read goes back onto the accessor, which makes the
+/// rank test the icall makes. So this must run behind every fold: a restored
+/// call is one no fold can read again.
+bool lower_array_shapes (llvm::Module &m);
 
 } // namespace mono
 

@@ -32,13 +32,8 @@ constexpr llvm::StringRef builtin_target_attribute = "mono-builtin-target";
 constexpr llvm::StringRef builtin_string_constructor = "string_constructor";
 
 /// Rewrites every call to a `mono.builtin.*` declaration into the call it
-/// stands for, and erases the declaration. Runs before the optimization
-/// pipeline, so nothing downstream ever sees a builtin.
-class LowerBuiltinsPass : public llvm::PassInfoMixin<LowerBuiltinsPass> {
-public:
-	llvm::PreservedAnalyses run (llvm::Module &m,
-	                             llvm::ModuleAnalysisManager &mam);
-};
+/// stands for, erases the declarations, and says whether it changed anything.
+bool lower_runtime_builtins (llvm::Module &m);
 
 } // namespace mono
 

@@ -12,7 +12,6 @@
 #define MONO_LLVM_PASSES_VTABLE_FUNC_HPP
 
 #include <llvm/ADT/StringRef.h>
-#include <llvm/IR/PassManager.h>
 
 namespace llvm {
 class Function;
@@ -44,23 +43,31 @@ constexpr llvm::StringRef imt_func_name = "mono.imt.func";
 /// register. key is that method, and it is what makes the site resolvable: the
 /// slot alone serves every instantiation, while the class and the key together
 /// name one. Written as a call rather than as the load so both stay operands
-/// for DevirtualizePass to read.
+/// for fold_dispatch_sites () to read.
 constexpr llvm::StringRef vtable_gfunc_name = "mono.vtable.gfunc";
+
+/// `ptr @mono.vtable.klass (ptr vtable)` returns the class the vtable stands
+/// for, `ptr @mono.vtable.type (ptr vtable)` that class's `System.Type` object,
+/// and `i8 @mono.vtable.rank (ptr vtable)` its rank.
+///
+/// Each is a call rather than the load it stands for so that the vtable stays
+/// an operand, which is what `fold_vtable_fields ()` reads once the IR settles
+/// which vtable a site names. Only the translator writes a call to one.
+constexpr llvm::StringRef vtable_klass_name = "mono.vtable.klass";
+constexpr llvm::StringRef vtable_type_name = "mono.vtable.type";
+constexpr llvm::StringRef vtable_rank_name = "mono.vtable.rank";
 
 /// The declarations in m, created on first use and carrying their attributes.
 llvm::Function *vtable_func_decl (llvm::Module &m);
 llvm::Function *imt_func_decl (llvm::Module &m);
 llvm::Function *vtable_gfunc_decl (llvm::Module &m);
+llvm::Function *vtable_klass_decl (llvm::Module &m);
+llvm::Function *vtable_type_decl (llvm::Module &m);
+llvm::Function *vtable_rank_decl (llvm::Module &m);
 
-/// Rewrites every `mono.vtable.func` and `mono.imt.func` call into the load it
-/// stands for, and erases the declarations.
-///
-/// Codegen has no lowering for either, so both tiers run this behind everything
-/// that reads the calls.
-class LowerVTableFuncPass : public llvm::PassInfoMixin<LowerVTableFuncPass> {
-public:
-	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &mam);
-};
+/// Rewrites every call to the three declarations above into the load it stands
+/// for, erases the declarations, and says whether it changed anything.
+bool lower_vtable_reads (llvm::Module &m);
 
 } // namespace mono
 

@@ -319,14 +319,8 @@ MethodLLVMEmitter::emit_element_type (MonoIrBuilder &builder, MonoMethod *callee
 	// tests the field for that reason and this follows it.
 	builder.SetInsertPoint (read);
 
-	llvm::LoadInst *answered = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), vtable,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, type))),
-		align, "element_type");
-
-	answered->setMetadata (llvm::LLVMContext::MD_invariant_load,
-	                       llvm::MDNode::get (builder.getContext (), {}));
+	llvm::Value *answered =
+		builder.CreateCall (vtable_type_decl (*module), { vtable }, "element_type");
 
 	builder.CreateCondBr (builder.CreateIsNotNull (answered), done, declined);
 

@@ -56,13 +56,9 @@ mark_array_header_load (llvm::LoadInst *load)
 }
 
 /// Rewrites every call to a `mono.array.address.*` declaration into the
-/// bounds-checked element address computation, throwing the corlib exception
-/// the site names on a failed check. Runs before the optimization pipeline.
-class ArrayAddressPass : public llvm::PassInfoMixin<ArrayAddressPass> {
-public:
-	llvm::PreservedAnalyses run (llvm::Module &m,
-	                             llvm::ModuleAnalysisManager &mam);
-};
+/// bounds-checked element address computation, and says whether it changed
+/// anything. A failed check throws the corlib exception the site names.
+bool lower_array_addresses (llvm::Module &m);
 
 } // namespace mono
 

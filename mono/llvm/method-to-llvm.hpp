@@ -14,7 +14,7 @@
 
 #include "il-line-table.hpp"
 #include "method-symbols.hpp"
-#include "passes/vtable-snapshot.hpp"
+#include "vtable-facts.hpp"
 #include "mini.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-forward.h"
@@ -932,8 +932,6 @@ private:
 	                    bool native = false);
 	llvm::Value *load_vtable (MonoIrBuilder &builder, llvm::Value *object,
 	                          const llvm::Twine &name = "");
-	llvm::Value *vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver,
-	                           int32_t offset);
 	llvm::Value *virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
 	                             MonoMethod *target);
 	llvm::Value *generic_virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
@@ -987,10 +985,7 @@ private:
 	std::string identity_symbol (const std::string &name, const void *object);
 	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
 	llvm::Constant *vtable_symbol (MonoClass *klass, const std::string &symbol);
-	std::optional<VTableConstants> vtable_constants (MonoClass *klass);
-	bool vtable_slots (MonoClass *klass,
-	                   llvm::SmallVectorImpl<llvm::Constant *> &slots);
-	llvm::Function *unbox_shim (llvm::Function *callee);
+	std::optional<VTableFacts> vtable_facts_for (MonoClass *klass);
 	llvm::Expected<llvm::Constant *> typeof_symbol (MonoType *type);
 	MonoClass *parameter_class (MonoType *type);
 	llvm::Constant *field_symbol (MonoClassField *field);
@@ -1324,8 +1319,8 @@ MonoMethod *icall_wrapper_target (MonoMethod *method);
 /// on instead of entering the accessor. sig is the signature the call site was
 /// written against.
 ///
-/// A site that names a dimension can still end up as a call: ArrayShapePass
-/// puts back the ones whose dimension it cannot read.
+/// A site that names a dimension can still end up as a call:
+/// lower_array_shapes () puts back the ones whose dimension it cannot read.
 bool answers_array_shape (MonoMethod *target, MonoMethodSignature *sig);
 
 /// Which element accessor on System.Array target is, or nothing when it is

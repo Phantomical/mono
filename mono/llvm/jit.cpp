@@ -15,10 +15,8 @@
 #include "il-line-table.hpp"
 #include "seq-point-marker.hpp"
 #include "sidetables.hpp"
-#include "passes/array-address.hpp"
-#include "passes/array-shape.hpp"
+#include "passes/builtins.hpp"
 #include "passes/class-init.hpp"
-#include "passes/lower-builtins.hpp"
 #include "passes/profile-counters.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "passes/top-down-inline.hpp"
@@ -156,9 +154,8 @@ verify_or_die (const Function &f, StringRef when)
 bool
 is_mono_pass (StringRef pass)
 {
-	return pass == ArrayAddressPass::name () || pass == ArrayShapePass::name ()
+	return pass == MonoBuiltinConstProp::name () || pass == MonoBuiltinLower::name ()
 	       || pass == ClassInitPass::name ()
-	       || pass == LowerBuiltinsPass::name ()
 	       || pass == RestoreTailPositionPass::name ()
 	       || pass == arch::MonoAbiPass::name ();
 }

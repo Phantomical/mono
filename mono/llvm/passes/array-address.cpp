@@ -18,6 +18,8 @@
 
 #include "array-address.hpp"
 
+#include "builtins.hpp"
+
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/object-internals.h"
@@ -265,8 +267,8 @@ lower_call (CallBase *site, const AddressSpec &spec)
 
 } // namespace
 
-PreservedAnalyses
-ArrayAddressPass::run (Module &m, ModuleAnalysisManager &)
+bool
+lower_array_addresses (Module &m)
 {
 	SmallVector<Function *, 4> decls;
 
@@ -275,17 +277,12 @@ ArrayAddressPass::run (Module &m, ModuleAnalysisManager &)
 			decls.push_back (&f);
 
 	if (decls.empty ())
-		return PreservedAnalyses::all ();
+		return false;
 
 	for (Function *decl : decls) {
 		AddressSpec spec = parse_spec (*decl);
-		SmallVector<CallBase *, 8> sites;
 
-		for (User *user : decl->users ())
-			if (auto *site = dyn_cast<CallBase> (user))
-				sites.push_back (site);
-
-		for (CallBase *site : sites)
+		for (CallBase *site : builtin_sites (m, decl->getName ()))
 			lower_call (site, spec);
 
 		/* Anything left is a use no lowering understands, so fail loudly. */
@@ -294,7 +291,7 @@ ArrayAddressPass::run (Module &m, ModuleAnalysisManager &)
 		decl->eraseFromParent ();
 	}
 
-	return PreservedAnalyses::none ();
+	return true;
 }
 
 } // namespace mono

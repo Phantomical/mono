@@ -242,7 +242,7 @@ set(MONO_TESTS_CS_SRC
   stack-merge-class.cs
   tier2-inline-override.cs
   cast-fold.cs
-  vtable-snapshot.cs
+  vtable-fold.cs
   reflection-element-type.cs
   tier2-narrow-arg.cs
   pinvoke-narrow-arg.cs

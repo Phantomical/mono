@@ -182,7 +182,7 @@ uint32_t inline_depth_limit ();
 ///
 /// MONO_LLVM_JIT_INLINE_ROUNDS moves it, and one leaves the inliner with the
 /// sites the method arrived with. A fold settles the receiver's class at a
-/// dispatch below it, which `DevirtualizePass` then answers with a direct call
+/// dispatch below it, which `fold_dispatch_sites ()` then replaces with a direct call
 /// - a site that was not there when the sites were first read, and one an
 /// interface dispatch reaches no other way.
 ///

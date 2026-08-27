@@ -89,7 +89,7 @@ the vtable store an allocation carries — one step no other simplification here
 takes. It goes in front of the SROA question, which otherwise consumes the load.
 
 **`CallAnalyzer::visitCallBase ()` asks `folded_type_test ()`.** A type test is
-one call each until `LowerCastFuncPass`, which runs behind the inliner, so the
+one call each until `lower_type_tests ()`, which runs behind the inliner, so the
 model sees the form `cast_answer ()` settles. It goes behind
 `simplifyCallSite ()`, which is where a call that is really a value belongs. The
 tests are cheap and the arms they rule out are not: a cascade picking one

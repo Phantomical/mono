@@ -17,6 +17,7 @@
 #include "array-shape.hpp"
 
 #include "array-address.hpp"
+#include "builtins.hpp"
 
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-internals.h"
@@ -208,29 +209,62 @@ restore_call (CallBase *site, Function *target)
 	site->eraseFromParent ();
 }
 
-} // namespace
-
-PreservedAnalyses
-ArrayShapePass::run (Module &m, ModuleAnalysisManager &)
+/// The declarations \p m holds, and the accessor kind each stands for.
+SmallVector<std::pair<Function *, StringRef>, 4>
+shape_decls (Module &m)
 {
-	SmallVector<Function *, 4> decls;
+	SmallVector<std::pair<Function *, StringRef>, 4> found;
 
-	for (Function &f : m)
-		if (f.isDeclaration () && f.getName ().starts_with (array_shape_prefix))
-			decls.push_back (&f);
+	for (Function &f : m) {
+		if (!f.isDeclaration () || !f.getName ().starts_with (array_shape_prefix))
+			continue;
 
-	if (decls.empty ())
-		return PreservedAnalyses::all ();
-
-	for (Function *decl : decls) {
-		StringRef kind = decl->getFnAttribute (array_shape_attribute).getValueAsString ();
-		StringRef name =
-			decl->getFnAttribute (array_shape_target_attribute).getValueAsString ();
-		Function *target = m.getFunction (name);
+		StringRef kind = f.getFnAttribute (array_shape_attribute).getValueAsString ();
 
 		if (kind != array_shape_length && kind != array_shape_lower_bound)
 			report_fatal_error (Twine ("unknown ") + array_shape_attribute + " kind '"
-			                    + kind + "' on " + decl->getName ());
+			                    + kind + "' on " + f.getName ());
+
+		found.push_back ({ &f, kind });
+	}
+
+	return found;
+}
+
+} // namespace
+
+bool
+fold_array_shapes (Function &f)
+{
+	bool changed = false;
+
+	for (auto [decl, kind] : shape_decls (*f.getParent ())) {
+		for (CallBase *site : builtin_sites (f, decl->getName ())) {
+			auto *dimension = dyn_cast<ConstantInt> (site->getArgOperand (1));
+
+			if (dimension == nullptr || !dimension->isZero ())
+				continue;
+
+			lower_call (site, kind == array_shape_lower_bound);
+			changed = true;
+		}
+	}
+
+	return changed;
+}
+
+bool
+lower_array_shapes (Module &m)
+{
+	auto decls = shape_decls (m);
+
+	if (decls.empty ())
+		return false;
+
+	for (auto [decl, kind] : decls) {
+		StringRef name =
+			decl->getFnAttribute (array_shape_target_attribute).getValueAsString ();
+		Function *target = m.getFunction (name);
 
 		if (target == nullptr)
 			report_fatal_error (Twine ("array shape ") + decl->getName ()
@@ -242,23 +276,14 @@ ArrayShapePass::run (Module &m, ModuleAnalysisManager &)
 			                    + " does not take the arguments of " + name
 			                    + " and an exception token");
 
-		SmallVector<CallBase *, 8> sites;
-
-		for (User *user : decl->users ())
-			if (auto *site = dyn_cast<CallBase> (user))
-				sites.push_back (site);
-
-		for (CallBase *site : sites) {
+		for (CallBase *site : builtin_sites (m, decl->getName ())) {
 			auto *dimension = dyn_cast<ConstantInt> (site->getArgOperand (1));
 
 			if (dimension != nullptr && dimension->isZero ())
 				lower_call (site, kind == array_shape_lower_bound);
-			else if (finalize)
+			else
 				restore_call (site, target);
 		}
-
-		if (!finalize)
-			continue;
 
 		/* Anything left is a use no lowering understands, so fail loudly. */
 		if (!decl->use_empty ())
@@ -266,7 +291,7 @@ ArrayShapePass::run (Module &m, ModuleAnalysisManager &)
 		decl->eraseFromParent ();
 	}
 
-	return PreservedAnalyses::none ();
+	return true;
 }
 
 } // namespace mono

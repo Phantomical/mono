@@ -2,8 +2,7 @@
 #include "method-symbols.hpp"
 #include "runtime-error.hpp"
 #include "../passes/class-init.hpp"
-#include "../passes/devirtualize.hpp"
-#include "../passes/vtable-snapshot.hpp"
+#include "../vtable-facts.hpp"
 #include "../runtime/naming.hpp"
 #include "../runtime/options.hpp"
 #include "mono/metadata/abi-details.h"
@@ -274,45 +273,30 @@ MethodLLVMEmitter::extern_symbol (const std::string &name)
 	                                 llvm::GlobalValue::ExternalLinkage, nullptr, name);
 }
 
-/// The global a class's vtable is named by, standing as a constant a compile can
-/// read where the snapshot is on.
-///
-/// The symbol is the same either way and the link resolves it to the real
-/// MonoVTable, because StripVTableSnapshotPass drops the initializer before
-/// codegen. So a use that escapes - the allocator's argument, an object header
-/// store - is what it was before the snapshot.
+/// The global a class's vtable is named by, carrying what the class alone
+/// settles about it.
 llvm::Constant *
 MethodLLVMEmitter::vtable_symbol (MonoClass *klass, const std::string &symbol)
 {
 	if (llvm::GlobalValue *existing = module->getNamedValue (symbol))
 		return existing;
 
-	// Read before the global exists, because the slot count decides its type
-	// and a global's type is fixed once it is built.
-	std::optional<VTableConstants> held = vtable_constants (klass);
-	uint32_t count = held ? uint32_t (held->slots.size ()) : 0;
-
-	auto *global = new llvm::GlobalVariable (*module,
-	                                         vtable_snapshot_type (*module, count),
+	auto *global = new llvm::GlobalVariable (*module, llvm::Type::getInt8Ty (context ()),
 	                                         false, llvm::GlobalValue::ExternalLinkage,
 	                                         nullptr, symbol);
 
-	if (!held)
-		return global;
-
-	global->setInitializer (vtable_snapshot_init (*module, *held));
-	mark_vtable_snapshot (*global);
+	if (std::optional<VTableFacts> facts = vtable_facts_for (klass))
+		mark_vtable_facts (*global, *facts);
 
 	return global;
 }
 
-/// The values a snapshot of klass's vtable states, or nothing where the compile
-/// cannot produce all of them.
+/// What a fold can read off klass's vtable symbol, or nothing where this
+/// compile cannot state every field.
 ///
-/// Nothing leaves the class with no snapshot at all rather than one with a hole
-/// in it.
-std::optional<VTableConstants>
-MethodLLVMEmitter::vtable_constants (MonoClass *klass)
+/// Nothing leaves the symbol unmarked rather than marked with a hole in it.
+std::optional<VTableFacts>
+MethodLLVMEmitter::vtable_facts_for (MonoClass *klass)
 {
 	llvm::Expected<llvm::Constant *> named =
 		typeof_symbol (m_class_get_byval_arg (klass));
@@ -322,115 +306,18 @@ MethodLLVMEmitter::vtable_constants (MonoClass *klass)
 		return std::nullopt;
 	}
 
-	VTableConstants held;
-
-	if (*named == nullptr || !vtable_slots (klass, held.slots))
+	if (*named == nullptr)
 		return std::nullopt;
+
+	VTableFacts facts;
 
 	// Each pointer is the symbol something else compares against: a type test
 	// reads the class word, and typeof names the System.Type object. The two
 	// sides have to be one value for the comparison to fold.
-	held.klass = class_symbol (klass, "mono_class_");
-	held.type = *named;
-	held.rank = uint8_t (m_class_get_rank (klass));
-	return held;
-}
-
-/// A body that steps a boxed receiver past its header and hands the frame to
-/// \p callee.
-///
-/// A value type's vtable slot holds the unbox entry rather than the method's
-/// own: a call arriving through the vtable carries the box, and the body wants
-/// the value inside it. That entry carries no symbol, so a slot constant names
-/// this instead. It is IR, so an inliner can act on a dispatch that folds to it.
-///
-/// The call is `musttail`, which is what keeps the shim off the stack. It owns
-/// no jit info, so a frame of its own would be one a stack walk cannot name.
-llvm::Function *
-MethodLLVMEmitter::unbox_shim (llvm::Function *callee)
-{
-	std::string name = callee->getName ().str () + "$unbox";
-
-	if (llvm::Function *existing = module->getFunction (name))
-		return existing;
-
-	llvm::Function *shim =
-		llvm::Function::Create (callee->getFunctionType (),
-	                                llvm::GlobalValue::InternalLinkage, name, module);
-
-	shim->setAttributes (callee->getAttributes ());
-	shim->setCallingConv (callee->getCallingConv ());
-
-	MonoIrBuilder builder (llvm::BasicBlock::Create (context (), "entry", shim));
-	std::vector<llvm::Value *> args;
-
-	for (llvm::Argument &argument : shim->args ())
-		args.push_back (&argument);
-
-	args[0] = builder.CreateGEP (builder.getInt8Ty (), args[0],
-	                             builder.getInt64 (MONO_ABI_SIZEOF (MonoObject)));
-
-	llvm::CallInst *call = builder.CreateCall (callee, args);
-
-	call->setTailCallKind (llvm::CallInst::TCK_MustTail);
-	call->setCallingConv (callee->getCallingConv ());
-	call->setAttributes (callee->getAttributes ());
-
-	if (call->getType ()->isVoidTy ())
-		builder.CreateRetVoid ();
-	else
-		builder.CreateRet (call);
-
-	return shim;
-}
-
-/// Fills \p slots with what each of klass's dispatch slots holds, and says
-/// whether every one of them was stated.
-///
-/// A slot this compile can name gets the callee's own declaration, so a folded
-/// dispatch is a direct call. Any other gets the address standing in the
-/// runtime's own slot, which is the shared vcall trampoline
-/// mini_get_vtable_trampoline () keys on the slot index alone. Both stay right
-/// whatever the slot holds later, for the reason describe_slot_read ()
-/// (passes/vtable-func.cpp) gives.
-bool
-MethodLLVMEmitter::vtable_slots (MonoClass *klass,
-                                 llvm::SmallVectorImpl<llvm::Constant *> &slots)
-{
-	ERROR_DECL (vtable_error);
-	MonoVTable *vtable = mono_class_vtable_checked (cfg->domain, klass, vtable_error);
-
-	// Resolution asks for the same vtable and reports the failure there, which
-	// is where the program is owed it.
-	if (vtable == nullptr) {
-		mono_error_cleanup (vtable_error);
-		return false;
-	}
-
-	int32_t count = m_class_get_vtable_size (klass);
-
-	for (int32_t i = 0; i < count; ++i) {
-		if (MonoMethod *target = slot_target (klass, i)) {
-			llvm::Expected<llvm::Function *> decl = create_method_decl (target);
-
-			if (decl) {
-				slots.push_back (publishes_unbox_entry (target)
-				                         ? unbox_shim (*decl)
-				                         : *decl);
-				continue;
-			}
-
-			llvm::consumeError (decl.takeError ());
-		}
-
-		char *name = g_strdup_printf ("mono_vtslot_%d_", i);
-		std::string symbol = identity_symbol (name, vtable->vtable[i]);
-
-		g_free (name);
-		slots.push_back (address_symbol (symbol, vtable->vtable[i]));
-	}
-
-	return true;
+	facts.klass = class_symbol (klass, "mono_class_");
+	facts.type = *named;
+	facts.rank = uint8_t (m_class_get_rank (klass));
+	return facts;
 }
 
 void

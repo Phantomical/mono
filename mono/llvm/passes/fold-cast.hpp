@@ -11,7 +11,9 @@
 #ifndef MONO_LLVM_PASSES_FOLD_CAST_HPP
 #define MONO_LLVM_PASSES_FOLD_CAST_HPP
 
-#include <llvm/IR/PassManager.h>
+namespace llvm {
+class Function;
+}
 
 typedef struct _MonoClass MonoClass;
 
@@ -31,15 +33,9 @@ enum class CastAnswer { Unknown, Yes, No };
 /// leaves the site alone.
 CastAnswer cast_answer (MonoClass *target, MonoClass *held, bool exact);
 
-/// Replaces a cast call this can answer with the value it stands for.
-///
-/// Runs at the peephole extension point, so it sits behind each round of the
-/// simplification that settles an operand and in front of the one that drops
-/// the branches the answer makes dead.
-class FoldCastPass : public llvm::PassInfoMixin<FoldCastPass> {
-public:
-	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
-};
+/// Replaces each type test in \p f that the operand's own class decides with
+/// the value it stands for. Says whether it changed anything.
+bool fold_type_tests (llvm::Function &f);
 
 } // namespace mono
 

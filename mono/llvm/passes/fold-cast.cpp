@@ -10,6 +10,7 @@
 
 #include "fold-cast.hpp"
 
+#include "builtins.hpp"
 #include "cast-func.hpp"
 #include "compile-state.hpp"
 #include "method-symbols.hpp"
@@ -222,25 +223,13 @@ tested_class (const CallBase *site)
 	return global != nullptr ? marked_class (*global) : nullptr;
 }
 
-/// Answers what it can of the sites in \p f that call \p decl.
+/// Folds what it can of the sites in \p f that call the declaration \p name.
 bool
-answer_sites (Function &f, Function *decl, bool throw_on_fail)
+fold_sites (Function &f, StringRef name, bool throw_on_fail)
 {
-	if (decl == nullptr)
-		return false;
-
-	SmallVector<CallBase *, 4> sites;
-
-	for (User *user : decl->users ()) {
-		auto *site = dyn_cast<CallBase> (user);
-
-		if (site != nullptr && site->getFunction () == &f)
-			sites.push_back (site);
-	}
-
 	bool changed = false;
 
-	for (CallBase *site : sites) {
+	for (CallBase *site : builtin_sites (f, name)) {
 		Value *obj = site->getArgOperand (0);
 		SmallPtrSet<const Value *, 8> seen;
 		CastAnswer answer = answer_for (obj, tested_class (site), f, seen);
@@ -268,21 +257,17 @@ answer_sites (Function &f, Function *decl, bool throw_on_fail)
 
 } // namespace
 
-PreservedAnalyses
-FoldCastPass::run (Function &f, FunctionAnalysisManager &)
+bool
+fold_type_tests (Function &f)
 {
-	Module &m = *f.getParent ();
-
 	// The classes ride as pointers into this process. An offline run over a
 	// dumped module would read them as addresses of its own.
 	if (current_compile ().domain == nullptr || !fold_casts ())
-		return PreservedAnalyses::all ();
+		return false;
 
-	bool changed = answer_sites (f, m.getFunction (cast_isinst_name), false);
+	bool changed = fold_sites (f, cast_isinst_name, false);
 
-	changed |= answer_sites (f, m.getFunction (cast_castclass_name), true);
-
-	return changed ? PreservedAnalyses::none () : PreservedAnalyses::all ();
+	return fold_sites (f, cast_castclass_name, true) || changed;
 }
 
 } // namespace mono

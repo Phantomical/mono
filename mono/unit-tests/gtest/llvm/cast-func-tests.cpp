@@ -1,5 +1,5 @@
 /*
- * Tests for LowerCastFuncPass, which writes a type test back as the probe the
+ * Tests for lower_type_tests (), which writes a type test back as the probe the
  * runtime reads.
  *
  * Pure LLVM. A site whose class operand carries no marker gets the null check,
@@ -95,12 +95,7 @@ struct CastModule {
 		b.CreateRet (site);
 	}
 
-	void lower ()
-	{
-		ModuleAnalysisManager mam;
-
-		LowerCastFuncPass ().run (*module, mam);
-	}
+	void lower () { lower_type_tests (*module); }
 
 	std::string text () const
 	{

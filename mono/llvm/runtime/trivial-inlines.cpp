@@ -234,8 +234,8 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 			 * A site answered out of the array, which the one-call rule has
 			 * no frame to hold. Array.GetUpperBound () is the body this lets
 			 * through: two of these sites and arithmetic. Folding it in is
-			 * what puts a caller's literal dimension where ArrayShapePass
-			 * reads it.
+			 * what puts a caller's literal dimension where
+			 * fold_array_shapes () reads it.
 			 */
 			if (answers_the_shape_of_an_array (target)) {
 				at = next;

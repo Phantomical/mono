@@ -11,6 +11,7 @@
 #include "harness.hpp"
 
 #include "jit.hpp"
+#include "passes/builtins.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/tier-counter.hpp"
 
@@ -330,7 +331,7 @@ TEST_F (JitExecution, LowerBuiltinsGivesTheStringConstructorItsNullThis)
 	ModulePassManager mpm;
 
 	pb.registerModuleAnalyses (mam);
-	mpm.addPass (LowerBuiltinsPass ());
+	mpm.addPass (MonoBuiltinLower (LowerStage::pre_simplification));
 	mpm.run (*t->module, mam);
 
 	EXPECT_EQ (t->count ("mono.builtin."), 0u) << t->text ();

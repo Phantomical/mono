@@ -1,15 +1,10 @@
 #include "pipelines.hpp"
 #include "arch/arch.hpp"
 #include "jit.hpp"
-#include "passes/array-address.hpp"
-#include "passes/array-shape.hpp"
+#include "passes/builtins.hpp"
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init.hpp"
-#include "passes/cast-func.hpp"
-#include "passes/devirtualize.hpp"
-#include "passes/fold-cast.hpp"
 #include "passes/inline-copies.hpp"
-#include "passes/lower-builtins.hpp"
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
 #include "passes/restore-tail-position.hpp"
@@ -17,8 +12,6 @@
 #include "passes/rgctx-fetch.hpp"
 #include "passes/tier-counter.hpp"
 #include "passes/top-down-inline.hpp"
-#include "passes/vtable-func.hpp"
-#include "passes/vtable-snapshot.hpp"
 #include <llvm/IR/PassManager.h>
 #include <llvm/ADT/Statistic.h>
 #include <llvm/IR/ProfileSummary.h>
@@ -273,10 +266,7 @@ MonoPassBuilder::MonoPassBuilder (llvm::TargetMachine *TM, OneFileFS *ProfileFS,
 	 */
 	registerPeepholeEPCallback (
 		[] (llvm::FunctionPassManager &FPM, llvm::OptimizationLevel) {
-			// In front of DevirtualizePass, because answering a type test is
-			// what delivers the allocation a chain's receiver comes from.
-			FPM.addPass (mono::FoldCastPass ());
-			FPM.addPass (mono::DevirtualizePass ());
+			FPM.addPass (mono::MonoBuiltinConstProp ());
 		});
 }
 
@@ -364,29 +354,29 @@ MonoPassBuilder::buildCommonModuleSimplificationPipeline ()
 	MPM.addPass (llvm::ForceFunctionAttrsPass ());
 	MPM.addPass (llvm::InferFunctionAttrsPass ());
 
-	MPM.addPass (mono::ArrayAddressPass ());
-	MPM.addPass (mono::LowerBuiltinsPass ());
+	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::pre_simplification));
 
 	// Make sure that the always-inline functions we add get inlined early on
 	// before simplifications and PGO counters are added.
 	MPM.addPass (llvm::AlwaysInlinerPass (/*InsertLifetime=*/true));
 	MPM.addPass (mono::StripInlineCopiesPass ());
 
-	// A dimension the method's own IL settled, in front of the simplification
-	// that then optimizes the reads this writes.
-	MPM.addPass (mono::ArrayShapePass (/*finalize=*/false));
+	// What the method's own IL settled, in front of the simplification that
+	// then optimizes what a fold writes.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::MonoBuiltinConstProp ()));
 
 	auto CommonFPM = buildCommonFunctionSimplificationPipeline ();
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (std::move (CommonFPM),
 	                                                      PTO.EagerlyInvalidateAnalyses));
 
 	/*
-	 * And a dimension that arrived with a fold. The translator gives every
-	 * argument an alloca, so an inlined parameter is a load until SROA has run
-	 * above, whatever the caller passed. Both tiers lower at both points, so a
-	 * body carries the same CFG into the PGO hash whichever tier compiled it.
+	 * An array shape site that is left goes back onto its accessor. The
+	 * translator gives every argument an alloca, so a dimension that arrived
+	 * with a fold is a load until SROA has run above, whatever the caller
+	 * passed. Both tiers lower here, so a body carries the same CFG into the
+	 * PGO hash whichever tier compiled it.
 	 */
-	MPM.addPass (mono::ArrayShapePass (/*finalize=*/true));
+	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::pre_profile));
 
 	return MPM;
 }
@@ -467,10 +457,9 @@ MonoPassBuilder::buildTier1Pipeline ()
 	 * neither tier has lowered by the time it takes the hash.
 	 *
 	 * In front of TierCounterPass, which turns the calls that can unwind into
-	 * invokes on to the counter's own pad. The wrapper this writes is one of
-	 * them.
+	 * invokes on to the counter's own pad. The type test wrapper is one of them.
 	 */
-	MPM.addPass (mono::LowerCastFuncPass ());
+	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
 
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RgctxDedupPass ()));
@@ -492,14 +481,6 @@ MonoPassBuilder::buildTier1Pipeline ()
 		MPM.addPass (mono::TierCounterPass ());
 
 	MPM.addPass (mono::RgctxFetchPass ());
-
-	// In front of the lowering below, which reads an IMT slot at a negative
-	// offset from the vtable - memory a snapshot does not describe.
-	MPM.addPass (mono::StripVTableSnapshotPass ());
-
-	// In front of the ABI lowering, which rewrites the calls this leaves, and of
-	// codegen, which has no lowering for the declaration at all.
-	MPM.addPass (mono::LowerVTableFuncPass ());
 	MPM.addPass (arch::MonoAbiPass ());
 
 	// Behind the ABI lowering, which makes an alloca of its own for a value the
@@ -558,12 +539,12 @@ MonoPassBuilder::buildTier2Pipeline ()
 	MPM.addPass (mono::StripInlineCopiesPass ());
 
 	/*
-	 * Behind the inliner, so the cost model weighs a callee with its type tests
-	 * still one call each, and so a test the inliner made answerable has been
-	 * answered. In front of the optimization pipeline, which then reads the
-	 * probe this writes as ordinary IR.
+	 * Behind the inliner, so the cost model weighs a callee with its sites still
+	 * one call each, and so a site the inliner settled has been folded. In front
+	 * of the optimization pipeline, which then reads what this writes as
+	 * ordinary IR.
 	 */
-	MPM.addPass (mono::LowerCastFuncPass ());
+	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
 
 	/*
 	 * InstCombine sinks a load only into a block whose unique predecessor is
@@ -593,12 +574,6 @@ MonoPassBuilder::buildTier2Pipeline ()
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (std::move (FPM)));
 
 	MPM.addPass (mono::RgctxFetchPass ());
-
-	// In front of the lowering below, for the reason tier 1 gives.
-	MPM.addPass (mono::StripVTableSnapshotPass ());
-
-	// In front of the ABI lowering, for the reason tier 1 gives.
-	MPM.addPass (mono::LowerVTableFuncPass ());
 	MPM.addPass (arch::MonoAbiPass ());
 
 	// Behind the ABI lowering, for the reason tier 1 gives.

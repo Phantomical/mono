@@ -12,6 +12,7 @@
 
 #include "devirtualize.hpp"
 
+#include "builtins.hpp"
 #include "compile-state.hpp"
 #include "method-symbols.hpp"
 #include "runtime/naming.hpp"
@@ -339,25 +340,16 @@ entry_for (Module &m, MonoMethod *target, FunctionType *shape, const CompileStat
 /// from and whether the calls carry a key to drop.
 enum class Lookup { vtable, imt, generic_virtual };
 
-/// Answers what it can of the sites in \p f that call \p decl.
+/// Folds what it can of the sites in \p f that call the declaration \p name.
 bool
-answer_sites (Function &f, Function *decl, const CompileState &compile, Lookup lookup)
+fold_sites (Function &f, StringRef name, const CompileState &compile, Lookup lookup)
 {
-	if (decl == nullptr)
-		return false;
-
-	SmallVector<CallBase *, 4> sites;
-
-	for (User *user : decl->users ()) {
-		auto *site = dyn_cast<CallBase> (user);
-
-		if (site != nullptr && site->getFunction () == &f && !site->use_empty ())
-			sites.push_back (site);
-	}
-
 	bool changed = false;
 
-	for (CallBase *site : sites) {
+	for (CallBase *site : builtin_sites (f, name)) {
+		if (site->use_empty ())
+			continue;
+
 		auto *vtable = dyn_cast<GlobalValue> (site->getArgOperand (0));
 		auto *index = dyn_cast<ConstantInt> (site->getArgOperand (1));
 
@@ -418,23 +410,19 @@ answer_sites (Function &f, Function *decl, const CompileState &compile, Lookup l
 
 } // namespace
 
-PreservedAnalyses
-DevirtualizePass::run (Function &f, FunctionAnalysisManager &)
+bool
+fold_dispatch_sites (Function &f)
 {
 	const CompileState &compile = current_compile ();
-	Module &m = *f.getParent ();
 
 	if (compile.domain == nullptr || !compile.publish)
-		return PreservedAnalyses::all ();
+		return false;
 
-	bool changed =
-		answer_sites (f, m.getFunction (vtable_func_name), compile, Lookup::vtable);
+	bool changed = fold_sites (f, vtable_func_name, compile, Lookup::vtable);
 
-	changed |= answer_sites (f, m.getFunction (imt_func_name), compile, Lookup::imt);
-	changed |= answer_sites (f, m.getFunction (vtable_gfunc_name), compile,
-	                         Lookup::generic_virtual);
+	changed |= fold_sites (f, imt_func_name, compile, Lookup::imt);
 
-	return changed ? PreservedAnalyses::none () : PreservedAnalyses::all ();
+	return fold_sites (f, vtable_gfunc_name, compile, Lookup::generic_virtual) || changed;
 }
 
 } // namespace mono

@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "operand-class.hpp"
 #include "runtime-error.hpp"
+#include "../passes/vtable-func.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-abi-details.h"
 #include "mono/metadata/class-internals.h"
@@ -139,19 +140,12 @@ MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, Mono
 	llvm::Value *vtable = load_vtable (builder, obj);
 	// An array of T and a boxed T have the same element class, so the rank is
 	// what tells them apart.
-	llvm::Value *rank = builder.CreateLoad (
-		builder.getInt8Ty (),
-		builder.CreateGEP (builder.getInt8Ty (), vtable,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, rank))));
+	llvm::Value *rank = builder.CreateCall (vtable_rank_decl (*module), { vtable });
 
 	emit_cond_exception (builder, builder.CreateICmpNE (rank, builder.getInt8 (0)),
 	                     "InvalidCastException");
 
-	llvm::Value *cls = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), vtable,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
-		llvm::Align (TARGET_SIZEOF_VOID_P));
+	llvm::Value *cls = builder.CreateCall (vtable_klass_decl (*module), { vtable });
 	llvm::Value *element = builder.CreateAlignedLoad (
 		ptr,
 		builder.CreateGEP (builder.getInt8Ty (), cls,

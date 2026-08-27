@@ -6,8 +6,8 @@
 #include "method-symbols.hpp"
 #include "operand-class.hpp"
 #include "strip-casts.hpp"
+#include "vtable-facts.hpp"
 #include "vtable-func.hpp"
-#include "vtable-snapshot.hpp"
 
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-internals.h"
@@ -49,12 +49,8 @@ cl::opt<bool> DispatchIsALoad (
 
 cl::opt<bool> FoldVTableFields (
 	"mono-inline-fold-vtable-fields", cl::Hidden, cl::init (true),
-	cl::desc ("Answer a read of the class, type or rank a vtable snapshot "
-	          "states"));
-
-cl::opt<bool> FoldVTableSlots (
-	"mono-inline-fold-vtable-slots", cl::Hidden, cl::init (true),
-	cl::desc ("Answer a read of a dispatch slot a vtable snapshot states"));
+	cl::desc ("Fold a read of the class, type or rank off a vtable the call site "
+	          "settled"));
 
 cl::opt<bool> AnswerTypeTests (
 	"mono-inline-answer-casts", cl::Hidden, cl::init (true),
@@ -63,7 +59,7 @@ cl::opt<bool> AnswerTypeTests (
 
 /*
  * Each bonus below counts the calls a fold removes, times what the model
- * charges for one call. A dispatch DevirtualizePass then resolves becomes a
+ * charges for one call. A dispatch fold_dispatch_sites () then resolves becomes a
  * direct call the simplification behind the inliner can fold again, and an
  * allocation SROA scalarizes takes its allocator call with it.
  *
@@ -160,18 +156,15 @@ reads_the_vtable_of (const Value *vtable, const Value *dispatched_on)
 	       && read->getPointerOperand ()->stripPointerCasts () == dispatched_on;
 }
 
-/// Whether a site in \p f reads a dispatch table out of \p object and cannot
-/// name the method in the slot.
+/// Whether a site in \p f reads a dispatch table out of \p object.
 ///
-/// An ordinary virtual site is the plain load of the slot, which is what folds
-/// against a vtable a compile states. The declarations are what is left: an
-/// interface, a virtual generic, and a method the runtime could give no slot.
+/// Every dispatch is one of the three declarations, so this reads their users
+/// rather than walking the body.
 bool
 dispatches_unresolved_on (const Value *object, const Function &f)
 {
 	const Module *m = f.getParent ();
 	const Value *dispatched_on = object->stripPointerCasts ();
-	const DataLayout &dl = m->getDataLayout ();
 
 	for (StringRef name : { vtable_func_name, imt_func_name, vtable_gfunc_name }) {
 		const Function *decl = m->getFunction (name);
@@ -190,41 +183,21 @@ dispatches_unresolved_on (const Value *object, const Function &f)
 		}
 	}
 
-	for (const BasicBlock &block : f) {
-		for (const Instruction &instruction : block) {
-			const auto *entry = dyn_cast<LoadInst> (&instruction);
-
-			if (entry == nullptr || !entry->getType ()->isPointerTy ())
-				continue;
-
-			APInt at (64, 0);
-			const Value *base =
-				entry->getPointerOperand ()->stripAndAccumulateConstantOffsets (
-					dl, at, /*AllowNonInbounds=*/true);
-
-			// The slots are the last field, so an offset short of them is one
-			// of the facts a snapshot states rather than a dispatch.
-			if (at.uge (MONO_STRUCT_OFFSET (MonoVTable, vtable))
-			    && reads_the_vtable_of (base, dispatched_on))
-				return true;
-		}
-	}
-
 	return false;
 }
 
-/// The vtable snapshot \p object's allocation stored into its first word, or
-/// null where this cannot say what stands there.
+/// The vtable symbol \p object's allocation stored into its first word, or null
+/// where this cannot say what stands there.
 ///
 /// `emit_object_alloc ()` writes that word once, behind an allocation nothing
-/// else holds yet, so a read of it anywhere below answers with what the store
-/// put there. That is the same fact `DevirtualizePass` stands on, and it is
+/// else holds yet, so a read of it anywhere below gives what the store put
+/// there. That is the same fact `fold_dispatch_sites ()` stands on, and it is
 /// what lets a walk with no memory model follow one store.
 ///
 /// Null covers a class whose allocation can return a transparent proxy, which
-/// gets no such store, and a class with no snapshot at all.
+/// gets no such store, and a class the translator could state no facts about.
 GlobalVariable *
-stored_vtable_snapshot (Value *object, const DataLayout &dl)
+stored_vtable (Value *object, const DataLayout &dl)
 {
 	object = object->stripPointerCasts ();
 
@@ -258,18 +231,17 @@ stored_vtable_snapshot (Value *object, const DataLayout &dl)
 		    || at != 0)
 			continue;
 
-		auto *snapshot = dyn_cast<GlobalVariable> (
+		auto *named = dyn_cast<GlobalVariable> (
 			const_cast<Value *> (strip_casts (store->getValueOperand ())));
 
 		// A store this cannot read leaves the word unknown, and two that
 		// disagree leave it unknown as well.
-		if (snapshot == nullptr || !snapshot->hasMetadata (vtable_snapshot_metadata)
-		    || !snapshot->hasDefinitiveInitializer ())
+		if (named == nullptr || !vtable_facts (*named))
 			return nullptr;
-		if (found != nullptr && found != snapshot)
+		if (found != nullptr && found != named)
 			return nullptr;
 
-		found = snapshot;
+		found = named;
 	}
 
 	return found;
@@ -308,24 +280,19 @@ lowers_to_a_load (const Function &f)
 	if (!DispatchIsALoad)
 		return false;
 
-	// LowerVTableFuncPass writes one load back for each of these, whatever the
-	// slot is and whichever table it sits in.
+	// Each of these is one load once lower_vtable_reads () has run, whatever the
+	// slot is and whichever table or field it names.
 	StringRef name = f.getName ();
 
 	return name == vtable_func_name || name == imt_func_name
-	       || name == vtable_gfunc_name;
+	       || name == vtable_gfunc_name || name == vtable_klass_name
+	       || name == vtable_type_name || name == vtable_rank_name;
 }
 
-/*
- * Word zero of a MonoObject and word zero of a MonoVTable are both at offset
- * zero, so the offset alone cannot tell the two reads apart. What does
- * is the base: this is the only thing that settles a value to a snapshot, so a
- * base that is one is a vtable, and a base that is not is an object.
- */
 Value *
 folded_vtable_read (LoadInst &load, SettledValue settled)
 {
-	if (!FoldVTableFields && !FoldVTableSlots)
+	if (!FoldVTableFields || !load.getType ()->isPointerTy ())
 		return nullptr;
 
 	const DataLayout &dl = load.getModule ()->getDataLayout ();
@@ -337,27 +304,44 @@ folded_vtable_read (LoadInst &load, SettledValue settled)
 		base = caller_side->stripAndAccumulateConstantOffsets (
 			dl, at, /*AllowNonInbounds=*/true);
 
-	if (auto *snapshot = dyn_cast<GlobalVariable> (base)) {
-		if (!snapshot->hasMetadata (vtable_snapshot_metadata)
-		    || !snapshot->hasDefinitiveInitializer ())
-			return nullptr;
-
-		uint64_t offset = at.getZExtValue ();
-		bool slot = offset >= MONO_SIZEOF_VTABLE;
-
-		if (!(slot ? FoldVTableSlots : FoldVTableFields))
-			return nullptr;
-		if (!vtable_snapshot_states (offset, dl.getTypeStoreSize (load.getType ()),
-		                             vtable_snapshot_slots (*snapshot)))
-			return nullptr;
-
-		return ConstantFoldLoadFromConstPtr (snapshot, load.getType (), at, dl);
-	}
-
-	if (at != MONO_STRUCT_OFFSET (MonoObject, vtable) || !load.getType ()->isPointerTy ())
+	if (at != MONO_STRUCT_OFFSET (MonoObject, vtable))
 		return nullptr;
 
-	return stored_vtable_snapshot (base, dl);
+	return stored_vtable (base, dl);
+}
+
+Value *
+folded_vtable_field (CallBase &call, SettledValue settled)
+{
+	const Function *decl = call.getCalledFunction ();
+
+	if (!FoldVTableFields || decl == nullptr)
+		return nullptr;
+
+	StringRef name = decl->getName ();
+
+	if (name != vtable_klass_name && name != vtable_type_name
+	    && name != vtable_rank_name)
+		return nullptr;
+
+	Value *vtable = const_cast<Value *> (strip_casts (call.getArgOperand (0)));
+
+	if (Value *caller_side = settled (vtable))
+		vtable = const_cast<Value *> (strip_casts (caller_side));
+
+	auto *named = dyn_cast<GlobalObject> (vtable);
+	std::optional<VTableFacts> facts =
+		named != nullptr ? vtable_facts (*named) : std::nullopt;
+
+	if (!facts)
+		return nullptr;
+
+	if (name == vtable_klass_name)
+		return facts->klass;
+	if (name == vtable_type_name)
+		return facts->type;
+
+	return ConstantInt::get (call.getType (), facts->rank);
 }
 
 Value *

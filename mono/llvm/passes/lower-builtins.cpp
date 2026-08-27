@@ -10,6 +10,8 @@
 
 #include "lower-builtins.hpp"
 
+#include "builtins.hpp"
+
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -57,8 +59,8 @@ lower_string_constructor (CallBase *site, Function *target)
 
 } // namespace
 
-PreservedAnalyses
-LowerBuiltinsPass::run (Module &m, ModuleAnalysisManager &)
+bool
+lower_runtime_builtins (Module &m)
 {
 	SmallVector<Function *, 4> decls;
 
@@ -67,7 +69,7 @@ LowerBuiltinsPass::run (Module &m, ModuleAnalysisManager &)
 			decls.push_back (&f);
 
 	if (decls.empty ())
-		return PreservedAnalyses::all ();
+		return false;
 
 	for (Function *decl : decls) {
 		StringRef kind = decl->getFnAttribute (builtin_attribute).getValueAsString ();
@@ -79,11 +81,7 @@ LowerBuiltinsPass::run (Module &m, ModuleAnalysisManager &)
 			report_fatal_error (Twine ("builtin ") + decl->getName ()
 			                    + " stands for " + name + ", which is not declared");
 
-		SmallVector<CallBase *, 8> sites;
-
-		for (User *user : decl->users ())
-			if (auto *site = dyn_cast<CallBase> (user))
-				sites.push_back (site);
+		SmallVector<CallBase *, 8> sites = builtin_sites (m, decl->getName ());
 
 		if (kind == builtin_string_constructor) {
 			if (target->arg_size () != decl->arg_size () + 1)
@@ -104,7 +102,7 @@ LowerBuiltinsPass::run (Module &m, ModuleAnalysisManager &)
 		decl->eraseFromParent ();
 	}
 
-	return PreservedAnalyses::none ();
+	return true;
 }
 
 } // namespace mono

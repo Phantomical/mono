@@ -323,62 +323,32 @@ MethodLLVMEmitter::load_vtable (MonoIrBuilder &builder, llvm::Value *object,
 	return load;
 }
 
-llvm::Value *
-MethodLLVMEmitter::vtable_entry (MonoIrBuilder &builder, llvm::Value *receiver, int32_t offset)
-{
-	llvm::Value *vtable = load_vtable (builder, receiver);
-
-	return builder.CreateAlignedLoad (
-		llvm::PointerType::get (context (), 0),
-		builder.CreateGEP (builder.getInt8Ty (), vtable, builder.getInt32 (offset)),
-		llvm::Align (TARGET_SIZEOF_VOID_P));
-}
-
 /// Loads the callee out of target's vtable slot in the object receiver points
 /// at.
 ///
-/// The load is the plain one, so a receiver whose class the optimizer settles
-/// leaves it reading a vtable snapshot, and the entry folds to the callee's own
-/// declaration. Constant folding does that, and so does the inline cost model,
-/// which weighs a candidate against what its caller settled and cannot run a
-/// pass of ours.
+/// The site is a `mono.vtable.func` call rather than the load it stands for,
+/// which keeps the vtable and the slot as operands. That is the form
+/// fold_dispatch_sites () (passes/devirtualize.cpp) reads once the receiver's
+/// class is settled.
 ///
-/// The load is `!invariant.load` for the reason describe_slot_read ()
-/// (passes/vtable-func.cpp) gives the declaration this replaces: the slot does
-/// change, and every value it takes enters the method the site named.
-///
-/// A method the runtime could give no slot carries an index of -1. Such a site
-/// keeps the declaration, whose lowering does the arithmetic signed.
+/// A method the runtime could give no slot carries an index of -1, which reads
+/// back into the interface method table. The lowering does that arithmetic
+/// signed, so such a site needs no case of its own here.
 llvm::Value *
 MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
                                    MonoMethod *target)
 {
-	int index = mono_method_get_vtable_index (target);
-	llvm::Value *vtable = load_vtable (builder, receiver);
-
-	if (index < 0)
-		return builder.CreateCall (vtable_func_decl (*module),
-		                           { vtable, builder.getInt32 (index) });
-
-	llvm::LoadInst *entry = builder.CreateAlignedLoad (
-		llvm::PointerType::get (context (), 0),
-		builder.CreateGEP (builder.getInt8Ty (), vtable,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, vtable)
-	                                             + index * TARGET_SIZEOF_VOID_P)),
-		llvm::Align (TARGET_SIZEOF_VOID_P), "vtable_entry");
-
-	entry->setMetadata (llvm::LLVMContext::MD_invariant_load,
-	                    llvm::MDNode::get (context (), {}));
-	return entry;
+	return builder.CreateCall (
+		vtable_func_decl (*module),
+		{ load_vtable (builder, receiver),
+	          builder.getInt32 (mono_method_get_vtable_index (target)) });
 }
 
 /// Loads the callee out of target's vtable slot for a virtual generic call.
 ///
-/// The site keeps the declaration rather than the plain load, because the slot
-/// serves every instantiation and the key is what picks one. A snapshot states
-/// such a slot as the trampoline standing in it, so folding the load first would
-/// take the class and the slot away before anything could put them together with
-/// the key.
+/// The site carries the key as well as the slot, because the slot serves every
+/// instantiation and holds a trampoline. The class and the key together are what
+/// name one method.
 llvm::Value *
 MethodLLVMEmitter::generic_virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
                                            MonoMethod *target, llvm::Value *key)
@@ -399,8 +369,8 @@ MethodLLVMEmitter::generic_virtual_callee (MonoIrBuilder &builder, llvm::Value *
 /// The site is a `mono.imt.func` call rather than the load it stands for, which
 /// keeps the vtable, the slot and the key the site asks with as operands. A
 /// slot is a hash bucket, so the key is what says which method of the several
-/// that reach it this site wants. LowerVTableFuncPass writes the load back for
-/// every site nothing answered.
+/// that reach it this site wants. lower_vtable_reads () writes the load back for
+/// every site nothing folded.
 llvm::Value *
 MethodLLVMEmitter::interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
                                      MonoMethod *target, llvm::Value *key)
@@ -1244,16 +1214,9 @@ MethodLLVMEmitter::emit_get_type (MonoIrBuilder &builder, bool receiver_by_refer
 	 * vtable is a copy of the real class's, and mono_class_proxy_vtable ()
 	 * overwrites `type` with the interface for an interface proxy.
 	 */
-	llvm::LoadInst *type = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), vtable,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, type))),
-		align, "obj_type");
+	llvm::Value *type =
+		builder.CreateCall (vtable_type_decl (*module), { vtable }, "obj_type");
 
-	// The field takes its one value while the vtable is built, so a reader can
-	// keep it across a call. A vtable the snapshot states folds the load away.
-	type->setMetadata (llvm::LLVMContext::MD_invariant_load,
-	                   llvm::MDNode::get (context (), {}));
 	pop_stack (1);
 	push_stack (type, m_class_get_byval_arg (mono_defaults.systemtype_class));
 	return llvm::Error::success ();
@@ -1483,8 +1446,8 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		if (what == "get_Length")
 			return emit_array_total_length (builder);
 
-		// Whatever dimension the site names. ArrayShapePass leaves the ones it
-		// cannot answer on the accessor, and it reads the dimension where an
+		// Whatever dimension the site names. lower_array_shapes () leaves the
+		// ones it cannot read on the accessor, and it reads the dimension where an
 		// inliner has already folded a forwarded parameter into a constant.
 		if (what == "GetLength")
 			return emit_array_dimension (builder, callee_method, false);

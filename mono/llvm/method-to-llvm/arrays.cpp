@@ -2,6 +2,7 @@
 #include "runtime-error.hpp"
 #include "../passes/array-address.hpp"
 #include "../passes/array-shape.hpp"
+#include "../passes/vtable-func.hpp"
 #include "../runtime/options.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-init.h"
@@ -557,11 +558,8 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 		emit_null_check (builder, array.value);
 
 		llvm::Value *array_vtable = load_vtable (builder, array.value, "array_vtable");
-		llvm::Value *array_class = builder.CreateAlignedLoad (
-			ptr,
-			builder.CreateGEP (builder.getInt8Ty (), array_vtable,
-		                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
-			llvm::Align (TARGET_SIZEOF_VOID_P), "array_class");
+		llvm::Value *array_class = builder.CreateCall (vtable_klass_decl (*module),
+		                                               { array_vtable }, "array_class");
 
 		// LLVM CSEs this load across the stores of an initializer. A
 		// call through the array's stelemref vtable slot, which is how
@@ -575,11 +573,8 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 	}
 
 	llvm::Value *value_vtable = load_vtable (builder, stored, "value_vtable");
-	llvm::Value *value_class = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), value_vtable,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
-		llvm::Align (TARGET_SIZEOF_VOID_P), "value_class");
+	llvm::Value *value_class = builder.CreateCall (vtable_klass_decl (*module),
+	                                               { value_vtable }, "value_class");
 
 	// A value of exactly the element class is the general answer, so it goes
 	// first. A store the compare below catches pays this one as well.
@@ -702,7 +697,7 @@ MethodLLVMEmitter::emit_stelem (MonoIrBuilder &builder, MonoType *element)
 	return llvm::Error::success ();
 }
 
-/// The symbolic element-address call that ArrayAddressPass expands.
+/// The symbolic element-address call that lower_array_addresses () expands.
 ///
 /// The expansion turns (array, idx...) into a pointer at the element, and
 /// throws the exception whose token trails the indices when one of them misses
@@ -1165,7 +1160,7 @@ MethodLLVMEmitter::emit_newarr (MonoIrBuilder &builder, uint32_t token)
  *
  * The first two read a field of the receiver, so each one raises
  * NullReferenceException on a null receiver. The third leaves the read to
- * ArrayShapePass, which owes the same exception.
+ * the array shape lowering, which owes the same exception.
  */
 
 /// Reads the rank out of the array's vtable, which is what Array.Rank answers.
@@ -1183,11 +1178,8 @@ MethodLLVMEmitter::emit_array_rank (MonoIrBuilder &builder)
 
 	emit_null_check (builder, array.value);
 
-	llvm::Value *vtable = load_vtable (builder, array.value);
-	llvm::Value *rank = builder.CreateLoad (
-		builder.getInt8Ty (),
-		builder.CreateGEP (builder.getInt8Ty (), vtable,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, rank))));
+	llvm::Value *rank = builder.CreateCall (
+		vtable_rank_decl (*module), { load_vtable (builder, array.value) }, "rank");
 
 	pop_stack (1);
 	push_stack (builder.CreateZExt (rank, builder.getInt32Ty ()), mono_get_int32_type ());
@@ -1215,7 +1207,7 @@ MethodLLVMEmitter::emit_array_total_length (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
-/// The symbolic dimension call ArrayShapePass expands, for a site that asks
+/// The symbolic dimension call the array shape passes expand, for a site that asks
 /// Array.GetLength () or Array.GetLowerBound () for one dimension.
 ///
 /// The expansion answers dimension zero from the object and leaves any other

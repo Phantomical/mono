@@ -1,9 +1,9 @@
 using System;
 
 /*
- * What a compile answers from a class's vtable when the IR already names it.
+ * What a compile reads off a class's vtable when the IR already names it.
  *
- * Every case here asserts the answer rather than the shape, so it fails on a
+ * Every case here asserts the value rather than the shape, so it fails on a
  * wrong fold and not on a missing one. Each receiver is a fresh allocation, so
  * the vtable store in front of the read names the class and the reads fold.
  */
@@ -34,7 +34,7 @@ struct Counted {
 	public override string ToString () { return "counted:" + Value; }
 }
 
-class VTableSnapshot {
+class VTableFold {
 	static int failures;
 
 	static void Check (string what, object got, object want)

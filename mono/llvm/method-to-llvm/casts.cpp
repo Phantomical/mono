@@ -133,7 +133,7 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 
 	/*
 	 * Each site owns a cache slot that holds the vtable which last answered
-	 * for it, and LowerCastFuncPass reads it in front of the wrapper. A hit
+	 * for it, and lower_type_tests () reads it in front of the wrapper. A hit
 	 * is two loads and a comparison. A miss pays the call.
 	 *
 	 * The two forms encode the slot differently, so they cannot share one
@@ -173,7 +173,7 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 
 	/*
 	 * The site is one call rather than the probe it stands for, so the class
-	 * the test names stays an operand. FoldCastPass answers a site whose
+	 * the test names stays an operand. fold_type_tests () decides a site whose
 	 * operand has a class the IR gives, and the lowering writes the probe and
 	 * the wrapper back for every site nothing answered.
 	 */
