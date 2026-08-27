@@ -120,6 +120,19 @@ exact_class (const Value *v, const Function &f)
 	if (klass == nullptr || exact)
 		return klass;
 
+	/*
+	 * An array is marked sealed and is still not exact. A slot admits every
+	 * array of that rank with the same cast class, and each of those carries a
+	 * vtable of its own, so `int[]`, `uint[]` and an array of an enum over int
+	 * reach three different interface slots.
+	 *
+	 * Narrowing this to the elements the width fold leaves alone does not work
+	 * either. An enum's cast class is its underlying type, and the loader takes
+	 * that type off the first instance field without a check -
+	 * `mono_class_is_valid_enum ()` has one caller, in `sre.c`. So an image can
+	 * declare an enum over any type at all and put its array in the set.
+	 * `mono/tests/array-devirt.cs` gates the answer.
+	 */
 	if (!m_class_is_sealed (klass) || m_class_get_rank (klass) != 0
 	    || mono_class_is_marshalbyref (klass))
 		return nullptr;
