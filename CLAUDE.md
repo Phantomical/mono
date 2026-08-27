@@ -444,6 +444,14 @@ fold is visible from outside:
   one method, default 16. A count of its own, so what one inliner takes in does not
   decide what the other is left to fold. Zero refuses every method this root has not
   folded already, which separates a cost-model fold from a pre-pass one.
+- `MONO_LLVM_JIT_INLINE_ROUNDS=<n>` — times the tier-2 inliner takes up a method's
+  sites again, default 4. One reads them once, which is what separates a fold a
+  round exposed from one the method arrived with. A dispatch is not a site — its
+  callee is a load — so a virtual or interface call becomes foldable only after
+  `DevirtualizePass` answers it, and that needs the receiver's class, which a fold
+  is often what settles. On `tier2-inline-policy.cs` one round folds 15 bodies and
+  never reaches `Box:Area`; four fold 22 and reach it at all three of its sites.
+  The budget above is what bounds the work, and this count is what stops a cycle.
 
 ## Architecture of the backend (`mono/llvm/`)
 

@@ -66,6 +66,14 @@ public:
 	/// How many folds deep past the root a chain can go. Without a limit a call
 	/// graph with a cycle in it never runs out of sites.
 	virtual unsigned depth_limit () const = 0;
+
+	/// How many times the pass takes up a root's sites again.
+	///
+	/// A fold settles what a dispatch below it reads, and the simplification
+	/// behind the fold answers that dispatch with a direct call. Such a site was
+	/// not there when the root's sites were first read, so a pass that reads
+	/// them once never offers it.
+	virtual unsigned round_limit () const = 0;
 };
 
 /// Says which engine the inliner is to ask about the module it is running over.

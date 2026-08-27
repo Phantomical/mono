@@ -34,6 +34,12 @@ ProfileInliner::depth_limit () const
 	return inline_depth_limit ();
 }
 
+unsigned
+ProfileInliner::round_limit () const
+{
+	return inline_round_limit ();
+}
+
 void
 ProfileInliner::folded (Function &caller, Function &callee)
 {

@@ -178,6 +178,18 @@ uint32_t costed_inline_il_limit ();
 /// runs out of sites, so the loop needs a floor whatever the budget says.
 uint32_t inline_depth_limit ();
 
+/// How many times the tier-2 inliner takes up a method's sites again.
+///
+/// MONO_LLVM_JIT_INLINE_ROUNDS moves it, and one leaves the inliner with the
+/// sites the method arrived with. A fold settles the receiver's class at a
+/// dispatch below it, which `DevirtualizePass` then answers with a direct call
+/// - a site that was not there when the sites were first read, and one an
+/// interface dispatch reaches no other way.
+///
+/// What bounds the work is the budget rather than this. The count is what stops
+/// a cycle, the way the depth limit does.
+uint32_t inline_round_limit ();
+
 /// How many folds deep past root the shape-test pre-pass can go.
 ///
 /// MONO_LLVM_JIT_INLINE_PREPASS_DEPTH moves it. A bound of its own rather than

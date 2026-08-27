@@ -488,6 +488,23 @@ inline_depth_limit ()
 }
 
 uint32_t
+inline_round_limit ()
+{
+	static uint32_t rounds = [] () -> uint32_t {
+		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_ROUNDS");
+
+		if (value == nullptr)
+			return 4;
+
+		int set = atoi (value);
+
+		return set > 0 ? (uint32_t) set : 1;
+	}();
+
+	return rounds;
+}
+
+uint32_t
 trivial_inline_depth_limit ()
 {
 	static uint32_t levels = [] () -> uint32_t {

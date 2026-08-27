@@ -222,7 +222,6 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 	for (Function *root : roots) {
 		std::vector<Site> queue;
-		bool took_one = false;
 
 		/*
 		 * Read through get_bfi () every time rather than holding a reference.
@@ -241,11 +240,53 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			std::push_heap (queue.begin (), queue.end (), Colder ());
 		};
 
-		for (Instruction &i : instructions (*root))
-			if (auto *call = dyn_cast<CallBase> (&i))
-				push (call, 0);
+		auto read_sites = [&] () {
+			for (Instruction &i : instructions (*root))
+				if (auto *call = dyn_cast<CallBase> (&i))
+					push (call, 0);
+		};
 
-		while (!queue.empty ()) {
+		unsigned rounds = candidates->round_limit ();
+		bool took_one = false;
+
+		read_sites ();
+
+		while (true) {
+			/*
+			 * A round ends when the queue runs out. What a fold buys is the
+			 * caller's arguments as constants inside the folded body and the
+			 * branches that kills, so simplification runs over what the round
+			 * took. Here rather than as a pipeline row behind the pass, so a
+			 * compile that folded nothing pays nothing.
+			 *
+			 * The sites are then read again. Those constants settle what a
+			 * dispatch below the fold reads, and the simplification answers it
+			 * with a direct call - a site nothing offered before, and the only
+			 * way an interface dispatch becomes a site at all, since it enters
+			 * the root as a load rather than as a call of a function.
+			 *
+			 * A round that folded nothing has nothing to expose, so the loop
+			 * stops there. What bounds the work is the engine's budget, which
+			 * refuses a candidate once the compile has spent its translation.
+			 * The count is what stops a cycle.
+			 */
+			if (queue.empty ()) {
+				if (!took_one)
+					break;
+
+				PreservedAnalyses kept = simplify_.run (*root, fam);
+
+				fam.invalidate (*root, kept);
+				changed = true;
+
+				if (--rounds == 0)
+					break;
+
+				took_one = false;
+				read_sites ();
+				continue;
+			}
+
 			std::pop_heap (queue.begin (), queue.end (), Colder ());
 			Site site = queue.back ();
 			queue.pop_back ();
@@ -319,19 +360,6 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 			for (CallBase *exposed : ifi.InlinedCallSites)
 				push (exposed, site.depth + 1);
-		}
-
-		/*
-		 * What a fold buys is the caller's arguments as constants inside the
-		 * folded body and the branches that kills, so simplification has to run
-		 * again over what the loop took. Here rather than as a pipeline row
-		 * behind the pass, so a compile that folded nothing pays nothing.
-		 */
-		if (took_one) {
-			PreservedAnalyses kept = simplify_.run (*root, fam);
-
-			fam.invalidate (*root, kept);
-			changed = true;
 		}
 	}
 

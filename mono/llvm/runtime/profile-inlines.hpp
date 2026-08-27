@@ -57,6 +57,7 @@ public:
 	void declined (llvm::Function &caller, llvm::Function &callee,
 	               const llvm::InlineCost &cost, uint64_t count) override;
 	unsigned depth_limit () const override;
+	unsigned round_limit () const override;
 
 private:
 	const TranslationTarget &target_;
