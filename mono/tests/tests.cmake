@@ -1018,6 +1018,12 @@ set(MONO_TESTS_TIER2_INLINE_CASTS_SRC
   tier2-inline-casts.cs
 )
 
+# A wrapper folded into the method that calls it. Two arms the same way, and the
+# file says why it names a threshold of its own.
+set(MONO_TESTS_TIER2_INLINE_WRAPPER_SRC
+  tier2-inline-wrapper.cs
+)
+
 # The tailcall suite, including the corpus imported from coreclr.
 set(MONO_TESTS_TAILCALL_CS_SRC
   tailcall/coreclr/JIT/CodeGenBringUpTests/RecursiveTailCall.cs

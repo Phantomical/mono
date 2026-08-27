@@ -659,9 +659,29 @@ find_jit_info (MonoDomain *domain, MonoJitTlsData *jit_tls, MonoJitInfo *res, Mo
 	}
 }
 
+/*
+ * Whether a frame running this method is one managed code wrote.
+ *
+ * This is what the reflection and security internal calls that ask who called
+ * them skip on: a wrapper is a frame the runtime made, so a walk looking for the
+ * caller passes over it and names the method behind it. A dynamic method is the
+ * exception, because Reflection.Emit is where its IL came from.
+ *
+ * Ask this of the method a frame runs rather than of the frame, so a body an
+ * inliner folded in is answered for on its own terms. A wrapper folded into a
+ * managed method is still a wrapper.
+ */
+static gboolean
+mono_method_runs_managed_frame (MonoMethod *method)
+{
+	return method != NULL
+	       && (!method->wrapper_type
+	           || method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD);
+}
+
 /* mono_find_jit_info:
  *
- * This function is used to gather information from @ctx. It return the 
+ * This function is used to gather information from @ctx. It return the
  * MonoJitInfo of the corresponding function, unwinds one stack frame and
  * stores the resulting context into @new_ctx. It also stores a string 
  * describing the stack location into @trace (if not NULL), and modifies
@@ -716,8 +736,7 @@ mono_find_jit_info (MonoDomain *domain, MonoJitTlsData *jit_tls, MonoJitInfo *re
 			*native_offset = offset;
 
 		if (managed)
-			if (!method->wrapper_type || method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD)
-				*managed = TRUE;
+			*managed = mono_method_runs_managed_frame (method);
 
 		if (trace)
 			*trace = mono_debug_print_stack_frame (method, offset, domain);
@@ -814,10 +833,8 @@ mono_find_jit_info_ext (MonoDomain *domain, MonoJitTlsData *jit_tls,
 	if (frame->ji && !frame->ji->is_trampoline && !frame->ji->async)
 		method = jinfo_get_method (frame->ji);
 
-	if (frame->type == FRAME_TYPE_MANAGED && method) {
-		if (!method->wrapper_type || method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD)
-			frame->managed = TRUE;
-	}
+	if (frame->type == FRAME_TYPE_MANAGED && method)
+		frame->managed = mono_method_runs_managed_frame (method);
 
 	if (frame->type == FRAME_TYPE_MANAGED_TO_NATIVE) {
 		/*
@@ -1798,6 +1815,9 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 				inlined.reg_locations = NULL;
 				mono_jinfo_inline_frame (frame.ji, frame.native_offset, i, &inlined.method, &inlined.il_offset);
 				inlined.actual_method = inlined.method;
+				// The borrowed frame's flag describes the method that owns the
+				// code, and a folded wrapper is a wrapper wherever it ran.
+				inlined.managed = mono_method_runs_managed_frame (inlined.method);
 
 				if (func (&inlined, &ctx, user_data))
 					return;

@@ -19,6 +19,7 @@
 
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
+#include "mono/metadata/marshal.h"
 #include "mono/metadata/profiler-private.h"
 #include "mono/metadata/tabledefs.h"
 
@@ -26,13 +27,75 @@ using namespace llvm;
 
 namespace mono {
 
+/// Whether a wrapper can run in the frame of the method that takes it in.
+///
+/// Correctness only, like may_fold () around it. What a fold is worth is the
+/// cost model's question, and it is not priced the same as an ordinary callee:
+/// the frame work below arrives with the body and none of it is in the IL the
+/// model weighs.
+///
+/// A wrapper is a method with IL of its own, and a copy is translated from the
+/// callee's own record, so what the front end writes for the callee comes with
+/// the copy. For a save_lmf wrapper that is emit_push_lmf (), and folding moves
+/// it into the caller: the LMF then names the caller's rbp and rsp, which is
+/// where the call into native is once the wrapper has no frame. The clobber that
+/// goes with it makes the caller save every callee-saved register, which is what
+/// the LMF hop in mono_arch_unwind_frame () rebuilds them from.
+///
+/// So what this answers no for is the wrappers whose frame is the thing they
+/// exist to make.
+static bool
+wrapper_may_fold (MonoMethod *callee)
+{
+	if (callee->wrapper_type == MONO_WRAPPER_NONE)
+		return true;
+
+	/*
+	 * A caller arriving at one of these speaks C, so its frame is the boundary
+	 * it crosses at. The two kinds are named as well as asked for, because the
+	 * test above them reads the pinvoke flag on a signature and
+	 * mono/metadata/marshal.c is what sets that.
+	 */
+	if (publishes_interop_entry (callee))
+		return false;
+
+	switch (callee->wrapper_type) {
+	case MONO_WRAPPER_RUNTIME_INVOKE:
+	case MONO_WRAPPER_NATIVE_TO_MANAGED:
+		return false;
+
+	// Where the subtypes below live. Ask for the info only here, the way every
+	// other caller of it does: a wrapper of another kind can carry no data
+	// array at all, and mono_marshal_get_wrapper_info () reads one.
+	case MONO_WRAPPER_OTHER:
+		break;
+
+	default:
+		return true;
+	}
+
+	WrapperInfo *info = mono_marshal_get_wrapper_info (callee);
+
+	if (info == nullptr)
+		return true;
+
+	switch (info->subtype) {
+	// Entered with the arguments in a buffer and the target in a register,
+	// which is a convention no IL call site writes.
+	case WRAPPER_SUBTYPE_GSHAREDVT_IN_SIG:
+	case WRAPPER_SUBTYPE_GSHAREDVT_OUT_SIG:
+	case WRAPPER_SUBTYPE_INTERP_IN:
+	case WRAPPER_SUBTYPE_INTERP_LMF:
+		return false;
+	default:
+		return true;
+	}
+}
+
 bool
 may_fold (MonoDomain *domain, MonoMethod *callee)
 {
-	// A wrapper is a frame the runtime's own walks look for. The stack trace
-	// hides it, and an icall reads its caller from it. Several kinds are also
-	// entered on terms this caller does not share.
-	if (callee->wrapper_type != MONO_WRAPPER_NONE)
+	if (!wrapper_may_fold (callee))
 		return false;
 
 	// A dynamic method is freed on its own. A copy of its body folded into a
