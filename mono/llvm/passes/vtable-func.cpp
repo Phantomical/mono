@@ -61,11 +61,13 @@ describe_vtable_read (Function *decl)
 
 /// Puts on decl the attributes a read of an object's vtable word carries.
 ///
-/// `memory(none)` for the reason a vtable read carries it. The allocator writes
-/// the word before managed code can reach the object, and nothing writes it
-/// again. Not `speculatable`, which is what keeps the read under the null check
-/// on the object. That check dominating every such read is what lets a fold
-/// take a sealed slot's declared class for the class the object is.
+/// `memory(none)` for the reason `load_vtable ()` (method-to-llvm/call.cpp)
+/// gives: the allocator writes the word before managed code can reach the
+/// object, and no later writer of it reaches an object a compiled frame holds.
+///
+/// Not `speculatable`, which is what keeps the read under the null check on the
+/// object. That check dominating every such read is what lets a fold take a
+/// sealed slot's declared class for the class the object is.
 Function *
 describe_object_read (Function *decl)
 {

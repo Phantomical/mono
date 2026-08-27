@@ -3638,7 +3638,7 @@ mono_field_static_set_value_internal (MonoVTable *vt, MonoClassField *field, voi
 	mono_copy_value (field->type, dest, value, value && field->type->type == MONO_TYPE_PTR);
 	/* This is not needed by sgen, as it does not seem
 	to need write barriers for uncollectable objects (like the vtables storing static
-+	fields), but it is needed for incremental boehm.
+	fields), but it is needed for incremental boehm.
 	The barrier reads what was written as an object pointer, so a field that does
 	not hold one must not reach it. */
 	if (field->offset == -1 && MONO_TYPE_IS_REFERENCE (field->type))

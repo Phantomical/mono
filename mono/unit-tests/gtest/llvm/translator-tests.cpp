@@ -1510,9 +1510,7 @@ TEST_F (TranslatorTest, TypeOfDoesNotFoldAcrossABranch)
 }
 
 // object.GetType () is the System.Type on the receiver's vtable, so the site is a
-// null check and two loads rather than a call into an icall wrapper. The second
-// is `!invariant.load`, which is what folds it away against a vtable the
-// snapshot states.
+// null check and two reads rather than a call into an icall wrapper.
 TEST_F (TranslatorTest, GetTypeReadsTheVtable)
 {
 	const Translation &t = translate ("tokens", "Tokens:TypeOfObject");

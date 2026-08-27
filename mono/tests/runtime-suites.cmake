@@ -618,7 +618,7 @@ mono_runtime_suite(runtime-tier2-inline-policy-off TESTS ${_tier2_inline_policy}
                    ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
                        "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
                        "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=110 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-scalarize-arg-bonus=0 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false --llvm-opt=-mono-inline-fold-vtable-slots=false")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=110 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-scalarize-arg-bonus=0 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false")
 
 # What the cost model answers about a receiver the call site allocated. The off
 # arm turns those answers off and leaves the bonuses alone, because what it
@@ -634,7 +634,7 @@ mono_runtime_suite(runtime-tier2-inline-dispatch-off TESTS ${_tier2_inline_dispa
                        "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
                        "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=256"
                        "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=190 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false --llvm-opt=-mono-inline-fold-vtable-slots=false")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=190 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false")
 
 # What the cost model answers about a type test over a parameter. The off arm
 # turns that answer off alone, so what it separates is the answered cascade.

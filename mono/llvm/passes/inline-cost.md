@@ -119,8 +119,8 @@ A cost and a budget that `MONO_LLVM_JIT_TRACE` prints are not what an upstream
 build gives for the same pair, so a comparison against clang or against LLVM's
 own pipeline needs the options off first. Setting each `mono-inline-*-bonus` to
 zero, turning off `-mono-inline-implicit-null-free`,
-`-mono-inline-dispatch-is-a-load`, `-mono-inline-fold-vtable-fields`,
-`-mono-inline-fold-vtable-slots` and `-mono-inline-answer-casts`, and turning
+`-mono-inline-dispatch-is-a-load`, `-mono-inline-fold-vtable-fields`
+and `-mono-inline-answer-casts`, and turning
 **on**
 `-mono-inline-boost-indirect-calls` is what gets LLVM's own answers back. Every
 answer this file adds owes an option here, so that this list stays the whole of
