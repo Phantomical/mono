@@ -50,11 +50,11 @@ class_in (const MDNode *node, unsigned at)
 } // namespace
 
 void
-mark_allocated_class (Instruction &site, MonoClass *klass)
+mark_exact_class (Instruction &site, MonoClass *klass)
 {
 	LLVMContext &c = site.getContext ();
 
-	site.setMetadata (alloc_class_md, MDNode::get (c, { as_metadata (c, klass) }));
+	site.setMetadata (exact_class_md, MDNode::get (c, { as_metadata (c, klass) }));
 }
 
 void
@@ -81,7 +81,7 @@ operand_class (const Value *v, const Function &f)
 	v = strip_casts (v);
 
 	if (const auto *site = dyn_cast<Instruction> (v))
-		return { class_in (site->getMetadata (alloc_class_md), 0), true };
+		return { class_in (site->getMetadata (exact_class_md), 0), true };
 
 	const auto *arg = dyn_cast<Argument> (v);
 

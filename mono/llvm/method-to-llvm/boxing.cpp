@@ -119,7 +119,7 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 		// The same fact for a reader that has the object rather than its vtable,
 		// which is what a type test on a fresh object has.
 		if (auto *made = llvm::dyn_cast<llvm::Instruction> (object))
-			mark_allocated_class (*made, klass);
+			mark_exact_class (*made, klass);
 	}
 
 	return object;

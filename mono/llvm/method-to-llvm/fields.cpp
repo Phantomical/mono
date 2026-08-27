@@ -1,5 +1,6 @@
 #include "method-to-llvm.hpp"
 #include "method-symbols.hpp"
+#include "operand-class.hpp"
 #include "runtime-error.hpp"
 #include "../passes/class-init.hpp"
 #include "../vtable-facts.hpp"
@@ -1001,8 +1002,71 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 	if (!address)
 		return address.takeError ();
 
-	return push_from_location (builder, *address, ftype, /*native=*/false,
-	                           ManagedAccess::of_field (*field));
+	if (llvm::Error error = push_from_location (builder, *address, ftype, /*native=*/false,
+	                                            ManagedAccess::of_field (*field)))
+		return error;
+
+	if (MonoClass *held = initonly_static_class (*field))
+		if (auto *loaded = llvm::dyn_cast<llvm::Instruction> (get_stack (0).value))
+			mark_exact_class (*loaded, held);
+
+	return llvm::Error::success ();
+}
+
+/// The class the object in an initonly static field has, or null where this
+/// compile cannot read one.
+///
+/// `initonly` makes the class initializer the only writer that IL has, so the
+/// value read once that initializer has run is the value the field keeps. What
+/// this states is the class, which stays right while the collector moves the
+/// object, so no address is written down.
+///
+/// Reflection is the writer IL does not have.
+/// `mono_field_static_set_value_internal ()` refuses a literal and nothing else,
+/// and no compiled body is taken back when a field is written that way. A
+/// program that does it reads a stale class here.
+MonoClass *
+MethodLLVMEmitter::initonly_static_class (MonoClassField *field)
+{
+	MonoType *type = mono_field_get_type_internal (field);
+
+	if ((mono_field_get_flags (field) & FIELD_ATTRIBUTE_INIT_ONLY) == 0
+	    || !MONO_TYPE_IS_REFERENCE (type) || depends_on_context (field))
+		return nullptr;
+
+	// A special static lives per thread or per context, so what stands there
+	// now says nothing about what a compiled body will read.
+	if (field->offset < 0)
+		return nullptr;
+
+	ERROR_DECL (vtable_error);
+	MonoVTable *vtable =
+		mono_class_vtable_checked (cfg->domain, field->parent, vtable_error);
+
+	if (vtable == nullptr) {
+		mono_error_cleanup (vtable_error);
+		return nullptr;
+	}
+
+	/*
+	 * The flag goes on once the initializer has run. A body compiled before
+	 * that reads whatever the field holds part way through, which the rest of
+	 * the initializer is free to replace.
+	 */
+	if (!vtable->initialized)
+		return nullptr;
+
+	auto *held = *(MonoObject **) ((char *) mono_vtable_get_static_field_data (vtable)
+	                               + field->offset);
+
+	if (held == nullptr)
+		return nullptr;
+
+	MonoClass *klass = mono_object_class (held);
+
+	// A transparent proxy stands in for another class and carries a vtable
+	// that is not that class's.
+	return mono_class_is_marshalbyref (klass) ? nullptr : klass;
 }
 
 /*

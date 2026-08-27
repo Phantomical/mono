@@ -34,8 +34,18 @@ struct Counted {
 	public override string ToString () { return "counted:" + Value; }
 }
 
+sealed class Sealed : Shape {
+	public override int Sides () { return 8; }
+}
+
 class VTableFold {
 	static int failures;
+
+	// Declared as the base, so only the object the initializer put here settles
+	// which override runs.
+	static readonly Shape Only = new Square ();
+
+	static readonly Shape Absent = null;
 
 	static void Check (string what, object got, object want)
 	{
@@ -106,8 +116,36 @@ class VTableFold {
 		Check ("type-after-gc", s.GetType ().Name, "Square");
 	}
 
+	// A receiver no allocation in the body names. A sealed class admits itself
+	// alone, so the slot it is declared with settles the class.
+	static void SealedSlot (string s, Sealed held)
+	{
+		Check ("sealed-string", s.GetType () == typeof (string), true);
+		Check ("sealed-class", held.GetType () == typeof (Sealed), true);
+		Check ("sealed-dispatch", held.Sides (), 8);
+	}
+
+	// A receiver read out of an initonly static. The class initializer is the
+	// only writer IL has, so the class the object has is settled too. It is not
+	// the class the field is declared with.
+	static void InitonlyStatic ()
+	{
+		Check ("initonly-dispatch", Only.Sides (), 4);
+		Check ("initonly-type", Only.GetType () == typeof (Square), true);
+	}
+
+	// A null one keeps its lookup rather than answering for the class the last
+	// reader saw.
+	static void NullInitonlyStatic ()
+	{
+		Check ("initonly-null", Absent == null, true);
+	}
+
 	static int Main ()
 	{
+		string text = "text";
+		Sealed sealed_receiver = new Sealed ();
+
 		// Many turns, so every body promotes past tier 0 and the compiled
 		// answers are what the checks read.
 		for (int i = 0; i < 200000; i++) {
@@ -115,6 +153,9 @@ class VTableFold {
 			GenericDispatch ();
 			BoxedValueType ();
 			ArrayStore ();
+			SealedSlot (text, sealed_receiver);
+			InitonlyStatic ();
+			NullInitonlyStatic ();
 		}
 
 		TypeIdentity ();
