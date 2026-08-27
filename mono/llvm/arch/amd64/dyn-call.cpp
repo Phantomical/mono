@@ -142,7 +142,7 @@ place_scalar (DynCallArg::Load load, bool sse, Assigner &assign)
 	return arg;
 }
 
-/// How many bytes the interpreter is owed through the return pointer.
+/// Gives the width the interpreter is owed through the return pointer.
 uint8_t
 return_width (DynCallArg::Load load)
 {

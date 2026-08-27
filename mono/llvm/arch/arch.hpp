@@ -64,12 +64,11 @@ void interp_frame_enter (void *frame, const InterpArgContext *args);
 
 void interp_frame_leave (void *frame);
 
-/// Plans how a call of \p sig is passed to a compiled body. The caller has no
-/// compiled code of its own to pass it from.
+/// Plans how a call of \p sig is passed to a compiled body.
 ///
-/// Returns null when the convention here cannot be stated as a plan, which a
-/// value type passed or returned by value is. The caller then has to reach the
-/// method another way, and \p why says what was refused.
+/// Returns null for a signature that passes or returns a value type by value,
+/// which this refuses rather than state as a plan. The caller then has to
+/// reach the method another way, and \p why says what was refused.
 ///
 /// The plan holds no metadata and never changes, so a caller that reaches
 /// several methods of one signature can share one.

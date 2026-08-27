@@ -204,10 +204,11 @@ jit_call_cb (gpointer arg)
 
 /// Room do_jit_call () keeps on its own frame for a dyn call's scratch.
 ///
-/// What a plan wants grows with the arguments that miss a register, and
-/// MONO_INTERP_JIT_CALL_MAX_ARGS caps how many arguments a call has at all. A
-/// plan that wants more than this is declined in favour of a wrapper, so
-/// raising that cap costs wrappers rather than correctness.
+/// A plan's frame grows with the arguments that miss a register, and
+/// MONO_INTERP_JIT_CALL_MAX_ARGS bounds how many arguments a call can have. A
+/// plan that needs more than INTERP_DYN_CALL_FRAME_MAX bytes is declined in
+/// favour of a wrapper, so raising MONO_INTERP_JIT_CALL_MAX_ARGS trades plans
+/// for wrappers and cannot break correctness.
 #define INTERP_DYN_CALL_FRAME_MAX 256
 
 struct JitCallInfo {
@@ -219,8 +220,8 @@ struct JitCallInfo {
 	gint32 res_size = 0;
 	/// Empty when the call returns void, and so writes nothing back to sp.
 	std::optional<MintType> ret_mt;
-	/// How the backend passes this signature, or NULL when it would not say
-	/// and the wrapper above is what carries the call.
+	/// How the backend passes this signature, or NULL when it cannot be
+	/// stated and the wrapper above is what carries the call.
 	gpointer dyn_plan = nullptr;
 	int dyn_frame_size = 0;
 };
@@ -254,9 +255,7 @@ init_jit_call_info (InterpMethod *rmethod, MonoError *error)
 
 	/*
 	 * A plan costs a descriptor where a wrapper costs a compile on this
-	 * thread, so it is what to ask for first. The backend declines a
-	 * signature whose convention it will not state, and the wrapper is what
-	 * carries those.
+	 * thread, so it is what to ask for first.
 	 */
 	cinfo->dyn_plan = mono_llvm_jit_dyn_call_prepare (sig);
 	if (cinfo->dyn_plan != nullptr) {
@@ -338,10 +337,10 @@ do_jit_call (stackval *sp, InterpFrame *frame, InterpMethod *rmethod, MonoError 
 
 	if (cinfo->dyn_plan != nullptr) {
 		/*
-		 * The plan reads each argument through a pointer, and a stackval's
-		 * union starts at the slot itself, so the slot address is that
-		 * pointer whatever the argument's type. The return goes back to sp,
-		 * where the widening below expects it.
+		 * The plan reads each argument through a pointer. A stackval's union
+		 * starts at the slot itself, so the slot address serves as that
+		 * pointer for any argument type. The return goes back to sp, where
+		 * the widening below expects it.
 		 */
 		gpointer args[32];
 		int pindex = 0;

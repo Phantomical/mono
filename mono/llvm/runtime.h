@@ -170,16 +170,17 @@ mono_bool mono_llvm_jit_verify_method (MonoMethod *method, MonoError *error);
  * it, so a signature costs a plan rather than a compiled wrapper.
  */
 
-/// Plans how a call of \p sig is passed, or returns NULL when the convention
-/// cannot be stated as a plan. A value type passed or returned by value is
-/// what that refuses, and such a call has to be made another way.
+/// Plans how a call of \p sig is passed. Returns NULL for a signature that
+/// passes or returns a value type by value, which this refuses rather than
+/// state as a plan, and such a call has to be made another way.
 ///
 /// The caller owns the plan. It holds no metadata and never changes, so a
 /// caller that reaches several methods of one signature can share one.
 void *mono_llvm_jit_dyn_call_prepare (MonoMethodSignature *sig);
 
-/// Bytes of scratch a call under \p plan needs. The scratch holds no pointer
-/// the collector has to see, so a stack buffer is the right place for it.
+/// Returns the bytes of scratch a call under \p plan needs. The scratch holds
+/// no pointer the collector has to see, so a stack buffer is the right place
+/// for it.
 int mono_llvm_jit_dyn_call_frame_size (void *plan);
 
 /// Calls \p target under \p plan, with each entry of \p args pointing at one

@@ -139,18 +139,12 @@ struct InterpEntryPoint {
 
 /*
  * The other direction across the same seam: a call the interpreter makes into
- * a compiled body, whose prototype it only knows at run time.
- *
- * The convention restated here is the same one interp-entry.cpp reads a call
- * out of - LLVM's own lowering of the backend's ccc declarations. For scalar
- * arguments, that lowering runs the integer and SSE register files down in
- * argument order and sends the overflow to the stack. place_scalar () in
- * dyn-call.cpp is that rule.
+ * a compiled body, whose prototype it only knows at run time. dyn-call.cpp
+ * states the convention these types describe.
  */
 
-/// What dyn-call-thunk.S moves between the interpreter's storage and the
-/// registers a call is made in. The stack area is extended to hold
-/// DynCallPlan::stack_words.
+/// The registers and stack a dyn call is made through, as dyn-call-thunk.S
+/// loads them. The stack area is extended to hold DynCallPlan::stack_words.
 struct DynCallFrame {
 	uint64_t gregs[6]; ///< rdi rsi rdx rcx r8 r9
 	double fregs[8];   ///< xmm0 - xmm7; a float rides the low half of its slot
@@ -197,8 +191,9 @@ struct DynCallReturn {
 	uint8_t width = 0;
 };
 
-/// How a call of one signature is made. Shared by every method with that
-/// signature, and read on every call, so it holds no metadata.
+/// How a call of one signature is made. It holds no metadata and never
+/// changes, so a caller that reaches several methods of one signature can
+/// share one.
 struct DynCallPlan {
 	std::vector<DynCallArg> args; ///< the receiver first, when there is one
 	DynCallReturn ret;
