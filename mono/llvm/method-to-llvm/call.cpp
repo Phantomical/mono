@@ -1471,6 +1471,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (std::optional<MonoJitICallId> fast = monitor_exit_fast_icall (callee_method, sig))
 		return emit_monitor_fast_path (builder, callee_method, sig, *fast);
 
+	if (is_current_managed_thread_id (callee_method, sig))
+		return emit_current_managed_thread_id (builder, sig);
+
 	// Debugger.Break () has an empty body and a comment where the code goes: the
 	// JIT gives the call its meaning, and that meaning is the one the break
 	// instruction has. An embedder can say no through mono_set_break_policy.

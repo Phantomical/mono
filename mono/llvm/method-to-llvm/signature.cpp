@@ -904,6 +904,10 @@ MethodLLVMEmitter::icall_wrapper_decl (MonoJitICallId id)
 /// A call to it is a C call, so the caller marks the site with
 /// mark_mono_call (). It carries no checkpoint, which is why only an entry
 /// point registered as needing no wrapper may be reached this way.
+///
+/// The callee is a Function where the module has no other value under that
+/// name, so a caller can put function attributes on it. LLVM refuses
+/// `speculatable` anywhere else.
 llvm::Expected<llvm::FunctionCallee>
 MethodLLVMEmitter::raw_icall_decl (const MonoJitICallInfo *info)
 {
@@ -913,9 +917,11 @@ MethodLLVMEmitter::raw_icall_decl (const MonoJitICallInfo *info)
 	if (!type)
 		return type.takeError ();
 
-	return llvm::FunctionCallee (
-		*type, address_symbol (std::string ("mono_icall_") + info->name,
-	                               const_cast<void *> (info->func)));
+	std::string name = std::string ("mono_icall_") + info->name;
+
+	record_external (name, ExternalSymbol::Kind::Address, const_cast<void *> (info->func));
+
+	return module->getOrInsertFunction (name, *type);
 }
 
 /// The declaration of method in this module, created on first use and cached.

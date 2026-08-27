@@ -1144,6 +1144,8 @@ private:
 	                              MonoMethodSignature *sig);
 	llvm::Error emit_monitor_fast_path (MonoIrBuilder &builder, MonoMethod *callee_method,
 	                                    MonoMethodSignature *sig, MonoJitICallId helper);
+	llvm::Error emit_current_managed_thread_id (MonoIrBuilder &builder,
+	                                            MonoMethodSignature *sig);
 
 	llvm::Expected<llvm::Value *> indirect_address (MonoIrBuilder &builder,
 	                                                StackValue address);
@@ -1376,6 +1378,10 @@ std::optional<MonoJitICallId> monitor_enter_fast_icall (MonoMethod *method,
 /// Monitor.Exit. sig is the signature the call site was written against.
 std::optional<MonoJitICallId> monitor_exit_fast_icall (MonoMethod *method,
                                                        MonoMethodSignature *sig);
+
+/// Whether target is the Environment.CurrentManagedThreadId getter. sig is the
+/// signature the call site was written against.
+bool is_current_managed_thread_id (MonoMethod *target, MonoMethodSignature *sig);
 
 /// The number of sig's parameters that are ordinary ones, which for a vararg
 /// signature means the fixed part ahead of the sentinel.
