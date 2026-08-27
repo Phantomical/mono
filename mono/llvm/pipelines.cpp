@@ -461,6 +461,11 @@ MonoPassBuilder::buildTier1Pipeline ()
 	 */
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
 
+	// Beside the stage above rather than behind an optimization pipeline, which
+	// this tier does not run. What the late stage buys is the attributes an
+	// allocation and a barrier carry, and no pass here reads them.
+	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_optimization));
+
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RgctxDedupPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RestoreTailPositionPass ()));
@@ -542,7 +547,8 @@ MonoPassBuilder::buildTier2Pipeline ()
 	 * Behind the inliner, so the cost model weighs a callee with its sites still
 	 * one call each, and so a site the inliner settled has been folded. In front
 	 * of the optimization pipeline, which then reads what this writes as
-	 * ordinary IR.
+	 * ordinary IR. A vtable read becomes the load a loop hoists, and a type test
+	 * the cache probe repeated tests share.
 	 */
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
 
@@ -561,6 +567,18 @@ MonoPassBuilder::buildTier2Pipeline ()
 
 	MPM.addPass (buildModuleOptimizationPipeline (llvm::OptimizationLevel::O3,
 	                                              llvm::ThinOrFullLTOPhase::None));
+
+	/*
+	 * Behind the pipeline above, because an allocation and a barrier say more as
+	 * one call than as the code they become. The allocation states an alloc kind
+	 * and the memory it touches, which is what lets a pass erase an object the
+	 * program stopped reading. The barrier states the same memory and keeps the
+	 * field store and the card mark together, where the lowered form is two
+	 * stores that do not alias.
+	 *
+	 * In front of the ABI lowering below, which the calls this writes need.
+	 */
+	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_optimization));
 
 	llvm::FunctionPassManager FPM;
 

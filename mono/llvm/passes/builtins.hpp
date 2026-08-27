@@ -60,6 +60,15 @@ enum class LowerStage {
 	/// Behind the inliners. A cost model then weighs a callee with its sites
 	/// still one call each, and a fold reads what a caller brought in.
 	post_inline,
+
+	/// Behind the optimization pipeline. A site that stands until here keeps the
+	/// attributes only the front end can state, so the passes that decide
+	/// whether an object is dead read them rather than an opaque call.
+	///
+	/// What lowers here has to answer for the code it writes, because no
+	/// simplification runs behind it. An allocation becomes one call, and a
+	/// barrier a compare and a byte store, so neither wants one.
+	post_optimization,
 };
 
 /// Folds every builtin site in a function that the IR settles.

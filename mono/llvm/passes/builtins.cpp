@@ -129,7 +129,10 @@ MonoBuiltinLower::run (Module &m, ModuleAnalysisManager &)
 	case LowerStage::post_inline:
 		changed = lower_type_tests (m);
 		changed |= lower_vtable_reads (m);
-		changed |= lower_allocations (m);
+		break;
+
+	case LowerStage::post_optimization:
+		changed = lower_allocations (m);
 		changed |= lower_gc_barriers (m);
 		break;
 	}
