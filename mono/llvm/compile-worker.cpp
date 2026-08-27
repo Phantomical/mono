@@ -83,6 +83,24 @@ CompileWorker::stop ()
 }
 
 void
+CompileWorker::abandon ()
+{
+	if (!attached_)
+		return;
+
+	/*
+	 * The queue does not wait for this thread, and mono_thread_current ()
+	 * reads the domain's special static fields, which mono_domain_free () can
+	 * already have cleared. An exit instead of a park runs mono's own
+	 * thread-exit cleanup out of a TLS destructor, which takes the GC lock and
+	 * is no safer. An attach to a runtime that is shutting down parks a thread
+	 * the same way, one frame inside start ().
+	 */
+	for (;;)
+		mono_thread_info_sleep (10000, nullptr);
+}
+
+void
 CompileWorker::idle (llvm::function_ref<void ()> wake)
 {
 	MONO_ENTER_GC_SAFE;

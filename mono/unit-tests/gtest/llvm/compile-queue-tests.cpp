@@ -646,7 +646,10 @@ public:
 		return true;
 	}
 
-	void stop () override { done.store (true); }
+	void stop () override { stopped.store (true); }
+	void abandon () override { done.store (true); }
+
+	std::atomic<bool> stopped {false};
 };
 
 /*
@@ -654,6 +657,9 @@ public:
  * when the runtime is shutting down, and that call is inside Worker::start ().
  * A worker still in there has taken no work, so stop () has nothing to wait for
  * and must not.
+ *
+ * One that does come back gets abandon () rather than stop (). By then stop ()
+ * returned, and its caller takes apart what start () attached the thread to.
  */
 TEST (CompileQueue, StoppingDoesNotWaitForAWorkerStillStarting)
 {
@@ -675,6 +681,56 @@ TEST (CompileQueue, StoppingDoesNotWaitForAWorkerStillStarting)
 	/* Let it out and see it off, so that nothing outlives the queue. */
 	parked->release.open ();
 	wait_for ([&] { return parked->done.load (); }, "the worker never finished");
+	EXPECT_FALSE (parked->stopped.load ());
+}
+
+/// A worker with a slow stop hook, so a test can prove stop () waits for it
+/// to finish.
+class RetiringWorker : public CompileQueue::Worker {
+public:
+	struct Counts {
+		std::atomic<int> stopping {0};
+		std::atomic<int> stopped {0};
+	};
+
+	explicit RetiringWorker (Counts &counts) : counts_ (&counts) {}
+
+	void stop () override
+	{
+		counts_->stopping++;
+		std::this_thread::sleep_for (100ms);
+		counts_->stopped++;
+	}
+
+private:
+	Counts *counts_;
+};
+
+/*
+ * An idle timeout detaches the thread it retires, so no join covers the
+ * Worker::stop () that follows. What runs there is mono's thread detach, and
+ * the caller that asked for the stop then frees the domain it detaches from.
+ */
+TEST (CompileQueue, StoppingWaitsForARetiredWorkersStopHook)
+{
+	RetiringWorker::Counts counts;
+
+	CompileQueue queue (
+		[&counts] {
+			return std::unique_ptr<CompileQueue::Worker> (
+				new RetiringWorker (counts));
+		},
+		1, 5ms);
+	CompileQueue::Channel channel (&queue);
+
+	ASSERT_TRUE (channel.enqueue (nullptr, [] {}));
+	queue.drain ();
+
+	wait_for ([&] { return counts.stopping.load () == 1; },
+	          "the idle timeout never retired the thread");
+
+	queue.stop ();
+	EXPECT_EQ (counts.stopped.load (), 1);
 }
 
 /// A worker that refuses the thread it is given.

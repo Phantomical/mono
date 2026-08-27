@@ -111,7 +111,7 @@ CompileQueue::stop ()
 	std::vector<std::thread> joining;
 
 	{
-		std::lock_guard<std::mutex> lock (mutex_);
+		std::unique_lock<std::mutex> lock (mutex_);
 
 		stopping_ = true;
 		pending_.clear ();
@@ -126,17 +126,17 @@ CompileQueue::stop ()
 		 * nothing grows threads_ behind it.
 		 */
 		for (Thread &worker : threads_) {
-			/* Already joined or detached by an earlier stop (). Both this and
-			 * the destructor call one, so the second finds these. */
+			/* Already joined or detached by an earlier stop (), or detached by
+			 * the thread an idle timeout retired. Both this and the destructor
+			 * call one, so the second finds these. */
 			if (!worker.thread.joinable ())
 				continue;
 
 			/*
-			 * A worker without started set is still inside Worker::start ():
-			 * it has taken no work and can take none, so there is nothing to
-			 * wait for even when it is the caller. One that reached the loop
-			 * and calls this is a compile tearing down the runtime under
-			 * itself.
+			 * A worker without started set is still inside Worker::start (),
+			 * which is entitled never to return, so this call cannot join it.
+			 * It has no work and can take none, and run () hands it to
+			 * Worker::abandon () rather than let it give anything back.
 			 */
 			if (!worker.started) {
 				worker.thread.detach ();
@@ -148,10 +148,33 @@ CompileQueue::stop ()
 
 			joining.push_back (std::move (worker.thread));
 		}
+
+		/*
+		 * A thread an idle timeout retired detached itself, so the joins below
+		 * miss it. Without the wait it runs Worker::stop () after this call
+		 * returns, and the caller takes the runtime apart under it.
+		 * mini_cleanup () frees the domain that Worker::stop () detaches the
+		 * thread from, and the detach asserts on a domain whose special static
+		 * fields are gone.
+		 *
+		 * The wait sits in front of the joins rather than behind them, which
+		 * also keeps each join short. By the time one runs, its thread is past
+		 * Worker::stop ().
+		 */
+		hooks_done_.wait (lock, [this] { return in_hooks_ == 0; });
 	}
 
 	for (std::thread &thread : joining)
 		thread.join ();
+}
+
+void
+CompileQueue::leave_hooks ()
+{
+	std::lock_guard<std::mutex> lock (mutex_);
+
+	in_hooks_--;
+	hooks_done_.notify_all ();
 }
 
 uint64_t
@@ -230,7 +253,23 @@ CompileQueue::run (size_t index)
 
 	std::unique_lock<std::mutex> lock (mutex_);
 
+	/*
+	 * A stop () passed this entry over while the thread was still inside
+	 * Worker::start (), so it detached the thread and did not wait for it.
+	 * That stop () can already have returned, and its caller takes apart what
+	 * start () attached this thread to. So Worker::stop () is the wrong thing
+	 * to run now: the thread goes to abandon () instead and takes no work.
+	 */
+	if (stopping_) {
+		lock.unlock ();
+
+		if (worker != nullptr)
+			worker->abandon ();
+		return;
+	}
+
 	threads_[index].started = true;
+	in_hooks_++;
 
 	auto wait = [&] {
 		auto ready = [this] { return stopping_ || !pending_.empty (); };
@@ -278,8 +317,9 @@ CompileQueue::run (size_t index)
 			threads_[index].started = false;
 			threads_[index].vacant = true;
 
-			/* stop () joins the entries it started. This entry is no longer
-			 * one of them, so no one is left to join this thread. */
+			/* Nobody joins this thread now. What orders its Worker::stop ()
+			 * against a stop () is in_hooks_, which this thread still counts
+			 * against. */
 			threads_[index].thread.detach ();
 			break;
 		}
@@ -311,11 +351,12 @@ CompileQueue::run (size_t index)
 
 	lock.unlock ();
 
-	/* Past this point a retired thread reads nothing the queue owns, so it can
-	 * outlive the queue. worker belongs either to an entry that stop () joins,
-	 * or to retiring, which is this thread's own. */
+	/* worker belongs either to an entry that stop () joins, or to retiring,
+	 * which is this thread's own. */
 	if (worker != nullptr)
 		worker->stop ();
+
+	leave_hooks ();
 }
 
 } // namespace mono

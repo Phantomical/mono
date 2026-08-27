@@ -67,9 +67,21 @@ public:
 		/// On the worker thread, before it takes any work. Answering false
 		/// means this thread can run none, and it exits without taking the
 		/// queue's lock or calling stop ().
+		///
+		/// It is entitled never to return. The queue waits for no thread
+		/// inside start (), which is what lets an implementation park one it
+		/// cannot attach.
 		virtual bool start () { return true; }
 		/// On the worker thread, once it has taken its last.
+		/// CompileQueue::stop () waits for this to return before it does.
 		virtual void stop () {}
+
+		/// On the worker thread, when start () came back after the queue
+		/// stopped. abandon () replaces stop () there, and the queue waits for
+		/// neither: stop () can already have returned, and its caller takes
+		/// apart what start () attached this thread to. So an implementation
+		/// gives nothing back. The default returns, which lets the thread exit.
+		virtual void abandon () {}
 
 		/// Wait, by calling wake (), until there is something to do.
 		///
@@ -169,9 +181,10 @@ public:
 	/// Stop the workers. Anything queued is dropped, anything running finishes,
 	/// and nothing is taken afterwards.
 	///
-	/// A worker that has not got through Worker::start () yet is left where it
-	/// is rather than waited for: it has taken no work, and start () is
-	/// entitled never to return.
+	/// On return no Worker::stop () is still running. That covers the thread an
+	/// idle timeout retired, so a caller can take apart what the hook gives its
+	/// thread back to. A thread inside Worker::start () is the exception, and it
+	/// gets Worker::abandon () instead.
 	void stop ();
 
 	uint64_t completed () const;
@@ -205,7 +218,7 @@ private:
 		std::unique_ptr<Worker> worker;
 		std::thread thread;
 		/// Whether this one got through Worker::start () and reached the loop.
-		/// Until it has, it is not a thread stop () may wait for.
+		/// Until it has, stop () cannot join it.
 		bool started = false;
 		/// Whether the thread that had this entry gave it back, which is what
 		/// an idle timeout makes it do. ensure_worker () starts the next thread
@@ -236,6 +249,10 @@ private:
 	/// A worker thread's whole life. index names its own entry in threads_.
 	void run (size_t index);
 
+	/// Reports that this thread left the Worker hooks, and wakes a stop () that
+	/// waits for the last of them.
+	void leave_hooks ();
+
 	/// Start one more worker if there is work no parked one will take and the
 	/// limit allows it. Called with the queue's mutex held. The new thread's
 	/// first act is to take that same lock, so it waits for the caller to let
@@ -259,6 +276,9 @@ private:
 	/// Signalled when a piece of work finishes, which is what close (), drop ()
 	/// and drain () are all waiting for.
 	std::condition_variable retired_;
+	/// Signalled when a worker thread leaves the Worker hooks, which is what
+	/// stop () waits for.
+	std::condition_variable hooks_done_;
 
 	std::deque<Item> pending_;
 	std::vector<Ticket> running_;
@@ -271,6 +291,10 @@ private:
 	/// against what is queued to decide whether another thread would have
 	/// anything to run.
 	size_t idle_ = 0;
+	/// How many worker threads have reached the loop and not yet left
+	/// Worker::stop (). A thread an idle timeout retired detached itself and
+	/// still counts here, which is what lets stop () wait for it.
+	size_t in_hooks_ = 0;
 	bool stopping_ = false;
 
 	uint64_t next_id_ = 0;

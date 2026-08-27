@@ -26,6 +26,7 @@ class CompileWorker : public CompileQueue::Worker {
 public:
 	bool start () override;
 	void stop () override;
+	void abandon () override;
 	void idle (llvm::function_ref<void ()> wake) override;
 
 private:
