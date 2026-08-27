@@ -1,20 +1,21 @@
 /**
  * \file
- * \brief How a reference in the IR says which class stands behind it.
+ * \brief How the IR carries what the translator knew about a reference.
  *
  * An IR pointer carries no class. What the translator knew about a value is
  * therefore written beside it, and a pass reads it back after inlining has
  * brought the value and the use into one function.
  *
- * Two facts travel, and they are not the same strength. An allocation and a
+ * Three facts travel, and they are not the same strength. An allocation and a
  * read of an initonly static both state the class the object *is*. A parameter
- * states only a bound: the class its slot is declared with.
+ * states only a bound: the class its slot is declared with. A delegate either
+ * of the first two produced also states the method it calls.
  *
- * Each is a MonoClass pointer written into metadata, the way a marked
- * declaration carries one in an attribute (`method-symbols.hpp`). So it names
- * no symbol and costs the link nothing. It is also why a reader has to be
- * inside the compile that wrote it: the pointer means nothing to a later
- * process reading a dumped module.
+ * Each is a host pointer written into metadata, the way a marked declaration
+ * carries one in an attribute (`method-symbols.hpp`). So it names no symbol and
+ * costs the link nothing. It is also why a reader has to be inside the compile
+ * that wrote it: the pointer means nothing to a later process reading a dumped
+ * module.
  */
 
 #ifndef MONO_LLVM_OPERAND_CLASS_HPP
@@ -32,6 +33,7 @@ class Value;
 } // namespace llvm
 
 typedef struct _MonoClass MonoClass;
+typedef struct _MonoMethod MonoMethod;
 
 namespace mono {
 
@@ -43,6 +45,13 @@ constexpr llvm::StringRef exact_class_md = "mono.exact.class";
 /// as pairs of the argument index and the class. Only the parameters this can
 /// answer for are listed.
 constexpr llvm::StringRef param_classes_md = "mono.param.classes";
+
+/// Names the method a delegate value calls. It sits on the instruction that
+/// produces the delegate, so a fold carries it along with that instruction.
+constexpr llvm::StringRef delegate_target_md = "mono.delegate.target";
+
+/// Names the Invoke a call dispatches out of the delegate in its argument 0.
+constexpr llvm::StringRef delegate_invoke_md = "mono.delegate.invoke";
 
 /// Says that \p site produces an instance of \p klass.
 void mark_exact_class (llvm::Instruction &site, MonoClass *klass);
@@ -72,6 +81,26 @@ std::pair<MonoClass *, bool> operand_class (const llvm::Value *v, const llvm::Fu
 /// caller that reads memory off the value therefore needs the null check that
 /// dominates it to rule that out.
 MonoClass *exact_class (const llvm::Value *v, const llvm::Function &f);
+
+/// Says that \p site produces a delegate whose target method is \p target.
+///
+/// Only where \p target is the method the delegate will really enter. An
+/// `ldvirtftn` delegate resolves its target when it is called, so the method
+/// named at its construction is not the one it runs.
+void mark_delegate_target (llvm::Instruction &site, MonoMethod *target);
+
+/// The method the delegate \p v calls, or null where the IR says nothing.
+///
+/// A null answer means "not stated here" rather than "not a delegate": only the
+/// producers the translator could answer for carry the mark.
+MonoMethod *delegate_target (const llvm::Value *v);
+
+/// Says that \p site dispatches \p invoke out of the delegate it takes as its
+/// argument 0.
+void mark_delegate_invoke (llvm::Instruction &site, MonoMethod *invoke);
+
+/// The Invoke \p site dispatches, or null where it dispatches no delegate.
+MonoMethod *delegate_invoke (const llvm::Instruction &site);
 
 } // namespace mono
 

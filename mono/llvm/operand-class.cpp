@@ -25,15 +25,15 @@ namespace mono {
 namespace {
 
 Metadata *
-as_metadata (LLVMContext &c, MonoClass *klass)
+as_metadata (LLVMContext &c, const void *pointer)
 {
 	return ConstantAsMetadata::get (ConstantInt::get (
-		Type::getInt64Ty (c), reinterpret_cast<uintptr_t> (klass)));
+		Type::getInt64Ty (c), reinterpret_cast<uintptr_t> (pointer)));
 }
 
-/// The class at \p at in \p node, or null where the node holds none there.
-MonoClass *
-class_in (const MDNode *node, unsigned at)
+/// The pointer at \p at in \p node, or null where the node holds none there.
+void *
+pointer_in (const MDNode *node, unsigned at)
 {
 	if (node == nullptr || at >= node->getNumOperands ())
 		return nullptr;
@@ -43,8 +43,21 @@ class_in (const MDNode *node, unsigned at)
 	if (held == nullptr)
 		return nullptr;
 
-	return reinterpret_cast<MonoClass *> (
-		static_cast<uintptr_t> (held->getZExtValue ()));
+	return reinterpret_cast<void *> (static_cast<uintptr_t> (held->getZExtValue ()));
+}
+
+MonoClass *
+class_in (const MDNode *node, unsigned at)
+{
+	return static_cast<MonoClass *> (pointer_in (node, at));
+}
+
+/// The method \p site was marked with under \p kind, or null where it carries
+/// no such mark.
+MonoMethod *
+marked_with (const Instruction &site, StringRef kind)
+{
+	return static_cast<MonoMethod *> (pointer_in (site.getMetadata (kind), 0));
 }
 
 } // namespace
@@ -138,6 +151,36 @@ exact_class (const Value *v, const Function &f)
 		return nullptr;
 
 	return klass;
+}
+
+void
+mark_delegate_target (Instruction &site, MonoMethod *target)
+{
+	LLVMContext &c = site.getContext ();
+
+	site.setMetadata (delegate_target_md, MDNode::get (c, { as_metadata (c, target) }));
+}
+
+MonoMethod *
+delegate_target (const Value *v)
+{
+	const auto *site = dyn_cast<Instruction> (strip_casts (v));
+
+	return site != nullptr ? marked_with (*site, delegate_target_md) : nullptr;
+}
+
+void
+mark_delegate_invoke (Instruction &site, MonoMethod *invoke)
+{
+	LLVMContext &c = site.getContext ();
+
+	site.setMetadata (delegate_invoke_md, MDNode::get (c, { as_metadata (c, invoke) }));
+}
+
+MonoMethod *
+delegate_invoke (const Instruction &site)
+{
+	return marked_with (site, delegate_invoke_md);
 }
 
 } // namespace mono

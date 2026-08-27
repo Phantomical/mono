@@ -261,6 +261,18 @@ fold_casts ()
 }
 
 bool
+fold_delegates ()
+{
+	static bool on = [] {
+		const char *value = g_getenv ("MONO_LLVM_JIT_FOLD_DELEGATES");
+
+		return value == nullptr || is_truthy_env_var (value);
+	}();
+
+	return on;
+}
+
+bool
 thread_static_fast_path ()
 {
 	static bool on = [] {

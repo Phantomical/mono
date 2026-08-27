@@ -31,6 +31,46 @@ namespace mono {
 
 namespace {
 
+/// The class \p held is an instance of, or null where a compile cannot state one.
+///
+/// A transparent proxy stands in for another class and carries a vtable that is
+/// not that class's.
+MonoClass *
+settled_class_of (MonoObject *held)
+{
+	MonoClass *klass = mono_object_class (held);
+
+	return mono_class_is_marshalbyref (klass) ? nullptr : klass;
+}
+
+/// The method the delegate \p held calls, or null where \p held is not a
+/// delegate whose target this compile can name.
+///
+/// MonoDelegate::method is the field to read. mini_init_delegate () writes it
+/// once, at construction, and no other path writes it at all. method_ptr is not
+/// an alternative: the delegate trampoline replaces it on the first call and can
+/// put an unbox entry there, so a value read now is not the one a later call
+/// uses.
+///
+/// Two delegates name a method they do not enter. One built from `ldvirtftn`
+/// resolves an override when it is called, and a multicast one runs an
+/// invocation list instead of a target.
+MonoMethod *
+settled_delegate_target_of (MonoObject *held)
+{
+	if (m_class_get_parent (mono_object_class (held))
+	    != mono_defaults.multicastdelegate_class)
+		return nullptr;
+
+	auto *delegate = (MonoDelegate *) held;
+
+	if (delegate->method_is_virtual
+	    || ((MonoMulticastDelegate *) delegate)->delegates != nullptr)
+		return nullptr;
+
+	return delegate->method;
+}
+
 /// Reads the collector's write-barrier layout, once for the process.
 ///
 /// The collector fixes each address and shift while it starts, before any method
@@ -992,27 +1032,32 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 	                                            access))
 		return error;
 
-	if (MonoClass *held = initonly_static_class (*field))
-		if (auto *loaded = llvm::dyn_cast<llvm::Instruction> (get_stack (0).value))
-			mark_exact_class (*loaded, held);
+	if (MonoObject *held = initonly_static_value (*field))
+		if (auto *loaded = llvm::dyn_cast<llvm::Instruction> (get_stack (0).value)) {
+			if (MonoClass *klass = settled_class_of (held))
+				mark_exact_class (*loaded, klass);
+
+			if (MonoMethod *target = settled_delegate_target_of (held))
+				mark_delegate_target (*loaded, target);
+		}
 
 	return llvm::Error::success ();
 }
 
-/// The class the object in an initonly static field has, or null where this
-/// compile cannot read one.
+/// The object an initonly static field holds, or null where this compile cannot
+/// read one.
 ///
 /// `initonly` makes the class initializer the only writer that IL has, so the
 /// value read once that initializer has run is the value the field keeps. What
-/// this states is the class, which stays right while the collector moves the
+/// a caller may state from it is what stays right while the collector moves the
 /// object, so no address is written down.
 ///
 /// Reflection is the writer IL does not have.
 /// `mono_field_static_set_value_internal ()` refuses a literal and nothing else,
 /// and no compiled body is taken back when a field is written that way. A
-/// program that does it reads a stale class here.
-MonoClass *
-MethodLLVMEmitter::initonly_static_class (MonoClassField *field)
+/// program that does it reads a stale object here.
+MonoObject *
+MethodLLVMEmitter::initonly_static_value (MonoClassField *field)
 {
 	MonoType *type = mono_field_get_type_internal (field);
 
@@ -1042,17 +1087,8 @@ MethodLLVMEmitter::initonly_static_class (MonoClassField *field)
 	if (!vtable->initialized)
 		return nullptr;
 
-	auto *held = *(MonoObject **) ((char *) mono_vtable_get_static_field_data (vtable)
-	                               + field->offset);
-
-	if (held == nullptr)
-		return nullptr;
-
-	MonoClass *klass = mono_object_class (held);
-
-	// A transparent proxy stands in for another class and carries a vtable
-	// that is not that class's.
-	return mono_class_is_marshalbyref (klass) ? nullptr : klass;
+	return *(MonoObject **) ((char *) mono_vtable_get_static_field_data (vtable)
+	                         + field->offset);
 }
 
 /*

@@ -1,4 +1,6 @@
 #include "method-to-llvm.hpp"
+#include "method-symbols.hpp"
+#include "operand-class.hpp"
 #include "runtime-error.hpp"
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
@@ -8,6 +10,7 @@
 #include "mono/metadata/remoting.h"
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/Operator.h>
 #include <llvm/IR/Type.h>
 
 #include <algorithm>
@@ -15,6 +18,42 @@
 #include <string>
 
 namespace mono {
+namespace {
+
+/// The method a delegate constructor is being handed, or null where this site
+/// does not name one.
+///
+/// \p args is the constructor's own argument list, so the function pointer is
+/// argument 2 and \p sig is what says the constructor takes one at all.
+///
+/// Only `ldftn` pushes that pointer as a marked symbol, which is what carries
+/// the method (`code_address_symbol ()`). Answering null for the other two
+/// producers is the answer rather than a gap, because a delegate built either
+/// way enters a method this site cannot name: `ldvirtftn` pushes the result of
+/// an icall and resolves the override when the delegate is called, and a shared
+/// generic pushes an rgctx fetch whose method depends on the context the body
+/// is entered with.
+MonoMethod *
+delegate_ctor_target (MonoClass *klass, MonoMethodSignature *sig,
+                      llvm::ArrayRef<llvm::Value *> args)
+{
+	if (m_class_get_parent (klass) != mono_defaults.multicastdelegate_class
+	    || sig->param_count != 2 || args.size () < 3)
+		return nullptr;
+
+	// PtrToIntOperator covers the constant expression an ldftn of a settled
+	// method folds to as well as the instruction a coercion writes.
+	auto *address = llvm::dyn_cast<llvm::PtrToIntOperator> (args[2]);
+
+	if (address == nullptr)
+		return nullptr;
+
+	auto *symbol = llvm::dyn_cast<llvm::GlobalValue> (address->getPointerOperand ());
+
+	return symbol != nullptr ? marked_method (*symbol) : nullptr;
+}
+
+} // namespace
 
 /// Fails with a TypeLoadException when the delegate class has no Invoke method,
 /// or when Invoke's signature will not resolve, which is what a missing type in
@@ -293,6 +332,13 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 		// The object has the class this opcode named, so a virtual call on it
 		// while it is still this value needs no dispatch.
 		allocated_here.insert (created);
+
+		// A delegate also states the method it calls, which is what lets a
+		// later pass answer its Invoke without dispatching.
+		if (MonoMethod *bound = delegate_ctor_target (klass, sig, args))
+			if (auto *site = llvm::dyn_cast<llvm::Instruction> (created))
+				mark_delegate_target (*site, bound);
+
 		push_stack (created, pushed);
 	} else if (held_in_memory (pushed)) {
 		push_stack (temp, pushed);

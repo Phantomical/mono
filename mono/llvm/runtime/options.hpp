@@ -108,6 +108,13 @@ bool tier2_enabled ();
 /// translator writes the same IR either way, so the two arms differ in one pass.
 bool fold_casts ();
 
+/// Whether MONO_LLVM_JIT_FOLD_DELEGATES left the delegate-Invoke fold on.
+///
+/// A false value leaves every Invoke reading its entry off the delegate, which
+/// is the answer a fold has to agree with. The translator writes the same IR
+/// either way, so the two arms differ in one pass.
+bool fold_delegates ();
+
 /// Whether MONO_LLVM_JIT_THREAD_STATIC left the thread-static fast path on.
 ///
 /// A false value sends every thread static back through mono_domain_get () and

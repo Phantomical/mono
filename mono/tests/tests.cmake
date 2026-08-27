@@ -1006,6 +1006,14 @@ set(MONO_TESTS_TIER2_INLINE_POLICY_SRC
   tier2-inline-policy.cs
 )
 
+# Entering a delegate's target instead of reading it off the delegate. It runs
+# twice, on the default and with the fold off, and reads the variable to know
+# which arm it is in. Every value it asserts holds in both; the stack trace that
+# says the fold happened is what they disagree about.
+set(MONO_TESTS_DELEGATE_FOLD_SRC
+  delegate-fold.cs
+)
+
 # What the cost model answers about a receiver the call site allocated. Two
 # arms the same way, and the file says why it names a threshold of its own.
 set(MONO_TESTS_TIER2_INLINE_DISPATCH_SRC

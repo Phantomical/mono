@@ -617,6 +617,16 @@ mono_runtime_suite(runtime-tier2-cost-trigger TESTS ${_tier2_cost_trigger}
 mono_runtime_suite(runtime-tier2-cost-trigger-off TESTS ${_tier2_cost_trigger}
                    ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0")
 
+# Entering a delegate's target directly. Two arms, on and off, the way
+# runtime-tier2-cost-trigger has it. The root drives its own compiles, so
+# self-promotion is off: what the test reads is the tier it asked for.
+_mono_exe_list(_delegate_fold ${MONO_TESTS_DELEGATE_FOLD_SRC})
+mono_runtime_suite(runtime-delegate-fold TESTS ${_delegate_fold}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0")
+mono_runtime_suite(runtime-delegate-fold-off TESTS ${_delegate_fold}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_FOLD_DELEGATES=0")
+
 # The bonuses mono adds to the cost model. Two arms, on and off, the way
 # runtime-tier2-cost-trigger has it. The root drives its own compiles, so
 # self-promotion is off the way the costed suite has it, and the trivial

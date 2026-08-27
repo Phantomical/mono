@@ -2,6 +2,7 @@
 #include "hidden-return.hpp"
 #include "method-symbols.hpp"
 #include "mini-runtime.h"
+#include "operand-class.hpp"
 #include "passes/vtable-func.hpp"
 #include "runtime-error.hpp"
 #include "runtime/naming.hpp"
@@ -1785,6 +1786,12 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		if (keyed)
 			site->addParamAttr (site->arg_size () - 1, llvm::Attribute::Nest);
 		carry_parameter_extensions (site, *declaration);
+
+		// Says which call the entry it reads belongs to, so a pass can answer
+		// the site from what the receiver is without matching the load and the
+		// select that delegate_invoke_callee () wrote.
+		if (delegate != nullptr)
+			mark_delegate_invoke (*site, callee_method);
 	};
 
 	llvm::CallInst::TailCallKind tail_kind =
@@ -1816,6 +1823,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	        || instrumented (MONO_PROFILER_CALL_INSTRUMENTATION_TAIL_CALL)))
 		tail_kind = llvm::CallInst::TCK_None;
 
+	// A delegate's Invoke never arrives here: should_tail_call () refuses a
+	// method implemented_outside_il () answers for, and Invoke carries
+	// METHOD_IMPL_ATTRIBUTE_RUNTIME. So the mark describe_site () writes for one
+	// only ever lands on the protected call below, and keep_alive () is emitted
+	// on the one path that needs it.
 	if (tail_kind != llvm::CallInst::TCK_None) {
 		emit_profiler_frame_handover (builder, callee_method);
 		return emit_tail_call (builder, callee, *args, tail_kind,

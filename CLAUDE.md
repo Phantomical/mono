@@ -413,6 +413,17 @@ and the note says which split:
   probe. It is also the negative control for what the fold is worth: on `linq-devirt`'s
   `LinqOne` at the wide inline gates, off gives 9 icalls in 932 lines and on gives 3 in
   483.
+- `MONO_LLVM_JIT_FOLD_DELEGATES=<0|false|empty>` — turn the delegate-Invoke fold off, so
+  every Invoke reads its entry off the delegate whatever the IR says the delegate is. On
+  by default, and tier 2 only. The translator writes the same site either way, which is
+  what separates a wrong target from a wrong dispatch. Two producers name a target: a
+  read of an initonly static names the object, so the call becomes a direct one; the
+  cache a C# compiler writes for a lambda or a method group names a candidate, so the
+  call becomes a compare against `MonoDelegate::method_ptr` with the direct call on the
+  arm that matches and today's dispatch on the arm that does not. `method_ptr` rather
+  than `method`, because an `ldvirtftn` delegate never writes back the override it
+  resolves and a combined delegate leaves `method_ptr` null, so a match proves both.
+  `mono/tests/delegate-fold.cs` gates it and carries the off arm.
 
 Inlining. `MONO_LLVM_JIT_TRACE=1` prints a line for each fold, which is the only place a
 fold is visible from outside:

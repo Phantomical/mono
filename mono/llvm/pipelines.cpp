@@ -4,6 +4,7 @@
 #include "passes/builtins.hpp"
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init.hpp"
+#include "passes/fold-delegate.hpp"
 #include "passes/inline-copies.hpp"
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
@@ -537,6 +538,17 @@ llvm::ModulePassManager
 MonoPassBuilder::buildTier2Pipeline ()
 {
 	auto MPM = buildTier2SimplificationPipeline ();
+
+	/*
+	 * Behind the reader above, which is what the counter indices are keyed on.
+	 * A guard is blocks the CFG tier 1 hashed does not have, and even entering
+	 * a target directly takes away the select the instrumentation counted. In
+	 * front of the inliner, so a cost model weighs the target the site now
+	 * names rather than a call through a delegate, which it can do nothing
+	 * with.
+	 */
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
+		mono::FoldDelegateInvokesPass ()));
 
 	MPM.addPass (mono::TopDownInlinerPass (*TM, buildTier2MaterializePipeline (),
 	                                       buildTier2FunctionSimplificationPipeline ()));
