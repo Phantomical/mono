@@ -86,13 +86,11 @@ public class CastFold {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static object CastToDerived (Base b) => (Derived) b;
 
-	// A closed generic instance bounds its slot the way an ordinary class does,
-	// and assignability carries down to the interfaces it implements.
+	// A closed generic instance bounds its slot the way an ordinary class does.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool ListIsCollection (List<int> l) => l is ICollection<int>;
 
-	// Two instantiations of one generic are unrelated classes, and no class is
-	// under both.
+	// Two instantiations of one generic share no class, so this is answerable no.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool HolderIntIsHolderString (Holder<int> h) => h is Holder<string>;
 
@@ -112,6 +110,17 @@ public class CastFold {
 	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool IsHolderOfObject<T> (Holder<T> h) => h is Holder<object>;
+
+	/*
+	 * A closed instance beside the shared parameter is the class every
+	 * instantiation gets. A shared body states it, so both arms of the rule
+	 * are answerable off it.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool SharedListIsCollection<T> (List<int> l, T ignored) => l is ICollection<int>;
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool SharedListIsListOfString<T> (List<int> l, T ignored) => l is List<string>;
 
 	// The class of a fresh object is exact, so both directions are answerable.
 	[MethodImpl (MethodImplOptions.NoInlining)]
@@ -203,6 +212,11 @@ public class CastFold {
 		       IsHolderOfObject<object> (new Holder<object> ()), true);
 		Check ("shared Holder<string> is Holder<object>",
 		       IsHolderOfObject<string> (new Holder<string> ()), false);
+
+		Check ("shared List<int> is ICollection<int>",
+		       SharedListIsCollection<string> (new List<int> (), null), true);
+		Check ("shared List<int> is List<string>",
+		       SharedListIsListOfString<string> (new List<int> (), null), false);
 
 		Check ("fresh Derived is Base", FreshDerivedIsBase (), true);
 		Check ("fresh Base is Derived", FreshBaseIsDerived (), false);

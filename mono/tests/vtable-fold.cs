@@ -38,6 +38,10 @@ sealed class Sealed : Shape {
 	public override int Sides () { return 8; }
 }
 
+sealed class SealedCrate<T> : Box<T> {
+	public override int Sides () { return 12; }
+}
+
 class VTableFold {
 	static int failures;
 
@@ -125,6 +129,15 @@ class VTableFold {
 		Check ("sealed-dispatch", held.Sides (), 8);
 	}
 
+	// A receiver declared with a sealed generic instance. Every type argument is
+	// closed, so the slot names one class, and the Type comes off that class's
+	// vtable rather than off the receiver.
+	static void SealedGenericSlot (SealedCrate<int> held)
+	{
+		Check ("sealed-generic-type", held.GetType () == typeof (SealedCrate<int>), true);
+		Check ("sealed-generic-dispatch", held.Sides (), 12);
+	}
+
 	// A receiver read out of an initonly static. The class initializer is the
 	// only writer IL has, so the class the object has is settled too. It is not
 	// the class the field is declared with.
@@ -145,6 +158,7 @@ class VTableFold {
 	{
 		string text = "text";
 		Sealed sealed_receiver = new Sealed ();
+		SealedCrate<int> sealed_generic = new SealedCrate<int> ();
 
 		// Many turns, so every body promotes past tier 0 and the compiled
 		// answers are what the checks read.
@@ -154,6 +168,7 @@ class VTableFold {
 			BoxedValueType ();
 			ArrayStore ();
 			SealedSlot (text, sealed_receiver);
+			SealedGenericSlot (sealed_generic);
 			InitonlyStatic ();
 			NullInitonlyStatic ();
 		}
