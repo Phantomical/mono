@@ -235,6 +235,25 @@ gc_barrier_decl (Module &m, const GcBarrierLayout &layout)
 	decl->addFnAttr (Attribute::WillReturn);
 	decl->addFnAttr (Attribute::NoCallback);
 
+	/*
+	 * A barrier marks a table from the address it is given and keeps neither
+	 * pointer. `lower_card ()` writes the card byte the destination indexes, and
+	 * `lower_helper ()` calls the collector's own
+	 * `mono_gc_wbarrier_generic_nostore_internal ()`, which is
+	 * `sgen_card_table_mark_address ()` under SGen and `GC_dirty ()` under Boehm.
+	 * A remembered set that instead recorded the address would capture it, and
+	 * `sgen-cardtable.c` holds the one assignment to
+	 * `remset.wbarrier_generic_nostore`.
+	 *
+	 * Capture is tracked apart from the memory effects above, so a barrier with
+	 * no such attribute hands the object its destination points into to an
+	 * opaque call. Every call below that then may-writes the object's fields.
+	 * A field a caller stored before a loop is then re-read inside it, and the
+	 * class an allocation stated does not reach the dispatch that wants it.
+	 */
+	decl->addParamAttr (0, Attribute::getWithCaptureInfo (c, CaptureInfo::none ()));
+	decl->addParamAttr (1, Attribute::getWithCaptureInfo (c, CaptureInfo::none ()));
+
 	if (layout.card_table == nullptr)
 		return decl;
 
