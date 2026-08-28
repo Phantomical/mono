@@ -15,12 +15,27 @@ include(CheckCSourceRuns)
 include(CheckCCompilerFlag)
 
 # Probes must see the same feature-test macros the runtime is compiled with,
-# otherwise glibc hides half of what we are looking for.
-set(CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE -D_REENTRANT)
-set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS} m)
+# otherwise glibc hides half of what we are looking for.  The Windows CRT has
+# no such macros, and naming a library it does not carry -- libm is part of the
+# CRT there -- makes every check_function_exists fail for the wrong reason.
+if(MONO_HOST_WINDOWS)
+  set(CMAKE_REQUIRED_DEFINITIONS "")
+  set(CMAKE_REQUIRED_LIBRARIES ws2_32)
+else()
+  set(CMAKE_REQUIRED_DEFINITIONS -D_GNU_SOURCE -D_REENTRANT)
+  set(CMAKE_REQUIRED_LIBRARIES ${CMAKE_DL_LIBS} m)
+endif()
 set(CMAKE_REQUIRED_QUIET TRUE)
 if(CMAKE_USE_PTHREADS_INIT)
   list(APPEND CMAKE_REQUIRED_LIBRARIES Threads::Threads)
+endif()
+
+# The headers a socket symbol is declared in.  Everything below asks through
+# this list rather than naming netdb.h, so one platform answer covers the set.
+if(MONO_HOST_WINDOWS)
+  set(_mono_socket_headers winsock2.h ws2tcpip.h)
+else()
+  set(_mono_socket_headers sys/socket.h netdb.h netinet/in.h arpa/inet.h)
 endif()
 
 # Headers
@@ -101,15 +116,15 @@ check_symbol_exists(statvfs "sys/statvfs.h"            HAVE_STATVFS)
 check_symbol_exists(access  "unistd.h"                 HAVE_ACCESS)
 check_symbol_exists(pipe2   "unistd.h"                 HAVE_PIPE2)
 check_symbol_exists(readdir_r "dirent.h"               HAVE_READDIR_R)
-check_symbol_exists(getaddrinfo "sys/socket.h;netdb.h" HAVE_GETADDRINFO)
-check_symbol_exists(getnameinfo "sys/socket.h;netdb.h" HAVE_GETNAMEINFO)
-check_symbol_exists(gethostbyname  "netdb.h"           HAVE_GETHOSTBYNAME)
-check_symbol_exists(gethostbyname2 "netdb.h"           HAVE_GETHOSTBYNAME2)
-check_symbol_exists(gethostbyname2_r "netdb.h"         HAVE_GETHOSTBYNAME2_R)
-check_symbol_exists(getprotobyname   "netdb.h"         HAVE_GETPROTOBYNAME)
-check_symbol_exists(getprotobyname_r "netdb.h"         HAVE_GETPROTOBYNAME_R)
-check_symbol_exists(inet_ntop     "arpa/inet.h"        HAVE_INET_NTOP)
-check_symbol_exists(if_nametoindex "net/if.h"          HAVE_IF_NAMETOINDEX)
+check_symbol_exists(getaddrinfo "${_mono_socket_headers}" HAVE_GETADDRINFO)
+check_symbol_exists(getnameinfo "${_mono_socket_headers}" HAVE_GETNAMEINFO)
+check_symbol_exists(gethostbyname  "${_mono_socket_headers}" HAVE_GETHOSTBYNAME)
+check_symbol_exists(gethostbyname2 "${_mono_socket_headers}" HAVE_GETHOSTBYNAME2)
+check_symbol_exists(gethostbyname2_r "${_mono_socket_headers}" HAVE_GETHOSTBYNAME2_R)
+check_symbol_exists(getprotobyname   "${_mono_socket_headers}" HAVE_GETPROTOBYNAME)
+check_symbol_exists(getprotobyname_r "${_mono_socket_headers}" HAVE_GETPROTOBYNAME_R)
+check_symbol_exists(inet_ntop     "${_mono_socket_headers}" HAVE_INET_NTOP)
+check_symbol_exists(if_nametoindex "${_mono_socket_headers};net/if.h" HAVE_IF_NAMETOINDEX)
 check_symbol_exists(nl_langinfo   "langinfo.h"         HAVE_NL_LANGINFO)
 check_symbol_exists(lsetxattr     "sys/xattr.h"        HAVE_LSETXATTR)
 check_symbol_exists(pthread_mutexattr_setprotocol "pthread.h"
@@ -150,16 +165,16 @@ check_symbol_exists(ICANON                 "termios.h" HAVE_ICANON)
 check_symbol_exists(TIOCGWINSZ             "sys/ioctl.h" HAVE_TIOCGWINSZ)
 check_symbol_exists(SIOCGIFCONF            "sys/ioctl.h;net/if.h" HAVE_SIOCGIFCONF)
 check_symbol_exists(IN_EXCL_UNLINK         "sys/inotify.h" HAVE_IN_EXCL_UNLINK)
-check_symbol_exists(SOL_IP    "sys/socket.h;netinet/in.h" HAVE_SOL_IP)
-check_symbol_exists(SOL_IPV6  "sys/socket.h;netinet/in.h" HAVE_SOL_IPV6)
-check_symbol_exists(SOL_TCP   "netdb.h" HAVE_SOL_TCP)
-check_symbol_exists(IPPROTO_IP   "netinet/in.h" HAVE_IPPROTO_IP)
-check_symbol_exists(IPPROTO_IPV6 "netinet/in.h" HAVE_IPPROTO_IPV6)
-check_symbol_exists(IPPROTO_TCP  "netinet/in.h" HAVE_IPPROTO_TCP)
-check_symbol_exists(IP_MTU_DISCOVER "netinet/in.h" HAVE_IP_MTU_DISCOVER)
-check_symbol_exists(IP_PMTUDISC_DO  "netinet/in.h" HAVE_IP_PMTUDISC_DO)
-check_symbol_exists(IP_DONTFRAG     "netinet/in.h" HAVE_IP_DONTFRAG)
-check_symbol_exists(IP_DONTFRAGMENT "netinet/in.h" HAVE_IP_DONTFRAGMENT)
+check_symbol_exists(SOL_IP    "${_mono_socket_headers}" HAVE_SOL_IP)
+check_symbol_exists(SOL_IPV6  "${_mono_socket_headers}" HAVE_SOL_IPV6)
+check_symbol_exists(SOL_TCP   "${_mono_socket_headers}" HAVE_SOL_TCP)
+check_symbol_exists(IPPROTO_IP   "${_mono_socket_headers}" HAVE_IPPROTO_IP)
+check_symbol_exists(IPPROTO_IPV6 "${_mono_socket_headers}" HAVE_IPPROTO_IPV6)
+check_symbol_exists(IPPROTO_TCP  "${_mono_socket_headers}" HAVE_IPPROTO_TCP)
+check_symbol_exists(IP_MTU_DISCOVER "${_mono_socket_headers}" HAVE_IP_MTU_DISCOVER)
+check_symbol_exists(IP_PMTUDISC_DO  "${_mono_socket_headers}" HAVE_IP_PMTUDISC_DO)
+check_symbol_exists(IP_DONTFRAG     "${_mono_socket_headers}" HAVE_IP_DONTFRAG)
+check_symbol_exists(IP_DONTFRAGMENT "${_mono_socket_headers}" HAVE_IP_DONTFRAGMENT)
 check_symbol_exists(MAP_ANONYMOUS   "sys/mman.h"   HAVE_MAP_ANONYMOUS)
 check_symbol_exists(major "sys/sysmacros.h" MAJOR_IN_SYSMACROS)
 if(NOT MAJOR_IN_SYSMACROS)
@@ -184,43 +199,56 @@ check_c_source_compiles("
   HAVE_LARGE_FILE_SUPPORT)
 
 # Types
-set(CMAKE_EXTRA_INCLUDE_FILES sys/types.h sys/socket.h netinet/in.h sys/un.h
-                              sys/stat.h sys/time.h time.h poll.h fcntl.h
-                              utime.h dirent.h signal.h)
-foreach(_pair
-    "clockid_t;HAVE_CLOCKID_T"
-    "blksize_t;HAVE_BLKSIZE_T"
-    "blkcnt_t;HAVE_BLKCNT_T"
-    "suseconds_t;HAVE_SUSECONDS_T"
-    "socklen_t;HAVE_SOCKLEN_T"
-    "struct cmsghdr;HAVE_STRUCT_CMSGHDR"
-    "struct flock;HAVE_STRUCT_FLOCK"
-    "struct flock64;HAVE_STRUCT_FLOCK64"
-    "struct iovec;HAVE_STRUCT_IOVEC"
-    "struct linger;HAVE_STRUCT_LINGER"
-    "struct pollfd;HAVE_STRUCT_POLLFD"
-    "struct sockaddr;HAVE_STRUCT_SOCKADDR"
-    "struct sockaddr_storage;HAVE_STRUCT_SOCKADDR_STORAGE"
-    "struct sockaddr_in;HAVE_STRUCT_SOCKADDR_IN"
-    "struct sockaddr_in6;HAVE_STRUCT_SOCKADDR_IN6"
-    "struct sockaddr_un;HAVE_STRUCT_SOCKADDR_UN"
-    "struct stat;HAVE_STRUCT_STAT"
-    "struct timespec;HAVE_STRUCT_TIMESPEC"
-    "struct timeval;HAVE_STRUCT_TIMEVAL"
-    "struct timezone;HAVE_STRUCT_TIMEZONE"
-    "struct utimbuf;HAVE_STRUCT_UTIMBUF"
-    "struct ip_mreqn;HAVE_STRUCT_IP_MREQN"
-    "struct kinfo_proc;HAVE_STRUCT_KINFO_PROC")
-  list(GET _pair 0 _type)
-  list(GET _pair 1 _var)
-  set(_sz "${_var}_SIZE")
-  check_type_size("${_type}" ${_sz} LANGUAGE C)
-  if(HAVE_${_sz})
-    set(${_var} 1)
+if(MONO_HOST_WINDOWS)
+  set(CMAKE_EXTRA_INCLUDE_FILES sys/types.h winsock2.h ws2tcpip.h afunix.h
+                                sys/stat.h time.h fcntl.h sys/utime.h signal.h)
+else()
+  set(CMAKE_EXTRA_INCLUDE_FILES sys/types.h sys/socket.h netinet/in.h sys/un.h
+                                sys/stat.h sys/time.h time.h poll.h fcntl.h
+                                utime.h dirent.h signal.h)
+endif()
+# Answers HAVE_<var> for a type, the way autoconf's AC_CHECK_TYPE did: the
+# size is a means, and only whether the type exists at all is kept.
+function(_mono_probe_type type var)
+  check_type_size("${type}" ${var}_SIZE LANGUAGE C)
+  if(HAVE_${var}_SIZE)
+    set(${var} 1 PARENT_SCOPE)
   else()
-    set(${_var} "")
+    set(${var} "" PARENT_SCOPE)
   endif()
-endforeach()
+endfunction()
+
+_mono_probe_type("clockid_t"                HAVE_CLOCKID_T)
+_mono_probe_type("blksize_t"                HAVE_BLKSIZE_T)
+_mono_probe_type("blkcnt_t"                 HAVE_BLKCNT_T)
+_mono_probe_type("suseconds_t"              HAVE_SUSECONDS_T)
+_mono_probe_type("socklen_t"                HAVE_SOCKLEN_T)
+_mono_probe_type("struct flock"             HAVE_STRUCT_FLOCK)
+_mono_probe_type("struct flock64"           HAVE_STRUCT_FLOCK64)
+_mono_probe_type("struct iovec"             HAVE_STRUCT_IOVEC)
+_mono_probe_type("struct linger"            HAVE_STRUCT_LINGER)
+_mono_probe_type("struct pollfd"            HAVE_STRUCT_POLLFD)
+_mono_probe_type("struct sockaddr"          HAVE_STRUCT_SOCKADDR)
+_mono_probe_type("struct sockaddr_storage"  HAVE_STRUCT_SOCKADDR_STORAGE)
+_mono_probe_type("struct sockaddr_in"       HAVE_STRUCT_SOCKADDR_IN)
+_mono_probe_type("struct sockaddr_in6"      HAVE_STRUCT_SOCKADDR_IN6)
+_mono_probe_type("struct sockaddr_un"       HAVE_STRUCT_SOCKADDR_UN)
+_mono_probe_type("struct stat"              HAVE_STRUCT_STAT)
+_mono_probe_type("struct timespec"          HAVE_STRUCT_TIMESPEC)
+_mono_probe_type("struct timeval"           HAVE_STRUCT_TIMEVAL)
+_mono_probe_type("struct timezone"          HAVE_STRUCT_TIMEZONE)
+_mono_probe_type("struct utimbuf"           HAVE_STRUCT_UTIMBUF)
+_mono_probe_type("struct ip_mreqn"          HAVE_STRUCT_IP_MREQN)
+_mono_probe_type("struct kinfo_proc"        HAVE_STRUCT_KINFO_PROC)
+
+# ws2tcpip.h names its ancillary-data header `struct cmsghdr` as well, and
+# spells the members the same, so this probe answers yes on Windows for a type
+# support/map.c is not written against -- it converts the POSIX one, whose other
+# half is a set of SCM_* messages Winsock does not have.  Leaving the macro
+# undefined is what winconfig.h, the msvc build's config.h, does too.
+if(NOT MONO_HOST_WINDOWS)
+  _mono_probe_type("struct cmsghdr"         HAVE_STRUCT_CMSGHDR)
+endif()
 unset(CMAKE_EXTRA_INCLUDE_FILES)
 
 if(HAVE_STRUCT_FLOCK64)
@@ -282,7 +310,11 @@ check_symbol_exists(sys_siglist "signal.h" HAVE_SYSSIGNAME)
 # autoconf compiled a call with the candidate signature and looked for a
 # warning. -Werror on the probe gives the same answer without parsing output.
 set(_saved_flags "${CMAKE_REQUIRED_FLAGS}")
-set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -Werror")
+if(MSVC)
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} /WX")
+else()
+  set(CMAKE_REQUIRED_FLAGS "${CMAKE_REQUIRED_FLAGS} -Werror")
+endif()
 
 check_c_source_compiles("
   #include <sys/socket.h>

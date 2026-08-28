@@ -31,7 +31,7 @@ if(TARGET LLVM)
   set(_llvm_libs LLVM)
 else()
   llvm_map_components_to_libnames(_llvm_libs
-    analysis core bitwriter linker passes orcjit x86codegen)
+    analysis core bitwriter linker passes orcjit x86codegen x86asmparser)
 endif()
 
 target_include_directories(mono_llvm SYSTEM INTERFACE ${LLVM_INCLUDE_DIRS})
@@ -52,19 +52,30 @@ endif()
 # passes) out of a TU that disagrees with it about RTTI is a silent ABI break,
 # so the C++ side of the backend takes its answer from the install.
 if(NOT LLVM_ENABLE_RTTI)
-  target_compile_options(mono_llvm INTERFACE $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>)
+  if(MSVC)
+    target_compile_options(mono_llvm INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/GR->)
+  else()
+    target_compile_options(mono_llvm INTERFACE $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>)
+  endif()
 endif()
 
 # Exceptions stay on regardless of how LLVM itself was built: the ORC APIs
 # report failures through llvm::Error, and the unwinder needs the tables.
-target_compile_options(mono_llvm INTERFACE
-  $<$<COMPILE_LANGUAGE:CXX>:-fexceptions>
-  $<$<COMPILE_LANGUAGE:CXX>:-funwind-tables>)
+# MSVC's /EHsc, which CMake passes already, is both of those.
+if(NOT MSVC)
+  target_compile_options(mono_llvm INTERFACE
+    $<$<COMPILE_LANGUAGE:CXX>:-fexceptions>
+    $<$<COMPILE_LANGUAGE:CXX>:-funwind-tables>)
+endif()
 
 target_link_libraries(mono_llvm INTERFACE ${_llvm_libs})
 # The dylib lives outside the system search path (a local install prefix), so
 # bake its directory into the runpath of everything that links it - otherwise
-# every binary needs LD_LIBRARY_PATH, and the tests don't get one.
-target_link_options(mono_llvm INTERFACE "-Wl,-rpath,${LLVM_LIBRARY_DIRS}")
+# every binary needs LD_LIBRARY_PATH, and the tests don't get one.  A PE image
+# has no such field: it finds a DLL by the loader's search order, and this
+# build links LLVM statically there anyway.
+if(NOT MSVC)
+  target_link_options(mono_llvm INTERFACE "-Wl,-rpath,${LLVM_LIBRARY_DIRS}")
+endif()
 
 message(STATUS "LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_INSTALL_PREFIX} (API version ${MONO_LLVM_API_VERSION})")

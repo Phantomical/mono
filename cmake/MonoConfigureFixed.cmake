@@ -25,9 +25,6 @@ set(STDC_HEADERS 1)
 if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
   message(FATAL_ERROR "Unsupported target ${CMAKE_SYSTEM_PROCESSOR}; this build supports amd64 only")
 endif()
-if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
-  message(FATAL_ERROR "Unsupported host ${CMAKE_SYSTEM_NAME}; this build supports Linux only")
-endif()
 
 set(HOST_AMD64   1)
 set(TARGET_AMD64 1)
@@ -40,20 +37,47 @@ set(MONO_ARCHITECTURE "\"amd64\"")
 # guard is always false.  HOST_LINUX was never defined in a released build,
 # even though the automake conditional of the same name was true.  Keeping
 # the C macro undefined preserves the code paths the runtime has actually
-# been built and tested with.  MONO_HOST_LINUX below carries the correct
-# value for the build system's own use: it is a CMake variable, and config.h
-# gets nothing from it.
-set(MONO_HOST_LINUX ON)
+# been built and tested with.  MONO_HOST_LINUX, which MonoOptions.cmake sets,
+# carries the correct value for the build system's own use: it is a CMake
+# variable, and config.h gets nothing from it.
 
-# Classic (non-UWP) Windows API surface: defined on every target.
+# Classic (non-UWP) Windows API surface: defined on every target.  The runtime
+# reads the pair through mono/utils/w32subset.h, which is compiled everywhere,
+# so a Unix host answers the question too.
 set(HAVE_CLASSIC_WINAPI_SUPPORT 1)
 set(HAVE_UWP_WINAPI_SUPPORT     0)
 
-set(MONO_ZERO_LEN_ARRAY 0)
 set(MONO_INSIDE_RUNTIME 1)
 
-if(MONO_WITH_TLS STREQUAL "__thread")
-  set(MONO_KEYWORD_THREAD "__thread")
+if(MONO_HOST_WINDOWS)
+  set(HOST_WIN32   1)
+  set(TARGET_WIN32 1)
+
+  # NTFS has junctions and symlinks, but the runtime reaches them through the
+  # POSIX calls in mono/metadata/w32file-unix.c, which this host does not
+  # compile.  The IO portability layer is the same story: it rewrites a path's
+  # case and separators for a case-sensitive filesystem, and Windows needs
+  # neither.
+  set(HOST_NO_SYMLINKS    1)
+  set(DISABLE_PORTABILITY 1)
+
+  # MSVC rejects `char x[0]` in a struct and takes `char x[1]` as the
+  # variable-length member instead, so a trailing array is declared one
+  # element long and every size computation subtracts it.
+  set(MONO_ZERO_LEN_ARRAY 1)
+
+  set(MONO_KEYWORD_THREAD "__declspec (thread)")
+
+  # The CRT spells it strtok_s, and mono/eglib/eglib-config.hw maps the POSIX
+  # name onto it.  Saying so here is what keeps mono/eglib/gpath.c from
+  # compiling its own BSD copy over the CRT's declaration.
+  set(HAVE_STRTOK_R 1)
+else()
+  set(MONO_ZERO_LEN_ARRAY 0)
+
+  if(MONO_WITH_TLS STREQUAL "__thread")
+    set(MONO_KEYWORD_THREAD "__thread")
+  endif()
 endif()
 
 if(MONO_UNITY_DEFINE)
@@ -78,7 +102,13 @@ if(MONO_ENABLE_BIG_ARRAYS)
   set(MONO_BIG_ARRAYS 1)
 endif()
 
-if(MONO_ENABLE_DEV_RANDOM)
+if(MONO_HOST_WINDOWS)
+  # mono/utils/mono-rand-windows.c seeds from BCryptGenRandom, so the runtime
+  # has an RNG without a device to name.  NAME_DEV_RANDOM is still read by the
+  # code that opens the device, hence the empty string rather than no macro.
+  set(NAME_DEV_RANDOM "\"\"")
+  set(HAVE_CRYPT_RNG 1)
+elseif(MONO_ENABLE_DEV_RANDOM)
   set(NAME_DEV_RANDOM "\"/dev/random\"")
   set(HAVE_CRYPT_RNG 1)
 endif()

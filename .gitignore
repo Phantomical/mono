@@ -152,3 +152,10 @@ external/buildscripts/build.gen.*
 # llvm-cov profiles, from a build configured with MONO_ENABLE_COVERAGE.
 *.profraw
 *.profdata
+
+# Working notes and helper scripts under .claude/.  The skills beside them are
+# tracked, so this names the local directories rather than the whole tree.
+/.claude/TASKS.md
+/.claude/scripts/
+/.claude/plans/
+/.claude/handoff/

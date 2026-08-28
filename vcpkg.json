@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "mono",
+  "version": "6.13.0",
+  "description": "Mono runtime (Unity fork, LLVM tiered JIT) -- the libraries the native build does not carry itself",
+  "homepage": "https://github.com/mono/mono",
+  "builtin-baseline": "e99d87dcf02926bfd629560e11e156329d5720c1",
+  "$comment": [
+    "Only what the tree has no copy of. mono/zlib, mono/eglib and msvc/getopt.c",
+    "cover the rest, and a vcpkg port that duplicates one of those would put two",
+    "implementations of the same symbol in the same link."
+  ],
+  "dependencies": [
+    {
+      "name": "zlib",
+      "$comment": "The runtime prefers a system zlib over the bundled mono/zlib; on Windows vcpkg is that system."
+    },
+    {
+      "name": "gtest",
+      "$comment": "The C++ unit tests under mono/unit-tests. -DBUILD_TESTING=OFF drops the dependency."
+    }
+  ]
+}

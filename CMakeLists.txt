@@ -4,7 +4,17 @@ project(mono
         VERSION 6.13.0
         DESCRIPTION "Mono runtime (Unity fork, LLVM 18 tiered JIT)"
         HOMEPAGE_URL "https://github.com/mono/mono"
-        LANGUAGES C CXX ASM)
+        LANGUAGES C CXX)
+
+# The hand-written assembly.  Windows spells it MASM, in .asm files ml64
+# assembles; everything else spells it GAS, in .S files the C compiler driver
+# hands to the assembler.  CMake calls the two different languages, so a
+# directory picks its sources by host and this picks the assembler.
+if(WIN32)
+  enable_language(ASM_MASM)
+else()
+  enable_language(ASM)
+endif()
 
 #
 # This is the version of the corlib-runtime interface.  Change it whenever a
@@ -75,6 +85,11 @@ find_program(MONO_BOOTSTRAP_RUNTIME NAMES mono mono-sgen)
 # them.
 find_program(MONO_SYSTEM_RUNTIME_EXECUTABLE NAMES mono-sgen mono)
 
+# The host's own strong-name tool.  A managed program the host runs itself has
+# to carry a signature that host will accept, and the bootstrap profile's
+# sn.exe is one of the programs that needs signing.
+find_program(MONO_HOST_SN sn)
+
 find_program(MONO_PERL perl)
 find_program(MONO_DOXYGEN doxygen)
 
@@ -84,7 +99,17 @@ if(MONO_ENABLE_NLS)
 endif()
 
 find_program(MONO_NM nm)
-find_program(MONO_TIMEOUT_BINARY timeout)
+
+# timeout(1), which the runtime corpus runs each program under so that a hang
+# gets SIGQUIT and prints every thread's stack.  Windows has a TIMEOUT.EXE that
+# waits for a keypress and shares nothing but the name, and no signal makes the
+# runtime dump its threads there, so the search is skipped rather than allowed
+# to find it.  MonoRunTest.cmake leaves the prefix off when this is empty, and
+# CTest's own TIMEOUT still ends a hung test -- what is lost on Windows is the
+# dump, not the limit.
+if(NOT WIN32)
+  find_program(MONO_TIMEOUT_BINARY timeout)
+endif()
 find_program(MONO_GNU_MAKE NAMES gmake make)
 find_program(MONO_PERF_BINARY perf DOC "perf(1), for the profiled microbenchmarks")
 find_library(MONO_XATTR_LIB attr)

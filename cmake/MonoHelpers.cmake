@@ -1,5 +1,20 @@
 # Small helpers shared by the per-directory build files.
 
+# What a wrapper script is called.  The build writes several -- the uninstalled
+# runtime, the shims the class-library build shells out to -- and a host runs
+# either a /bin/sh script with no extension or a .cmd the command processor
+# reads.  Everything that names one appends this.
+if(WIN32)
+  set(MONO_WRAPPER_SUFFIX ".cmd")
+else()
+  set(MONO_WRAPPER_SUFFIX "")
+endif()
+
+# The uninstalled runtime: what everything that runs a managed program out of
+# the build tree invokes. runtime/CMakeLists.txt writes it.
+set(MONO_RUNTIME_WRAPPER
+    "${CMAKE_BINARY_DIR}/runtime/mono-wrapper${MONO_WRAPPER_SUFFIX}")
+
 # The runtime is assembled out of OBJECT libraries rather than static archives.
 # automake's noinst_LTLIBRARIES were "convenience libraries": every object in
 # them ends up in the shared library whether or not anything references it.
@@ -89,6 +104,58 @@ function(mono_gtest_tests target)
   set_tests_properties("${ARG_PREFIX}" PROPERTIES ${_workdir} ${ARG_PROPERTIES})
 endfunction()
 
+# Names the static twin of a shared library.
+#
+# libtool built lib<name>.a beside lib<name>.so, and an embedder that links the
+# runtime statically consumes the archive.  A PE host has no such pair: the
+# DLL's import library is <name>.lib already, and a second rule writing that
+# path is an error ninja raises before it builds anything.  So on Windows the
+# twin takes a name of its own.
+function(mono_static_twin_name target name)
+  if(WIN32)
+    set_target_properties(${target} PROPERTIES OUTPUT_NAME "${name}-static")
+  else()
+    set_target_properties(${target} PROPERTIES OUTPUT_NAME "${name}")
+  endif()
+endfunction()
+
+# Points `link` at the directory `target`, whatever the host calls that.
+#
+# Windows has directory symlinks, but creating one needs SeCreateSymbolicLink,
+# which an ordinary account holds only with Developer Mode on.  A junction is
+# the same thing for a path on a local volume and needs no privilege, so that
+# is what this makes.  Either way the caller gets a second name for one
+# directory rather than a copy.
+function(mono_link_directory target link)
+  # An empty directory here is a leftover from a build whose profile
+  # directories carried no platform suffix, and it shadows the link for as long
+  # as it stands: every consumer that resolves the alias then reads an empty
+  # directory and reports the assembly as missing. Take it away so the link
+  # below replaces it. Only when it is empty, because a populated one is either
+  # a link that already works or output this function must not delete.
+  if(IS_DIRECTORY "${link}")
+    file(GLOB _held "${link}/*")
+    if(NOT _held)
+      file(REMOVE_RECURSE "${link}")
+    endif()
+  endif()
+
+  if(EXISTS "${link}")
+    return()
+  endif()
+  if(WIN32)
+    file(TO_NATIVE_PATH "${target}" _native_target)
+    file(TO_NATIVE_PATH "${link}"   _native_link)
+    execute_process(COMMAND cmd /c mklink /J "${_native_link}" "${_native_target}"
+                    RESULT_VARIABLE _rc OUTPUT_QUIET ERROR_VARIABLE _err)
+    if(NOT _rc EQUAL 0)
+      message(FATAL_ERROR "could not junction ${link} onto ${target}: ${_err}")
+    endif()
+  else()
+    file(CREATE_LINK "${target}" "${link}" SYMBOLIC)
+  endif()
+endfunction()
+
 # `configure_file`-style generation of the little shell wrappers under
 # scripts/ and runtime/, which are @VAR@ templates in the autotools build too.
 function(mono_configure_script input output)
@@ -97,6 +164,26 @@ function(mono_configure_script input output)
        OWNER_READ OWNER_WRITE OWNER_EXECUTE
        GROUP_READ GROUP_EXECUTE
        WORLD_READ WORLD_EXECUTE)
+endfunction()
+
+# Joins directories into one MONO_PATH, with the separator the runtime splits
+# on: `;` on Windows and `:` everywhere else.
+#
+# The Windows separator is spelled as the generator expression rather than as a
+# character, because the result is dropped into a string CMake goes on to read
+# as a list - a COMMAND argument, or one entry of an ENVIRONMENT property - and
+# a `;` there splits the string in two, handing the runtime half a path.
+# Backslash-escaping it only survives one such expansion, and a value that
+# reaches a test through a list and a function argument is expanded twice.
+# $<SEMICOLON> is put in after all of that, so it survives however many.
+function(mono_path_join out)
+  if(WIN32)
+    string(JOIN "$<SEMICOLON>" _joined ${ARGN})
+  else()
+    string(JOIN ":" _joined ${ARGN})
+  endif()
+
+  set(${out} "${_joined}" PARENT_SCOPE)
 endfunction()
 
 set(MONO_ASSEMBLIES_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
