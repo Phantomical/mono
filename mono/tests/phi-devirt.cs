@@ -13,7 +13,9 @@ using System.Runtime.CompilerServices;
  *   - agreement folds;
  *   - a disagreement must not;
  *   - a value carried around a loop must not misread the loop;
- *   - a null arm must never make the walk answer some class for a null.
+ *   - a null arm must never make the walk answer some class for a null;
+ *   - an allocation that reaches a protected region through inlining, and so
+ *     loses the mark that names its class, must still answer that class.
  *
  * A wrong fold here is not a slower answer. It is a wrong one. Narrow and
  * Wide read a different number of fields, so a dispatch to the wrong
@@ -121,6 +123,41 @@ public static class Program {
 		return o is Narrow;
 	}
 
+	// Small enough for the trivial-inline pre-pass to fold into any caller,
+	// which is what puts this allocation inside AllocatedInATryBlock's try.
+	static Shape MakeNarrow ()
+	{
+		return new Narrow ();
+	}
+
+	/*
+	 * MakeNarrow ()'s own translation marks its allocation with an exact
+	 * class, because nothing in MakeNarrow () itself is protected. Folding
+	 * MakeNarrow ()'s body in here moves that allocation inside this try
+	 * block, and the call to MakeNarrow () was already an invoke because it
+	 * sits in a protected region - so InlineFunction () rewrites the
+	 * allocation call into an invoke of its own, targeting this block's
+	 * landing pad. LLVM's changeToInvokeAndSplitBasicBlock () copies the
+	 * debug location, the calling convention, the attributes and MD_prof
+	 * onto that invoke, and nothing else, so the exact-class mark is gone.
+	 * The dispatch below has to answer from the allocation's vtable operand
+	 * instead.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int AllocatedInATryBlock ()
+	{
+		try {
+			Shape s = MakeNarrow ();
+
+			if (s == null)
+				throw new Exception ();
+
+			return s.Which ();
+		} catch (Exception) {
+			return -1;
+		}
+	}
+
 	static void CheckAll (string tier)
 	{
 		Check (tier + ": same class, true arm", SameClass (true), 1);
@@ -134,6 +171,8 @@ public static class Program {
 		Check (tier + ": is Narrow, null arm", IsNarrow (0), false);
 		Check (tier + ": is Narrow, Narrow arm", IsNarrow (1), true);
 		Check (tier + ": is Narrow, Wide arm", IsNarrow (2), false);
+
+		Check (tier + ": allocated in a try block", AllocatedInATryBlock (), 1);
 	}
 
 	static bool Promote (string name, int tier)
@@ -152,7 +191,8 @@ public static class Program {
 	static bool PromoteAll (int tier)
 	{
 		return Promote ("SameClass", tier) & Promote ("DifferentClasses", tier)
-		       & Promote ("LoopReceiver", tier) & Promote ("IsNarrow", tier);
+		       & Promote ("LoopReceiver", tier) & Promote ("IsNarrow", tier)
+		       & Promote ("AllocatedInATryBlock", tier);
 	}
 
 	public static int Main ()

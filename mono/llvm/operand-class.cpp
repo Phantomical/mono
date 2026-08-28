@@ -7,6 +7,7 @@
 
 #include "compile-state.hpp"
 #include "method-symbols.hpp"
+#include "passes/alloc-func.hpp"
 #include "passes/strip-casts.hpp"
 
 #include "mono/metadata/class.h"
@@ -24,7 +25,9 @@
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalObject.h>
 #include <llvm/IR/GlobalValue.h>
+#include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instruction.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Metadata.h>
@@ -232,10 +235,59 @@ initonly_static_read (const Value *v)
 	                        : nullptr;
 }
 
+/// The class an allocation site makes, read off the vtable its first operand
+/// names, or null where \p site is not one of the object-allocation builtins,
+/// that operand names no class this compile can read, or the vtable does not
+/// settle what comes back.
+///
+/// `mono.exact.class` is the ordinary way an allocation states its class, and
+/// it can go missing: `changeToInvokeAndSplitBasicBlock ()`
+/// (`llvm/lib/Transforms/Utils/Local.cpp`) is what `InlineFunction ()` calls
+/// to turn a folded call into an invoke when the call it was folded into sits
+/// in a protected region, and it copies only the debug location, the calling
+/// convention, the attributes and `MD_prof` onto the new instruction. The
+/// vtable operand is not metadata, so it survives that rewrite, and it names
+/// the same class the missing mark would have.
+///
+/// A marshalbyref or COM class is the one case where the vtable operand does
+/// not settle it: `mono_object_new_specific_checked ()` can answer such an
+/// allocation with a transparent proxy instead, and a proxy carries a vtable
+/// of its own. `MethodLLVMEmitter::allocation_can_be_a_proxy ()`
+/// (`method-to-llvm/call.cpp`) is the same rule, read here without the
+/// translator: it is two calls into class metadata, not a fact this compile
+/// only knows while it is translating.
+MonoClass *
+allocation_class (const CallBase &site)
+{
+	const Function *callee = site.getCalledFunction ();
+
+	if (callee == nullptr)
+		return nullptr;
+
+	StringRef name = callee->getName ();
+
+	if (name != alloc_object_name && name != alloc_object_kept_name)
+		return nullptr;
+
+	const auto *vtable =
+		dyn_cast<GlobalObject> (site.getArgOperand (0)->stripPointerCasts ());
+
+	if (vtable == nullptr)
+		return nullptr;
+
+	MonoClass *klass = marked_class (*vtable);
+
+	if (klass == nullptr
+	    || mono_class_is_marshalbyref (klass) || mono_class_is_com_object (klass))
+		return nullptr;
+
+	return klass;
+}
+
 /// The class \p v answers on its own, without looking through a `PHINode` or
 /// a `SelectInst`. This is the class marked on \p v, the class an initonly
-/// static read off it settles, or the class its parameter type bounds it
-/// with.
+/// static read off it settles, the class an allocation site names through its
+/// vtable operand, or the class its parameter type bounds it with.
 std::pair<MonoClass *, bool>
 leaf_operand_class (const Value *v, const Function &f)
 {
@@ -245,6 +297,10 @@ leaf_operand_class (const Value *v, const Function &f)
 
 		if (MonoObject *held = initonly_static_read (site))
 			return { settled_class_of (held), true };
+
+		if (const auto *call = dyn_cast<CallBase> (site))
+			if (MonoClass *klass = allocation_class (*call))
+				return { klass, true };
 
 		return { nullptr, true };
 	}

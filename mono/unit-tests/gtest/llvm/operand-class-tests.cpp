@@ -2,18 +2,30 @@
  * Tests for operand_class () and exact_class (), the walk that answers what
  * class a value is, including where the value is a merge.
  *
- * Pure LLVM. Every producer the walk reads is marked with a fake MonoClass
- * pointer of a test's own choosing. exact_class ()'s non-exact filter
- * (sealed, rank, marshal-by-ref) is never reached here, because every
- * contributing answer in these fixtures comes from a mark with exact = true.
- * So a test builds a module and asks no runtime for anything.
+ * Most cases are pure LLVM. Every producer the walk reads is marked with a
+ * fake MonoClass pointer of a test's own choosing, and no test asks a runtime
+ * for anything.
+ *
+ * The allocation-site cases near the end are the exception. Reading a class
+ * off an allocation's vtable operand checks that class is not marshal-by-ref
+ * or a COM object, and that check reads real fields, so those cases boot a
+ * runtime and mark a real class.
  */
 
 #include "operand-class.hpp"
 
+#include "harness.hpp"
+#include "method-symbols.hpp"
+#include "passes/alloc-func.hpp"
+
+#include <mono/metadata/appdomain.h>
+#include <mono/metadata/class-internals.h>
+#include <mono/metadata/class.h>
+
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -315,6 +327,83 @@ TEST (OperandClassTest, ExceedingTheWalkBudgetAnswersNoClass)
 	IRBuilder<> (previous_block).CreateRet (previous);
 
 	EXPECT_EQ (exact_class (previous, *caller), nullptr);
+}
+
+/// A function with one call to the object-allocation builtin, the vtable
+/// operand a global marked with \p klass and no other class mark on the call.
+///
+/// `changeToInvokeAndSplitBasicBlock ()` builds an `InvokeInst` from a
+/// `CallInst` the same way, keeping the same operands and copying no
+/// metadata, so a plain call answers the same question the invoke it can
+/// become would.
+struct AllocationModule {
+	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
+	std::unique_ptr<Module> module;
+	Function *caller = nullptr;
+	CallInst *site = nullptr;
+
+	AllocationModule (MonoClass *klass, StringRef decl_name)
+	{
+		module = std::make_unique<Module> ("alloc", *context);
+
+		Type *ptr = PointerType::get (*context, 0);
+		Type *word = Type::getInt64Ty (*context);
+
+		Function *decl = Function::Create (
+			FunctionType::get (ptr, { ptr, word, ptr }, false),
+			GlobalValue::ExternalLinkage, decl_name, module.get ());
+
+		auto *vtable = new GlobalVariable (*module, Type::getInt8Ty (*context), false,
+		                                   GlobalValue::ExternalLinkage, nullptr, "vtable");
+		mark_class_reference (*vtable, klass);
+
+		caller = Function::Create (FunctionType::get (ptr, {}, false),
+		                           GlobalValue::ExternalLinkage, "caller", module.get ());
+
+		IRBuilder<> b (BasicBlock::Create (*context, "entry", caller));
+
+		site = b.CreateCall (
+			decl, { vtable, ConstantInt::get (word, 64), ConstantPointerNull::get (
+				                                       cast<PointerType> (ptr)) });
+		b.CreateRet (site);
+	}
+};
+
+TEST (OperandClassTest, AllocationSiteAnswersItsVtableClassWithNoMark)
+{
+	mono::test::init_runtime ();
+
+	AllocationModule m (mono_defaults.object_class, alloc_object_name);
+	auto [klass, exact] = operand_class (m.site, *m.caller);
+
+	EXPECT_EQ (klass, mono_defaults.object_class);
+	EXPECT_TRUE (exact);
+}
+
+/// The kept form names the same allocation as the ordinary one and answers
+/// its class the same way.
+TEST (OperandClassTest, KeptAllocationSiteAnswersItsVtableClassWithNoMark)
+{
+	mono::test::init_runtime ();
+
+	AllocationModule m (mono_defaults.object_class, alloc_object_kept_name);
+
+	EXPECT_EQ (operand_class (m.site, *m.caller).first, mono_defaults.object_class);
+}
+
+/// A marshal-by-ref class's allocator can answer with a transparent proxy
+/// instead of an instance of the class it was asked to allocate, so the
+/// vtable operand must not settle the class here the way it does above.
+TEST (OperandClassTest, AllocationSiteRefusesAMarshalByRefClass)
+{
+	mono::test::init_runtime ();
+
+	MonoClass *klass = mono_class_from_name (mono_get_corlib (), "System", "MarshalByRefObject");
+	ASSERT_NE (klass, nullptr);
+
+	AllocationModule m (klass, alloc_object_name);
+
+	EXPECT_EQ (operand_class (m.site, *m.caller).first, nullptr);
 }
 
 } // namespace
