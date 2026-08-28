@@ -22,6 +22,9 @@ constexpr StringRef method_attribute = "mono-method";
 /// The same for the MonoClass a per-class symbol stands for.
 constexpr StringRef class_attribute = "mono-class";
 
+/// The same for the MonoClass whose static fields a block holds.
+constexpr StringRef statics_class_attribute = "mono-statics-class";
+
 /// The same for a symbol holding the MonoMethod itself. Kept apart from
 /// method_attribute, which is what the renaming below reads.
 constexpr StringRef method_pointer_attribute = "mono-method-pointer";
@@ -98,6 +101,20 @@ MonoClass *
 marked_class (const GlobalValue &value)
 {
 	std::optional<uintptr_t> address = pointer_marker (value, class_attribute);
+
+	return address ? reinterpret_cast<MonoClass *> (*address) : nullptr;
+}
+
+void
+mark_statics_reference (GlobalValue &value, MonoClass *klass)
+{
+	mark_pointer (value, statics_class_attribute, klass);
+}
+
+MonoClass *
+marked_statics_class (const GlobalValue &value)
+{
+	std::optional<uintptr_t> address = pointer_marker (value, statics_class_attribute);
 
 	return address ? reinterpret_cast<MonoClass *> (*address) : nullptr;
 }

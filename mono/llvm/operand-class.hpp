@@ -11,11 +11,20 @@
  * states only a bound: the class its slot is declared with. A delegate either
  * of the first two produced also states the method it calls.
  *
- * Each is a host pointer written into metadata, the way a marked declaration
+ * Two channels carry them, and a reader here takes either. What the translator
+ * writes down is a host pointer in metadata, the way a marked declaration
  * carries one in an attribute (`method-symbols.hpp`). So it names no symbol and
- * costs the link nothing. It is also why a reader has to be inside the compile
- * that wrote it: the pointer means nothing to a later process reading a dumped
- * module.
+ * costs the link nothing.
+ *
+ * A read of an initonly static instead says what it is by its shape, a load off
+ * a marked statics block at a constant offset, and the reader asks mono what
+ * the field holds. Metadata does not last on such a load: InstCombine folds the
+ * address into the load's pointer operand and builds a new one, which drops it.
+ * A global outlives every pass, so the shape is what survives.
+ *
+ * Either way a reader has to be inside the compile: a metadata pointer means
+ * nothing to a later process reading a dumped module, and the field is read
+ * against this compile's domain.
  */
 
 #ifndef MONO_LLVM_OPERAND_CLASS_HPP
@@ -90,7 +99,7 @@ void mark_delegate_target (llvm::Instruction &site, MonoMethod *target);
 /// The method the delegate \p v calls, or null where the IR says nothing.
 ///
 /// A null answer means "not stated here" rather than "not a delegate": only the
-/// producers the translator could answer for carry the mark.
+/// producers the translator could answer for say a target at all.
 MonoMethod *delegate_target (const llvm::Value *v);
 
 

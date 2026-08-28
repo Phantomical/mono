@@ -999,7 +999,6 @@ private:
 	std::optional<VTableFacts> vtable_facts_for (MonoClass *klass);
 	llvm::Expected<llvm::Constant *> typeof_symbol (MonoType *type);
 	MonoClass *parameter_class (MonoType *type);
-	MonoObject *initonly_static_value (MonoClassField *field);
 	llvm::Constant *field_symbol (MonoClassField *field);
 	llvm::Constant *address_symbol (const std::string &name, void *address);
 

@@ -31,46 +31,6 @@ namespace mono {
 
 namespace {
 
-/// The class \p held is an instance of, or null where a compile cannot state one.
-///
-/// A transparent proxy stands in for another class and carries a vtable that is
-/// not that class's.
-MonoClass *
-settled_class_of (MonoObject *held)
-{
-	MonoClass *klass = mono_object_class (held);
-
-	return mono_class_is_marshalbyref (klass) ? nullptr : klass;
-}
-
-/// The method the delegate \p held calls, or null where \p held is not a
-/// delegate whose target this compile can name.
-///
-/// MonoDelegate::method is the field to read. mini_init_delegate () writes it
-/// once, at construction, and no other path writes it at all. method_ptr is not
-/// an alternative: the delegate trampoline replaces it on the first call and can
-/// put an unbox entry there, so a value read now is not the one a later call
-/// uses.
-///
-/// Two delegates name a method they do not enter. One built from `ldvirtftn`
-/// resolves an override when it is called, and a multicast one runs an
-/// invocation list instead of a target.
-MonoMethod *
-settled_delegate_target_of (MonoObject *held)
-{
-	if (m_class_get_parent (mono_object_class (held))
-	    != mono_defaults.multicastdelegate_class)
-		return nullptr;
-
-	auto *delegate = (MonoDelegate *) held;
-
-	if (delegate->method_is_virtual
-	    || ((MonoMulticastDelegate *) delegate)->delegates != nullptr)
-		return nullptr;
-
-	return delegate->method;
-}
-
 /// Reads the collector's write-barrier layout, once for the process.
 ///
 /// The collector fixes each address and shift while it starts, before any method
@@ -341,6 +301,11 @@ MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 	// pass that answers a type test has the class the test names.
 	if (kind == ExternalSymbol::Kind::VTable || kind == ExternalSymbol::Kind::Class)
 		mark_class_reference (*llvm::cast<llvm::GlobalValue> (symbolic), klass);
+
+	// A pass that reads what an initonly static holds has the block and the
+	// offset, and needs the class to find the field.
+	if (kind == ExternalSymbol::Kind::Statics)
+		mark_statics_reference (*llvm::cast<llvm::GlobalValue> (symbolic), klass);
 
 	return symbolic;
 }
@@ -1028,67 +993,7 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 
 	access.invariant = invariant_static_read (*field);
 
-	if (llvm::Error error = push_from_location (builder, *address, ftype, /*native=*/false,
-	                                            access))
-		return error;
-
-	if (MonoObject *held = initonly_static_value (*field))
-		if (auto *loaded = llvm::dyn_cast<llvm::Instruction> (get_stack (0).value)) {
-			if (MonoClass *klass = settled_class_of (held))
-				mark_exact_class (*loaded, klass);
-
-			if (MonoMethod *target = settled_delegate_target_of (held))
-				mark_delegate_target (*loaded, target);
-		}
-
-	return llvm::Error::success ();
-}
-
-/// The object an initonly static field holds, or null where this compile cannot
-/// read one.
-///
-/// `initonly` makes the class initializer the only writer that IL has, so the
-/// value read once that initializer has run is the value the field keeps. What
-/// a caller may state from it is what stays right while the collector moves the
-/// object, so no address is written down.
-///
-/// Reflection is the writer IL does not have.
-/// `mono_field_static_set_value_internal ()` refuses a literal and nothing else,
-/// and no compiled body is taken back when a field is written that way. A
-/// program that does it reads a stale object here.
-MonoObject *
-MethodLLVMEmitter::initonly_static_value (MonoClassField *field)
-{
-	MonoType *type = mono_field_get_type_internal (field);
-
-	if ((mono_field_get_flags (field) & FIELD_ATTRIBUTE_INIT_ONLY) == 0
-	    || !MONO_TYPE_IS_REFERENCE (type) || depends_on_context (field))
-		return nullptr;
-
-	// A special static lives per thread or per context, so what stands there
-	// now says nothing about what a compiled body will read.
-	if (field->offset < 0)
-		return nullptr;
-
-	ERROR_DECL (vtable_error);
-	MonoVTable *vtable =
-		mono_class_vtable_checked (cfg->domain, field->parent, vtable_error);
-
-	if (vtable == nullptr) {
-		mono_error_cleanup (vtable_error);
-		return nullptr;
-	}
-
-	/*
-	 * The flag goes on once the initializer has run. A body compiled before
-	 * that reads whatever the field holds part way through, which the rest of
-	 * the initializer is free to replace.
-	 */
-	if (!vtable->initialized)
-		return nullptr;
-
-	return *(MonoObject **) ((char *) mono_vtable_get_static_field_data (vtable)
-	                         + field->offset);
+	return push_from_location (builder, *address, ftype, /*native=*/false, access);
 }
 
 /*

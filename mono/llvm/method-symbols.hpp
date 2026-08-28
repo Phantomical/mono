@@ -51,6 +51,18 @@ void mark_class_reference (llvm::GlobalValue &value, MonoClass *klass);
 /// Returns the class \p value stands for, or null when it carries no marker.
 MonoClass *marked_class (const llvm::GlobalValue &value);
 
+/// The same for a symbol that stands for the block holding one class's static
+/// fields.
+///
+/// A mark of its own rather than the one above, because the two state different
+/// relations between the same two pointers. That one names the class a symbol
+/// *is*, and this one names the class whose statics a block *holds*.
+void mark_statics_reference (llvm::GlobalValue &value, MonoClass *klass);
+
+/// Returns the class whose statics \p value holds, or null when it carries no
+/// marker.
+MonoClass *marked_statics_class (const llvm::GlobalValue &value);
+
 /// The same for a symbol that holds the MonoMethod itself rather than the
 /// method's code.
 ///
