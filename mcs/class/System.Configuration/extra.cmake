@@ -87,7 +87,7 @@ foreach(_t IN LISTS _cases)
 
   add_test(NAME config-standalone-${_t}
            COMMAND "${CMAKE_COMMAND}"
-                   -D "RUNTIME=${CMAKE_BINARY_DIR}/runtime/mono-wrapper"
+                   -D "RUNTIME=${MONO_RUNTIME_WRAPPER}"
                    -D "PROFILE_DIR=${_pdir}"
                    -D "RUN_DIR=${_run}"
                    -D "EXE=${_exe}"

@@ -6,6 +6,7 @@
 mono_profile_dir(_pdir net_4_x)
 set(_src "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_tests "${_pdir}/tests")
+mono_path_join(_corlib_test_path "${_pdir}" "${_tests}")
 
 _mono_csc_command(_csc net_4_x)
 _mono_csc_env(_cscenv net_4_x)
@@ -127,11 +128,11 @@ add_custom_target(mcs-corlib-vts-tests ALL DEPENDS "${_vts_test}")
 add_dependencies(mcs-corlib-vts-tests mcs-net_4_x-nunit-lite-console)
 
 add_test(NAME bcl-corlib-vts
-         COMMAND "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug
+         COMMAND "${MONO_RUNTIME_WRAPPER}" --debug
                  "${_pdir}/nunit-lite-console.exe" "${_vts_test}"
                  -format:nunit2
                  "-result:${_tests}/TestResult-net_4_x-corlib-vts.xml"
          WORKING_DIRECTORY "${_tests}")
 set_tests_properties(bcl-corlib-vts PROPERTIES
   LABELS bcl TIMEOUT 1800
-  ENVIRONMENT "MONO_PATH=${_pdir}:${_tests};MONO_TESTS_IN_PROGRESS=yes")
+  ENVIRONMENT "MONO_PATH=${_corlib_test_path};MONO_TESTS_IN_PROGRESS=yes")

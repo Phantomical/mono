@@ -98,7 +98,13 @@ _mcs_tests_lib(dlls/test-939-1/test-939-ref.cs SIGNED
 _mcs_tests_lib(dlls/test-939-2/test-939-lib.cs SIGNED
                REFS dlls/test-939-common.dll)
 
-add_custom_target(mcs-compiler-tests ALL DEPENDS ${_support})
+# The support assemblies reach the shards here rather than in the sharding
+# step, which runs before any of them is built.
+add_custom_target(mcs-compiler-tests ALL
+  DEPENDS ${_support}
+  COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/cmake/shard-corpus.py"
+          --src "${_src}" --dest "${_bin}" --mode pos --shards ${_shards}
+          --stage-support)
 add_dependencies(mcs-compiler-tests mcs-net_4_x-mcs mcs-net_4_x-compiler-tester)
 
 # -issues lists the cases already known to fail, so only a new regression makes
@@ -114,8 +120,9 @@ add_dependencies(mcs-compiler-tests mcs-net_4_x-mcs mcs-net_4_x-compiler-tester)
 math(EXPR _last "${_shards} - 1")
 foreach(_i RANGE ${_last})
   string(REGEX REPLACE "^(.)$" "0\\1" _nn "${_i}")
+  mono_path_join(_shard_path "${_pdir}" "${_bin}/run-${_nn}")
   add_test(NAME compiler-tests/${_nn}
-           COMMAND "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug
+           COMMAND "${MONO_RUNTIME_WRAPPER}" --debug
                    "${_pdir}/compiler-tester.exe"
                    -mode:pos -files:v4
                    "-compiler:${_pdir}/mcs.exe"
@@ -130,5 +137,5 @@ foreach(_i RANGE ${_last})
     TIMEOUT 1800
     # The shard directory is on MONO_PATH because compiler-tester compiles the
     # `*-lib.cs` cases into it and the tests that use them load them by name.
-    ENVIRONMENT "MONO_PATH=${_pdir}:${_bin}/run-${_nn};MONO_RUNTIME=${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
+    ENVIRONMENT "MONO_PATH=${_shard_path};MONO_RUNTIME=${MONO_RUNTIME_WRAPPER}")
 endforeach()

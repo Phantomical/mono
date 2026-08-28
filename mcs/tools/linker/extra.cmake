@@ -80,7 +80,7 @@ foreach(_case IN LISTS _cases)
 
   add_test(NAME linker-${_slug}
            COMMAND "${CMAKE_COMMAND}"
-                   -D "RUNTIME=${CMAKE_BINARY_DIR}/runtime/mono-wrapper"
+                   -D "RUNTIME=${MONO_RUNTIME_WRAPPER}"
                    -D "TOOLS_PATH=${_build}"
                    -D "LINKER=${_build}/monolinker.exe"
                    -D "PROFILE_DIR=${_pdir}"

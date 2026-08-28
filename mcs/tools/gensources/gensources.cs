@@ -300,9 +300,17 @@ public class ParseResult {
         var isFirstError = true;
 
         foreach (var entry in entries) {
-            var absolutePath = Path.GetFullPath (Path.Combine (entry.Directory, entry.Pattern));
-            var absoluteDirectory = Path.GetDirectoryName (absolutePath);
-            var absolutePattern = Path.GetFileName (absolutePath);
+            // The wildcard is split off before the path is made absolute.
+            // Path.GetFullPath demands a name a file could actually have, and
+            // .NET Framework answers one holding a '*' with "Illegal
+            // characters in path" rather than with the directory it names.
+            var patternDirectory = Path.GetDirectoryName (entry.Pattern);
+            var absoluteDirectory = Path.GetFullPath (
+                string.IsNullOrEmpty (patternDirectory)
+                    ? entry.Directory
+                    : Path.Combine (entry.Directory, patternDirectory));
+            var absolutePattern = Path.GetFileName (entry.Pattern);
+            var absolutePath = Path.Combine (absoluteDirectory, absolutePattern);
 
             if (SourcesParser.TraceLevel >= 4) {
                 if ((absolutePattern != entry.Pattern) || (absoluteDirectory != entry.Directory))

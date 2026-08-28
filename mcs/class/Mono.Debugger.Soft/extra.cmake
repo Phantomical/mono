@@ -57,10 +57,21 @@ mono_test_environment(PROFILE net_4_x ASSEMBLY Mono.Debugger.Soft.dll
 #
 # Matched on the full path of the exe this build tree produced, which no other
 # process on the machine can be running.
-add_test(NAME bcl-Mono.Debugger.Soft-cleanup
-         COMMAND pkill -f "^.*mono-sgen .*${_tests}/dtest-app\\.exe")
+if(WIN32)
+  # No pkill here. PowerShell matches on the same full path and is made to
+  # exit 1 when it matched nothing, so SKIP_RETURN_CODE below reads either
+  # sweep the same way. `?` stands for one character, which lets the pattern
+  # match whichever separator the command line was built with.
+  string(REPLACE "/" "?" _dtest_glob "${_tests}/dtest-app.exe")
+  set(_sweep powershell -NoProfile -NonInteractive -Command
+      "$found = @(Get-CimInstance Win32_Process -Filter \"Name='mono-sgen.exe'\" | Where-Object { $_.CommandLine -like '*${_dtest_glob}*' }); if ($found.Count -eq 0) { exit 1 }; $found | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }; exit 0")
+else()
+  set(_sweep pkill -f "^.*mono-sgen .*${_tests}/dtest-app\\.exe")
+endif()
+
+add_test(NAME bcl-Mono.Debugger.Soft-cleanup COMMAND ${_sweep})
 set_tests_properties(bcl-Mono.Debugger.Soft-cleanup PROPERTIES
   LABELS fixture
   FIXTURES_CLEANUP fx_bcl-Mono.Debugger.Soft
-  # pkill exits 1 when it matched nothing, which is the good outcome.
+  # The sweep exits 1 when it matched nothing, which is the good outcome.
   SKIP_RETURN_CODE 1)
