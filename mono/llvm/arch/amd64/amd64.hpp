@@ -1,13 +1,25 @@
 /**
  * \file
- * \brief amd64 SysV: the types and constants the arch seam is spelled in.
+ * \brief amd64: the types and constants the arch seam is spelled in.
  *
  * Pulled in by arch/arch.hpp, which declares the functions these go with and
  * is what the rest of the backend includes.
+ *
+ * The architecture is one and the conventions are two.  Where a type here
+ * describes registers a call arrived in or is made through, it has an arm per
+ * convention: System V hands out six integer and eight SSE argument registers
+ * from two independent files, and the Microsoft one hands out four argument
+ * slots, each of which is an integer register or an SSE register depending on
+ * what the argument is.  Everything else on this page is shared.
  */
 
 #ifndef MONO_LLVM_ARCH_AMD64_AMD64_HPP
 #define MONO_LLVM_ARCH_AMD64_AMD64_HPP
+
+// Every arm below turns on HOST_WIN32, and so do the two layout headers. A
+// translation unit that reaches this page before config.h otherwise gets the
+// System V arm of each while its neighbours get the Microsoft one.
+#include "config.h"
 
 #include "arch/amd64/dyn-call-offsets.h"
 #include "arch/amd64/interp-entry-offsets.h"
@@ -51,6 +63,21 @@ constexpr unsigned managed_frame_size = 32;
  */
 constexpr unsigned interp_frame_size = 512;
 
+/// How many argument registers of each file the convention hands out, and how
+/// many callee-saved integer registers the entry thunk spills.
+///
+/// shadow_space is what a caller leaves above its outgoing stack arguments for
+/// the callee to spill the register arguments into. Only the Microsoft
+/// convention has one, and it is why an argument that lands on the stack there
+/// is that much further from the frame pointer.
+#ifdef HOST_WIN32
+constexpr unsigned param_gregs = 4, param_fregs = 4, saved_gregs = 7;
+constexpr unsigned shadow_space = 32;
+#else
+constexpr unsigned param_gregs = 6, param_fregs = 8, saved_gregs = 5;
+constexpr unsigned shadow_space = 0;
+#endif
+
 /// How many registers of each file a return value's leaves can be spread over.
 ///
 /// The two SSE counts index one register file and run out at different points,
@@ -62,15 +89,27 @@ constexpr unsigned interp_frame_size = 512;
 /// x87 stack, which neither thunk across the interpreter seam saves.
 constexpr unsigned ret_gregs = 3, ret_scalar_fregs = 2, ret_vector_fregs = 4;
 
-/// The registers a call arrived in, as interp-entry-thunk.S spilled them.
+/// The registers a call arrived in, as the interpreter entry thunk spilled
+/// them.
 struct InterpArgContext {
-	uint64_t gregs[6];                     ///< rdi rsi rdx rcx r8 r9
-	alignas (16) uint8_t fregs[8][16];     ///< xmm0 - xmm7
+#ifdef HOST_WIN32
+	uint64_t gregs[param_gregs];           ///< rcx rdx r8 r9
+	alignas (16) uint8_t fregs[param_fregs][16]; ///< xmm0 - xmm3
+#else
+	uint64_t gregs[param_gregs];           ///< rdi rsi rdx rcx r8 r9
+	alignas (16) uint8_t fregs[param_fregs][16]; ///< xmm0 - xmm7
+#endif
 	uint64_t ret_gregs[3];                 ///< rax rdx rcx
 	alignas (16) uint8_t ret_fregs[4][16]; ///< xmm0 - xmm3
 	uint8_t *stack;                        ///< the caller's outgoing arguments
 	uint64_t caller_fp;                    ///< the caller's frame pointer
-	uint64_t saved[5];                     ///< rbx r12 r13 r14 r15, the caller's
+#ifdef HOST_WIN32
+	/// rbx rdi rsi r12 r13 r14 r15, the caller's
+	uint64_t saved[saved_gregs];
+#else
+	/// rbx r12 r13 r14 r15, the caller's
+	uint64_t saved[saved_gregs];
+#endif
 };
 
 static_assert (offsetof (InterpArgContext, gregs) == MONO_INTERP_CTX_GREGS);
@@ -154,24 +193,28 @@ struct InterpEntryPoint {
 
 /*
  * The other direction across the same seam: a call the interpreter makes into
- * a compiled body, whose prototype it only knows at run time. dyn-call.cpp
+ * a compiled body, whose prototype it only knows at run time. leaf-layout.cpp
  * states the convention these types describe - the same one plan_interp_entry
  * () states above, restated outgoing rather than incoming. ArgPiece is what
- * both directions place a leaf as, and DynCallFrame's argument files match
- * InterpArgContext's sizes because both read the same six-greg, eight-freg
- * convention.
+ * both directions place a leaf as, and DynCallFrame's argument files are the
+ * size of InterpArgContext's because both read that one statement of it.
  */
 
-/// The registers and stack a dyn call is made through, as dyn-call-thunk.S
+/// The registers and stack a dyn call is made through, as the dyn-call thunk
 /// loads them. The stack area is extended to hold DynCallPlan::stack_words.
 struct DynCallFrame {
-	uint64_t gregs[6];                  ///< rdi rsi rdx rcx r8 r9
-	alignas (16) uint8_t fregs[8][16];  ///< xmm0 - xmm7
-	uint64_t has_fp;                    ///< whether the call reads any of fregs
-	uint64_t nstack;                    ///< words of stack the call passes
-	uint64_t ret_gregs[3];              ///< rax rdx rcx, as the call left them
+#ifdef HOST_WIN32
+	uint64_t gregs[param_gregs];           ///< rcx rdx r8 r9
+	alignas (16) uint8_t fregs[param_fregs][16]; ///< xmm0 - xmm3
+#else
+	uint64_t gregs[param_gregs];           ///< rdi rsi rdx rcx r8 r9
+	alignas (16) uint8_t fregs[param_fregs][16]; ///< xmm0 - xmm7
+#endif
+	uint64_t has_fp;                       ///< whether the call reads any of fregs
+	uint64_t nstack;                       ///< words of stack the call passes
+	uint64_t ret_gregs[3];                 ///< rax rdx rcx, as the call left them
 	alignas (16) uint8_t ret_fregs[4][16]; ///< xmm0 - xmm3, as the call left them
-	uint64_t stack[];                   ///< an image of the callee's incoming stack arguments
+	uint64_t stack[];                      ///< an image of the callee's incoming stack arguments
 };
 
 static_assert (offsetof (DynCallFrame, gregs) == MONO_DYN_CALL_GREGS);
@@ -261,8 +304,17 @@ trampoline_of (const LazyEntryFrame *frame)
 }
 
 /// ORC's re-entry ABI, resolving through a mono lazy-entry frame.
+///
+/// Only the trampoline and stub writers come from the base, and those are the
+/// same either way; the resolver below is written here for both conventions.
+/// The base still names which one, so that the two never disagree silently.
+#ifdef HOST_WIN32
+struct LazyEntryABI : public llvm::orc::OrcX86_64_Win32 {
+	static constexpr unsigned ResolverCodeSize = 0xc2;
+#else
 struct LazyEntryABI : public llvm::orc::OrcX86_64_SysV {
 	static constexpr unsigned ResolverCodeSize = 0xbe;
+#endif
 
 	static void writeResolverCode (char *resolver_mem,
 	                               llvm::orc::ExecutorAddr resolver_addr,

@@ -50,6 +50,36 @@ lazy_resolver_frame ()
 	const int32_t fp = dwarf_frame_pointer_reg;
 	const int32_t sp = dwarf_stack_pointer_reg;
 
+#ifdef HOST_WIN32
+	/* The same frame, at the offsets the Microsoft x64 body below puts its
+	 * instructions at: it reserves shadow space for each of its three calls,
+	 * which moves everything after the prologue. */
+	return {
+		/* Entry. The trampoline's call sits above the caller's. */
+		{ 0x00, MONO_UNWIND_OP_DEF_CFA, sp, 0x10 },
+
+		/* push rbp */
+		{ 0x01, MONO_UNWIND_OP_DEF_CFA_OFFSET, 0, 0x18 },
+		{ 0x01, MONO_UNWIND_OP_OFFSET, fp, -0x18 },
+
+		/* mov rbp, rsp - the rest of the body stands on this. */
+		{ 0x04, MONO_UNWIND_OP_DEF_CFA_REGISTER, fp, 0 },
+
+		/* pop rbp, so rbp is the caller's again and the CFA moves back. */
+		{ 0xa4, MONO_UNWIND_OP_DEF_CFA, sp, 0x10 },
+		{ 0xa4, MONO_UNWIND_OP_SAME_VALUE, fp, 0 },
+
+		/* The throw path. A jump arrives here, so it needs the body's rules
+		 * again rather than the ones the line above leaves. */
+		{ 0xa5, MONO_UNWIND_OP_DEF_CFA, fp, 0x18 },
+		{ 0xa5, MONO_UNWIND_OP_OFFSET, fp, -0x18 },
+
+		/* The stack is cut back to the caller's return address, and rbp is
+		 * the caller's. */
+		{ 0xb3, MONO_UNWIND_OP_DEF_CFA, sp, 0x08 },
+		{ 0xb3, MONO_UNWIND_OP_SAME_VALUE, fp, 0 },
+	};
+#else
 	return {
 		/* Entry. The trampoline's call sits above the caller's. */
 		{ 0x00, MONO_UNWIND_OP_DEF_CFA, sp, 0x10 },
@@ -75,6 +105,7 @@ lazy_resolver_frame ()
 		{ 0xaf, MONO_UNWIND_OP_DEF_CFA, sp, 0x08 },
 		{ 0xaf, MONO_UNWIND_OP_SAME_VALUE, fp, 0 },
 	};
+#endif
 }
 
 /*
@@ -110,6 +141,112 @@ LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
 	static_assert (managed_frame_size == 0x20,
 	               "the frame reservation is an immediate below");
 
+#ifdef HOST_WIN32
+	/*
+	 * The same body against the Microsoft x64 convention. Three things move:
+	 * the helpers take their arguments in rcx, rdx and r8; every call is owed
+	 * 32 bytes of shadow space, which is reserved once alongside the frame
+	 * rather than around each call; and the spill order stays as it is, so
+	 * arch::LazyEntryFrame describes both.
+	 */
+	const uint8_t resolver_code[] = {
+		// resolver_entry:
+		0x55,                                     // 0x00: push      rbp
+		0x48, 0x89, 0xe5,                         // 0x01: mov       rbp, rsp
+		0x50,                                     // 0x04: push      rax
+		0x53,                                     // 0x05: push      rbx
+		0x51,                                     // 0x06: push      rcx
+		0x52,                                     // 0x07: push      rdx
+		0x56,                                     // 0x08: push      rsi
+		0x57,                                     // 0x09: push      rdi
+		0x41, 0x50,                               // 0x0a: push      r8
+		0x41, 0x51,                               // 0x0c: push      r9
+		0x41, 0x52,                               // 0x0e: push      r10
+		0x41, 0x53,                               // 0x10: push      r11
+		0x41, 0x54,                               // 0x12: push      r12
+		0x41, 0x55,                               // 0x14: push      r13
+		0x41, 0x56,                               // 0x16: push      r14
+		0x41, 0x57,                               // 0x18: push      r15
+		0x48, 0x81, 0xec, 0x08, 0x02, 0x00, 0x00, // 0x1a: sub       rsp, 0x208
+		0x48, 0x0f, 0xae, 0x04, 0x24,             // 0x21: fxsave64  [rsp]
+
+		// The lazy-entry frame, standing for the caller across the compile,
+		// with the callees' shadow space under it.
+		0x48, 0x81, 0xec, 0x40, 0x00, 0x00, 0x00, // 0x26: sub       rsp, 0x40
+		0x48, 0x8d, 0x4c, 0x24, 0x20,             // 0x2d: lea       rcx, [rsp + 0x20]
+		0x48, 0x8b, 0x55, 0x00,                   // 0x32: mov       rdx, [rbp]
+		0x4c, 0x8d, 0x45, 0x18,                   // 0x36: lea       r8, [rbp + 0x18]
+		0x48, 0xb8,                               // 0x3a: movabs    rax, <enter>
+
+		// 0x3c: lazy_frame_enter ().
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+		0xff, 0xd0,                               // 0x44: call      rax
+		0x48, 0xb9,                               // 0x46: movabs    rcx, <CBMgr>
+
+		// 0x48: JIT re-entry ctx addr.
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+		0x48, 0x8d, 0x55, 0x90,                   // 0x50: lea       rdx, [rbp - 0x70]
+		0x48, 0xb8,                               // 0x54: movabs    rax, <REntry>
+
+		// 0x56: JIT re-entry fn addr.
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+		0xff, 0xd0,                               // 0x5e: call      rax
+		0x48, 0x89, 0x45, 0x08,                   // 0x60: mov       [rbp + 8], rax
+		0x48, 0x8d, 0x4c, 0x24, 0x20,             // 0x64: lea       rcx, [rsp + 0x20]
+		0x48, 0xb8,                               // 0x69: movabs    rax, <leave>
+
+		// 0x6b: lazy_frame_leave ().
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+		0xff, 0xd0,                               // 0x73: call      rax
+		0x48, 0x81, 0xc4, 0x40, 0x00, 0x00, 0x00, // 0x75: add       rsp, 0x40
+		0x48, 0x85, 0xc0,                         // 0x7c: test      rax, rax
+		0x75, 0x24,                               // 0x7f: jne       throw
+
+		0x48, 0x0f, 0xae, 0x0c, 0x24,             // 0x81: fxrstor64 [rsp]
+		0x48, 0x81, 0xc4, 0x08, 0x02, 0x00, 0x00, // 0x86: add       rsp, 0x208
+		0x41, 0x5f,                               // 0x8d: pop       r15
+		0x41, 0x5e,                               // 0x8f: pop       r14
+		0x41, 0x5d,                               // 0x91: pop       r13
+		0x41, 0x5c,                               // 0x93: pop       r12
+		0x41, 0x5b,                               // 0x95: pop       r11
+		0x41, 0x5a,                               // 0x97: pop       r10
+		0x41, 0x59,                               // 0x99: pop       r9
+		0x41, 0x58,                               // 0x9b: pop       r8
+		0x5f,                                     // 0x9d: pop       rdi
+		0x5e,                                     // 0x9e: pop       rsi
+		0x5a,                                     // 0x9f: pop       rdx
+		0x59,                                     // 0xa0: pop       rcx
+		0x5b,                                     // 0xa1: pop       rbx
+		0x58,                                     // 0xa2: pop       rax
+		0x5d,                                     // 0xa3: pop       rbp
+		0xc3,                                     // 0xa4: ret
+
+		// throw: the exception is in rax and the callee-saved registers are
+		// already the caller's, so all that is left is to cut the stack back
+		// to the call and enter the throw trampoline in the caller's place.
+		0x48, 0x89, 0xc1,                         // 0xa5: mov       rcx, rax
+		0x4c, 0x8b, 0x5d, 0x00,                   // 0xa8: mov       r11, [rbp]
+		0x48, 0x8d, 0x65, 0x10,                   // 0xac: lea       rsp, [rbp + 0x10]
+		0x4c, 0x89, 0xdd,                         // 0xb0: mov       rbp, r11
+		0x48, 0xb8,                               // 0xb3: movabs    rax, <slot>
+
+		// 0xb5: where the rethrow trampoline's address is kept.
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+		0x48, 0x8b, 0x00,                         // 0xbd: mov       rax, [rax]
+		0xff, 0xe0,                               // 0xc0: jmp       rax
+	};
+
+	const unsigned enter_fn_offset = 0x3c;
+	const unsigned reentry_ctx_offset = 0x48;
+	const unsigned reentry_fn_offset = 0x56;
+	const unsigned leave_fn_offset = 0x6b;
+	const unsigned rethrow_slot_offset = 0xb5;
+#else
 	const uint8_t resolver_code[] = {
 		// resolver_entry:
 		0x55,                                     // 0x00: pushq     %rbp
@@ -201,14 +338,15 @@ LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
 		0xff, 0xe0,                               // 0xbc: jmpq      *%rax
 	};
 
-	static_assert (sizeof (resolver_code) == ResolverCodeSize,
-	               "the resolver does not fit what the pool allocated for it");
-
 	const unsigned enter_fn_offset = 0x3a;
 	const unsigned reentry_ctx_offset = 0x46;
 	const unsigned reentry_fn_offset = 0x54;
 	const unsigned leave_fn_offset = 0x67;
 	const unsigned rethrow_slot_offset = 0xb1;
+#endif
+
+	static_assert (sizeof (resolver_code) == ResolverCodeSize,
+	               "the resolver does not fit what the pool allocated for it");
 
 	void (*enter_fn) (void *, uint64_t, uint64_t) = &lazy_frame_enter;
 	void *(*leave_fn) (void *) = &lazy_frame_leave;

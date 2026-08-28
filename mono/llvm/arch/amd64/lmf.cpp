@@ -142,11 +142,22 @@ interp_frame_enter (void *frame, const InterpArgContext *args)
 	entry->ctx.gregs[AMD64_RIP] = *(uint64_t *) (caller_sp - sizeof (uint64_t));
 	entry->ctx.gregs[AMD64_RSP] = caller_sp;
 	entry->ctx.gregs[AMD64_RBP] = args->caller_fp;
+#ifdef HOST_WIN32
+	/* rdi and rsi are callee-saved here as well, so the thunk spills seven. */
+	entry->ctx.gregs[AMD64_RBX] = args->saved[0];
+	entry->ctx.gregs[AMD64_RDI] = args->saved[1];
+	entry->ctx.gregs[AMD64_RSI] = args->saved[2];
+	entry->ctx.gregs[AMD64_R12] = args->saved[3];
+	entry->ctx.gregs[AMD64_R13] = args->saved[4];
+	entry->ctx.gregs[AMD64_R14] = args->saved[5];
+	entry->ctx.gregs[AMD64_R15] = args->saved[6];
+#else
 	entry->ctx.gregs[AMD64_RBX] = args->saved[0];
 	entry->ctx.gregs[AMD64_R12] = args->saved[1];
 	entry->ctx.gregs[AMD64_R13] = args->saved[2];
 	entry->ctx.gregs[AMD64_R14] = args->saved[3];
 	entry->ctx.gregs[AMD64_R15] = args->saved[4];
+#endif
 
 	entry->lmf.ctx = &entry->ctx;
 	entry->lmf.lmf_addr = entry->addr;
@@ -179,9 +190,17 @@ rethrow_trampoline_slot ()
 void
 emit_callee_saved_clobber (llvm::IRBuilderBase &b)
 {
+#ifdef HOST_WIN32
+	/* rdi and rsi are callee-saved here too, so a frame that has to describe
+	 * all of them has to save those as well. */
+	const char *clobbers = "~{rbx},~{rdi},~{rsi},~{r12},~{r13},~{r14},~{r15}";
+#else
+	const char *clobbers = "~{rbx},~{r12},~{r13},~{r14},~{r15}";
+#endif
+
 	b.CreateCall (llvm::InlineAsm::get (
-		llvm::FunctionType::get (b.getVoidTy (), false), "",
-		"~{rbx},~{r12},~{r13},~{r14},~{r15}", /*hasSideEffects=*/true));
+		llvm::FunctionType::get (b.getVoidTy (), false), "", clobbers,
+		/*hasSideEffects=*/true));
 }
 
 /*
@@ -198,7 +217,7 @@ emit_callee_saved_clobber (llvm::IRBuilderBase &b)
 static std::optional<int32_t>
 lmf_address_tls_displacement ()
 {
-#ifdef MONO_KEYWORD_THREAD
+#if defined (MONO_KEYWORD_THREAD) && !defined (HOST_WIN32)
 	gint32 offset = mono_tls_offsets[TLS_KEY_LMF_ADDR];
 	uint8_t *thread_pointer;
 
@@ -208,6 +227,13 @@ lmf_address_tls_displacement ()
 		return std::nullopt;
 	return offset;
 #else
+	/*
+	 * Windows reaches a __declspec(thread) variable through the TEB's
+	 * ThreadLocalStoragePointer, which is an array a module indexes into --
+	 * two loads and a per-module index, not a displacement from the thread
+	 * pointer.  So there is no constant a load can be folded to, and the
+	 * caller emits the call instead.
+	 */
 	return std::nullopt;
 #endif
 }

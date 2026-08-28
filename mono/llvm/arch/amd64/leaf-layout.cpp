@@ -52,9 +52,18 @@ flatten (Type *t, uint64_t offset, const DataLayout &dl, SmallVectorImpl<Leaf> &
 		if (!t->isHalfTy () && !t->isFloatTy () && !t->isDoubleTy ())
 			return unrepresentable ("an extended-precision float");
 	} else if (t->isVectorTy ()) {
+#ifdef HOST_WIN32
+		/*
+		 * The Microsoft convention passes a vector by reference rather than in
+		 * a register, and neither direction models an argument that arrives as
+		 * a pointer to a copy the caller made.
+		 */
+		return unrepresentable ("a vector argument");
+#else
 		// Anything wider rides a YMM or a ZMM, which neither thunk saves.
 		if (dl.getTypeSizeInBits (t).getFixedValue () > 128)
 			return unrepresentable ("a vector wider than an SSE register");
+#endif
 	} else if (!t->isPointerTy ()) {
 		return unrepresentable ("a value of an unclassifiable type");
 	}
@@ -77,21 +86,34 @@ LeafAssigner::place (const Leaf &leaf, const DataLayout &dl)
 	piece.offset = (uint32_t) leaf.offset;
 	piece.width = (uint8_t) dl.getTypeStoreSize (leaf.type).getFixedValue ();
 
+#ifdef HOST_WIN32
+	if (slots_ < param_gregs) {
+		bool sse = rides_sse (leaf.type);
+
+		piece.file = sse ? ArgPiece::File::Freg : ArgPiece::File::Greg;
+		piece.at = slots_++;
+		fregs_ += sse;
+		return piece;
+	}
+#else
 	if (rides_sse (leaf.type) && fregs_ < param_fregs) {
 		piece.file = ArgPiece::File::Freg;
 		piece.at = fregs_++;
-	} else if (!rides_sse (leaf.type) && gregs_ < param_gregs) {
+		return piece;
+	}
+	if (!rides_sse (leaf.type) && gregs_ < param_gregs) {
 		piece.file = ArgPiece::File::Greg;
 		piece.at = gregs_++;
-	} else {
-		uint64_t slot = leaf.type->isVectorTy () ? 16 : 8;
-
-		stack_ = alignTo (stack_, slot);
-		piece.file = ArgPiece::File::Stack;
-		piece.at = (uint32_t) stack_;
-		stack_ += slot;
+		return piece;
 	}
+#endif
 
+	uint64_t slot = leaf.type->isVectorTy () ? 16 : 8;
+
+	stack_ = alignTo (stack_, slot);
+	piece.file = ArgPiece::File::Stack;
+	piece.at = (uint32_t) stack_;
+	stack_ += slot;
 	return piece;
 }
 

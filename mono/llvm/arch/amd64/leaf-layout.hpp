@@ -39,6 +39,13 @@ bool rides_sse (llvm::Type *t);
 
 /// Hands out the places the convention gives each leaf, in the order it visits
 /// parameters.
+///
+/// The Microsoft convention numbers the arguments rather than the registers:
+/// leaf n rides register n of whichever file its type wants, and the register
+/// of the other file with that number is spent too. So one counter runs the
+/// pair, where System V runs a counter for each. The first stack argument
+/// there also starts past the shadow space a caller reserves for the four
+/// register arguments -- CCInfo.AllocateStack (32) in X86ISelLowering.
 class LeafAssigner {
 public:
 	ArgPiece place (const Leaf &leaf, const llvm::DataLayout &dl);
@@ -46,15 +53,20 @@ public:
 	/// Whether any leaf placed so far rode an SSE register.
 	bool used_fregs () const { return fregs_ > 0; }
 
-	/// Stack bytes reserved so far. Always a multiple of 8: place () aligns
-	/// every stack slot to a whole register width or wider.
+	/// Stack bytes the call passes its arguments in, the Microsoft shadow
+	/// space included. Always a multiple of 8: place () aligns every stack slot
+	/// to a whole register width or wider.
 	uint64_t stack_bytes () const { return stack_; }
 
 private:
-	static constexpr unsigned param_gregs = 6, param_fregs = 8;
-
+#ifdef HOST_WIN32
+	/// Argument slots spent, and how many of them rode an SSE register.
+	unsigned slots_ = 0, fregs_ = 0;
+	uint64_t stack_ = shadow_space;
+#else
 	unsigned gregs_ = 0, fregs_ = 0;
 	uint64_t stack_ = 0;
+#endif
 };
 
 /// Where each leaf of a return value of type \p ret comes back.
