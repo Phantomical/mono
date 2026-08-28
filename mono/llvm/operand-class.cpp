@@ -368,6 +368,36 @@ leaf_operand_class (const Value *v, const Function &f)
  * that names the load back, directly or through another merge.
  */
 
+/// How strong an answer the caller needs, which is what decides how each walk
+/// below treats a path it cannot see the end of.
+enum class ClassRule {
+	/// The answer has to hold on every path, and a null is one of the values a
+	/// path can carry. `operand_class ()`.
+	settled,
+
+	/// The caller dereferences the answer, so a null path faults in front of
+	/// the use and the answer never has to cover it. `exact_class ()`.
+	dereferenced,
+
+	/// The caller compares against the answer before it acts on it, so a path
+	/// this walk was wrong about costs it nothing. `guessed_class ()`.
+	guessed,
+};
+
+/// Whether \p rule lets a null skip rather than settle the answer at no class.
+bool
+skips_null (ClassRule rule)
+{
+	return rule != ClassRule::settled;
+}
+
+/// The stores a walk over one object's uses found, and whether the object
+/// stays inside that walk. `field_stores_reaching ()` below fills both in.
+struct ReachingStores {
+	SmallVector<StoreInst *, 4> stores;
+	bool complete;
+};
+
 /// Bounds how many merge nodes one walk visits, so a large phi web costs a
 /// compile only a small, fixed amount of work.
 constexpr unsigned merge_walk_budget = 24;
@@ -443,10 +473,19 @@ cannot_write_through (const CallBase &site, unsigned arg_no)
 /// already queued contributes nothing rather than refusing the whole
 /// answer: every use it has was already queued the first time it was
 /// reached, the same rule the class walk's own cycle rule rests on.
-std::optional<SmallVector<StoreInst *, 4>>
+///
+/// A refused use clears `complete` and the walk carries on over the rest.
+/// The stores it still collects are then a subset of what the field can
+/// hold, which is what a guessed answer wants and what a settled one has to
+/// throw away. Carrying on is also what makes that subset worth having: a
+/// walk that stopped at the first refusal would leave `aliases` half filled,
+/// so which stores it had found would depend on the order the uses came in.
+/// A spent budget stops the walk all the same, because it bounds the work
+/// rather than describing the object.
+ReachingStores
 field_stores_reaching (Value *base, SmallPtrSetImpl<Value *> &aliases)
 {
-	SmallVector<StoreInst *, 4> stores;
+	ReachingStores found { {}, true };
 	SmallVector<Value *, 8> work { base };
 	SmallPtrSet<Value *, 16> seen { base };
 	unsigned budget = field_use_walk_budget;
@@ -463,8 +502,10 @@ field_stores_reaching (Value *base, SmallPtrSetImpl<Value *> &aliases)
 				if (!seen.insert (user).second)
 					continue;
 
-				if (budget == 0)
-					return std::nullopt;
+				if (budget == 0) {
+					found.complete = false;
+					return found;
+				}
 				--budget;
 
 				aliases.insert (user);
@@ -472,20 +513,34 @@ field_stores_reaching (Value *base, SmallPtrSetImpl<Value *> &aliases)
 				continue;
 			}
 
-			if (budget == 0 || !seen.insert (user).second)
-				return std::nullopt;
+			// A user that names v twice is seen twice. Only the first of the
+			// two uses is read below, so the second one is a use this walk
+			// did not clear rather than one it can skip: a call can take the
+			// same pointer as an argument it keeps and an argument it does
+			// not.
+			if (!seen.insert (user).second) {
+				found.complete = false;
+				continue;
+			}
+
+			if (budget == 0) {
+				found.complete = false;
+				return found;
+			}
 			--budget;
 
 			if (const auto *gep = dyn_cast<GEPOperator> (user)) {
-				if (!gep->hasAllConstantIndices ())
-					return std::nullopt;
+				if (!gep->hasAllConstantIndices ()) {
+					found.complete = false;
+					continue;
+				}
 				work.push_back (user);
 				continue;
 			}
 
 			if (const auto *load = dyn_cast<LoadInst> (user)) {
 				if (load->getPointerOperand () != v)
-					return std::nullopt;
+					found.complete = false;
 				continue;
 			}
 
@@ -498,33 +553,46 @@ field_stores_reaching (Value *base, SmallPtrSetImpl<Value *> &aliases)
 				// through v. Only the former is safe to skip past. The write
 				// barrier passes the field address as a plain argument.
 				// Nothing calls through a field's own address.
-				if (!call->isArgOperand (&use))
-					return std::nullopt;
+				if (!call->isArgOperand (&use)) {
+					found.complete = false;
+					continue;
+				}
 
 				unsigned arg_no = call->getArgOperandNo (&use);
 
 				if (!call->doesNotCapture (arg_no)
 				    || !cannot_write_through (*call, arg_no))
-					return std::nullopt;
+					found.complete = false;
 
 				continue;
 			}
 
 			auto *store = dyn_cast<StoreInst> (user);
 
-			if (store == nullptr || store->getPointerOperand () != v)
-				return std::nullopt;
+			if (store == nullptr) {
+				found.complete = false;
+				continue;
+			}
 
-			stores.push_back (store);
+			// A store of the object itself into memory hands it to code this
+			// walk cannot see. The LINQ iterators reach each other this way,
+			// each cached in the next one's field.
+			if (store->getPointerOperand () != v) {
+				found.complete = false;
+				continue;
+			}
+
+			found.stores.push_back (store);
 		}
 	}
 
-	return stores;
+	return found;
 }
 
 SmallVector<const Value *, 4>
-matching_field_stores (const LoadInst &load, SmallPtrSetImpl<const Value *> &visiting,
-                       unsigned &budget);
+matching_field_stores (const LoadInst &load, ClassRule rule,
+                       SmallPtrSetImpl<const Value *> &visiting, unsigned &budget,
+                       bool *complete = nullptr);
 
 /// Resolves \p v to the allocation call sites a field load's base can name,
 /// appending each to \p out once. Answers false where \p v cannot be
@@ -565,7 +633,7 @@ matching_field_stores (const LoadInst &load, SmallPtrSetImpl<const Value *> &vis
 /// allocation reachable only by going around the cycle is already reachable
 /// by the path that first walked into it.
 bool
-resolve_base_candidates (Value *v, SmallVectorImpl<CallBase *> &out,
+resolve_base_candidates (Value *v, ClassRule rule, SmallVectorImpl<CallBase *> &out,
                          SmallPtrSetImpl<const Value *> &visiting, unsigned &budget)
 {
 	v = const_cast<Value *> (strip_casts (v));
@@ -605,22 +673,25 @@ resolve_base_candidates (Value *v, SmallVectorImpl<CallBase *> &out,
 
 	if (phi != nullptr) {
 		for (Value *incoming : phi->incoming_values ()) {
-			if (!resolve_base_candidates (incoming, out, visiting, budget)) {
+			if (!resolve_base_candidates (incoming, rule, out, visiting, budget)) {
 				ok = false;
 				break;
 			}
 		}
 	} else if (select != nullptr) {
-		ok = resolve_base_candidates (select->getTrueValue (), out, visiting, budget)
-		     && resolve_base_candidates (select->getFalseValue (), out, visiting, budget);
+		ok = resolve_base_candidates (select->getTrueValue (), rule, out, visiting, budget)
+		     && resolve_base_candidates (select->getFalseValue (), rule, out, visiting,
+		                                 budget);
 	} else {
-		SmallVector<const Value *, 4> stores = matching_field_stores (*load, visiting, budget);
+		SmallVector<const Value *, 4> stores =
+			matching_field_stores (*load, rule, visiting, budget);
 
 		if (stores.empty ())
 			ok = false;
 
 		for (const Value *stored : stores) {
-			if (!resolve_base_candidates (const_cast<Value *> (stored), out, visiting, budget)) {
+			if (!resolve_base_candidates (const_cast<Value *> (stored), rule, out,
+			                              visiting, budget)) {
 				ok = false;
 				break;
 			}
@@ -638,10 +709,12 @@ resolve_base_candidates (Value *v, SmallVectorImpl<CallBase *> &out,
 /// in which case the caller falls back to the ordinary leaf answer for a
 /// load with no mark of its own.
 ///
-/// Every resolved candidate has to clear `field_stores_reaching ()` below:
-/// one candidate this compile cannot rule out as written from outside makes
-/// the whole answer empty, because the stores gathered from the rest would
-/// no longer be every store the field can see.
+/// Under `ClassRule::settled` and `ClassRule::dereferenced` every resolved
+/// candidate has to clear `field_stores_reaching ()` below: one candidate
+/// this compile cannot rule out as written from outside makes the whole
+/// answer empty, because the stores gathered from the rest would no longer
+/// be every store the field can see. `ClassRule::guessed` takes those stores
+/// all the same and reports through \p complete that they are a subset.
 ///
 /// `mono.alloc.object` zero-fills what it allocates, so the field reads null
 /// until a store runs. A load a store does not dominate, or a load reached on
@@ -654,8 +727,9 @@ resolve_base_candidates (Value *v, SmallVectorImpl<CallBase *> &out,
 /// `operand_class ()` does not skip it, which is right here too: a type test
 /// on this field must see null as an answer the allocation can still give.
 SmallVector<const Value *, 4>
-matching_field_stores (const LoadInst &load, SmallPtrSetImpl<const Value *> &visiting,
-                       unsigned &budget)
+matching_field_stores (const LoadInst &load, ClassRule rule,
+                       SmallPtrSetImpl<const Value *> &visiting, unsigned &budget,
+                       bool *complete)
 {
 	const DataLayout &dl = load.getModule ()->getDataLayout ();
 	Value *address = const_cast<Value *> (load.getPointerOperand ());
@@ -665,20 +739,27 @@ matching_field_stores (const LoadInst &load, SmallPtrSetImpl<const Value *> &vis
 
 	SmallVector<CallBase *, 4> candidates;
 
-	if (!resolve_base_candidates (base, candidates, visiting, budget) || candidates.empty ())
+	if (!resolve_base_candidates (base, rule, candidates, visiting, budget)
+	    || candidates.empty ()) {
+		if (complete != nullptr)
+			*complete = false;
 		return {};
+	}
 
 	SmallVector<const Value *, 4> matching;
 
 	for (CallBase *candidate : candidates) {
 		SmallPtrSet<Value *, 8> aliases;
-		std::optional<SmallVector<StoreInst *, 4>> stores =
-			field_stores_reaching (candidate, aliases);
+		ReachingStores found = field_stores_reaching (candidate, aliases);
 
-		if (!stores)
-			return {};
+		if (!found.complete) {
+			if (complete != nullptr)
+				*complete = false;
+			if (rule != ClassRule::guessed)
+				return {};
+		}
 
-		for (StoreInst *store : *stores) {
+		for (StoreInst *store : found.stores) {
 			APInt at (64, 0);
 			Value *store_base = store->getPointerOperand ()->stripAndAccumulateConstantOffsets (
 				dl, at, /*AllowNonInbounds=*/true);
@@ -695,15 +776,21 @@ matching_field_stores (const LoadInst &load, SmallPtrSetImpl<const Value *> &vis
 }
 
 std::optional<std::pair<MonoClass *, bool>>
-walk_operand_class (const Value *v, const Function &f, bool ignore_null,
+walk_operand_class (const Value *v, const Function &f, ClassRule rule,
                      SmallPtrSetImpl<const Value *> &visiting, unsigned &budget);
 
 /// The class every value in \p arms agrees on. This answers no class,
 /// concretely, when a contributing value answers no class itself, or when two
 /// contributing values disagree. It answers "found nothing" when the walk
 /// skipped every value in \p arms.
+///
+/// `ClassRule::guessed` reads an arm that answers no class as one more path
+/// its caller's compare will cover, so such an arm is skipped rather than
+/// settling the merge. Two arms that name two different classes still settle
+/// it: one compare picks one class, and picking either would leave the other
+/// arm's whole count on the dispatch.
 std::optional<std::pair<MonoClass *, bool>>
-merged_class (ArrayRef<const Value *> arms, const Function &f, bool ignore_null,
+merged_class (ArrayRef<const Value *> arms, const Function &f, ClassRule rule,
               SmallPtrSetImpl<const Value *> &visiting, unsigned &budget)
 {
 	MonoClass *klass = nullptr;
@@ -712,12 +799,19 @@ merged_class (ArrayRef<const Value *> arms, const Function &f, bool ignore_null,
 
 	for (const Value *arm : arms) {
 		std::optional<std::pair<MonoClass *, bool>> got =
-			walk_operand_class (arm, f, ignore_null, visiting, budget);
+			walk_operand_class (arm, f, rule, visiting, budget);
 
 		if (!got)
 			continue;
 
-		if (got->first == nullptr || (any && got->first != klass))
+		if (got->first == nullptr) {
+			if (rule == ClassRule::guessed)
+				continue;
+
+			return std::make_pair (static_cast<MonoClass *> (nullptr), false);
+		}
+
+		if (any && got->first != klass)
 			return std::make_pair (static_cast<MonoClass *> (nullptr), false);
 
 		klass = got->first;
@@ -735,12 +829,12 @@ merged_class (ArrayRef<const Value *> arms, const Function &f, bool ignore_null,
 /// select, otherwise the merge of the values it names. The same outer walk
 /// shares \p visiting and \p budget across every call it makes.
 std::optional<std::pair<MonoClass *, bool>>
-walk_operand_class (const Value *v, const Function &f, bool ignore_null,
+walk_operand_class (const Value *v, const Function &f, ClassRule rule,
                      SmallPtrSetImpl<const Value *> &visiting, unsigned &budget)
 {
 	v = strip_casts (v);
 
-	if (visiting.count (v) || (ignore_null && isa<ConstantPointerNull> (v)))
+	if (visiting.count (v) || (skips_null (rule) && isa<ConstantPointerNull> (v)))
 		return std::nullopt;
 
 	const auto *phi = dyn_cast<PHINode> (v);
@@ -757,12 +851,21 @@ walk_operand_class (const Value *v, const Function &f, bool ignore_null,
 		// and stops at a value already on this walk's call stack, this one
 		// included.
 		visiting.insert (v);
-		stores = matching_field_stores (*load, visiting, budget);
+		stores = matching_field_stores (*load, rule, visiting, budget);
 		visiting.erase (v);
 	}
 
-	if (phi == nullptr && select == nullptr && stores.empty ())
-		return leaf_operand_class (v, f);
+	if (phi == nullptr && select == nullptr && stores.empty ()) {
+		std::pair<MonoClass *, bool> leaf = leaf_operand_class (v, f);
+
+		// A guess names a class this function saw an object made under. A
+		// parameter's declared class is a bound instead, so a compare against
+		// it misses every subclass the slot admits.
+		if (rule == ClassRule::guessed && !leaf.second)
+			return std::nullopt;
+
+		return leaf;
+	}
 
 	// A merge node this walk cannot afford to enter answers no class, not a
 	// skip. Unlike the back edge of a cycle, nothing bounds what the
@@ -778,12 +881,12 @@ walk_operand_class (const Value *v, const Function &f, bool ignore_null,
 	if (phi != nullptr) {
 		SmallVector<const Value *, 4> incoming (
 			phi->incoming_values ().begin (), phi->incoming_values ().end ());
-		result = merged_class (incoming, f, ignore_null, visiting, budget);
+		result = merged_class (incoming, f, rule, visiting, budget);
 	} else if (select != nullptr) {
 		const Value *arms[] = { select->getTrueValue (), select->getFalseValue () };
-		result = merged_class (arms, f, ignore_null, visiting, budget);
+		result = merged_class (arms, f, rule, visiting, budget);
 	} else {
-		result = merged_class (stores, f, ignore_null, visiting, budget);
+		result = merged_class (stores, f, rule, visiting, budget);
 	}
 
 	visiting.erase (v);
@@ -825,7 +928,7 @@ operand_class (const Value *v, const Function &f)
 	SmallPtrSet<const Value *, 8> visiting;
 	unsigned budget = merge_walk_budget;
 	std::optional<std::pair<MonoClass *, bool>> found =
-		walk_operand_class (v, f, /*ignore_null=*/false, visiting, budget);
+		walk_operand_class (v, f, ClassRule::settled, visiting, budget);
 
 	return found.value_or (std::make_pair (nullptr, false));
 }
@@ -836,7 +939,7 @@ exact_class (const Value *v, const Function &f)
 	SmallPtrSet<const Value *, 8> visiting;
 	unsigned budget = merge_walk_budget;
 	std::optional<std::pair<MonoClass *, bool>> found =
-		walk_operand_class (v, f, /*ignore_null=*/true, visiting, budget);
+		walk_operand_class (v, f, ClassRule::dereferenced, visiting, budget);
 	auto [klass, exact] = found.value_or (std::make_pair (nullptr, false));
 
 	if (klass == nullptr || exact)
@@ -862,19 +965,32 @@ exact_class (const Value *v, const Function &f)
 	return klass;
 }
 
-SmallVector<const Value *, 4>
+MonoClass *
+guessed_class (const Value *v, const Function &f)
+{
+	SmallPtrSet<const Value *, 8> visiting;
+	unsigned budget = merge_walk_budget;
+	std::optional<std::pair<MonoClass *, bool>> found =
+		walk_operand_class (v, f, ClassRule::guessed, visiting, budget);
+
+	// Every leaf this rule reads answers exactly, so a merge of them does too.
+	return found.value_or (std::make_pair (nullptr, false)).first;
+}
+
+FieldValues
 field_load_values (const LoadInst &load)
 {
 	SmallPtrSet<const Value *, 8> visiting { &load };
 	unsigned budget = merge_walk_budget;
-	SmallVector<const Value *, 4> stores = matching_field_stores (load, visiting, budget);
-	SmallVector<const Value *, 4> without_zero;
+	FieldValues answer { {}, true };
+	SmallVector<const Value *, 4> stores = matching_field_stores (
+		load, ClassRule::guessed, visiting, budget, &answer.complete);
 
 	for (const Value *v : stores)
 		if (!isa<ConstantPointerNull> (v))
-			without_zero.push_back (v);
+			answer.values.push_back (v);
 
-	return without_zero;
+	return answer;
 }
 
 void

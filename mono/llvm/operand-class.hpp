@@ -123,18 +123,45 @@ std::pair<MonoClass *, bool> operand_class (const llvm::Value *v, const llvm::Fu
 /// `operand_class ()` instead.
 MonoClass *exact_class (const llvm::Value *v, const llvm::Function &f);
 
-/// Every value a store can leave in the field \p load reads, minus the
-/// allocation's own initial zero. Empty where this cannot prove that set is
-/// complete.
+/// What a field load can read, and how much of that a caller may trust.
+struct FieldValues {
+	/// Every value a store this walk found can leave in the field, minus the
+	/// allocation's own initial zero.
+	llvm::SmallVector<const llvm::Value *, 4> values;
+
+	/// Whether `values` is every value the field can hold. False where the
+	/// object reaches somewhere this walk cannot follow, so code it cannot see
+	/// writes the field too. A caller may still take a value from an
+	/// incomplete set as a candidate, and must then compare against what it
+	/// reads rather than trust the answer.
+	bool complete;
+};
+
+/// What the field \p load reads can hold.
 ///
 /// This runs the same walk `operand_class ()` runs over a field load - \p
 /// load's base resolved to every allocation it can name, each allocation's
-/// field required to escape nowhere but a load or a store through it - with
-/// a budget of its own rather than one shared across a wider merge. An
-/// allocation this cannot resolve the base to, or a field that reaches
-/// anywhere this walk cannot follow, empties the whole answer: a set this
-/// cannot prove complete is not one a caller can rule a value out of.
-llvm::SmallVector<const llvm::Value *, 4> field_load_values (const llvm::LoadInst &load);
+/// field checked for whether it escapes anywhere but a load or a store
+/// through it - with a budget of its own rather than one shared across a
+/// wider merge. An allocation this cannot resolve the base to empties the
+/// answer, because there is then no field to read the stores of.
+FieldValues field_load_values (const llvm::LoadInst &load);
+
+/// A class \p v plausibly has, for a caller that compares against it before it
+/// acts on the answer. Null where this walk names none.
+///
+/// The two answers above hold on every path. This one does not: the caller
+/// writes a compare that sends the path this walk was wrong about to the code
+/// that stood there before. So this reads the same channels with the proofs
+/// that cover an unseen path dropped. A field whose object escapes still
+/// answers from the stores this walk can see, and a merge still answers where
+/// only some of its arms name a class.
+///
+/// What it does not answer from is a parameter's declared class. That is a
+/// bound, and a compare against a bound misses every subclass, so a guard
+/// written on one pays for itself nowhere. Every class this answers is one an
+/// allocation or an initonly static states.
+MonoClass *guessed_class (const llvm::Value *v, const llvm::Function &f);
 
 /// Says that \p site produces a delegate whose target method is \p target.
 ///

@@ -1082,10 +1082,11 @@ TEST (OperandClassTest, FieldLoadValuesAnswersTheOneStore)
 	m.store_field (m.entry, value);
 	LoadInst *load = m.load_and_return (m.entry);
 
-	SmallVector<const Value *, 4> got = field_load_values (*load);
+	FieldValues got = field_load_values (*load);
 
-	ASSERT_EQ (got.size (), 1u);
-	EXPECT_EQ (got[0], value);
+	ASSERT_EQ (got.values.size (), 1u);
+	EXPECT_EQ (got.values[0], value);
+	EXPECT_TRUE (got.complete);
 }
 
 /// Two stores of two different values both answer, the same way
@@ -1103,11 +1104,11 @@ TEST (OperandClassTest, FieldLoadValuesAnswersEveryDistinctStore)
 	m.store_field (m.entry, second);
 	LoadInst *load = m.load_and_return (m.entry);
 
-	SmallVector<const Value *, 4> got = field_load_values (*load);
+	FieldValues got = field_load_values (*load);
 
-	ASSERT_EQ (got.size (), 2u);
-	EXPECT_TRUE (is_contained (got, first));
-	EXPECT_TRUE (is_contained (got, second));
+	ASSERT_EQ (got.values.size (), 2u);
+	EXPECT_TRUE (is_contained (got.values, first));
+	EXPECT_TRUE (is_contained (got.values, second));
 }
 
 /// The field's own zero-filled initial value is left out of the answer: a
@@ -1123,9 +1124,9 @@ TEST (OperandClassTest, FieldLoadValuesLeavesOutTheZeroFilledInitialValue)
 	m.store_field (m.entry, value);
 	LoadInst *load = m.load_and_return (m.entry);
 
-	SmallVector<const Value *, 4> got = field_load_values (*load);
+	FieldValues got = field_load_values (*load);
 
-	for (const Value *v : got)
+	for (const Value *v : got.values)
 		EXPECT_FALSE (isa<ConstantPointerNull> (v));
 }
 
@@ -1138,13 +1139,14 @@ TEST (OperandClassTest, FieldLoadValuesIsEmptyWhereNoStoreReachesTheField)
 	FieldModule m (mono_defaults.object_class);
 	LoadInst *load = m.load_and_return (m.entry);
 
-	EXPECT_TRUE (field_load_values (*load).empty ());
+	EXPECT_TRUE (field_load_values (*load).values.empty ());
 }
 
-/// The escape guard `field_stores_reaching ()` enforces answers empty here
-/// too: a set this cannot prove complete is not one a caller can read a value
-/// out of, whether the caller wants a class or the values themselves.
-TEST (OperandClassTest, FieldLoadValuesIsEmptyWhereTheAllocationEscapesToACall)
+/// `field_load_values ()` runs the walk under `ClassRule::guessed`, so an
+/// allocation that escapes to a call still answers with the store this walk
+/// found before the escape, marked incomplete rather than dropped. A caller
+/// reading `complete` false knows the field can hold more than this set.
+TEST (OperandClassTest, FieldLoadValuesAnswersIncompleteWhereTheAllocationEscapesToACall)
 {
 	mono::test::init_runtime ();
 
@@ -1160,7 +1162,11 @@ TEST (OperandClassTest, FieldLoadValuesIsEmptyWhereTheAllocationEscapesToACall)
 
 	LoadInst *load = m.load_and_return (m.entry);
 
-	EXPECT_TRUE (field_load_values (*load).empty ());
+	FieldValues got = field_load_values (*load);
+
+	ASSERT_EQ (got.values.size (), 1u);
+	EXPECT_EQ (got.values[0], value);
+	EXPECT_FALSE (got.complete);
 }
 
 } // namespace

@@ -345,6 +345,31 @@ guard_weights (LLVMContext &c, std::optional<uint64_t> count)
 		(uint32_t) std::min<uint64_t> (hot, UINT32_MAX), 0);
 }
 
+/**
+ * Whether the block around \p site is a shape guard_entry () below can split
+ * into two arms and merge back into one answer.
+ *
+ * guard_entry () writes one merge phi in the block execution returns to,
+ * with exactly one incoming value for the fast arm and one for the slow
+ * arm. An invoke returns to a block that already exists in the function,
+ * and that block can already have another predecessor. The merge phi would
+ * then need an incoming value for that edge too, and no value the rewrite
+ * writes reaches it.
+ *
+ * A plain call always fits. guard_entry () splits its own block to make the
+ * block it returns to, so that block gets no predecessor but the guard.
+ */
+bool
+guard_fits (CallBase *site)
+{
+	auto *unwinds = dyn_cast<InvokeInst> (site);
+
+	if (unwinds == nullptr)
+		return true;
+
+	return unwinds->getNormalDest ()->getUniquePredecessor () == site->getParent ();
+}
+
 /// Sends \p site through a compare of the delegate's entry against \p entry,
 /// with a direct call on the arm that matches.
 void
@@ -477,15 +502,22 @@ delegate_target_at (const Value *receiver)
 		 * Invoke this receiver feeds dereferences it, so a null delegate
 		 * faults at the site instead of reaching a wrong target.
 		 *
-		 * An empty answer, whether because no store reaches every candidate or
+		 * A field whose object escapes still names the delegates the stores
+		 * this walk can see put there. Such an answer is a candidate rather
+		 * than the target, so it goes on the pending list and marks the whole
+		 * receiver opaque, which is what leaves `settled` false and sends the
+		 * site to the guarded form.
+		 *
+		 * An empty answer, whether because no store reaches a candidate or
 		 * because the field held only that zero, falls through to opaque
 		 * below exactly as any other load did before this case existed.
 		 */
 		if (const auto *load = dyn_cast<LoadInst> (at)) {
-			SmallVector<const Value *, 4> from = field_load_values (*load);
+			FieldValues from = field_load_values (*load);
 
-			if (!from.empty ()) {
-				pending.append (from.begin (), from.end ());
+			if (!from.values.empty ()) {
+				pending.append (from.values.begin (), from.values.end ());
+				opaque |= !from.complete;
 				continue;
 			}
 		}
@@ -524,6 +556,11 @@ FoldDelegateInvokesPass::run (Function &f, FunctionAnalysisManager &fam)
 		DelegateTarget found = delegate_target_at (site->getArgOperand (0));
 
 		if (found.method == nullptr)
+			continue;
+
+		// enter_directly () below leaves the site's block alone, so only the
+		// guarded arm needs a shape guard_fits () can split and merge.
+		if (!found.settled && !guard_fits (site))
 			continue;
 
 		pending.push_back (
