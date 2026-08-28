@@ -469,6 +469,27 @@ delegate_target_at (const Value *receiver)
 			continue;
 		}
 
+		/*
+		 * A delegate copied into a field and read back is answered by
+		 * `field_load_values ()`, the same field-store walk `operand_class ()`
+		 * runs. The answer leaves out the field's own zero-filled initial
+		 * value, which is safe here for a reason no class caller has: the
+		 * Invoke this receiver feeds dereferences it, so a null delegate
+		 * faults at the site instead of reaching a wrong target.
+		 *
+		 * An empty answer, whether because no store reaches every candidate or
+		 * because the field held only that zero, falls through to opaque
+		 * below exactly as any other load did before this case existed.
+		 */
+		if (const auto *load = dyn_cast<LoadInst> (at)) {
+			SmallVector<const Value *, 4> from = field_load_values (*load);
+
+			if (!from.empty ()) {
+				pending.append (from.begin (), from.end ());
+				continue;
+			}
+		}
+
 		opaque = true;
 	}
 

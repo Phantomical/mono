@@ -18,6 +18,15 @@
 //
 // MONO_LLVM_JIT_FOLD_DELEGATES=0 is the other arm. The first two layers hold
 // there as well; the third is what the two arms disagree about.
+//
+// The field-copy cases below are answer-only: a delegate copied into a field
+// of a fresh object, then read back at the call, the shape a LINQ iterator's
+// own cached selector or predicate takes. Nothing here proves whether that
+// case folds - only that the answer is right whether it does or not, which
+// covers both a field with one settled writer and a field two different
+// writers can reach.
+
+
 
 using System;
 using System.Diagnostics;
@@ -104,6 +113,42 @@ class DelegateFold {
 		return Apply (b.Scale, x);
 	}
 
+	// A delegate copied into a field of a freshly allocated object, then
+	// invoked through that field: the shape a LINQ iterator's own cached
+	// selector or predicate takes.
+	class Holder {
+		public Func<int, int> f;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int UseFieldCopy (int x)
+	{
+		Holder h = new Holder ();
+		h.f = Settled;
+		return h.f (x);
+	}
+
+	// Two different delegates can reach the field, one on each arm. Neither
+	// arm alone settles what the field holds, so the answer has to come from
+	// whichever delegate this call actually stored, not from a fold that
+	// guessed one of the two.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int UseFieldCopyMixed (bool useTwice, int x)
+	{
+		Holder h = new Holder ();
+		h.f = useTwice ? Settled : new Func<int, int> (Triple);
+		return h.f (x);
+	}
+
+	// The field is never written before the call reads it, so the delegate
+	// the call invokes is null.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int UseFieldCopyUnset (int x)
+	{
+		Holder h = new Holder ();
+		return h.f (x);
+	}
+
 	static void One () { calls += 1; }
 	static void Ten () { calls += 10; }
 
@@ -142,6 +187,24 @@ class DelegateFold {
 		Check ("multicast", UseMulticast (), 11);
 		Check ("virtual-base", UseVirtual (new Base (), 7), 8);
 		Check ("virtual-derived", UseVirtual (new Derived (), 7), 107);
+		Check ("field-copy", UseFieldCopy (7), 14);
+		Check ("field-copy-mixed-twice", UseFieldCopyMixed (true, 7), 14);
+		Check ("field-copy-mixed-triple", UseFieldCopyMixed (false, 7), 21);
+		Expect ("field-copy-unset throws NullReferenceException",
+		        ThrowsNullReference (UseFieldCopyUnset), true);
+	}
+
+	/// Whether calling \p run (7) throws NullReferenceException and nothing
+	/// else.
+	static bool ThrowsNullReference (Func<int, int> run)
+	{
+		try {
+			run (7);
+		} catch (NullReferenceException) {
+			return true;
+		}
+
+		return false;
 	}
 
 	// The target the fold proof reads. It throws, so it leaves a frame in the

@@ -38,6 +38,7 @@
 #define MONO_LLVM_OPERAND_CLASS_HPP
 
 #include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
 
 #include <utility>
@@ -45,6 +46,7 @@
 namespace llvm {
 class Function;
 class Instruction;
+class LoadInst;
 class Value;
 } // namespace llvm
 
@@ -120,6 +122,19 @@ std::pair<MonoClass *, bool> operand_class (const llvm::Value *v, const llvm::Fu
 /// not dereference \p v has no such fault to rely on and must call
 /// `operand_class ()` instead.
 MonoClass *exact_class (const llvm::Value *v, const llvm::Function &f);
+
+/// Every value a store can leave in the field \p load reads, minus the
+/// allocation's own initial zero. Empty where this cannot prove that set is
+/// complete.
+///
+/// This runs the same walk `operand_class ()` runs over a field load - \p
+/// load's base resolved to every allocation it can name, each allocation's
+/// field required to escape nowhere but a load or a store through it - with
+/// a budget of its own rather than one shared across a wider merge. An
+/// allocation this cannot resolve the base to, or a field that reaches
+/// anywhere this walk cannot follow, empties the whole answer: a set this
+/// cannot prove complete is not one a caller can rule a value out of.
+llvm::SmallVector<const llvm::Value *, 4> field_load_values (const llvm::LoadInst &load);
 
 /// Says that \p site produces a delegate whose target method is \p target.
 ///

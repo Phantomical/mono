@@ -22,6 +22,7 @@
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/class.h>
 
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -1061,6 +1062,105 @@ TEST (OperandClassTest, LoadThroughACyclicPhiBaseTerminatesAndAnswers)
 	m.store_field (classX);
 
 	EXPECT_EQ (exact_class (m.load, *m.caller), classX);
+}
+
+/*
+ * Below is `field_load_values ()`, the same walk `operand_class ()` runs over
+ * a field load, exported for a caller that wants the values a store can leave
+ * rather than the class they agree on. `FieldModule` is reused from above:
+ * these tests answer with the store's own value, so `marked_value ()`'s class
+ * mark plays no part in them.
+ */
+
+TEST (OperandClassTest, FieldLoadValuesAnswersTheOneStore)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *value = m.marked_value (m.entry, nullptr);
+
+	m.store_field (m.entry, value);
+	LoadInst *load = m.load_and_return (m.entry);
+
+	SmallVector<const Value *, 4> got = field_load_values (*load);
+
+	ASSERT_EQ (got.size (), 1u);
+	EXPECT_EQ (got[0], value);
+}
+
+/// Two stores of two different values both answer, the same way
+/// `matching_field_stores ()` gathers every store to the field rather than
+/// the one a particular path executes.
+TEST (OperandClassTest, FieldLoadValuesAnswersEveryDistinctStore)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *first = m.marked_value (m.entry, nullptr);
+	Instruction *second = m.marked_value (m.entry, nullptr);
+
+	m.store_field (m.entry, first);
+	m.store_field (m.entry, second);
+	LoadInst *load = m.load_and_return (m.entry);
+
+	SmallVector<const Value *, 4> got = field_load_values (*load);
+
+	ASSERT_EQ (got.size (), 2u);
+	EXPECT_TRUE (is_contained (got, first));
+	EXPECT_TRUE (is_contained (got, second));
+}
+
+/// The field's own zero-filled initial value is left out of the answer: a
+/// field with one store still answers with that store alone, none of it a
+/// null standing for the path where the load ran first.
+TEST (OperandClassTest, FieldLoadValuesLeavesOutTheZeroFilledInitialValue)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *value = m.marked_value (m.entry, nullptr);
+
+	m.store_field (m.entry, value);
+	LoadInst *load = m.load_and_return (m.entry);
+
+	SmallVector<const Value *, 4> got = field_load_values (*load);
+
+	for (const Value *v : got)
+		EXPECT_FALSE (isa<ConstantPointerNull> (v));
+}
+
+/// A field no store ever reaches answers empty, the same way `operand_class
+/// ()` answers no class for it.
+TEST (OperandClassTest, FieldLoadValuesIsEmptyWhereNoStoreReachesTheField)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	LoadInst *load = m.load_and_return (m.entry);
+
+	EXPECT_TRUE (field_load_values (*load).empty ());
+}
+
+/// The escape guard `field_stores_reaching ()` enforces answers empty here
+/// too: a set this cannot prove complete is not one a caller can read a value
+/// out of, whether the caller wants a class or the values themselves.
+TEST (OperandClassTest, FieldLoadValuesIsEmptyWhereTheAllocationEscapesToACall)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *value = m.marked_value (m.entry, nullptr);
+
+	m.store_field (m.entry, value);
+
+	Function *sink = Function::Create (
+		FunctionType::get (Type::getVoidTy (*m.context), { m.base->getType () }, false),
+		GlobalValue::ExternalLinkage, "sink", m.module.get ());
+	IRBuilder<> (m.entry).CreateCall (sink, { m.base });
+
+	LoadInst *load = m.load_and_return (m.entry);
+
+	EXPECT_TRUE (field_load_values (*load).empty ());
 }
 
 } // namespace

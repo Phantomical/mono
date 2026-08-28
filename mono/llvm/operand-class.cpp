@@ -862,6 +862,21 @@ exact_class (const Value *v, const Function &f)
 	return klass;
 }
 
+SmallVector<const Value *, 4>
+field_load_values (const LoadInst &load)
+{
+	SmallPtrSet<const Value *, 8> visiting { &load };
+	unsigned budget = merge_walk_budget;
+	SmallVector<const Value *, 4> stores = matching_field_stores (load, visiting, budget);
+	SmallVector<const Value *, 4> without_zero;
+
+	for (const Value *v : stores)
+		if (!isa<ConstantPointerNull> (v))
+			without_zero.push_back (v);
+
+	return without_zero;
+}
+
 void
 mark_delegate_target (Instruction &site, MonoMethod *target)
 {

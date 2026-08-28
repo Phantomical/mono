@@ -40,10 +40,12 @@ struct DelegateTarget {
 
 /// What \p receiver says about the delegate it holds.
 ///
-/// Walks merges, so it reads a value the translator marked however many phis
-/// and selects stand between. The walk is bounded by a node budget and answers
-/// nothing at all once it runs out, rather than answering from the part it
-/// reached.
+/// Walks merges, so it reads a value the translator marked however many phis,
+/// selects and field copies stand between. A field copy is a load answered by
+/// `field_load_values ()` (`operand-class.hpp`): the delegate a caller stored
+/// into an object of its own, read back out. The walk is bounded by a node
+/// budget and answers nothing at all once it runs out, rather than answering
+/// from the part it reached.
 DelegateTarget delegate_target_at (const llvm::Value *receiver);
 
 /// Enters the delegate's target at each Invoke in \p f the IR names one for: a
