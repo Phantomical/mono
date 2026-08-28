@@ -243,6 +243,7 @@ set(MONO_TESTS_CS_SRC
   tier2-inline-override.cs
   cast-fold.cs
   array-devirt.cs
+  phi-devirt.cs
   invariant-static.cs
   vtable-fold.cs
   reflection-element-type.cs

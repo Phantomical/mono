@@ -73,6 +73,13 @@ void mark_parameter_classes (llvm::Function &f,
 ///
 /// \p f must be the function v belongs to, because a parameter's class is
 /// recorded there.
+///
+/// Where \p v is a `PHINode` or a `SelectInst`, this looks through the values
+/// it merges, including through a further merge one of them leads to. It
+/// stays safe when those merges form a cycle. The answer is the class every
+/// contributing value names. A null constant among them makes the answer no
+/// class. `exact_class ()` below answers the same merge with that null rule
+/// relaxed, for its one caller.
 std::pair<MonoClass *, bool> operand_class (const llvm::Value *v, const llvm::Function &f);
 
 /// The class \p v is, or null where the IR gives only a bound this cannot
@@ -84,9 +91,13 @@ std::pair<MonoClass *, bool> operand_class (const llvm::Value *v, const llvm::Fu
 /// marshal-by-ref class, because such a slot can hold a transparent proxy,
 /// whose vtable is not the class's.
 ///
-/// A bound holds for a null reference as well, which no class answers for. A
-/// caller that reads memory off the value therefore needs the null check that
-/// dominates it to rule that out.
+/// A bound holds for a null reference as well, which no class answers for.
+/// Unlike `operand_class ()`, a null among the values a merge combines does
+/// not make the answer no class here. This assumes the caller dereferences
+/// \p v right after. The path that carries null then faults before that
+/// dereference runs, so the answer never has to cover it. A caller that does
+/// not dereference \p v has no such fault to rely on and must call
+/// `operand_class ()` instead.
 MonoClass *exact_class (const llvm::Value *v, const llvm::Function &f);
 
 /// Says that \p site produces a delegate whose target method is \p target.

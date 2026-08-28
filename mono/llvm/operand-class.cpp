@@ -16,6 +16,8 @@
 #include "mono/metadata/object-internals.h"
 
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/ArrayRef.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Argument.h>
 #include <llvm/IR/Constants.h>
@@ -29,6 +31,7 @@
 #include <llvm/IR/Module.h>
 
 #include <cstdint>
+#include <optional>
 
 using namespace llvm;
 
@@ -229,39 +232,13 @@ initonly_static_read (const Value *v)
 	                        : nullptr;
 }
 
-} // namespace
-
-void
-mark_exact_class (Instruction &site, MonoClass *klass)
-{
-	LLVMContext &c = site.getContext ();
-
-	site.setMetadata (exact_class_md, MDNode::get (c, { as_metadata (c, klass) }));
-}
-
-void
-mark_parameter_classes (Function &f, ArrayRef<std::pair<unsigned, MonoClass *>> classes)
-{
-	if (classes.empty ())
-		return;
-
-	LLVMContext &c = f.getContext ();
-	SmallVector<Metadata *, 8> pairs;
-
-	for (const auto &entry : classes)
-		pairs.push_back (MDNode::get (
-			c, { ConstantAsMetadata::get (
-				     ConstantInt::get (Type::getInt32Ty (c), entry.first)),
-		             as_metadata (c, entry.second) }));
-
-	f.setMetadata (param_classes_md, MDNode::get (c, pairs));
-}
-
+/// The class \p v answers on its own, without looking through a `PHINode` or
+/// a `SelectInst`. This is the class marked on \p v, the class an initonly
+/// static read off it settles, or the class its parameter type bounds it
+/// with.
 std::pair<MonoClass *, bool>
-operand_class (const Value *v, const Function &f)
+leaf_operand_class (const Value *v, const Function &f)
 {
-	v = strip_casts (v);
-
 	if (const auto *site = dyn_cast<Instruction> (v)) {
 		if (MonoClass *marked = class_in (site->getMetadata (exact_class_md), 0))
 			return { marked, true };
@@ -301,10 +278,163 @@ operand_class (const Value *v, const Function &f)
 	return { nullptr, false };
 }
 
+/*
+ * Below is the walk that looks through a merge. operand_class () and
+ * exact_class () are both one call into it, with the null rule set the way
+ * each of them needs it.
+ *
+ * A phi that carries a value around a loop can name itself, directly or
+ * through another phi. `visiting` names the values already on the call stack
+ * for this walk. A value found there contributes nothing, and the walk does
+ * not visit it again. This is sound by induction: if every incoming outside
+ * the cycle names one class, the cycle itself never disagrees with that
+ * class.
+ *
+ * This makes "found nothing" different from "found two classes that
+ * disagree." Two disagreeing incomings settle the merge at no class. That
+ * answer, unlike "found nothing", carries out to whatever merge called this
+ * one, and settles it at no class too.
+ *
+ * "Found nothing" means the walk skipped every incoming, either by the cycle
+ * rule above or by the null rule below. The merge that called this one can
+ * still settle on a class from its own other incomings. `std::nullopt`
+ * stands for "found nothing". Every other answer, no-class included, is
+ * concrete. The two functions below this walk are the only place a
+ * `std::nullopt` becomes a concrete answer. Their callers cannot read any
+ * other kind of answer.
+ */
+
+/// Bounds how many merge nodes one walk visits, so a large phi web costs a
+/// compile only a small, fixed amount of work.
+constexpr unsigned merge_walk_budget = 24;
+
+std::optional<std::pair<MonoClass *, bool>>
+walk_operand_class (const Value *v, const Function &f, bool ignore_null,
+                     SmallPtrSetImpl<const Value *> &visiting, unsigned &budget);
+
+/// The class every value in \p arms agrees on. This answers no class,
+/// concretely, when a contributing value answers no class itself, or when two
+/// contributing values disagree. It answers "found nothing" when the walk
+/// skipped every value in \p arms.
+std::optional<std::pair<MonoClass *, bool>>
+merged_class (ArrayRef<const Value *> arms, const Function &f, bool ignore_null,
+              SmallPtrSetImpl<const Value *> &visiting, unsigned &budget)
+{
+	MonoClass *klass = nullptr;
+	bool exact = true;
+	bool any = false;
+
+	for (const Value *arm : arms) {
+		std::optional<std::pair<MonoClass *, bool>> got =
+			walk_operand_class (arm, f, ignore_null, visiting, budget);
+
+		if (!got)
+			continue;
+
+		if (got->first == nullptr || (any && got->first != klass))
+			return std::make_pair (static_cast<MonoClass *> (nullptr), false);
+
+		klass = got->first;
+		exact = exact && got->second;
+		any = true;
+	}
+
+	if (!any)
+		return std::nullopt;
+
+	return std::make_pair (klass, exact);
+}
+
+/// The class \p v answers with: \p v itself where it is not a phi or a
+/// select, otherwise the merge of the values it names. The same outer walk
+/// shares \p visiting and \p budget across every call it makes.
+std::optional<std::pair<MonoClass *, bool>>
+walk_operand_class (const Value *v, const Function &f, bool ignore_null,
+                     SmallPtrSetImpl<const Value *> &visiting, unsigned &budget)
+{
+	v = strip_casts (v);
+
+	if (visiting.count (v) || (ignore_null && isa<ConstantPointerNull> (v)))
+		return std::nullopt;
+
+	const auto *phi = dyn_cast<PHINode> (v);
+	const auto *select = phi == nullptr ? dyn_cast<SelectInst> (v) : nullptr;
+
+	if (phi == nullptr && select == nullptr)
+		return leaf_operand_class (v, f);
+
+	// A merge node this walk cannot afford to enter answers no class, not a
+	// skip. Unlike the back edge of a cycle, nothing bounds what the
+	// unexplored side of this merge can name.
+	if (budget == 0)
+		return std::make_pair (static_cast<MonoClass *> (nullptr), false);
+
+	--budget;
+	visiting.insert (v);
+
+	std::optional<std::pair<MonoClass *, bool>> result;
+
+	if (phi != nullptr) {
+		SmallVector<const Value *, 4> incoming (
+			phi->incoming_values ().begin (), phi->incoming_values ().end ());
+		result = merged_class (incoming, f, ignore_null, visiting, budget);
+	} else {
+		const Value *arms[] = { select->getTrueValue (), select->getFalseValue () };
+		result = merged_class (arms, f, ignore_null, visiting, budget);
+	}
+
+	visiting.erase (v);
+
+	return result;
+}
+
+} // namespace
+
+void
+mark_exact_class (Instruction &site, MonoClass *klass)
+{
+	LLVMContext &c = site.getContext ();
+
+	site.setMetadata (exact_class_md, MDNode::get (c, { as_metadata (c, klass) }));
+}
+
+void
+mark_parameter_classes (Function &f, ArrayRef<std::pair<unsigned, MonoClass *>> classes)
+{
+	if (classes.empty ())
+		return;
+
+	LLVMContext &c = f.getContext ();
+	SmallVector<Metadata *, 8> pairs;
+
+	for (const auto &entry : classes)
+		pairs.push_back (MDNode::get (
+			c, { ConstantAsMetadata::get (
+				     ConstantInt::get (Type::getInt32Ty (c), entry.first)),
+		             as_metadata (c, entry.second) }));
+
+	f.setMetadata (param_classes_md, MDNode::get (c, pairs));
+}
+
+std::pair<MonoClass *, bool>
+operand_class (const Value *v, const Function &f)
+{
+	SmallPtrSet<const Value *, 8> visiting;
+	unsigned budget = merge_walk_budget;
+	std::optional<std::pair<MonoClass *, bool>> found =
+		walk_operand_class (v, f, /*ignore_null=*/false, visiting, budget);
+
+	return found.value_or (std::make_pair (nullptr, false));
+}
+
 MonoClass *
 exact_class (const Value *v, const Function &f)
 {
-	auto [klass, exact] = operand_class (v, f);
+	SmallPtrSet<const Value *, 8> visiting;
+	unsigned budget = merge_walk_budget;
+	std::optional<std::pair<MonoClass *, bool>> found =
+		walk_operand_class (v, f, /*ignore_null=*/true, visiting, budget);
+	auto [klass, exact] = found.value_or (std::make_pair (nullptr, false));
 
 	if (klass == nullptr || exact)
 		return klass;
