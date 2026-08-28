@@ -1,5 +1,5 @@
 add_executable(test-dlopen-runtime test-dlopen-runtime.c)
-target_link_libraries(test-dlopen-runtime PRIVATE ${CMAKE_DL_LIBS})
+target_link_libraries(test-dlopen-runtime PRIVATE mono::common ${CMAKE_DL_LIBS})
 
 # Once per collector, because what this tests is the shared library rather than
 # the runtime inside it.

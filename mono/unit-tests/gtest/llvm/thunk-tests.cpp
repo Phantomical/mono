@@ -38,8 +38,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 
-#include <sys/mman.h>
-#include <unistd.h>
+#include <mono/utils/mono-mmap.h>
 
 #include <algorithm>
 #include <atomic>
@@ -383,12 +382,12 @@ build_caller_module (const char *callee_name)
 static void
 make_writable (void *addr, size_t len)
 {
-	uintptr_t page = static_cast<uintptr_t> (sysconf (_SC_PAGESIZE));
+	uintptr_t page = static_cast<uintptr_t> (mono_pagesize ());
 	uintptr_t start = reinterpret_cast<uintptr_t> (addr) & ~(page - 1);
 	uintptr_t end =
 		(reinterpret_cast<uintptr_t> (addr) + len + page - 1) & ~(page - 1);
-	ASSERT_EQ (mprotect (reinterpret_cast<void *> (start), end - start,
-	                     PROT_READ | PROT_WRITE | PROT_EXEC),
+	ASSERT_EQ (mono_mprotect (reinterpret_cast<void *> (start), end - start,
+	                          MONO_MMAP_READ | MONO_MMAP_WRITE | MONO_MMAP_EXEC),
 	           0)
 		<< std::strerror (errno);
 }

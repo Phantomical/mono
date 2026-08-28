@@ -44,10 +44,10 @@ protected:
 		reference.resize (POOL_SIZE);
 		playground.resize (POOL_SIZE);
 
-		srandom (time (NULL));
+		srand ((unsigned) time (NULL));
 		long *words = (long*)random_mem.data ();
 		for (size_t i = 0; i < POOL_SIZE / sizeof (long); ++i)
-			words [i] = random ();
+			words [i] = rand ();
 	}
 
 	void reset ()

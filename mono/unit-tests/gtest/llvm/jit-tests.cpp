@@ -8,6 +8,8 @@
  * runtime, since code memory comes out of mono's code manager.
  */
 
+#include "config.h"
+
 #include "harness.hpp"
 
 #include "jit.hpp"
@@ -29,7 +31,7 @@
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/CommandLine.h>
 
-#include <sys/mman.h>
+#include <mono/utils/mono-mmap.h>
 
 #include <cstdint>
 #include <cstdlib>
@@ -134,10 +136,10 @@ TEST_F (Jit, ResolvesRegisteredHelpers)
 	auto jit = test::make_jit ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
-	ASSERT_FALSE (bool ((*jit)->register_symbol (
+	ASSERT_FALSE (bool ((*jit)->register_code_symbol (
 		"mono_jit_test_double_it", (void *) &mono_jit_test_double_it)));
 	/* Registering the same name again is a no-op, not an error. */
-	ASSERT_FALSE (bool ((*jit)->register_symbol (
+	ASSERT_FALSE (bool ((*jit)->register_code_symbol (
 		"mono_jit_test_double_it", (void *) &mono_jit_test_double_it)));
 
 	auto entry = (*jit)->compile (
@@ -421,9 +423,16 @@ TEST_F (JitExecution, EveryMergedTailCallGetsItsReturnBack)
  */
 TEST_F (Jit, CallsAHelperFurtherAwayThanRel32Reaches)
 {
-	/* mov rax, rdi; add rax, rax; ret - mono_jit_test_double_it by hand,
-	 * because what has to move is the callee's address. */
+	/* mono_jit_test_double_it by hand, because what has to move is the callee's
+	 * address: the argument register out of the host's convention into rax,
+	 * add rax to itself, ret. */
+#ifdef HOST_WIN32
+	/* mov rax, rcx; add rax, rax; ret */
+	static const uint8_t body[] = { 0x48, 0x89, 0xc8, 0x48, 0x01, 0xc0, 0xc3 };
+#else
+	/* mov rax, rdi; add rax, rax; ret */
 	static const uint8_t body[] = { 0x48, 0x89, 0xf8, 0x48, 0x01, 0xc0, 0xc3 };
+#endif
 
 	size_t page = 4096;
 	void *far = nullptr;
@@ -431,10 +440,11 @@ TEST_F (Jit, CallsAHelperFurtherAwayThanRel32Reaches)
 	/* Somewhere no ordinary mapping lands, and > 4GB from both the test binary
 	 * and any slab, so a rel32 from either cannot encode it. */
 	for (uintptr_t at = 0x200000000000ULL; at < 0x400000000000ULL; at += 0x10000000000ULL) {
-		void *got = mmap (reinterpret_cast<void *> (at), page,
-		                  PROT_READ | PROT_WRITE | PROT_EXEC,
-		                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		if (got != MAP_FAILED) {
+		void *got = mono_valloc (reinterpret_cast<void *> (at), page,
+		                         MONO_MMAP_READ | MONO_MMAP_WRITE | MONO_MMAP_EXEC
+		                         | MONO_MMAP_PRIVATE | MONO_MMAP_ANON | MONO_MMAP_FIXED,
+		                         MONO_MEM_ACCOUNT_OTHER);
+		if (got != nullptr) {
 			far = got;
 			break;
 		}
@@ -445,7 +455,7 @@ TEST_F (Jit, CallsAHelperFurtherAwayThanRel32Reaches)
 	auto jit = test::make_jit ();
 	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
 
-	ASSERT_FALSE (bool ((*jit)->register_symbol ("mono_jit_test_far_helper", far)));
+	ASSERT_FALSE (bool ((*jit)->register_code_symbol ("mono_jit_test_far_helper", far)));
 
 	auto entry = (*jit)->compile (
 		build_helper_call_module ("mono_jit_test_far_helper").take (), "entry");
@@ -460,7 +470,7 @@ TEST_F (Jit, CallsAHelperFurtherAwayThanRel32Reaches)
 	auto fn = reinterpret_cast<int64_t (*) (int64_t)> (entry->entry);
 	EXPECT_EQ (fn (20), 41);
 
-	munmap (far, page);
+	mono_vfree (far, page, MONO_MEM_ACCOUNT_OTHER);
 }
 
 /*

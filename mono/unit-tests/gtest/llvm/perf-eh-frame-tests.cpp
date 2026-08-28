@@ -157,11 +157,32 @@ resolver_description ()
 }
 
 /*
- * The rules the resolver's frame has to produce. Read them against the code in
- * arch/amd64/lazy-entry.cpp: 0x00 is its first instruction, 0x04 is where its
- * body starts, 0xa0 is the `ret`, 0xa1 is the first instruction of the throw
- * path and 0xaf is where that path has the caller's frame back.
+ * The landmarks in the resolver the rules below are read at, against the code
+ * in arch/amd64/lazy-entry.cpp. The two conventions put them at different
+ * offsets, because their bodies pass arguments in different registers.
  */
+struct Landmarks {
+	/// Its first instruction, before the frame is set up.
+	uint64_t entry;
+	/// Just after `pushq %rbp`.
+	uint64_t pushed;
+	/// Where the body starts, standing on %rbp.
+	uint64_t body;
+	/// An instruction inside the body, and the last one still under its rules.
+	uint64_t mid, body_end;
+	/// The `ret`, which `popq %rbp` has already run before.
+	uint64_t ret;
+	/// The first instruction of the throw path, and where that path has the
+	/// caller's frame back.
+	uint64_t throw_path, throw_done;
+};
+
+#ifdef HOST_WIN32
+constexpr Landmarks resolver { 0x00, 0x01, 0x04, 0x60, 0xa3, 0xa4, 0xa5, 0xb3 };
+#else
+constexpr Landmarks resolver { 0x00, 0x01, 0x04, 0x61, 0x9f, 0xa0, 0xa1, 0xaf };
+#endif
+
 TEST (PerfEhFrame, ResolverDeclaresTheCallersFrame)
 {
 	perf::EhFrame frame = resolver_description ();
@@ -175,28 +196,28 @@ TEST (PerfEhFrame, ResolverDeclaresTheCallersFrame)
 
 	/* Entry: the trampoline's return address is on top of the caller's, so the
 	 * CFA is two slots up rather than one. */
-	expect_cfa (*table, 0x00, dwarf_rsp, 0x10);
+	expect_cfa (*table, resolver.entry, dwarf_rsp, 0x10);
 
 	/* pushq %rbp */
-	expect_cfa (*table, 0x01, dwarf_rsp, 0x18);
-	EXPECT_EQ (saved_at (*table, 0x01, dwarf_rbp), -0x18);
+	expect_cfa (*table, resolver.pushed, dwarf_rsp, 0x18);
+	EXPECT_EQ (saved_at (*table, resolver.pushed, dwarf_rbp), -0x18);
 
 	/* The body, which is all of the compile. */
-	expect_cfa (*table, 0x04, dwarf_rbp, 0x18);
-	expect_cfa (*table, 0x61, dwarf_rbp, 0x18);
-	expect_cfa (*table, 0x9f, dwarf_rbp, 0x18);
-	EXPECT_EQ (saved_at (*table, 0x61, dwarf_rbp), -0x18);
+	expect_cfa (*table, resolver.body, dwarf_rbp, 0x18);
+	expect_cfa (*table, resolver.mid, dwarf_rbp, 0x18);
+	expect_cfa (*table, resolver.body_end, dwarf_rbp, 0x18);
+	EXPECT_EQ (saved_at (*table, resolver.mid, dwarf_rbp), -0x18);
 
 	/* After popq %rbp the frame is the caller's again. */
-	expect_cfa (*table, 0xa0, dwarf_rsp, 0x10);
-	EXPECT_EQ (saved_at (*table, 0xa0, dwarf_rbp), std::nullopt);
+	expect_cfa (*table, resolver.ret, dwarf_rsp, 0x10);
+	EXPECT_EQ (saved_at (*table, resolver.ret, dwarf_rbp), std::nullopt);
 
 	/* The throw path is entered by a jump, so it restates the body's rules. */
-	expect_cfa (*table, 0xa1, dwarf_rbp, 0x18);
-	EXPECT_EQ (saved_at (*table, 0xa1, dwarf_rbp), -0x18);
+	expect_cfa (*table, resolver.throw_path, dwarf_rbp, 0x18);
+	EXPECT_EQ (saved_at (*table, resolver.throw_path, dwarf_rbp), -0x18);
 
-	expect_cfa (*table, 0xaf, dwarf_rsp, 0x08);
-	EXPECT_EQ (saved_at (*table, 0xaf, dwarf_rbp), std::nullopt);
+	expect_cfa (*table, resolver.throw_done, dwarf_rsp, 0x08);
+	EXPECT_EQ (saved_at (*table, resolver.throw_done, dwarf_rbp), std::nullopt);
 }
 
 /*
@@ -211,7 +232,7 @@ TEST (PerfEhFrame, ReturnAddressComesFromTheCieRule)
 
 	ASSERT_TRUE ((bool) table) << toString (table.takeError ());
 
-	for (uint64_t offset : { (uint64_t) 0x00, (uint64_t) 0x61, (uint64_t) 0xa4 })
+	for (uint64_t offset : { resolver.entry, resolver.mid, resolver.ret })
 		EXPECT_EQ (saved_at (*table, offset, dwarf_rip), -8)
 			<< "at offset " << offset;
 }
@@ -366,7 +387,13 @@ TEST (PerfEhFrame, ResolverRulesSitOnInstructionBoundaries)
 	uint32_t thrown = rule_offset (records, MONO_UNWIND_OP_DEF_CFA, dwarf_rbp,
 	                               popped);
 	EXPECT_EQ (thrown, popped + 1) << "the throw path does not follow the ret";
+	/* The exception goes into the register the convention passes the first
+	 * argument in, which is the one instruction of the two paths that differs. */
+#ifdef HOST_WIN32
+	expect_bytes (code, thrown, { 0x48, 0x89, 0xc1 }, "movq %rax, %rcx");
+#else
 	expect_bytes (code, thrown, { 0x48, 0x89, 0xc7 }, "movq %rax, %rdi");
+#endif
 
 	// movq %r11, %rbp, after which %rbp and %rsp are both the caller's.
 	uint32_t cut = rule_offset (records, MONO_UNWIND_OP_DEF_CFA, dwarf_rsp,

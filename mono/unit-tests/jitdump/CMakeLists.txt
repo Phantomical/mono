@@ -6,7 +6,9 @@
 # executes, and a report built on a wrong one still names real methods, so the
 # corpus stays green and the profile lies. check_jitdump.py reads the dump back.
 
-if(NOT MONO_ENABLE_LLVM)
+# Without the writer there is no --jitdump for the corpus to run under, and the
+# runtime refuses the option like any other it does not know.
+if(NOT MONO_ENABLE_LLVM OR NOT MONO_ENABLE_JIT_DUMP)
   return()
 endif()
 

@@ -124,13 +124,13 @@ TEST (SgenQsort, ReversedInts)
 
 TEST (SgenQsort, RandomStructs)
 {
-	srandom (time (NULL));
+	srand ((unsigned) time (NULL));
 	for (int i = 0; i < 2000; ++i) {
 		teststruct_t a [200];
 
 		for (int j = 0; j < 200; ++j) {
-			a [j].key = random ();
-			a [j].val = random ();
+			a [j].key = rand ();
+			a [j].val = rand ();
 		}
 
 		ASSERT_NO_FATAL_FAILURE (compare_sorts (a, 200, sizeof (teststruct_t), compare_teststructs));
@@ -140,14 +140,14 @@ TEST (SgenQsort, RandomStructs)
 /* The sort DEF_QSORT_INLINE generated, over an array of pointers. */
 TEST (SgenQsort, InlinedStructPointers)
 {
-	srandom (time (NULL));
+	srand ((unsigned) time (NULL));
 	for (int i = 0; i < 2000; ++i) {
 		teststruct_t a [200];
 		teststruct_t *b [200];
 
 		for (int j = 0; j < 200; ++j) {
-			a [j].key = random ();
-			a [j].val = random ();
+			a [j].key = rand ();
+			a [j].val = rand ();
 			b [j] = &a [j];
 		}
 

@@ -35,7 +35,7 @@ target_compile_definitions(interp-test-runner PRIVATE
   MONO_INTERP_TESTS_ASSEMBLIES="${MONO_CORPUS_CLASS_DIR}")
 
 target_link_libraries(interp-test-runner PRIVATE
-  monosgen-static mono::common mono::eglib_headers mono::llvm m)
+  monosgen-static mono::common mono::eglib_headers mono::llvm mono::platform)
 if(ZLIB_FOUND)
   target_link_libraries(interp-test-runner PRIVATE ZLIB::ZLIB)
 endif()

@@ -17,11 +17,32 @@
 #include <string.h>
 #include <time.h>
 
-#include <pthread.h>
+#include <thread>
 
 #include <gtest/gtest.h>
 
 namespace {
+
+/*
+ * A worker thread and the answer it hands back.  The bodies below are written
+ * as the pthread entry points they were, and std::thread drops what its
+ * callable returns, so the result comes back through a member instead.
+ */
+struct Worker {
+	std::thread thread;
+	void *result = nullptr;
+
+	Worker (void *(*body) (void *), void *arg)
+		: thread ([this, body, arg] { result = body (arg); })
+	{
+	}
+
+	void *join ()
+	{
+		thread.join ();
+		return result;
+	}
+};
 
 MonoConcurrentHashTable *hash;
 mono_mutex_t global_mutex;
@@ -194,15 +215,13 @@ TEST_F (ConcHashTable, SingleWriterSingleReader)
 
 TEST_F (ConcHashTable, ParallelWriterSingleReader)
 {
-	pthread_t a, b, c;
+	Worker a (pw_sr_thread, GINT_TO_POINTER (1));
+	Worker b (pw_sr_thread, GINT_TO_POINTER (2));
+	Worker c (pw_sr_thread, GINT_TO_POINTER (3));
 
-	pthread_create (&a, NULL, pw_sr_thread, GINT_TO_POINTER (1));
-	pthread_create (&b, NULL, pw_sr_thread, GINT_TO_POINTER (2));
-	pthread_create (&c, NULL, pw_sr_thread, GINT_TO_POINTER (3));
-
-	pthread_join (a, NULL);
-	pthread_join (b, NULL);
-	pthread_join (c, NULL);
+	a.join ();
+	b.join ();
+	c.join ();
 
 	for (int i = 0; i < 1000; ++i) {
 		for (int j = 1; j < 4; ++j) {
@@ -215,12 +234,10 @@ TEST_F (ConcHashTable, ParallelWriterSingleReader)
 
 TEST_F (ConcHashTable, SingleWriterParallelReader)
 {
-	pthread_t a, b, c;
+	Worker a (pr_sw_thread, GINT_TO_POINTER (0));
+	Worker b (pr_sw_thread, GINT_TO_POINTER (1));
+	Worker c (pr_sw_thread, GINT_TO_POINTER (2));
 	gpointer ra, rb, rc;
-
-	pthread_create (&a, NULL, pr_sw_thread, GINT_TO_POINTER (0));
-	pthread_create (&b, NULL, pr_sw_thread, GINT_TO_POINTER (1));
-	pthread_create (&c, NULL, pr_sw_thread, GINT_TO_POINTER (2));
 
 	for (int i = 0; i < 100; ++i) {
 		insert_locked (GINT_TO_POINTER (i +   0 + 1), GINT_TO_POINTER ((i +   0) * 2 + 1));
@@ -228,9 +245,9 @@ TEST_F (ConcHashTable, SingleWriterParallelReader)
 		insert_locked (GINT_TO_POINTER (i + 200 + 1), GINT_TO_POINTER ((i + 200) * 2 + 1));
 	}
 
-	pthread_join (a, &ra);
-	pthread_join (b, &rb);
-	pthread_join (c, &rc);
+	ra = a.join ();
+	rb = b.join ();
+	rc = c.join ();
 
 	/* A reader hands back the key it read a stale value for, or NULL. */
 	EXPECT_EQ (0, GPOINTER_TO_INT (ra));
@@ -240,7 +257,6 @@ TEST_F (ConcHashTable, SingleWriterParallelReader)
 
 TEST_F (ConcHashTable, ParallelWriterParallelReader)
 {
-	pthread_t wa, wb, wc, ra, rb, rc;
 	gpointer a, b, c;
 
 	srand (time (NULL));
@@ -250,24 +266,24 @@ TEST_F (ConcHashTable, ParallelWriterParallelReader)
 		SCOPED_TRACE (i == 0 ? "adding" : "removing");
 		running = 1;
 
-		pthread_create (&ra, NULL, pw_pr_r_thread, NULL);
-		pthread_create (&rb, NULL, pw_pr_r_thread, NULL);
-		pthread_create (&rc, NULL, pw_pr_r_thread, NULL);
+		Worker ra (pw_pr_r_thread, NULL);
+		Worker rb (pw_pr_r_thread, NULL);
+		Worker rc (pw_pr_r_thread, NULL);
 
 		void *(*writer) (void *) = i == 0 ? pw_pr_w_add_thread : pw_pr_w_del_thread;
-		pthread_create (&wa, NULL, writer, GINT_TO_POINTER (0));
-		pthread_create (&wb, NULL, writer, GINT_TO_POINTER (1));
-		pthread_create (&wc, NULL, writer, GINT_TO_POINTER (2));
+		Worker wa (writer, GINT_TO_POINTER (0));
+		Worker wb (writer, GINT_TO_POINTER (1));
+		Worker wc (writer, GINT_TO_POINTER (2));
 
-		pthread_join (wa, NULL);
-		pthread_join (wb, NULL);
-		pthread_join (wc, NULL);
+		wa.join ();
+		wb.join ();
+		wc.join ();
 
 		running = 0;
 
-		pthread_join (ra, &a);
-		pthread_join (rb, &b);
-		pthread_join (rc, &c);
+		a = ra.join ();
+		b = rb.join ();
+		c = rc.join ();
 
 		/* A reader hands back the key whose value did not match it, or NULL. */
 		EXPECT_EQ (0, GPOINTER_TO_INT (a));

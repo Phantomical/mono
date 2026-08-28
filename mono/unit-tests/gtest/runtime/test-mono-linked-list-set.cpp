@@ -1,5 +1,6 @@
 #include <assert.h>
-#include <pthread.h>
+
+#include <thread>
 
 #include <config.h>
 #include <mono/metadata/metadata.h>
@@ -33,7 +34,7 @@ typedef struct {
 	int skip;
 	int num_adds;
 	int num_removes;
-	pthread_t thread;
+	std::thread thread;
 } thread_data_t;
 
 node_t nodes [N];
@@ -143,11 +144,11 @@ TEST (MonoLinkedListSet, ConcurrentInsertFindRemove)
 	for (i = 0; i < NUM_THREADS; ++i) {
 		thread_data [i].num_adds = thread_data [i].num_removes = 0;
 		thread_data [i].skip = primes [i];
-		ASSERT_EQ (0, pthread_create (&thread_data [i].thread, NULL, worker, &thread_data [i]));
+		thread_data [i].thread = std::thread (worker, &thread_data [i]);
 	}
 
 	for (i = 0; i < NUM_THREADS; ++i) {
-		ASSERT_EQ (0, pthread_join (thread_data [i].thread, NULL));
+		thread_data [i].thread.join ();
 		printf ("thread %d  adds %d  removes %d\n", i, thread_data [i].num_adds, thread_data [i].num_removes);
 	}
 }

@@ -13,6 +13,8 @@
  * fields the planner reads are filled in.
  */
 
+#include "config.h"
+
 #include "arch/arch.hpp"
 
 #include "mono/metadata/metadata-internals.h"
@@ -149,11 +151,20 @@ TEST (InterpEntry, ScalarsTakeOneRegisterEach)
 	ASSERT_EQ (layout.args.size (), 4u);
 	EXPECT_FALSE (layout.has_this);
 
+#ifdef HOST_WIN32
+	/* One counter runs both files, so each argument spends the register of
+	 * its number in the file it does not want as well. */
+	expect_at (layout.args[0], ArgPlan::Where::Greg, 0);
+	expect_at (layout.args[1], ArgPlan::Where::Freg, 1);
+	expect_at (layout.args[2], ArgPlan::Where::Greg, 2);
+	expect_at (layout.args[3], ArgPlan::Where::Freg, 3);
+#else
 	/* The two files run down independently, so neither pushes the other along. */
 	expect_at (layout.args[0], ArgPlan::Where::Greg, 0);
 	expect_at (layout.args[1], ArgPlan::Where::Freg, 0);
 	expect_at (layout.args[2], ArgPlan::Where::Greg, 1);
 	expect_at (layout.args[3], ArgPlan::Where::Freg, 1);
+#endif
 	EXPECT_EQ ((int) layout.ret.kind, (int) ReturnPlan::Kind::None);
 }
 
@@ -213,7 +224,11 @@ TEST (InterpEntry, AStructIsFlattenedOneFieldPerRegister)
 	EXPECT_EQ (first.at, 0u);
 	EXPECT_EQ (first.offset, 0u);
 	EXPECT_EQ ((int) second.file, (int) ArgPiece::File::Freg);
+#ifdef HOST_WIN32
+	EXPECT_EQ (second.at, 1u);
+#else
 	EXPECT_EQ (second.at, 0u);
+#endif
 	EXPECT_EQ (second.offset, 4u);
 }
 
@@ -245,22 +260,38 @@ TEST (InterpEntry, AStructCanStraddleTheRegisterBoundary)
 	Type *i32 = Type::getInt32Ty (ctx);
 	Type *i64 = Type::getInt64Ty (ctx);
 	StructType *pair = StructType::get (ctx, { i32, i32 });
-	Prototype shape (Type::getVoidTy (ctx), { i64, i64, i64, i64, i64, pair });
-	Signature sig (false, { false, false, false, false, false, false });
+
+	/* Enough integers ahead of the pair to leave one register free, so the
+	 * pair's two leaves land either side of the boundary. The Microsoft
+	 * convention has four such registers where System V has six, and its
+	 * first stack argument sits past the caller's shadow space. */
+#ifdef HOST_WIN32
+	std::vector<Type *> params (3, i64);
+	const unsigned last_greg = 3, first_stack = 32;
+#else
+	std::vector<Type *> params (5, i64);
+	const unsigned last_greg = 5, first_stack = 0;
+#endif
+	params.push_back (pair);
+
+	Prototype shape (Type::getVoidTy (ctx), params);
+	Signature sig (false, std::vector<bool> (params.size (), false));
 	InterpEntryLayout layout = plan (shape, sig);
 
-	ASSERT_EQ (layout.args.size (), 6u);
-	ASSERT_EQ ((int) layout.args[5].where, (int) ArgPlan::Where::Pieces);
-	ASSERT_EQ (layout.args[5].piece_count, 2u);
+	const unsigned pair_at = (unsigned) params.size () - 1;
 
-	const ArgPiece &first = layout.pieces[layout.args[5].first_piece];
-	const ArgPiece &second = layout.pieces[layout.args[5].first_piece + 1];
+	ASSERT_EQ (layout.args.size (), params.size ());
+	ASSERT_EQ ((int) layout.args[pair_at].where, (int) ArgPlan::Where::Pieces);
+	ASSERT_EQ (layout.args[pair_at].piece_count, 2u);
+
+	const ArgPiece &first = layout.pieces[layout.args[pair_at].first_piece];
+	const ArgPiece &second = layout.pieces[layout.args[pair_at].first_piece + 1];
 
 	/* The last integer register, and then the first stack slot. */
 	EXPECT_EQ ((int) first.file, (int) ArgPiece::File::Greg);
-	EXPECT_EQ (first.at, 5u);
+	EXPECT_EQ (first.at, last_greg);
 	EXPECT_EQ ((int) second.file, (int) ArgPiece::File::Stack);
-	EXPECT_EQ (second.at, 0u);
+	EXPECT_EQ (second.at, first_stack);
 }
 
 TEST (InterpEntry, StackSlotsAreEightBytesAndSixteenForAVector)
@@ -268,6 +299,27 @@ TEST (InterpEntry, StackSlotsAreEightBytesAndSixteenForAVector)
 	LLVMContext ctx;
 	Type *f64 = Type::getDoubleTy (ctx);
 	Type *v128 = FixedVectorType::get (Type::getFloatTy (ctx), 4);
+
+#ifdef HOST_WIN32
+	/*
+	 * The Microsoft convention passes a vector by reference, which the entry
+	 * refuses, so the eight-byte slot is all this can check there. Its stack
+	 * arguments also start past the caller's shadow space.
+	 */
+	std::vector<Type *> params (6, f64);
+	Prototype shape (Type::getVoidTy (ctx), params);
+	Signature sig (false, std::vector<bool> (params.size (), false));
+	InterpEntryLayout layout = plan (shape, sig);
+
+	ASSERT_EQ (layout.args.size (), 6u);
+	expect_at (layout.args[3], ArgPlan::Where::Freg, 3);
+	expect_at (layout.args[4], ArgPlan::Where::Stack, 32);
+	expect_at (layout.args[5], ArgPlan::Where::Stack, 40);
+
+	Prototype vector_shape (Type::getVoidTy (ctx), { v128 });
+	Signature vector_sig (false, { false });
+	EXPECT_TRUE (refused (vector_shape, vector_sig));
+#else
 	std::vector<Type *> params (8, f64);
 
 	params.push_back (f64);
@@ -281,6 +333,7 @@ TEST (InterpEntry, StackSlotsAreEightBytesAndSixteenForAVector)
 	expect_at (layout.args[7], ArgPlan::Where::Freg, 7);
 	expect_at (layout.args[8], ArgPlan::Where::Stack, 0);
 	expect_at (layout.args[9], ArgPlan::Where::Stack, 16);
+#endif
 }
 
 TEST (InterpEntry, AByrefParameterIsMarked)

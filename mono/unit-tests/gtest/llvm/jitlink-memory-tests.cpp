@@ -1,17 +1,24 @@
 /*
  * Tests for the code memory JIT'd objects are linked into.
  *
- * Protections are read out of /proc/self/maps rather than out of the arena's
- * own bookkeeping, so a mapping that is not what it claims cannot pass by
+ * Protections are read from the operating system -- /proc/self/maps, or
+ * VirtualQuery -- rather than out of the arena's own bookkeeping, so a mapping
+ * that is not what it claims cannot pass by
  * agreeing with itself. The property nothing else here would catch is reach:
  * every fixup inside an object, and the .eh_frame delta back to the code, is a
  * PCRel32 that JITLink hard-errors on rather than stubbing, so two reservations
  * that end up more than 2GB apart break a compile a long way from here.
  */
 
+#include "config.h"
+
 #include "jitlink-memory.hpp"
 
 #include "harness.hpp"
+
+#ifdef HOST_WIN32
+#include <windows.h>
+#endif
 
 #include <gtest/gtest.h>
 
@@ -56,6 +63,46 @@ protected:
 	}
 };
 
+#ifdef HOST_WIN32
+
+/// The base page protection Windows reports for addr, or zero where it names
+/// nothing committed. The guard and caching bits are masked off, so this is one
+/// of the PAGE_* values on its own.
+DWORD
+mapping_protection (const void *addr)
+{
+	MEMORY_BASIC_INFORMATION info;
+
+	if (VirtualQuery (addr, &info, sizeof (info)) == 0)
+		return 0;
+	if (info.State != MEM_COMMIT)
+		return 0;
+
+	return info.Protect & 0xff;
+}
+
+bool
+is_writable (const void *addr)
+{
+	DWORD protection = mapping_protection (addr);
+
+	return protection == PAGE_READWRITE || protection == PAGE_WRITECOPY
+	       || protection == PAGE_EXECUTE_READWRITE
+	       || protection == PAGE_EXECUTE_WRITECOPY;
+}
+
+bool
+is_executable (const void *addr)
+{
+	DWORD protection = mapping_protection (addr);
+
+	return protection == PAGE_EXECUTE || protection == PAGE_EXECUTE_READ
+	       || protection == PAGE_EXECUTE_READWRITE
+	       || protection == PAGE_EXECUTE_WRITECOPY;
+}
+
+#else
+
 /// What /proc/self/maps says about addr, as the four rwxp characters.
 std::string
 mapping_perms (const void *addr)
@@ -97,6 +144,8 @@ is_executable (const void *addr)
 	std::string perms = mapping_perms (addr);
 	return perms.size () >= 3 && perms[2] == 'x';
 }
+
+#endif
 
 TEST_F (CodeMemory, ReservationsAreDisjoint)
 {

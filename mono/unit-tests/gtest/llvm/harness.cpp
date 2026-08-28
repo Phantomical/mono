@@ -26,7 +26,6 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/raw_ostream.h>
 
-#include <unistd.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -154,8 +153,8 @@ class SelectDumps : public ::testing::Environment {
 public:
 	void SetUp () override
 	{
-		::setenv ("MONO_JIT_DUMP", "unopt-ir,tier1-asm", 1);
-		::setenv ("MONO_JIT_DUMP_FILTER", dump_filter, 1);
+		g_setenv ("MONO_JIT_DUMP", "unopt-ir,tier1-asm", TRUE);
+		g_setenv ("MONO_JIT_DUMP_FILTER", dump_filter, TRUE);
 	}
 };
 

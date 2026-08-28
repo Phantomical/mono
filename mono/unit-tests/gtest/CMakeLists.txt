@@ -25,7 +25,7 @@ function(mono_gtest_binary name)
   target_compile_definitions(${name} PRIVATE ${ARG_DEFINITIONS})
 
   target_link_libraries(${name} PRIVATE
-    ${ARG_LIBRARIES} mono::common mono::eglib_headers mono::llvm m
+    ${ARG_LIBRARIES} mono::common mono::eglib_headers mono::llvm mono::platform
     GTest::gtest GTest::gtest_main)
   if(ZLIB_FOUND)
     target_link_libraries(${name} PRIVATE ZLIB::ZLIB)

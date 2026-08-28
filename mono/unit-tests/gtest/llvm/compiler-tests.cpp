@@ -16,7 +16,6 @@
 
 #include <llvm/IR/Module.h>
 
-#include <unistd.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -79,7 +78,7 @@ protected:
 		 * runtime's unwinder re-enters the frame itself - but the object still
 		 * has to be able to bind it.
 		 */
-		EXPECT_FALSE (bool ((*jit)->register_symbol (
+		EXPECT_FALSE (bool ((*jit)->register_code_symbol (
 			"mono_personality", (void *) &test_personality)));
 
 		/*
@@ -89,10 +88,10 @@ protected:
 		 * count is not a constant. Neither is called - nothing here runs the
 		 * code - but the object still has to bind them.
 		 */
-		EXPECT_FALSE (bool ((*jit)->register_symbol (
+		EXPECT_FALSE (bool ((*jit)->register_code_symbol (
 			"mono_llvm_throw_corlib_exception",
 			(void *) &mono_llvm_throw_corlib_exception)));
-		EXPECT_FALSE (bool ((*jit)->register_symbol (
+		EXPECT_FALSE (bool ((*jit)->register_code_symbol (
 			"memcpy", (void *) static_cast<void *(*) (void *, const void *, size_t)> (
 					  &std::memcpy))));
 
