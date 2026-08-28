@@ -90,7 +90,7 @@ exec \"${_tools_mono}\" \"$@\"
        OWNER_READ OWNER_WRITE OWNER_EXECUTE
        GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 else()
-  set(MONO_TOOLS_RUNTIME "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
+  set(MONO_TOOLS_RUNTIME "${MONO_RUNTIME_WRAPPER}")
   set(MONO_TOOLS_RUNTIME_IS_SYSTEM FALSE)
   set(MONO_TOOLS_RUNTIME_VERSION "this build")
   # The wrapper is a script around mono/mini/mono-<gc>, and some callers reach

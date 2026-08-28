@@ -823,11 +823,11 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
                       "${T_RUNNER_FILES}")
     list(APPEND _deps "${_runner}")
     string(JOIN "," _excludes ${MONO_TEST_NUNIT_EXCLUDES} ${T_EXCLUDES})
-    set(_command "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug "${_runner}"
+    set(_command "${MONO_RUNTIME_WRAPPER}" --debug "${_runner}"
                  "${_out}" "-exclude=${_excludes}" -format:nunit2)
     set(_mono_path "${_pdir}:${_testdir}:${dir}")
     # -explore builds the whole tree and prints it instead of running it.
-    set(_lister "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug "${_runner}"
+    set(_lister "${MONO_RUNTIME_WRAPPER}" --debug "${_runner}"
                 "${_out}" -noheader "-explore:${_listing}")
     set(_listing_deps "${_runner}")
     # A group where nothing was left to run after -exclude is a skip, not a pass.
@@ -838,7 +838,7 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
     # No -parallel here: it is per-test rather than per-assembly, and the CTest
     # side appends it along with the reservation that has to match it.  See
     # MONO_BCL_TESTS_XUNIT_THREADS.
-    set(_command "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" --debug
+    set(_command "${MONO_RUNTIME_WRAPPER}" --debug
                  "${MONO_TEST_XUNIT_DIR}/xunit.console.exe" "${_out}"
                  -noappdomain -noshadow)
     foreach(_t IN LISTS MONO_TEST_XUNIT_NOTRAITS)
@@ -857,7 +857,7 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
       set(_env_extra "REMOTE_EXECUTOR=${_remote}")
     endif()
     _mono_xunit_lister(_xl ${profile})
-    set(_lister "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" "${_xl}" "${_out}")
+    set(_lister "${MONO_RUNTIME_WRAPPER}" "${_xl}" "${_out}")
     set(_listing_deps "${_xl}")
     # xunit spells the assembly with its extension only in the summary of a run
     # that matched nothing, which is what makes this safe to look for in output

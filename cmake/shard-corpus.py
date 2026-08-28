@@ -16,23 +16,99 @@ and is staged into every shard.
 
 Support assemblies prebuilt by the build (out of *-lib.il, and in the errors
 suite every uppercase CS*-lib.cs, which compiler-tester skips) live in a
-shared support directory; each shard gets symlinks to them at the paths the
-cases reference.  The links dangle until the build has run, which is fine:
-nothing reads them at configure time.
+shared support directory, and each shard reaches them at the paths the cases
+reference.  Staging those is a second pass, --stage-support, which the build
+runs once it has built them: a shard holds hard links on a host that gives an
+unprivileged process no symlink, and a hard link cannot be made before its
+target exists.
 
 Usage:
   shard-corpus.py --src <corpus dir> --dest <binary dir> --mode pos|neg
-                  --shards <n>
+                  --shards <n> [--stage-support]
 
 Stages <dest>/run-00 .. run-<n-1> and <dest>/support/dlls, and writes the
 assignment to <dest>/shards.txt for the curious.
 """
 
 import argparse
+import os
 import re
 import shutil
 import sys
 from pathlib import Path
+
+
+def stage_file(target, link):
+    """Puts target at link, by whichever of the three a host gives us.
+
+    A symlink where the host makes one. Windows gives an unprivileged process
+    none, so a shard there holds hard links, and a copy stands in when target
+    is on another volume. Both need target to exist, which is why the support
+    assemblies are staged in a pass of their own.
+    """
+    if link.is_symlink() or link.is_file():
+        link.unlink()
+
+    try:
+        link.symlink_to(target)
+        return
+    except OSError:
+        pass
+
+    try:
+        os.link(target, link)
+    except OSError:
+        shutil.copy2(target, link)
+
+
+def stage_dir(target, link):
+    """Puts directory target at link, by symlink or by a Windows junction.
+
+    Neither one copies, so what the build writes into target later is visible
+    through link.
+    """
+    if link.is_symlink():
+        link.unlink()
+    elif link.is_dir():
+        # A junction reads as an ordinary directory, so this is either one we
+        # made or a real directory a caller wants kept. Leave it either way.
+        return
+
+    try:
+        link.symlink_to(target, target_is_directory=True)
+    except OSError:
+        import _winapi
+        _winapi.CreateJunction(str(target), str(link))
+
+
+def clear_staged(rundir):
+    """Takes out what an earlier run staged, so a changed assignment does not
+    leave a case behind in the shard it moved out of.
+
+    A junction is removed rather than walked. Deleting through one would take
+    the support tree with it.
+    """
+    for old in rundir.iterdir():
+        if old.is_symlink():
+            old.unlink()
+        elif old.is_dir():
+            if os.path.isjunction(old):
+                old.rmdir()
+        else:
+            old.unlink()
+
+
+def support_names(src, mode):
+    """The support assemblies a shard reaches by name: in the errors corpus the
+    build compiles every *-lib.cs / *-module.cs (compiler-tester skips them:
+    uppercase); in both corpora it assembles every root *-lib.il.
+    """
+    names = [p.stem + ".dll" for p in src.glob("*-lib.il")]
+    if mode == "neg":
+        names += [p.stem + ".dll"
+                  for pat in ("*-lib.cs", "*-module.cs")
+                  for p in src.glob(pat)]
+    return names
 
 # The same selection compiler-tester makes for -files:v4 (its most inclusive
 # version filter), including the skip of names starting with an uppercase
@@ -86,10 +162,21 @@ def main():
     ap.add_argument("--dest", required=True, type=Path)
     ap.add_argument("--mode", required=True, choices=("pos", "neg"))
     ap.add_argument("--shards", required=True, type=int)
+    ap.add_argument("--stage-support", action="store_true",
+                    help="stage the built support assemblies into the shards "
+                         "and do nothing else; run once they are built")
     args = ap.parse_args()
 
     src, dest = args.src.resolve(), args.dest
     support = dest / "support"
+
+    if args.stage_support:
+        for i in range(args.shards):
+            rundir = dest / f"run-{i:02d}"
+            for name in support_names(src, args.mode):
+                if (support / name).is_file():
+                    stage_file(support / name, rundir / name)
+        return
 
     cases = set()
     for pat in PATTERNS[args.mode]:
@@ -128,15 +215,6 @@ def main():
         bins[i].extend(sorted(members))
         loads[i] += len(members)
 
-    # Support assemblies the shards link to by name: in the errors corpus the
-    # build compiles every *-lib.cs / *-module.cs (compiler-tester skips them:
-    # uppercase); in both corpora it assembles every root *-lib.il.
-    prebuilt = [p.stem + ".dll" for p in src.glob("*-lib.il")]
-    if args.mode == "neg":
-        prebuilt += [p.stem + ".dll"
-                     for pat in ("*-lib.cs", "*-module.cs")
-                     for p in src.glob(pat)]
-
     # The shared support tree carries the source side of dlls/ too, so a shard
     # sees one merged dlls/ directory of sources and built assemblies.
     if (src / "dlls").is_dir():
@@ -144,9 +222,7 @@ def main():
             if p.is_file():
                 link = support / "dlls" / p.relative_to(src / "dlls")
                 link.parent.mkdir(parents=True, exist_ok=True)
-                if link.is_symlink():
-                    link.unlink()
-                link.symlink_to(p)
+                stage_file(p, link)
 
     for stale in dest.glob("run-*"):
         if stale.is_dir() and int(stale.name[4:]) >= args.shards:
@@ -155,17 +231,17 @@ def main():
     for i, members in enumerate(bins):
         rundir = dest / f"run-{i:02d}"
         rundir.mkdir(parents=True, exist_ok=True)
-        for old in rundir.iterdir():
-            if old.is_symlink():
-                old.unlink()
+        clear_staged(rundir)
         for f in members:
-            (rundir / f).symlink_to(src / f)
+            stage_file(src / f, rundir / f)
         for p in aux:
-            (rundir / p.name).symlink_to(p)
-        for name in prebuilt:
-            (rundir / name).symlink_to(support / name)
+            stage_file(p, rundir / p.name)
         if (src / "dlls").is_dir():
-            (rundir / "dlls").symlink_to(support / "dlls")
+            stage_dir(support / "dlls", rundir / "dlls")
+
+    # The support assemblies are not staged here. They are built after this
+    # runs, and a hard link needs the file to exist, so --stage-support puts
+    # them in once the build has made them.
 
     with open(dest / "shards.txt", "w") as f:
         for i, members in enumerate(bins):

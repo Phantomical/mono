@@ -140,10 +140,11 @@ endif()
 #
 # The corpus directory joins MONO_PATH because the child domain resolves the
 # program by assembly name rather than by the path it was started from.
+mono_path_join(_xdomain_path "${_class_dir}" "${CMAKE_CURRENT_BINARY_DIR}")
 if(MONO_ENABLE_INTERPRETER)
   add_test(NAME "mini-regression/xdomain"
            COMMAND "${CMAKE_COMMAND}" -E env
-                   "MONO_PATH=${_class_dir}:${CMAKE_CURRENT_BINARY_DIR}"
+                   "MONO_PATH=${_xdomain_path}"
                    "${_wrapper}" xdomain.exe
            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
   set_tests_properties("mini-regression/xdomain" PROPERTIES LABELS regression)
@@ -151,7 +152,7 @@ endif()
 
 add_test(NAME "mini-regression/xdomain-compiled"
          COMMAND "${CMAKE_COMMAND}" -E env
-                 "MONO_PATH=${_class_dir}:${CMAKE_CURRENT_BINARY_DIR}"
+                 "MONO_PATH=${_xdomain_path}"
                  "MONO_LLVM_JIT_TIER0=0"
                  "${_wrapper}" xdomain.exe
          WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")

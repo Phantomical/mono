@@ -155,7 +155,15 @@ if(MCS_STRING_REPLACER)
     ENVIRONMENT ${MCS_TOOL_ENV})
 endif()
 
-if(MCS_SN)
+if(MCS_SN AND MCS_SN_OPTIONAL)
+  # The host's own sn, re-signing what that host will otherwise refuse to load.
+  # An assembly delay-signed with a key other than this one -- mscorlib carries
+  # the ECMA key -- is refused by sn and is exactly the case where no signature
+  # is needed: the host does not verify that key either.
+  execute_process(
+    COMMAND ${MCS_SN} -R "${MCS_BUILD_OUTPUT}" "${MCS_SNK}"
+    WORKING_DIRECTORY "${_wd}" OUTPUT_QUIET ERROR_QUIET)
+elseif(MCS_SN)
   _mono_run("sn"
     COMMAND ${MCS_SN} -R "${MCS_BUILD_OUTPUT}" "${MCS_SNK}"
     ENVIRONMENT ${MCS_TOOL_ENV})

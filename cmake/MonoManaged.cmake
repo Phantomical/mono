@@ -33,6 +33,15 @@ set(MONO_MANAGED_DEPSDIR "${MONO_MANAGED_ROOT}/deps")
 # it takes them on its command line.  They are the build's to define.
 set(MONO_MANAGED_PLATFORM_NAMES linux macos unix win32)
 
+# Which of those names this host answers to. It picks the platform-suffixed
+# .sources files a library is built from, and it suffixes the profile
+# directories so that two hosts' outputs never share one.
+if(MONO_HOST_WINDOWS)
+  set(MONO_MANAGED_PLATFORM "win32")
+else()
+  set(MONO_MANAGED_PLATFORM "linux")
+endif()
+
 file(MAKE_DIRECTORY "${MONO_MANAGED_LIBDIR}" "${MONO_MANAGED_DEPSDIR}")
 
 # Ninja's depfile parser splits a path at a backtick and no escaping recovers
@@ -50,14 +59,25 @@ file(GLOB_RECURSE MONO_MANAGED_ODD_SOURCES "${MONO_MCS_TOPDIR}/class/*`*.cs")
 # resolved through PATH -- it is what produces the first mscorlib, so it cannot
 # be the runtime being built.  This is independent of
 # MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS, which only moves the *later* profiles.
-if(NOT MONO_BOOTSTRAP_RUNTIME)
+#
+# Only the class-library build needs it.  A native-only configuration is what
+# a port to a new host starts from, and there is no mono for that host yet.
+#
+# Windows needs none.  A managed program is a program that host runs by
+# itself, so csc.exe compiles the first mscorlib and the tools built beside it
+# run without any runtime at all -- which is the only order that works, since
+# what the bootstrap profile is producing is the mscorlib a runtime would need
+# to start on.
+if(MONO_ENABLE_MCS_BUILD AND NOT MONO_HOST_WINDOWS AND NOT MONO_BOOTSTRAP_RUNTIME)
   message(FATAL_ERROR
     "No `mono` found on PATH.  The class libraries are bootstrapped by a mono "
-    "that already works; install one, or point MONO_BOOTSTRAP_RUNTIME at it.")
+    "that already works; install one, point MONO_BOOTSTRAP_RUNTIME at it, or "
+    "configure with -DMONO_ENABLE_MCS_BUILD=OFF to build the runtime alone.")
 endif()
 
 # Fail at configure time rather than a thousand compile commands later.
-if(NOT MONO_BOOTSTRAP_RUNTIME_CHECKED STREQUAL "${MONO_BOOTSTRAP_RUNTIME}")
+if(MONO_BOOTSTRAP_RUNTIME AND
+   NOT MONO_BOOTSTRAP_RUNTIME_CHECKED STREQUAL "${MONO_BOOTSTRAP_RUNTIME}")
   execute_process(COMMAND "${MONO_BOOTSTRAP_RUNTIME}" --version
                   OUTPUT_VARIABLE _v ERROR_VARIABLE _v RESULT_VARIABLE _rc
                   OUTPUT_STRIP_TRAILING_WHITESPACE)
@@ -96,7 +116,7 @@ endmacro()
 # reference assemblies.  It signs nothing and installs nothing.  Its whole
 # purpose is to produce a toolchain good enough to build net_4_x.
 _mono_profile(build
-  DIRECTORY build-linux
+  DIRECTORY build-${MONO_MANAGED_PLATFORM}
   ALIAS     build
   MCS_FLAGS -d:NET_4_0 -d:NET_4_5 -d:MONO -d:WIN_PLATFORM -d:BOOTSTRAP_BASIC
             -nowarn:1699 -nostdlib
@@ -106,7 +126,7 @@ _mono_profile(build
   OPTIONS   NO_SIGN NO_INSTALL NO_TEST BOOTSTRAP_COMPILER)
 
 _mono_profile(net_4_x
-  DIRECTORY net_4_x-linux
+  DIRECTORY net_4_x-${MONO_MANAGED_PLATFORM}
   ALIAS     net_4_x
   MCS_FLAGS -d:NET_4_0 -d:NET_4_5 -d:NET_4_6 -d:MONO -d:WIN_PLATFORM
             -nowarn:1699 -nostdlib
@@ -143,7 +163,7 @@ _mono_profile(xbuild_14
   OPTIONS   WARN_AS_ERROR ENABLE_GSS DEBUG)
 
 _mono_profile(unityjit
-  DIRECTORY unityjit-linux
+  DIRECTORY unityjit-${MONO_MANAGED_PLATFORM}
   ALIAS     unityjit
   MCS_FLAGS -d:NET_4_0 -d:NET_4_5 -d:NET_4_6 -d:MONO -d:UNITY_JIT -d:UNITY
             -d:WIN_PLATFORM -nowarn:1699 -nostdlib -d:DISABLE_COM
@@ -170,9 +190,7 @@ foreach(_p IN LISTS MONO_MANAGED_PROFILES)
   file(MAKE_DIRECTORY "${_dir}")
   set(_alias "${MONO_PROFILE_${_p}_ALIAS}")
   if(_alias AND NOT _alias STREQUAL "${MONO_PROFILE_${_p}_DIRECTORY}")
-    if(NOT EXISTS "${MONO_MANAGED_LIBDIR}/${_alias}")
-      file(CREATE_LINK "${_dir}" "${MONO_MANAGED_LIBDIR}/${_alias}" SYMBOLIC)
-    endif()
+    mono_link_directory("${_dir}" "${MONO_MANAGED_LIBDIR}/${_alias}")
   endif()
 endforeach()
 
@@ -289,12 +307,17 @@ set(MONO_MCS_PIPENAME "mono-${_mono_pipe_hash}" CACHE STRING
 # put the entire class-library build, and every test corpus downstream of it,
 # back behind the native link.
 function(_mono_tool_host out profile)
-  if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER)
+  if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER AND MONO_HOST_WINDOWS)
+    # No host: on Windows a managed program is a program the host runs, which
+    # is the only order that works here. Every one of these tools is producing
+    # the first mscorlib, so there is none for a runtime to start on yet.
+    set(${out} "" PARENT_SCOPE)
+  elseif(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER)
     set(${out} "${MONO_BOOTSTRAP_RUNTIME}" PARENT_SCOPE)
   elseif(MONO_TOOLS_RUNTIME_IS_SYSTEM)
     set(${out} "${MONO_TOOLS_RUNTIME_HOST}" PARENT_SCOPE)
   else()
-    set(${out} "${CMAKE_BINARY_DIR}/runtime/mono-wrapper" PARENT_SCOPE)
+    set(${out} "${MONO_RUNTIME_WRAPPER}" PARENT_SCOPE)
   endif()
 endfunction()
 
@@ -309,6 +332,16 @@ endfunction()
 function(_mono_tool_command out profile tool)
   mono_profile_dir(_builddir build)
   _mono_tool_host(_host ${profile})
+
+  if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER AND MONO_HOST_WINDOWS)
+    # The tmp/ copy is for a runtime that resolves an assembly's dependencies
+    # out of the directory it sits in.  This host does that too, but it never
+    # takes mscorlib from there -- which is the one the copy exists to keep out
+    # of reach -- so the tools run from the profile's own output.
+    set(${out} "${_builddir}/${tool}" PARENT_SCOPE)
+    return()
+  endif()
+
   if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER)
     set(${out} "${_host}" "${_builddir}/tmp/${tool}" PARENT_SCOPE)
   else()
@@ -362,7 +395,17 @@ endfunction()
 
 # csc follows the same rule, with a bigger nursery: it is the one tool here that
 # allocates enough for the default to cost real time.
+#
+# Windows runs csc.exe itself -- it is a program of that host rather than an
+# assembly -- so there is no runtime under it and no nursery to size. That is
+# also what lets the bootstrap profile compile the first mscorlib before this
+# build has produced a runtime at all.
 function(_mono_csc_command out profile)
+  if(MONO_HOST_WINDOWS)
+    set(${out} "${MONO_CSC}" PARENT_SCOPE)
+    return()
+  endif()
+
   _mono_tool_host(_host ${profile})
   if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER)
     set(${out} "${_host}" "${MONO_CSC}" PARENT_SCOPE)
@@ -445,7 +488,7 @@ function(_mono_gac_install lib profile package)
   # CMAKE_INSTALL_PREFIX is left for install time so that
   # `cmake --install --prefix` still reaches the right root.
   install(CODE "
-set(MONO_GAC_RUNTIME [==[${CMAKE_BINARY_DIR}/runtime/mono-wrapper]==])
+set(MONO_GAC_RUNTIME [==[${MONO_RUNTIME_WRAPPER}]==])
 set(MONO_GAC_TOOL [==[${_builddir}/gacutil.exe]==])
 set(MONO_GAC_MONO_PATH [==[${_builddir}]==])
 set(MONO_GAC_LIBDIR \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
@@ -863,7 +906,25 @@ macro(_mono_materialize_profile _profile)
   elseif(A_PROGRAM AND NOT A_SNK)
     set(_do_sign FALSE)
   endif()
-  if(_do_sign)
+
+  # The bootstrap profile signs nothing, because its whole purpose is a
+  # toolchain and mono does not check a strong name.  A host that runs those
+  # tools itself does check: the assemblies carry mono's public key and no
+  # signature, and .NET Framework refuses to load one.  So on Windows the
+  # bootstrap profile is signed too, by that host's own sn.
+  set(_host_sn FALSE)
+  if(MONO_HOST_WINDOWS AND MONO_HOST_SN
+     AND MONO_PROFILE_${_profile}_BOOTSTRAP_COMPILER AND NOT A_PROGRAM)
+    set(_do_sign TRUE)
+    set(_host_sn TRUE)
+  endif()
+
+  set(_sn_optional "")
+  if(_host_sn)
+    set(_sn "${MONO_HOST_SN}" -q)
+    set(_snk "${MONO_MCS_TOPDIR}/class/mono.snk")
+    set(_sn_optional TRUE)
+  elseif(_do_sign)
     _mono_tool_command(_sn ${_profile} sn.exe)
     list(APPEND _sn -q)
     set(_snk "${MONO_MCS_TOPDIR}/class/mono.snk")
@@ -897,7 +958,7 @@ macro(_mono_materialize_profile _profile)
 
   # PLATFORM_PLATFORM is empty for the xbuild profiles, which declare no
   # PLATFORMS and are therefore unsuffixed.
-  set(_platform "linux")
+  set(_platform "${MONO_MANAGED_PLATFORM}")
   if(NOT MONO_PROFILE_${_profile}_ALIAS)
     set(_platform "")
   endif()
@@ -924,6 +985,7 @@ set(MCS_TOOL_ENV      [==[@_tool_env@]==])
 set(MCS_BUILT_SOURCES [==[@_built@]==])
 set(MCS_SN            [==[@_sn@]==])
 set(MCS_SNK           [==[@_snk@]==])
+set(MCS_SN_OPTIONAL   [==[@_sn_optional@]==])
 set(MCS_STRING_REPLACER       [==[@_string_replacer@]==])
 set(MCS_STRING_REPLACER_FLAGS [==[@A_STRING_REPLACER_FLAGS@]==])
 ]] @ONLY)
@@ -1081,7 +1143,8 @@ endfunction()
 # Generated parsers
 
 # jay takes the grammar as an argument but the output skeleton on stdin, and a
-# custom command cannot redirect, so the invocation goes through a shell.
+# custom command cannot redirect, so the invocation goes through a cmake script
+# that does the redirection with execute_process.
 #
 #   mono_jay_parser(TARGET <name> OUTPUT <file> GRAMMAR <file.jay>
 #                   [FLAGS <flag>...] [SKELETON <file>])
@@ -1097,13 +1160,14 @@ function(mono_jay_parser)
   endif()
   get_filename_component(_grammar "${J_GRAMMAR}" ABSOLUTE)
   get_filename_component(_name "${J_OUTPUT}" NAME)
-  string(JOIN " " _flags ${J_FLAGS})
-  # One shell word, so sh sees a single script rather than a shifted argv.
+  string(JOIN ";" _cmd
+         "$<TARGET_FILE:jay>" ${J_FLAGS} -o "${J_OUTPUT}" "${_grammar}")
   add_custom_command(
     OUTPUT "${J_OUTPUT}"
-    COMMAND sh -c
-      "'$<TARGET_FILE:jay>' ${_flags} -o '${J_OUTPUT}' '${_grammar}' < '${J_SKELETON}'"
+    COMMAND ${CMAKE_COMMAND} -D "CMD=${_cmd}" -D "INPUT=${J_SKELETON}"
+            -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MonoRunRedirected.cmake"
     DEPENDS jay "${_grammar}" "${J_SKELETON}"
+            "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/MonoRunRedirected.cmake"
     COMMENT "JAY     ${_name}"
     VERBATIM)
   add_custom_target(${J_TARGET} DEPENDS "${J_OUTPUT}")

@@ -1,0 +1,17 @@
+@echo off
+rem Runs the freshly built runtime out of the build tree, with the build tree's
+rem own dllmap configuration.  The Windows spelling of cmake/mono-wrapper.in.
+rem
+rem MONO_EXECUTABLE names which collector's binary to run, so a test matrix can
+rem pick one without the caller knowing where the build put it.
+
+setlocal EnableExtensions
+
+set "MONO_CFG_DIR=@MONO_BUILD_CFG_DIR@"
+set "PATH=@MONO_BUILD_ROOT@\runtime\_tmpinst\bin;%PATH%"
+
+if not defined MONO_EXECUTABLE set "MONO_EXECUTABLE=@MONO_RUNTIME_BINARY@"
+if not defined MONO_EXECUTABLE_WRAPPER set "MONO_EXECUTABLE_WRAPPER=%MONO_EXECUTABLE%"
+
+"%MONO_EXECUTABLE_WRAPPER%" --config "%MONO_CFG_DIR%\mono\config" %*
+exit /b %ERRORLEVEL%

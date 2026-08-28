@@ -17,7 +17,7 @@ set(MONO_CORPUS_ENABLED TRUE)
 
 set(MONO_CORPUS_CLASS_DIR "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
 set(MONO_CORPUS_BUILD_DIR "${MONO_MCS_LIBDIR}/build")
-set(MONO_CORPUS_WRAPPER   "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
+set(MONO_CORPUS_WRAPPER   "${MONO_RUNTIME_WRAPPER}")
 set(MONO_CORPUS_CSFLAGS   -unsafe -nowarn:0219,0169,0414,0649,0618)
 
 # TestDriver.dll is shared by every corpus but built with the mini ones, so a
@@ -25,7 +25,7 @@ set(MONO_CORPUS_CSFLAGS   -unsafe -nowarn:0219,0169,0414,0649,0618)
 # reference from the running assembly's own directory, which is no longer the
 # same directory.
 set(MONO_CORPUS_MINI_DIR "${CMAKE_BINARY_DIR}/mono/mini")
-set(MONO_CORPUS_MONO_PATH "${MONO_CORPUS_CLASS_DIR}:${MONO_CORPUS_MINI_DIR}")
+mono_path_join(MONO_CORPUS_MONO_PATH "${MONO_CORPUS_CLASS_DIR}" "${MONO_CORPUS_MINI_DIR}")
 
 # csc and ilasm run on whichever mono MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS selected.
 # The corpora themselves are always compiled -nostdlib against this tree's

@@ -7,20 +7,35 @@
 
 set(MONO_BUILD_ROOT     "${CMAKE_BINARY_DIR}")
 set(MONO_BUILD_CFG_DIR  "${CMAKE_CURRENT_BINARY_DIR}/etc")
-set(MONO_RUNTIME_BINARY "${CMAKE_BINARY_DIR}/mono/mini/mono-${MONO_DEFAULT_GC_SUFFIX}")
+set(MONO_RUNTIME_BINARY
+    "${CMAKE_BINARY_DIR}/mono/mini/mono-${MONO_DEFAULT_GC_SUFFIX}${CMAKE_EXECUTABLE_SUFFIX}")
 
-mono_configure_script("${CMAKE_SOURCE_DIR}/cmake/mono-wrapper.in"
-                      "${CMAKE_CURRENT_BINARY_DIR}/mono-wrapper")
+# A wrapper is a program the build shells out to, so it is written in whatever
+# the host runs: a /bin/sh script, or a .cmd the command processor reads.
+# MONO_WRAPPER_SUFFIX is what every consumer appends to reach one.
+if(WIN32)
+  mono_configure_script("${CMAKE_SOURCE_DIR}/cmake/mono-wrapper.cmd.in"
+                        "${CMAKE_CURRENT_BINARY_DIR}/mono-wrapper${MONO_WRAPPER_SUFFIX}")
 
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/monodis-wrapper"
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/monodis-wrapper${MONO_WRAPPER_SUFFIX}"
+"@echo off
+set \"MONO_CFG_DIR=${MONO_BUILD_CFG_DIR}\"
+\"${CMAKE_BINARY_DIR}/mono/dis/monodis${CMAKE_EXECUTABLE_SUFFIX}\" %*
+")
+else()
+  mono_configure_script("${CMAKE_SOURCE_DIR}/cmake/mono-wrapper.in"
+                        "${CMAKE_CURRENT_BINARY_DIR}/mono-wrapper")
+
+  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/monodis-wrapper"
 "#! /bin/sh
 MONO_CFG_DIR='${MONO_BUILD_CFG_DIR}'
 export MONO_CFG_DIR
 exec \"${CMAKE_BINARY_DIR}/mono/dis/monodis\" \"$@\"
 ")
-file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/monodis-wrapper"
-     PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
-                 WORLD_READ WORLD_EXECUTE)
+  file(CHMOD "${CMAKE_CURRENT_BINARY_DIR}/monodis-wrapper"
+       PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
+                   WORLD_READ WORLD_EXECUTE)
+endif()
 
 # The crash handler execs this by an absolute path it builds itself, as
 # `<config dir>/../bin/mono-hang-watchdog`, so an uninstalled runtime only
@@ -72,25 +87,52 @@ add_custom_target(mono-build-config ALL
 set(_tmpinst "${CMAKE_CURRENT_BINARY_DIR}/_tmpinst/bin")
 file(MAKE_DIRECTORY "${_tmpinst}")
 
-configure_file("${CMAKE_CURRENT_BINARY_DIR}/mono-wrapper" "${_tmpinst}/mono" COPYONLY)
+configure_file("${CMAKE_CURRENT_BINARY_DIR}/mono-wrapper${MONO_WRAPPER_SUFFIX}"
+               "${_tmpinst}/mono${MONO_WRAPPER_SUFFIX}" COPYONLY)
 
+# Writes a shim that runs `target`.
+#
+#   RUNTIME <r>  run it on <r> rather than on the uninstalled runtime
+#   NO_RUNTIME   `target` is a program the host runs by itself
 function(_mono_tmpinst_shim name target)
-  cmake_parse_arguments(ARG "" "RUNTIME" "" ${ARGN})
-  set(_on "${_tmpinst}/mono")
+  cmake_parse_arguments(ARG "NO_RUNTIME" "RUNTIME" "" ${ARGN})
+  set(_on "${_tmpinst}/mono${MONO_WRAPPER_SUFFIX}")
   if(ARG_RUNTIME)
     set(_on "${ARG_RUNTIME}")
   endif()
-  file(WRITE "${_tmpinst}/${name}"
-       "#! /bin/sh\nexec \"${_on}\" \"${target}\" \"$@\"\n")
+
+  if(WIN32)
+    if(ARG_NO_RUNTIME)
+      file(WRITE "${_tmpinst}/${name}${MONO_WRAPPER_SUFFIX}"
+           "@echo off\n\"${target}\" %*\n")
+    else()
+      file(WRITE "${_tmpinst}/${name}${MONO_WRAPPER_SUFFIX}"
+           "@echo off\n\"${_on}\" \"${target}\" %*\n")
+    endif()
+    return()
+  endif()
+
+  if(ARG_NO_RUNTIME)
+    file(WRITE "${_tmpinst}/${name}"
+         "#! /bin/sh\nexec \"${target}\" \"$@\"\n")
+  else()
+    file(WRITE "${_tmpinst}/${name}"
+         "#! /bin/sh\nexec \"${_on}\" \"${target}\" \"$@\"\n")
+  endif()
   file(CHMOD "${_tmpinst}/${name}" PERMISSIONS
        OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
        WORLD_READ WORLD_EXECUTE)
 endfunction()
 
-# csc follows MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS like every other C# compile.
-# mcs, ilasm and al do not: they are assemblies out of this tree, built against
-# this tree's corlib.
-_mono_tmpinst_shim(csc   "${MONO_CSC}" RUNTIME "${MONO_TOOLS_RUNTIME_HOST}")
+# csc follows MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS like every other C# compile,
+# except on Windows, where it is a program the host runs by itself.
+# mcs, ilasm and al never do: they are assemblies out of this tree, built
+# against this tree's corlib, so they run on this tree's runtime.
+if(MONO_HOST_WINDOWS)
+  _mono_tmpinst_shim(csc "${MONO_CSC}" NO_RUNTIME)
+else()
+  _mono_tmpinst_shim(csc "${MONO_CSC}" RUNTIME "${MONO_TOOLS_RUNTIME_HOST}")
+endif()
 _mono_tmpinst_shim(mcs   "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}/mcs.exe")
 _mono_tmpinst_shim(ilasm "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}/ilasm.exe")
 _mono_tmpinst_shim(al    "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}/al.exe")

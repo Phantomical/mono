@@ -84,7 +84,7 @@ set(_src      "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_bin      "${CMAKE_CURRENT_BINARY_DIR}")
 set(_class    "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
 set(_buildcls "${MONO_MCS_LIBDIR}/build")
-set(_wrapper  "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
+set(_wrapper  "${MONO_RUNTIME_WRAPPER}")
 
 # RUNTIME / TOOLS_RUNTIME.  RUNTIME is what the suites are *testing*, so it is
 # always the one this build produced.  TOOLS_RUNTIME only hosts the compiler and
