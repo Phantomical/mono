@@ -80,7 +80,7 @@ cl::opt<int> DevirtualizeArgumentBonus (
 	          "site fills with an object of a named class"));
 
 cl::opt<int> ScalarizeArgumentBonus (
-	"mono-inline-scalarize-arg-bonus", cl::Hidden, cl::init (50),
+	"mono-inline-scalarize-arg-bonus", cl::Hidden, cl::init (150),
 	cl::desc ("Threshold bonus for a callee that does not capture a parameter "
 	          "the site fills with a fresh allocation"));
 

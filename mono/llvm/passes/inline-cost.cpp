@@ -2113,8 +2113,14 @@ InlineCostCallAnalyzer::getHotCallSiteThreshold(CallBase &Call,
 
 void InlineCostCallAnalyzer::updateThreshold(CallBase &Call, Function &Callee) {
   // If no size growth is allowed for this inlining, set Threshold to 0.
+  //
+  // What mono adds still counts, because it does not describe the code this
+  // block runs. A call in a block that ends unreachable keeps the object it is
+  // handed captured, and `BasicAAResult::getModRefInfo ()` then answers ModRef
+  // for every call above it. The loop that pays for that is somewhere else in
+  // the function, so the block the call sits in says nothing about the fold.
   if (!allowSizeGrowth(Call)) {
-    Threshold = 0;
+    Threshold = mono::call_site_bonus(Call, F);
     return;
   }
 
@@ -2144,7 +2150,15 @@ void InlineCostCallAnalyzer::updateThreshold(CallBase &Call, Function &Callee) {
   // and the callsite.
   int SingleBBBonusPercent = 50;
   int VectorBonusPercent = TTI.getInlinerVectorBonusPercent();
-  int LastCallToStaticBonus = TTI.getInliningLastCallToStaticBonus();
+  /*
+   * The bonus prices deleting a body the fold takes the last call to, and
+   * `isSoleCallToLocalFunction ()` reads the module to decide that. A module
+   * here holds one root and the copies translated for it, so the count it reads
+   * is of this compile rather than of the program. A copy nothing folds is
+   * erased by `StripInlineCopiesPass` whichever way the model answers, and the
+   * callee keeps its own body behind its thunk, so no fold deletes anything.
+   */
+  int LastCallToStaticBonus = 0;
 
   // Lambda to set all the above bonus and bonus percentages to 0.
   auto DisallowAllBonuses = [&]() {
@@ -2482,9 +2496,9 @@ bool CallAnalyzer::simplifyCallSite(Function *F, CallBase &Call) {
 }
 
 bool CallAnalyzer::isLoweredToCall(Function *F, CallBase &Call) {
-  // A dispatch read mono writes as a call. TTI answers true for any named
-  // declaration and reads no attribute, so it costs a call penalty for one
-  // instruction.
+  // A dispatch read mono writes as a call. TTI answers true for any
+  // declaration outside its list of libm names, so it costs a call penalty for
+  // one instruction.
   if (mono::lowers_to_a_load(*F))
     return false;
 
