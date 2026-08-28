@@ -11,7 +11,7 @@
  * naturally. MonoAbiPass rewrites it after the optimization pipeline has run,
  * so nothing upstream of it ever sees a lowered call.
  *
- * The classification is done from IR types and the DataLayout:
+ * The classification is done from IR types and the DataLayout. Under System V:
  *
  *   - a value type of up to 16 bytes travels as one or two register words,
  *     each in the integer or the float file;
@@ -25,6 +25,19 @@
  * metadata. What makes that hold is the layout: the translator emits the same
  * shape mini reads, with padding spelled the one way (layout.hpp) that keeps
  * it distinguishable from data.
+ *
+ * The Microsoft convention asks a shorter question, and only about the size:
+ *
+ *   - a value type of 1, 2, 4 or 8 bytes travels as an integer of that width,
+ *     whatever its fields are;
+ *   - one of any other size travels as a pointer to a copy the caller made,
+ *     which is not the same as a copy in the outgoing argument area and so is
+ *     a plain pointer here rather than a byval one;
+ *   - a return follows the same rule, through a pointer the caller passes as
+ *     the first argument when it does not fit.
+ *
+ * Neither answer there depends on how many registers are left, so the walk of
+ * the fields and the running register counts are System V's alone.
  */
 
 #include "arch/arch.hpp"
@@ -114,6 +127,40 @@ pow2_width (uint64_t n)
 	return width;
 }
 
+#ifdef HOST_WIN32
+
+/// Classifies by size alone, which is the whole of the Microsoft rule. One
+/// quad comes back for a value type that fits a register, and `memory` for one
+/// that has to be reached through a pointer.
+AggShape
+classify_aggregate (Type *t, const DataLayout &dl)
+{
+	AggShape shape;
+	uint64_t size = dl.getTypeAllocSize (t);
+
+	/*
+	 * C and C++ give an empty struct one byte, so the Microsoft convention
+	 * gives it an argument slot like any other one-byte value type. A managed
+	 * declaration can still ask for a size of zero, and the native declaration
+	 * it is called against takes that slot, so the arguments behind it move
+	 * along by one when the slot is dropped.
+	 */
+	if (size == 0)
+		size = 1;
+
+	if (size != 1 && size != 2 && size != 4 && size != 8) {
+		shape.memory = true;
+		return shape;
+	}
+
+	shape.nquads = 1;
+	shape.cls[0] = Quad::Integer;
+	shape.qsize[0] = (unsigned) size;
+	return shape;
+}
+
+#else
+
 AggShape
 classify_aggregate (Type *t, const DataLayout &dl)
 {
@@ -172,6 +219,8 @@ classify_aggregate (Type *t, const DataLayout &dl)
 	return shape;
 }
 
+#endif
+
 /// Returns the IR type \p shape's register words travel as. LLVM's own lowering
 /// of a first-class struct argument passes each element separately, which is
 /// exactly what puts one word per register.
@@ -205,9 +254,10 @@ travel_type (LLVMContext &ctx, const AggShape &shape)
 /// How one argument crosses the boundary.
 struct ParamLowering {
 	enum Kind {
-		Direct,  ///< the natural type itself: scalars, pointers, vectors
-		Coerced, ///< a value type travelling as register-sized words
-		Memory,  ///< a value type copied onto the stack: a byval pointer
+		Direct,   ///< the natural type itself: scalars, pointers, vectors
+		Coerced,  ///< a value type travelling as register-sized words
+		Memory,   ///< a value type copied onto the stack: a byval pointer
+		Indirect, ///< a value type reached through a pointer to the caller's copy
 	} kind = Direct;
 	Type *travel = nullptr; ///< the lowered parameter type when Coerced
 };
@@ -225,6 +275,56 @@ is_aggregate (Type *t)
 {
 	return t->isStructTy () || t->isArrayTy ();
 }
+
+#ifdef HOST_WIN32
+
+/// No register counts here: the shape a value takes is the same wherever it
+/// lands, so an argument past the fourth differs only in that LLVM puts it on
+/// the stack.
+CallLowering
+compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
+                  const DataLayout &dl, LLVMContext &ctx)
+{
+	CallLowering low;
+	Type *ret = type->getReturnType ();
+
+	if (is_aggregate (ret)) {
+		AggShape shape = classify_aggregate (ret, dl);
+
+		if (shape.memory)
+			low.ret_by_address = true;
+		else
+			low.ret_travel = travel_type (ctx, shape);
+	}
+
+	for (unsigned i = 0; i < type->getNumParams (); ++i) {
+		Type *t = type->getParamType (i);
+		ParamLowering p;
+
+		/* The nest key rides its own register, outside the convention. */
+		if (is_nest (i)) {
+			low.params.push_back (p);
+			continue;
+		}
+
+		if (is_aggregate (t)) {
+			AggShape shape = classify_aggregate (t, dl);
+
+			if (shape.memory) {
+				p.kind = ParamLowering::Indirect;
+			} else {
+				p.kind = ParamLowering::Coerced;
+				p.travel = travel_type (ctx, shape);
+			}
+		}
+
+		low.params.push_back (p);
+	}
+
+	return low;
+}
+
+#else
 
 CallLowering
 compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
@@ -306,6 +406,8 @@ compute_lowering (FunctionType *type, function_ref<bool (unsigned)> is_nest,
 	return low;
 }
 
+#endif
+
 /// Whether \p low leaves this frame out of the call it describes, which is what
 /// lets the call hand the frame away:
 ///
@@ -324,7 +426,7 @@ frame_stays_out_of_the_call (const CallLowering &low)
 		return false;
 
 	for (const ParamLowering &p : low.params)
-		if (p.kind == ParamLowering::Memory)
+		if (p.kind == ParamLowering::Memory || p.kind == ParamLowering::Indirect)
 			return false;
 
 	return true;
@@ -410,14 +512,43 @@ rewrite_call (CallBase *call)
 		const ParamLowering &p = low.params[i];
 
 		switch (p.kind) {
-		case ParamLowering::Direct:
+		case ParamLowering::Direct: {
+			AttributeSet pattrs = old_attrs.getParamAttrs (i);
+#ifdef HOST_WIN32
+			// The Microsoft convention gives an i8 or i16 argument a
+			// register of its own width, so LLVM emits nothing for
+			// signext and zeroext. The psABI promotes such an argument
+			// to i32 instead, where the attribute decides the fill.
+			// Mono fills those bits itself, as the interpreter does in
+			// extend_narrow_arg (). The compiled engine fills them
+			// here, so both engines tell native code the same thing.
+			// i32 takes the register and the eight-byte stack slot the
+			// narrower type would have, so the argument does not move.
+			bool sign = pattrs.hasAttribute (Attribute::SExt);
+
+			if ((sign || pattrs.hasAttribute (Attribute::ZExt))
+			    && v->getType ()->isIntegerTy ()
+			    && v->getType ()->getIntegerBitWidth () < 32) {
+				Type *wide = Type::getInt32Ty (ctx);
+				AttrBuilder ab (ctx, pattrs);
+
+				v = sign ? b.CreateSExt (v, wide) : b.CreateZExt (v, wide);
+				ab.removeAttribute (Attribute::SExt);
+				ab.removeAttribute (Attribute::ZExt);
+				pattrs = AttributeSet::get (ctx, ab);
+			}
+#endif
 			args.push_back (v);
 			types.push_back (v->getType ());
-			attrs.push_back (old_attrs.getParamAttrs (i));
+			attrs.push_back (pattrs);
 			break;
+		}
 		case ParamLowering::Coerced: {
-			if (dl.getTypeStoreSize (p.travel) == 0) {
-				args.push_back (PoisonValue::get (p.travel));
+			/* An empty value type has no bytes to spill. Where the
+			 * convention gives it a slot all the same, a zero fills it. */
+			if (dl.getTypeStoreSize (p.travel) == 0
+			    || dl.getTypeStoreSize (v->getType ()) == 0) {
+				args.push_back (Constant::getNullValue (p.travel));
 				types.push_back (p.travel);
 				attrs.push_back (AttributeSet ());
 				break;
@@ -458,6 +589,25 @@ rewrite_call (CallBase *call)
 			args.push_back (slot);
 			types.push_back (PointerType::get (ctx, 0));
 			attrs.push_back (AttributeSet::get (ctx, ab));
+			break;
+		}
+		case ParamLowering::Indirect: {
+			/*
+			 * What crosses is a pointer to a copy this frame owns, not the
+			 * copy itself, so there is no byval here: byval would put the
+			 * pointee in the outgoing argument area, which is where the
+			 * callee expects the pointer instead.
+			 *
+			 * The copy is the callee's to write on -- the convention says the
+			 * caller supplies one per call -- and this frame's alloca is that.
+			 */
+			AllocaInst *slot = entry.CreateAlloca (v->getType ());
+
+			slot->setAlignment (Align (8));
+			b.CreateAlignedStore (v, slot, Align (8));
+			args.push_back (slot);
+			types.push_back (PointerType::get (ctx, 0));
+			attrs.push_back (AttributeSet ());
 			break;
 		}
 		}
@@ -621,14 +771,29 @@ create_mono_entry_thunk (Module &m, StringRef name, Function *target, Value *thr
 			attrs.push_back (AttributeSet::get (ctx, ab));
 			break;
 		}
+		case ParamLowering::Indirect:
+			types.push_back (PointerType::get (ctx, 0));
+			attrs.push_back (AttributeSet ());
+			break;
 		}
 	}
 
 	Type *ret_type = natural->getReturnType ();
 
 	if (low.ret_by_address) {
+		AttrBuilder hidden_attrs (ctx);
+
+#ifdef HOST_WIN32
+		/*
+		 * The Microsoft convention has the callee answer with the pointer in
+		 * the return register as well as write through it. sret is how LLVM is
+		 * told to do that, and it changes nothing for a caller, which passes
+		 * the pointer in the same register either way.
+		 */
+		hidden_attrs.addStructRetAttr (natural->getReturnType ());
+#endif
 		types.insert (types.begin (), PointerType::get (ctx, 0));
-		attrs.insert (attrs.begin (), AttributeSet ());
+		attrs.insert (attrs.begin (), AttributeSet::get (ctx, hidden_attrs));
 		ret_type = Type::getVoidTy (ctx);
 	} else if (low.ret_travel != nullptr) {
 		ret_type = low.ret_travel;
@@ -680,6 +845,10 @@ create_mono_entry_thunk (Module &m, StringRef name, Function *target, Value *thr
 			break;
 		}
 		case ParamLowering::Memory:
+		case ParamLowering::Indirect:
+			/* Both arrive as a pointer to the value: one into the outgoing
+			 * argument area, one to a copy of the caller's own. Either way the
+			 * body wants the value. */
 			args.push_back (b.CreateAlignedLoad (want, incoming, Align (8)));
 			break;
 		}
