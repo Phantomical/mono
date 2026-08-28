@@ -105,6 +105,18 @@ namespace System
 				try {
 					inputEncoding = Encoding.GetEncoding (WindowsConsole.GetInputCodePage ());
 					outputEncoding = Encoding.GetEncoding (WindowsConsole.GetOutputCodePage ());
+
+					//
+					// A console stream takes no preamble.  GetEncoding hands
+					// back a UTF-8 encoding that has one, and the writer puts
+					// it in front of the program's first output -- so a
+					// console under code page 65001 gets three bytes of
+					// ZWNBSP before anything it printed.  The unmarked form
+					// is the one the Unix branch below takes for the same
+					// reason.
+					//
+					if (outputEncoding.CodePage == 65001) // UTF8Encoding.UTF8_CODE_PAGE
+						outputEncoding = EncodingHelper.UTF8Unmarked;
 					// ArgumentException and NotSupportedException can be thrown as well
 				} catch {
 					// FIXME: I18N assemblies are not available when compiling mcs
