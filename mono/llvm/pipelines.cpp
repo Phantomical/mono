@@ -552,7 +552,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
 		mono::FoldDelegateInvokesPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
-		mono::GuardArrayDispatchPass ()));
+		mono::GuardDispatchPass ()));
 
 	/*
 	 * Both passes run again between the inliner's rounds. Most of what they
@@ -565,7 +565,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 	llvm::FunctionPassManager between;
 
 	between.addPass (mono::FoldDelegateInvokesPass ());
-	between.addPass (mono::GuardArrayDispatchPass ());
+	between.addPass (mono::GuardDispatchPass ());
 	between.addPass (buildTier2FunctionSimplificationPipeline ());
 
 	MPM.addPass (mono::TopDownInlinerPass (*TM, buildTier2MaterializePipeline (),

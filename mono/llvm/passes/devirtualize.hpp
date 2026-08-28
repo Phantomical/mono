@@ -61,7 +61,7 @@ bool fold_dispatch_sites (llvm::Function &f);
 /// inliner's rounds, because a folded body brings dispatches on the caller's
 /// own array with it, and it marks each dispatch it has taken so that a later
 /// run leaves the arm the compare did not pick alone.
-class GuardArrayDispatchPass : public llvm::PassInfoMixin<GuardArrayDispatchPass> {
+class GuardDispatchPass : public llvm::PassInfoMixin<GuardDispatchPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 };

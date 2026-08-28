@@ -123,6 +123,15 @@ bool fold_delegates ();
 /// arms differ in one pass.
 bool guard_array_dispatch ();
 
+/// Whether MONO_LLVM_JIT_GUARD_CLASSES left the guess on a dispatch whose
+/// receiver this compile cannot prove a class for.
+///
+/// A false value leaves every such dispatch reading its callee out of the
+/// receiver's vtable, which is the answer a guess has to agree with. The
+/// translator writes the same site either way, so the two arms differ in one
+/// pass.
+bool guard_class_dispatch ();
+
 /// Whether MONO_LLVM_JIT_THREAD_STATIC left the thread-static fast path on.
 ///
 /// A false value sends every thread static back through mono_domain_get () and

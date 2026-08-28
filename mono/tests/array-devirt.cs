@@ -16,7 +16,7 @@ using System.Runtime.CompilerServices;
  * `exact_class ()` (`mono/llvm/operand-class.cpp`) refuses an array, and this
  * file fails if that refusal comes out.
  *
- * `GuardArrayDispatchPass` (`mono/llvm/passes/devirtualize.cpp`) takes the same
+ * `GuardDispatchPass` (`mono/llvm/passes/devirtualize.cpp`) takes the same
  * site on the bound behind a compare of the receiver's vtable, so the arm it
  * picks is what has to keep the rows below apart. The guard is tier 2's:
  * `runtime-array-guard` is the arm whose threshold reaches it, and

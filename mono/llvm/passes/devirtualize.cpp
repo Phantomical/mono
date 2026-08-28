@@ -402,9 +402,9 @@ namespace {
 constexpr uint64_t unprofiled_guard_weight = 1000;
 
 /// Marks the dispatch a guard has already been written around, which is the one
-/// left standing on the arm the compare did not pick. Reading the same bound off
+/// left standing on the arm the compare did not pick. Reading the same class off
 /// it again would nest a second guard inside the first.
-constexpr StringRef guarded_md = "mono.array.guarded";
+constexpr StringRef guarded_md = "mono.dispatch.guarded";
 
 /// Whether a conformant image can put a class other than \p klass in a slot
 /// declared with it.
@@ -443,8 +443,19 @@ guardable_array (MonoClass *klass)
 	       || shared == mono_defaults.char_class || shared == mono_defaults.boolean_class;
 }
 
-/// The array class a receiver reaching \p site is declared with, or null where
-/// the IR gives none a guard pays for.
+/**
+ * The class a receiver reaching \p site can be compared against, or null where
+ * the IR gives none a guard pays for.
+ *
+ * Two rules answer, and they read different evidence. The array rule reads the
+ * class the slot is declared with, which bounds a set every member of which
+ * `guardable_array ()` says reaches the same implementation. The guess reads a
+ * class an allocation states, which bounds nothing: it is one class the
+ * receiver is known to reach, and the compare is what covers the rest.
+ *
+ * The array rule is asked first, because a declared array class answers for
+ * every array in the slot's set while a guess answers for one of them.
+ */
 MonoClass *
 guarded_class (CallBase *site, const Function &f)
 {
@@ -453,14 +464,20 @@ guarded_class (CallBase *site, const Function &f)
 	if (object == nullptr || site->getMetadata (guarded_md) != nullptr)
 		return nullptr;
 
-	auto [klass, exact] = operand_class (object, f);
-
-	// An exact class needs no guard: fold_object_vtables () names its vtable and
-	// the fold above then takes the site.
-	if (klass == nullptr || exact || !guardable_array (klass))
+	// A class exact_class () answers needs no guard: fold_object_vtables ()
+	// replaces the read with that class's vtable, and the fold above takes the
+	// site from there. Asking it rather than reading `exact` below is what keeps
+	// the two in step, since it has a rule of its own for a bound on a sealed
+	// class.
+	if (exact_class (object, f) != nullptr)
 		return nullptr;
 
-	return klass;
+	auto [klass, exact] = operand_class (object, f);
+
+	if (klass != nullptr && guard_array_dispatch () && guardable_array (klass))
+		return klass;
+
+	return guard_class_dispatch () ? guessed_class (object, f) : nullptr;
 }
 
 /// The call that reads \p site's answer, or null where the answer does not
@@ -477,6 +494,37 @@ sole_call (CallBase *site)
 	auto *call = dyn_cast<CallBase> (site->user_back ());
 
 	return call != nullptr && call->getCalledOperand () == site ? call : nullptr;
+}
+
+/**
+ * Whether the blocks around \p call are a shape `guard_dispatch ()` below can
+ * write two arms into.
+ *
+ * The answer the two arms merge into needs one phi in the block the call
+ * returns to, with an incoming for each arm. Where that block has a
+ * predecessor that is neither arm, such a phi would have to name a value for
+ * that edge as well, and the call's own answer is not defined along it.
+ *
+ * A plain call always fits, because the split below makes the block it returns
+ * to and that block then has the guard as its only predecessor. An invoke
+ * returns to a block that was already there, and tier 2 gives most of them one
+ * of their own - `changeToInvokeAndSplitBasicBlock ()` is what makes it - so
+ * refusing the rest costs little.
+ *
+ * Leaving such a site alone also keeps the block's phis agreeing on their
+ * predecessors, which is a rule LLVM enforces nowhere: `InstCombine`'s
+ * `PredOrder` reads the list off the first phi in a block and indexes the rest
+ * of them with it.
+ */
+bool
+guard_fits (CallBase *call)
+{
+	auto *unwinds = dyn_cast<InvokeInst> (call);
+
+	if (unwinds == nullptr)
+		return true;
+
+	return unwinds->getNormalDest ()->getUniquePredecessor () == call->getParent ();
 }
 
 /// A dispatch a guard can take, with the weights that guard will carry.
@@ -496,7 +544,11 @@ collect_guardable (Function &f, StringRef name, Lookup lookup, BlockFrequencyInf
 {
 	for (CallBase *site : builtin_sites (f, name)) {
 		CallBase *call = sole_call (site);
-		MonoClass *klass = call != nullptr ? guarded_class (site, f) : nullptr;
+
+		if (call == nullptr || !guard_fits (call))
+			continue;
+
+		MonoClass *klass = guarded_class (site, f);
 
 		if (klass == nullptr)
 			continue;
@@ -554,11 +606,11 @@ guard_dispatch (const Guardable &at, Constant *vtable, Function *entry)
 
 	BasicBlock *tail = unwinds != nullptr
 	                           ? unwinds->getNormalDest ()
-	                           : head->splitBasicBlock (call.getIterator (), "array_done");
+	                           : head->splitBasicBlock (call.getIterator (), "guard_done");
 	BasicBlock *pad = unwinds != nullptr ? unwinds->getUnwindDest () : nullptr;
 
-	BasicBlock *fast = BasicBlock::Create (c, "array_direct", f, tail);
-	BasicBlock *slow = BasicBlock::Create (c, "array_dispatch", f, tail);
+	BasicBlock *fast = BasicBlock::Create (c, "guard_direct", f, tail);
+	BasicBlock *slow = BasicBlock::Create (c, "guard_dispatch", f, tail);
 
 	// The call and the site it reads its callee from move into the dispatching
 	// arm rather than being cloned. That is what keeps the matching arm's
@@ -589,7 +641,7 @@ guard_dispatch (const Guardable &at, Constant *vtable, Function *entry)
 	}
 
 	if (!call.getType ()->isVoidTy ()) {
-		PHINode *merged = PHINode::Create (call.getType (), 2, "array_result",
+		PHINode *merged = PHINode::Create (call.getType (), 2, "guard_result",
 		                                   tail->getFirstNonPHIIt ());
 
 		// Before the incoming values name it, so that replacing the call's uses
@@ -607,14 +659,14 @@ guard_dispatch (const Guardable &at, Constant *vtable, Function *entry)
 	IRBuilder<> guard (head);
 
 	guard.SetCurrentDebugLocation (call.getDebugLoc ());
-	guard.CreateCondBr (guard.CreateICmpEQ (read, vtable, "array_hit"), fast, slow)
+	guard.CreateCondBr (guard.CreateICmpEQ (read, vtable, "guard_hit"), fast, slow)
 		->setMetadata (LLVMContext::MD_prof, at.weights);
 }
 
 } // namespace
 
 PreservedAnalyses
-GuardArrayDispatchPass::run (Function &f, FunctionAnalysisManager &fam)
+GuardDispatchPass::run (Function &f, FunctionAnalysisManager &fam)
 {
 	const CompileState &compile = current_compile ();
 

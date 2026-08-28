@@ -285,6 +285,18 @@ guard_array_dispatch ()
 }
 
 bool
+guard_class_dispatch ()
+{
+	static bool on = [] {
+		const char *value = g_getenv ("MONO_LLVM_JIT_GUARD_CLASSES");
+
+		return value == nullptr || is_truthy_env_var (value);
+	}();
+
+	return on;
+}
+
+bool
 thread_static_fast_path ()
 {
 	static bool on = [] {
