@@ -60,12 +60,8 @@ namespace System.Linq
             /// Prepares this iterator to yield values.
             /// </summary>
             /// <remarks>
-            /// <see cref="GetEnumerator"/> calls this on the enumerator it returns, once, before
-            /// the first <see cref="MoveNext"/>. Derived classes override it to take the resources
-            /// an enumeration needs, such as an enumerator over a source sequence.
-            ///
-            /// A derived class that keeps its position in <see cref="_state"/> holds no such
-            /// resource, and inherits this empty implementation, which leaves that position alone.
+            /// This method is called when <see cref="GetEnumerator"/> is called. Use it to
+            /// initialize any child enumerators outside of the loop, so that they can be inlined.
             /// </remarks>
             public virtual void Initialize()
             {
