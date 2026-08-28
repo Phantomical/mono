@@ -50,8 +50,6 @@ constexpr llvm::StringRef param_classes_md = "mono.param.classes";
 /// produces the delegate, so a fold carries it along with that instruction.
 constexpr llvm::StringRef delegate_target_md = "mono.delegate.target";
 
-/// Names the Invoke a call dispatches out of the delegate in its argument 0.
-constexpr llvm::StringRef delegate_invoke_md = "mono.delegate.invoke";
 
 /// Says that \p site produces an instance of \p klass.
 void mark_exact_class (llvm::Instruction &site, MonoClass *klass);
@@ -95,12 +93,6 @@ void mark_delegate_target (llvm::Instruction &site, MonoMethod *target);
 /// producers the translator could answer for carry the mark.
 MonoMethod *delegate_target (const llvm::Value *v);
 
-/// Says that \p site dispatches \p invoke out of the delegate it takes as its
-/// argument 0.
-void mark_delegate_invoke (llvm::Instruction &site, MonoMethod *invoke);
-
-/// The Invoke \p site dispatches, or null where it dispatches no delegate.
-MonoMethod *delegate_invoke (const llvm::Instruction &site);
 
 } // namespace mono
 

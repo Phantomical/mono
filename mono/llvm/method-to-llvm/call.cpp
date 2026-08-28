@@ -1786,12 +1786,6 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		if (keyed)
 			site->addParamAttr (site->arg_size () - 1, llvm::Attribute::Nest);
 		carry_parameter_extensions (site, *declaration);
-
-		// Says which call the entry it reads belongs to, so a pass can answer
-		// the site from what the receiver is without matching the load and the
-		// select that delegate_invoke_callee () wrote.
-		if (delegate != nullptr)
-			mark_delegate_invoke (*site, callee_method);
 	};
 
 	llvm::CallInst::TailCallKind tail_kind =

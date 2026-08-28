@@ -169,18 +169,4 @@ delegate_target (const Value *v)
 	return site != nullptr ? marked_with (*site, delegate_target_md) : nullptr;
 }
 
-void
-mark_delegate_invoke (Instruction &site, MonoMethod *invoke)
-{
-	LLVMContext &c = site.getContext ();
-
-	site.setMetadata (delegate_invoke_md, MDNode::get (c, { as_metadata (c, invoke) }));
-}
-
-MonoMethod *
-delegate_invoke (const Instruction &site)
-{
-	return marked_with (site, delegate_invoke_md);
-}
-
 } // namespace mono
