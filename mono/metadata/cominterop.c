@@ -3582,7 +3582,7 @@ mono_cominterop_emit_marshal_safearray (EmitMarshalContext *m, int argnum, MonoT
 			mono_mb_emit_managed_call (mb, mono_get_Array_SetValueImpl (), NULL);
 
 			if (byValue)
-				mono_mb_patch_short_branch (mb, label4);
+				mono_mb_patch_branch (mb, label4);
 
 			mono_mb_emit_add_to_local (mb, index_var, 1);
 
