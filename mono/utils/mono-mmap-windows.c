@@ -79,6 +79,72 @@ mono_setmmapjit (int flag)
 	/* Ignored on HOST_WIN32 */
 }
 
+/*
+ * Any two addresses below this are within a signed 32-bit displacement of each
+ * other.  Generated code branches and reaches its own data that way, so the
+ * code manager asks for MONO_MMAP_32BIT to stay under it.
+ */
+#define MONO_MMAP_32BIT_LIMIT ((uintptr_t) 0x80000000)
+
+/*
+ * Reserves `length` bytes below MONO_MMAP_32BIT_LIMIT.
+ *
+ * There is no VirtualAlloc flag for this the way there is a MAP_32BIT for
+ * mmap, so the free regions below the boundary are walked and the first one
+ * that fits is taken.  A caller that gets NULL is out of that range, which is
+ * what it wants to hear: an address anywhere else would be a branch that
+ * silently does not reach.
+ */
+static void *
+valloc_below_2gb (size_t length, DWORD mflags, DWORD prot)
+{
+	const uintptr_t limit = MONO_MMAP_32BIT_LIMIT;
+	SYSTEM_INFO si;
+	uintptr_t granularity, at;
+
+	GetSystemInfo (&si);
+	granularity = (uintptr_t) si.dwAllocationGranularity;
+	if (granularity == 0)
+		return NULL;
+
+	at = (uintptr_t) si.lpMinimumApplicationAddress;
+	at = (at + granularity - 1) & ~(granularity - 1);
+
+	while (at != 0 && at + length <= limit) {
+		MEMORY_BASIC_INFORMATION mbi;
+		uintptr_t next;
+
+		if (VirtualQuery ((void *) at, &mbi, sizeof (mbi)) == 0)
+			break;
+
+		next = (uintptr_t) mbi.BaseAddress + mbi.RegionSize;
+
+		if (mbi.State == MEM_FREE && next - at >= length) {
+			void *ptr = VirtualAlloc ((void *) at, length, mflags, prot);
+
+			if (ptr != NULL)
+				return ptr;
+
+			/*
+			 * Another thread reserved this address between the query
+			 * and the request. The rest of the region is still free,
+			 * and a region here is routinely most of the low 2GB, so
+			 * step one granule. Stepping over the region instead
+			 * gives up the whole range on a single lost race.
+			 */
+			next = at + granularity;
+		}
+
+		/* A region shorter than the granularity would leave `at` where it is. */
+		next = (next + granularity - 1) & ~(granularity - 1);
+		if (next <= at)
+			break;
+		at = next;
+	}
+
+	return NULL;
+}
+
 void*
 mono_valloc (void *addr, size_t length, int flags, MonoMemAccountType type)
 {
@@ -90,7 +156,29 @@ mono_valloc (void *addr, size_t length, int flags, MonoMemAccountType type)
 	int prot = mono_mmap_win_prot_from_flags (flags);
 	/* translate the flags */
 
-	ptr = VirtualAlloc (addr, length, mflags, prot);
+	if (flags & MONO_MMAP_32BIT) {
+		uintptr_t want = (uintptr_t) addr;
+
+		/*
+		 * The boundary is a constraint and the preferred address only a
+		 * hint, so a hint that puts any of the range at or past the
+		 * boundary is dropped.  The code manager asks for the address
+		 * behind its last chunk, and honouring that one once the chunks
+		 * have grown up to the boundary is what puts code out of reach.
+		 */
+		if (addr != NULL
+		    && (want >= MONO_MMAP_32BIT_LIMIT
+		        || length > MONO_MMAP_32BIT_LIMIT - want))
+			addr = NULL;
+
+		ptr = addr != NULL ? VirtualAlloc (addr, length, mflags, prot)
+		                   : valloc_below_2gb (length, (DWORD) mflags, (DWORD) prot);
+	} else {
+		ptr = VirtualAlloc (addr, length, mflags, prot);
+	}
+
+	if (ptr == NULL)
+		return NULL;
 
 	mono_account_mem (type, (ssize_t)length);
 
