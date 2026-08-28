@@ -555,13 +555,16 @@ MonoPassBuilder::buildTier2Pipeline ()
 		mono::GuardArrayDispatchPass ()));
 
 	/*
-	 * The array guard again between the inliner's rounds. A folded body brings
-	 * the caller's own array into a dispatch the caller never wrote, so the
-	 * sites it can take are mostly the ones a fold delivers, and the round after
-	 * each one reads what it named as an ordinary call site.
+	 * Both passes run again between the inliner's rounds. Most of what they
+	 * find there is not in the caller's own code: it arrives with a fold.
+	 * An inlined `MoveNext` or `get_Current` carries its own delegate calls and
+	 * array dispatches into the caller. Neither pass reached those sites before
+	 * the inline happened. The round after each pass then reads what it named
+	 * as an ordinary call site.
 	 */
 	llvm::FunctionPassManager between;
 
+	between.addPass (mono::FoldDelegateInvokesPass ());
 	between.addPass (mono::GuardArrayDispatchPass ());
 	between.addPass (buildTier2FunctionSimplificationPipeline ());
 
