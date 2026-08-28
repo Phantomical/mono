@@ -158,6 +158,27 @@ public static class Program {
 		}
 	}
 
+	sealed class Holder {
+		public Shape s;
+	}
+
+	/*
+	 * The receiver comes from a field, not straight off an allocation or a
+	 * merge. `h.s = new Narrow ()` stores a reference, so the translator
+	 * writes a write-barrier call beside the store
+	 * (`MethodLLVMEmitter::emit_reference_store ()`,
+	 * `method-to-llvm/fields.cpp`), taking the field's address as an
+	 * argument. A walk that answered a class off the field's one store still
+	 * had to read past that call to reach it.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int FieldReceiver ()
+	{
+		Holder h = new Holder ();
+		h.s = new Narrow ();
+		return h.s.Which ();
+	}
+
 	static void CheckAll (string tier)
 	{
 		Check (tier + ": same class, true arm", SameClass (true), 1);
@@ -173,6 +194,8 @@ public static class Program {
 		Check (tier + ": is Narrow, Wide arm", IsNarrow (2), false);
 
 		Check (tier + ": allocated in a try block", AllocatedInATryBlock (), 1);
+
+		Check (tier + ": field receiver", FieldReceiver (), 1);
 	}
 
 	static bool Promote (string name, int tier)
@@ -192,7 +215,7 @@ public static class Program {
 	{
 		return Promote ("SameClass", tier) & Promote ("DifferentClasses", tier)
 		       & Promote ("LoopReceiver", tier) & Promote ("IsNarrow", tier)
-		       & Promote ("AllocatedInATryBlock", tier);
+		       & Promote ("AllocatedInATryBlock", tier) & Promote ("FieldReceiver", tier);
 	}
 
 	public static int Main ()

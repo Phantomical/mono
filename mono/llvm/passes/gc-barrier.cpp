@@ -250,9 +250,17 @@ gc_barrier_decl (Module &m, const GcBarrierLayout &layout)
 	 * opaque call. Every call below that then may-writes the object's fields.
 	 * A field a caller stored before a loop is then re-read inside it, and the
 	 * class an allocation stated does not reach the dispatch that wants it.
+	 *
+	 * `readonly` on each parameter states, per argument, what the function-level
+	 * effects above already say for both: the barrier never writes through
+	 * either pointer. A caller that reads only the parameter attribute -
+	 * `CallBase::onlyReadsMemory (OpNo)` does, and does not consult
+	 * `MemoryEffects` - still gets the right answer.
 	 */
 	decl->addParamAttr (0, Attribute::getWithCaptureInfo (c, CaptureInfo::none ()));
 	decl->addParamAttr (1, Attribute::getWithCaptureInfo (c, CaptureInfo::none ()));
+	decl->addParamAttr (0, Attribute::ReadOnly);
+	decl->addParamAttr (1, Attribute::ReadOnly);
 
 	if (layout.card_table == nullptr)
 		return decl;

@@ -22,6 +22,7 @@
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/class.h>
 
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
@@ -29,6 +30,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+#include <llvm/Support/ModRef.h>
 
 #include <gtest/gtest.h>
 
@@ -404,6 +406,318 @@ TEST (OperandClassTest, AllocationSiteRefusesAMarshalByRefClass)
 	AllocationModule m (klass, alloc_object_name);
 
 	EXPECT_EQ (operand_class (m.site, *m.caller).first, nullptr);
+}
+
+/// A function with one allocation site real enough for `allocation_class ()`
+/// to answer it, a field at a fixed offset off that allocation, and the
+/// pieces a test needs to store into and load back from that field.
+///
+/// A store is legal any time after the allocation and before the load that
+/// reads it back: `matching_field_stores ()` gathers every store to the
+/// field by walking uses, not by tracing which one a particular path
+/// executes, so two stores in the same straight line stand for two stores on
+/// two different paths as far as the walk is concerned.
+struct FieldModule {
+	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
+	std::unique_ptr<Module> module;
+	Function *caller = nullptr;
+	CallInst *base = nullptr;
+	Value *field_address = nullptr;
+	BasicBlock *entry = nullptr;
+
+	static constexpr int64_t field_offset = 8;
+
+	explicit FieldModule (MonoClass *base_klass)
+	{
+		module = std::make_unique<Module> ("field", *context);
+
+		Type *ptr = PointerType::get (*context, 0);
+		Type *word = Type::getInt64Ty (*context);
+
+		Function *decl = Function::Create (
+			FunctionType::get (ptr, { ptr, word, ptr }, false),
+			GlobalValue::ExternalLinkage, alloc_object_name, module.get ());
+
+		auto *vtable = new GlobalVariable (*module, Type::getInt8Ty (*context), false,
+		                                   GlobalValue::ExternalLinkage, nullptr, "vtable");
+		mark_class_reference (*vtable, base_klass);
+
+		caller = Function::Create (
+			FunctionType::get (ptr, { PointerType::get (*context, 0) }, false),
+			GlobalValue::ExternalLinkage, "caller", module.get ());
+
+		entry = BasicBlock::Create (*context, "entry", caller);
+
+		IRBuilder<> b (entry);
+
+		base = b.CreateCall (
+			decl, { vtable, ConstantInt::get (word, 64),
+			        ConstantPointerNull::get (cast<PointerType> (ptr)) });
+		field_address = b.CreateGEP (Type::getInt8Ty (*context), base,
+		                             { ConstantInt::get (word, field_offset) });
+	}
+
+	/// A store of \p value into the field, appended to \p block.
+	void store_field (BasicBlock *block, Value *value)
+	{
+		IRBuilder<> (block).CreateStore (value, field_address);
+	}
+
+	/// A load in \p block, marked as an instance of \p klass when \p klass is
+	/// given, standing for a value a test stores into the field. This reuses
+	/// `MergeModule::allocation ()`'s reason for a load rather than a
+	/// constant: a mark has to sit on an instruction.
+	Instruction *marked_value (BasicBlock *block, MonoClass *klass)
+	{
+		IRBuilder<> b (block);
+		Instruction *made = b.CreateLoad (b.getPtrTy (), caller->getArg (0));
+
+		if (klass != nullptr)
+			mark_exact_class (*made, klass);
+
+		return made;
+	}
+
+	/// Ends \p block with a load of the field and a return of it.
+	LoadInst *load_and_return (BasicBlock *block)
+	{
+		IRBuilder<> b (block);
+		LoadInst *load = b.CreateLoad (b.getPtrTy (), field_address);
+
+		b.CreateRet (load);
+
+		return load;
+	}
+};
+
+/// The split this whole rule stands on: the allocation starts zero-filled,
+/// so a path where the load runs before the store is still live, and
+/// `operand_class ()` must answer no class for it the way it would for an
+/// `isinst` reading this field. `exact_class ()` is for a caller that
+/// dereferences right after, so the null path faults there before it
+/// matters, and that entry reads past it to the one store's class.
+TEST (OperandClassTest, LoadWithOneStoreSplitsOperandClassFromExactClass)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *value = m.marked_value (m.entry, classX);
+
+	m.store_field (m.entry, value);
+	LoadInst *load = m.load_and_return (m.entry);
+
+	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
+	EXPECT_EQ (exact_class (load, *m.caller), classX);
+}
+
+/// The class every store agrees on settles the load even where the objects
+/// those stores write are themselves different, because the rule is about
+/// what class the field holds, not which object. This reads through
+/// `exact_class ()`, because `operand_class ()` answers no class here too:
+/// the field's zero-filled initial value is still one of the arms.
+TEST (OperandClassTest, LoadAnswersWhereTwoStoresNameDifferentObjectsOfTheSameClass)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *first = m.marked_value (m.entry, classX);
+	Instruction *second = m.marked_value (m.entry, classX);
+
+	m.store_field (m.entry, first);
+	m.store_field (m.entry, second);
+	LoadInst *load = m.load_and_return (m.entry);
+
+	EXPECT_EQ (exact_class (load, *m.caller), classX);
+}
+
+/// Two stores that disagree settle the merge at no class before the null arm
+/// even enters into it, so both entry points refuse here.
+TEST (OperandClassTest, LoadAnswersNoClassWhereTwoStoresDisagree)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *first = m.marked_value (m.entry, classX);
+	Instruction *second = m.marked_value (m.entry, classY);
+
+	m.store_field (m.entry, first);
+	m.store_field (m.entry, second);
+	LoadInst *load = m.load_and_return (m.entry);
+
+	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
+	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
+}
+
+/// The escape guard is what this rule stands on: passing the allocation to a
+/// call hands its address to code this walk cannot read, so the answer must
+/// go to no class even though the one store still in sight names a settled
+/// class.
+TEST (OperandClassTest, LoadAnswersNoClassWhereTheAllocationEscapesToACall)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *value = m.marked_value (m.entry, classX);
+
+	m.store_field (m.entry, value);
+
+	Function *sink = Function::Create (
+		FunctionType::get (Type::getVoidTy (*m.context), { m.base->getType () }, false),
+		GlobalValue::ExternalLinkage, "sink", m.module.get ());
+	IRBuilder<> (m.entry).CreateCall (sink, { m.base });
+
+	LoadInst *load = m.load_and_return (m.entry);
+
+	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
+	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
+}
+
+/// The same guard covers the allocation escaping as the value a store writes
+/// into another object, rather than as the address a store writes through.
+TEST (OperandClassTest, LoadAnswersNoClassWhereTheAllocationIsStoredIntoAnotherObject)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *value = m.marked_value (m.entry, classX);
+
+	m.store_field (m.entry, value);
+	IRBuilder<> (m.entry).CreateStore (m.base, m.caller->getArg (0));
+
+	LoadInst *load = m.load_and_return (m.entry);
+
+	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
+	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
+}
+
+/// A declaration shaped like the write barrier's own
+/// (`gc_barrier_decl ()`, `passes/gc-barrier.cpp`): one pointer parameter
+/// carrying whatever \p captures and \p effects a test asks for.
+Function *
+declare_sink (Module &m, Type *param, bool captures, MemoryEffects effects)
+{
+	Function *decl = Function::Create (
+		FunctionType::get (Type::getVoidTy (m.getContext ()), { param }, false),
+		GlobalValue::ExternalLinkage, "sink", &m);
+
+	if (!captures)
+		decl->addParamAttr (
+			0, Attribute::getWithCaptureInfo (m.getContext (), CaptureInfo::none ()));
+
+	decl->setMemoryEffects (effects);
+	return decl;
+}
+
+/// A call the write barrier's own attributes mark as safe must not stop the
+/// walk from reaching the store behind it.
+///
+/// Read the effects off `getMemoryEffects ()` rather than off a `readonly`
+/// parameter attribute. `CallBase::onlyReadsMemory (OpNo)` answers only the
+/// parameter attribute, and says nothing about the callee's own memory
+/// effects. A callee that states argument memory is read-only at the
+/// function level, the way the barrier declaration does, must still count.
+TEST (OperandClassTest, LoadAnswersWhereTheFieldAddressReachesACallThatCannotWriteOrCapture)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *value = m.marked_value (m.entry, classX);
+
+	m.store_field (m.entry, value);
+
+	Function *sink = declare_sink (*m.module, m.field_address->getType (), /*captures=*/false,
+	                               MemoryEffects::argMemOnly (ModRefInfo::Ref));
+	IRBuilder<> (m.entry).CreateCall (sink, { m.field_address });
+
+	LoadInst *load = m.load_and_return (m.entry);
+
+	EXPECT_EQ (exact_class (load, *m.caller), classX);
+}
+
+/// A callee whose memory effects say it can write argument memory is refused
+/// even though it does not keep the pointer. Not capturing it only bounds how
+/// long the callee can hold it, not whether the call itself writes through it.
+TEST (OperandClassTest, LoadAnswersNoClassWhereTheCallMayWriteTheFieldAddress)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *value = m.marked_value (m.entry, classX);
+
+	m.store_field (m.entry, value);
+
+	Function *sink = declare_sink (*m.module, m.field_address->getType (), /*captures=*/false,
+	                               MemoryEffects::argMemOnly (ModRefInfo::ModRef));
+	IRBuilder<> (m.entry).CreateCall (sink, { m.field_address });
+
+	LoadInst *load = m.load_and_return (m.entry);
+
+	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
+	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
+}
+
+/// A callee that can keep the field address is refused even though it never
+/// writes through it. A kept pointer can be written back to later, from code
+/// this walk never sees.
+TEST (OperandClassTest, LoadAnswersNoClassWhereTheCallMayCaptureTheFieldAddress)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *value = m.marked_value (m.entry, classX);
+
+	m.store_field (m.entry, value);
+
+	Function *sink = declare_sink (*m.module, m.field_address->getType (), /*captures=*/true,
+	                               MemoryEffects::argMemOnly (ModRefInfo::Ref));
+	IRBuilder<> (m.entry).CreateCall (sink, { m.field_address });
+
+	LoadInst *load = m.load_and_return (m.entry);
+
+	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
+	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
+}
+
+/// A pointer compare writes nothing and yields an `i1`, so it is not a route
+/// by which the object is written, whether it compares the allocation itself
+/// or one of its fields - both are exactly what the translator's own null
+/// test emits ahead of a dereference.
+TEST (OperandClassTest, LoadAnswersWhereTheAllocationOrAFieldIsCompared)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *value = m.marked_value (m.entry, classX);
+
+	m.store_field (m.entry, value);
+
+	Value *null_base = ConstantPointerNull::get (cast<PointerType> (m.base->getType ()));
+	Value *null_field = ConstantPointerNull::get (cast<PointerType> (m.field_address->getType ()));
+
+	IRBuilder<> (m.entry).CreateICmpEQ (m.base, null_base);
+	IRBuilder<> (m.entry).CreateICmpEQ (m.field_address, null_field);
+
+	LoadInst *load = m.load_and_return (m.entry);
+
+	EXPECT_EQ (exact_class (load, *m.caller), classX);
+}
+
+/// `ptrtoint` stays refused: an integer can be turned back into a pointer and
+/// written through, and this walk cannot see where that happens.
+TEST (OperandClassTest, LoadAnswersNoClassWhereTheAllocationIsConvertedToAnInteger)
+{
+	mono::test::init_runtime ();
+
+	FieldModule m (mono_defaults.object_class);
+	Instruction *value = m.marked_value (m.entry, classX);
+
+	m.store_field (m.entry, value);
+	IRBuilder<> (m.entry).CreatePtrToInt (m.base, Type::getInt64Ty (*m.context));
+
+	LoadInst *load = m.load_and_return (m.entry);
+
+	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
+	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
 }
 
 } // namespace

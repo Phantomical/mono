@@ -32,6 +32,8 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Operator.h>
+#include <llvm/Support/ModRef.h>
 
 #include <cstdint>
 #include <optional>
@@ -358,11 +360,183 @@ leaf_operand_class (const Value *v, const Function &f)
  * concrete. The two functions below this walk are the only place a
  * `std::nullopt` becomes a concrete answer. Their callers cannot read any
  * other kind of answer.
+ *
+ * A load reaching a matching store below joins the walk as a third kind of
+ * merge node, beside a phi and a select: `matching_field_stores ()` below
+ * gives it arms of its own, one value per store plus a trailing null for the
+ * field's zero-filled initial value, and the same cycle rule covers a store
+ * that names the load back, directly or through another merge.
  */
 
 /// Bounds how many merge nodes one walk visits, so a large phi web costs a
 /// compile only a small, fixed amount of work.
 constexpr unsigned merge_walk_budget = 24;
+
+/// Bounds how many uses of one allocation `field_stores_reaching ()` below
+/// visits, so a large use graph costs a compile only a small, fixed amount of
+/// work.
+constexpr unsigned field_use_walk_budget = 128;
+
+/// \p site cannot write through the pointer at \p arg_no. This reads what
+/// the call states about itself. It does not read the name of the callee.
+///
+/// `CallBase::onlyReadsMemory (OpNo)` reads only the parameter attributes
+/// `readonly` and `readnone`. It does not read the callee's own
+/// `MemoryEffects`. A call can state at the function level that argument
+/// memory is read-only, with no attribute on the parameter itself.
+/// `onlyReadsMemory` then answers false for that call. Checking
+/// `getMemoryEffects ().getModRef (IRMemLocation::ArgMem)` as well catches
+/// that case. Either check on its own is enough.
+bool
+cannot_write_through (const CallBase &site, unsigned arg_no)
+{
+	if (site.onlyReadsMemory (arg_no))
+		return true;
+
+	ModRefInfo arg_effect = site.getMemoryEffects ().getModRef (IRMemLocation::ArgMem);
+
+	return !isModSet (arg_effect);
+}
+
+/// Every store that writes through \p base, followed across a
+/// getelementptr with constant indices, or nothing where some other use of
+/// \p base makes that unsafe to answer.
+///
+/// A refusal covers four uses. One is a store of \p base itself into memory.
+/// Another is a getelementptr with an index this cannot read at compile
+/// time. Another is a conversion such as `ptrtoint`: a store this walk never
+/// sees can turn the integer back into a pointer and write through it. The
+/// last is a call argument the call can write through, or keep past the call
+/// returning. Each of these lets code outside this walk reach the object, or
+/// reach a field this walk cannot rule out as the one \p base's caller is
+/// asking about.
+///
+/// Two other uses are safe, and this walk does not follow past either one. A
+/// pointer compare writes nothing and answers an `i1`. It is not a route by
+/// which the object is written. A call argument is also safe when this walk
+/// can prove two things about the call: it does not write through the
+/// pointer, and it does not keep the pointer past the call returning. The
+/// write barrier every reference-field store carries meets both conditions.
+///
+/// `PointerMayBeCaptured ()` answers only the second condition: whether a
+/// pointer stays alive past the call it is passed to. A `captures(none)`
+/// argument is not kept, and the callee can still write through it for the
+/// length of the call. `cannot_write_through ()` above is the separate check
+/// this function still needs for the first condition.
+std::optional<SmallVector<StoreInst *, 4>>
+field_stores_reaching (Value *base)
+{
+	SmallVector<StoreInst *, 4> stores;
+	SmallVector<Value *, 8> work { base };
+	SmallPtrSet<Value *, 16> seen { base };
+	unsigned budget = field_use_walk_budget;
+
+	while (!work.empty ()) {
+		Value *v = work.pop_back_val ();
+
+		for (Use &use : v->uses ()) {
+			User *user = use.getUser ();
+
+			if (budget == 0 || !seen.insert (user).second)
+				return std::nullopt;
+			--budget;
+
+			if (const auto *gep = dyn_cast<GEPOperator> (user)) {
+				if (!gep->hasAllConstantIndices ())
+					return std::nullopt;
+				work.push_back (user);
+				continue;
+			}
+
+			if (const auto *load = dyn_cast<LoadInst> (user)) {
+				if (load->getPointerOperand () != v)
+					return std::nullopt;
+				continue;
+			}
+
+			if (isa<ICmpInst> (user))
+				continue;
+
+			if (auto *call = dyn_cast<CallBase> (user)) {
+				// `use` names v itself as an operand, so this covers both a
+				// data argument and the callee operand of an indirect call
+				// through v. Only the former is safe to skip past. The write
+				// barrier passes the field address as a plain argument.
+				// Nothing calls through a field's own address.
+				if (!call->isArgOperand (&use))
+					return std::nullopt;
+
+				unsigned arg_no = call->getArgOperandNo (&use);
+
+				if (!call->doesNotCapture (arg_no)
+				    || !cannot_write_through (*call, arg_no))
+					return std::nullopt;
+
+				continue;
+			}
+
+			auto *store = dyn_cast<StoreInst> (user);
+
+			if (store == nullptr || store->getPointerOperand () != v)
+				return std::nullopt;
+
+			stores.push_back (store);
+		}
+	}
+
+	return stores;
+}
+
+/// The values stored into the field \p load reads, where \p load reads a
+/// constant-offset field of an allocation this file recognizes
+/// (`allocation_class ()` above) and `field_stores_reaching ()` answers for,
+/// plus a trailing null standing for the field's initial value. Empty where
+/// \p load answers to neither, in which case the caller falls back to the
+/// ordinary leaf answer for a load with no mark of its own.
+///
+/// `mono.alloc.object` zero-fills what it allocates, so the field reads null
+/// until a store runs. A load a store does not dominate, or a load reached on
+/// a path where no store to this field ran first, still reads that null. The
+/// null this appends stands for that path, and it needs no dominance or
+/// reachability proof of its own: `merged_class ()` already settles a merge
+/// with a null arm the same way for a phi, by the same rule `exact_class ()`
+/// and `operand_class ()` split on. `exact_class ()` skips the null, because
+/// its caller dereferences the answer and the null path faults first.
+/// `operand_class ()` does not skip it, which is right here too: a type test
+/// on this field must see null as an answer the allocation can still give.
+SmallVector<const Value *, 4>
+matching_field_stores (const LoadInst &load)
+{
+	const DataLayout &dl = load.getModule ()->getDataLayout ();
+	Value *address = const_cast<Value *> (load.getPointerOperand ());
+	APInt offset (64, 0);
+	auto *base = dyn_cast<CallBase> (
+		address->stripAndAccumulateConstantOffsets (dl, offset, /*AllowNonInbounds=*/true));
+
+	if (base == nullptr || allocation_class (*base) == nullptr)
+		return {};
+
+	std::optional<SmallVector<StoreInst *, 4>> stores = field_stores_reaching (base);
+
+	if (!stores)
+		return {};
+
+	SmallVector<const Value *, 4> matching;
+
+	for (StoreInst *store : *stores) {
+		APInt at (64, 0);
+		Value *store_base = store->getPointerOperand ()->stripAndAccumulateConstantOffsets (
+			dl, at, /*AllowNonInbounds=*/true);
+
+		if (store_base == base && at == offset)
+			matching.push_back (store->getValueOperand ());
+	}
+
+	if (!matching.empty ())
+		matching.push_back (ConstantPointerNull::get (cast<PointerType> (load.getType ())));
+
+	return matching;
+}
 
 std::optional<std::pair<MonoClass *, bool>>
 walk_operand_class (const Value *v, const Function &f, bool ignore_null,
@@ -415,8 +589,13 @@ walk_operand_class (const Value *v, const Function &f, bool ignore_null,
 
 	const auto *phi = dyn_cast<PHINode> (v);
 	const auto *select = phi == nullptr ? dyn_cast<SelectInst> (v) : nullptr;
+	const auto *load = phi == nullptr && select == nullptr ? dyn_cast<LoadInst> (v) : nullptr;
+	SmallVector<const Value *, 4> stores;
 
-	if (phi == nullptr && select == nullptr)
+	if (load != nullptr)
+		stores = matching_field_stores (*load);
+
+	if (phi == nullptr && select == nullptr && stores.empty ())
 		return leaf_operand_class (v, f);
 
 	// A merge node this walk cannot afford to enter answers no class, not a
@@ -434,9 +613,11 @@ walk_operand_class (const Value *v, const Function &f, bool ignore_null,
 		SmallVector<const Value *, 4> incoming (
 			phi->incoming_values ().begin (), phi->incoming_values ().end ());
 		result = merged_class (incoming, f, ignore_null, visiting, budget);
-	} else {
+	} else if (select != nullptr) {
 		const Value *arms[] = { select->getTrueValue (), select->getFalseValue () };
 		result = merged_class (arms, f, ignore_null, visiting, budget);
+	} else {
+		result = merged_class (stores, f, ignore_null, visiting, budget);
 	}
 
 	visiting.erase (v);

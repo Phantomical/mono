@@ -87,6 +87,15 @@ void mark_parameter_classes (llvm::Function &f,
 /// contributing value names. A null constant among them makes the answer no
 /// class. `exact_class ()` below answers the same merge with that null rule
 /// relaxed, for its one caller.
+///
+/// Where \p v is a load, this also reads back the field it loads, the same
+/// way it reads a merge's arms, when that field belongs to an object this
+/// function allocates and keeps to itself: every use of the object, other
+/// than a load or store through it, makes the answer no class instead. The
+/// object starts zero-filled, so the merge also carries a null for the path
+/// where the load runs before any store to that field does, which is what a
+/// caller here needs: this answers no class for a field with exactly one
+/// store, because the null path is still live.
 std::pair<MonoClass *, bool> operand_class (const llvm::Value *v, const llvm::Function &f);
 
 /// The class \p v is, or null where the IR gives only a bound this cannot
