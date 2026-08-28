@@ -7,10 +7,17 @@
  */
 
 #include <stdio.h>
+#include <config.h>
 #include <stdlib.h>
 #include <assert.h>
 #include <glib.h>
+#ifdef HOST_WIN32
+// read (), close () and lseek (), which the CRT declares here rather than in
+// unistd.h.
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 #include <fcntl.h>
 #include "sgen-entry-stream.h"
 #include "sgen-grep-binprot.h"
@@ -29,8 +36,8 @@ main (int argc, char *argv[])
 	int num_nums = 0;
 	int num_vtables = 0;
 	int i;
-	long nums [num_args];
-	long vtables [num_args];
+	long *nums = g_newa (long, num_args);
+	long *vtables = g_newa (long, num_args);
 	gboolean dump_all = FALSE;
 	gboolean color_output = FALSE;
 	gboolean pause_times = FALSE;
@@ -90,7 +97,11 @@ main (int argc, char *argv[])
 	if (pause_times)
 		assert (!dump_all);
 
-	input_file = input_path ? open (input_path, O_RDONLY) : STDIN_FILENO;
+#ifndef O_BINARY
+// Only Windows distinguishes the two modes; elsewhere the flag is a no-op.
+#define O_BINARY 0
+#endif
+	input_file = input_path ? open (input_path, O_RDONLY | O_BINARY) : STDIN_FILENO;
 	init_stream (&stream, input_file);
 	for (i = 0; i < sizeof (grepers) / sizeof (GrepEntriesFunction); i++) {
 		if (grepers [i] (&stream, num_nums, nums, num_vtables, vtables, dump_all,

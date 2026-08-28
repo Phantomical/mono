@@ -1,4 +1,6 @@
 add_subdirectory(pedump)
 add_subdirectory(sgen)
-add_subdirectory(mono-hang-watchdog)
+if(MONO_ENABLE_CRASH_REPORTING)
+  add_subdirectory(mono-hang-watchdog)
+endif()
 add_subdirectory(locale-builder)

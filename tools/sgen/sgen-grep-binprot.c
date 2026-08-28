@@ -6,11 +6,18 @@
  * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 
+#include <config.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <assert.h>
 #include <glib.h>
+#ifdef HOST_WIN32
+// read (), close () and lseek (), which the CRT declares here rather than in
+// unistd.h.
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 #include <fcntl.h>
 #include <stdint.h>
 #include <inttypes.h>
@@ -669,7 +676,7 @@ GREP_ENTRIES_FUNCTION_NAME (EntryStream *stream, int num_nums, long nums [], int
 			}
 			}
 		} else {
-			int match_indices [num_nums + 1];
+			int *match_indices = g_newa (int, num_nums + 1);
 			gboolean match = is_always_match (type);
 			match_indices [num_nums] = num_nums == 0 ? match_index (0, type, data) : BINARY_PROTOCOL_NO_MATCH;
 			match = match_indices [num_nums] != BINARY_PROTOCOL_NO_MATCH;

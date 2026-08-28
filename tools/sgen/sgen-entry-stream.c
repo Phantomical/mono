@@ -6,8 +6,15 @@
  * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 
+#include <config.h>
 #include <stdlib.h>
+#ifdef HOST_WIN32
+// read (), close () and lseek (), which the CRT declares here rather than in
+// unistd.h.
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 #include <glib.h>
 #include "sgen-entry-stream.h"
 

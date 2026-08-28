@@ -6,6 +6,8 @@
  * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 
+#include <mono/utils/mono-compiler.h>   /* ssize_t */
+
 typedef struct {
 	int file;
 	char *buffer;

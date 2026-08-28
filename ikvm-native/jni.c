@@ -486,14 +486,14 @@ static void* JNIEnv_vtable[] =
 	0  // jlong JNICALL GetDirectBufferCapacity(jobject buf);
 };
 
-void** ikvm_GetJNIEnvVTable(void);
+JNIEXPORT void** JNICALL ikvm_GetJNIEnvVTable(void);
 
 JNIEXPORT void** JNICALL ikvm_GetJNIEnvVTable(void)
 {
 	return JNIEnv_vtable;
 }
 
-void* JNICALL ikvm_MarshalDelegate(void* p);
+JNIEXPORT void* JNICALL ikvm_MarshalDelegate(void* p);
 
 JNIEXPORT void* JNICALL ikvm_MarshalDelegate(void* p)
 {
@@ -502,7 +502,7 @@ JNIEXPORT void* JNICALL ikvm_MarshalDelegate(void* p)
 
 typedef jint (JNICALL *PJNI_ONLOAD)(JavaVM* vm, void* reserved);
 
-jint JNICALL ikvm_CallOnLoad(PJNI_ONLOAD method, JavaVM* vm, void* reserved);
+JNIEXPORT jint JNICALL ikvm_CallOnLoad(PJNI_ONLOAD method, JavaVM* vm, void* reserved);
 
 JNIEXPORT jint JNICALL ikvm_CallOnLoad(PJNI_ONLOAD method, JavaVM* vm, void* reserved)
 {

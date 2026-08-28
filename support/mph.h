@@ -32,6 +32,41 @@
 #include <errno.h>              /* for ERANGE */
 #include <glib.h>               /* for g* types, etc. */
 
+#ifdef HOST_WIN32
+/* struct timeval and the socket types.  configure finds them here, so map.c
+   has to see the headers configure asked. */
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+/* ws2def.h reaches inside struct in_addr with a macro, and map.h declares a
+   member of that name in a struct of its own. */
+#undef s_addr
+
+/*
+ * config.h answers for the Winsock types of these names, which is what
+ * mono/metadata/w32socket.c asks and not what Mono.Posix does.  Mono.Posix
+ * converts the POSIX structs, and the other half of each conversion --
+ * sys-socket.c, sys-uio.c, the SCM_* control messages -- has no Windows arm at
+ * all.  So Mono.Posix here is the errno, signal and enum converters, and the
+ * socket ones are left out rather than half-built.
+ */
+#undef HAVE_STRUCT_SOCKADDR
+#undef HAVE_STRUCT_SOCKADDR_IN
+#undef HAVE_STRUCT_SOCKADDR_IN6
+#undef HAVE_STRUCT_SOCKADDR_UN
+#undef HAVE_STRUCT_SOCKADDR_STORAGE
+#undef HAVE_STRUCT_LINGER
+#undef HAVE_STRUCT_IOVEC
+#undef HAVE_STRUCT_POLLFD
+#undef HAVE_STRUCT_CMSGHDR
+#endif
+
+#ifdef HAVE_SYS_UTIME_H
+/* struct utimbuf.  The Windows CRT keeps it here rather than in <utime.h>,
+   which map.c asks for instead. */
+#include <sys/utime.h>
+#endif
+
 #ifdef HAVE_SYS_STAT_H
 #include <sys/stat.h>
 #endif
