@@ -6,10 +6,17 @@
 
 mono_lazy_init_t mono_experiments_enabled_init;
 
+/*
+ * A build that asked for no experiment leaves both of these empty, and `{ }` is
+ * not an initializer C accepts.  The trailing entry is never read: every loop
+ * over them stops at MONO_EXPERIMENT_NUM_EXPERIMENTS, which counts what the
+ * .def declared and nothing else.
+ */
 guint8 mono_experiments_enabled_table[] = {
 #define EXPERIMENT(id,ghurl) 0,
 #include "mono-experiments.def"
 #undef EXPERIMENT
+	0
 };
 
 static
@@ -17,6 +24,7 @@ const char* mono_experiment_names[] = {
 #define EXPERIMENT(id,ghurl) #id,
 #include "mono-experiments.def"
 #undef EXPERIMENT
+	NULL
 };
 
 static int

@@ -311,24 +311,62 @@ mono_clock_get_time_ns (mono_clock_id_t clk_id)
 #endif
 }
 
-#else
+#elif defined(HOST_WIN32)
+
+/*
+ * QueryPerformanceCounter is the monotonic clock here.  Its frequency is fixed
+ * for the life of the process, so it is read once; the counter itself is what
+ * the id would name on a host that has several clocks, and Windows has the one.
+ */
+static LONGLONG qpc_frequency;
 
 void
 mono_clock_init (mono_clock_id_t *clk_id)
 {
-	// TODO: need to implement this function for Windows
+	LARGE_INTEGER freq;
+
+	if (QueryPerformanceFrequency (&freq))
+		qpc_frequency = freq.QuadPart;
+	*clk_id = NULL;
 }
 
 void
 mono_clock_cleanup (mono_clock_id_t clk_id)
 {
-	// TODO: need to implement this function for Windows
 }
 
 guint64
 mono_clock_get_time_ns (mono_clock_id_t clk_id)
 {
-	// TODO: need to implement time stamp function for Windows
+	LARGE_INTEGER now;
+
+	if (qpc_frequency == 0 || !QueryPerformanceCounter (&now))
+		return 0;
+
+	/* Divide before multiplying so that a counter well past 2^32 does not
+	 * overflow on the way to nanoseconds, then add back what the division
+	 * dropped. */
+	return (guint64) (now.QuadPart / qpc_frequency) * 1000000000
+	       + (guint64) ((now.QuadPart % qpc_frequency) * 1000000000 / qpc_frequency);
+}
+
+#else
+
+void
+mono_clock_init (mono_clock_id_t *clk_id)
+{
+	// TODO: need to implement this function for hosts with no clock of their own
+}
+
+void
+mono_clock_cleanup (mono_clock_id_t clk_id)
+{
+}
+
+guint64
+mono_clock_get_time_ns (mono_clock_id_t clk_id)
+{
+	// TODO: need to implement time stamp function for these hosts
 	return 0;
 }
 

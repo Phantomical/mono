@@ -209,19 +209,24 @@ G_EXTERN_C MonoLMF       **mono_tls_get_lmf_addr_extern (void);
 
 // Tls variables for each MonoTlsKey.
 //
-extern MONO_KEYWORD_THREAD MonoInternalThread *mono_tls_thread MONO_TLS_FAST;
-extern MONO_KEYWORD_THREAD MonoJitTlsData     *mono_tls_jit_tls MONO_TLS_FAST;
-extern MONO_KEYWORD_THREAD MonoDomain         *mono_tls_domain MONO_TLS_FAST;
-extern MONO_KEYWORD_THREAD SgenThreadInfo     *mono_tls_sgen_thread_info MONO_TLS_FAST;
-extern MONO_KEYWORD_THREAD MonoLMF           **mono_tls_lmf_addr MONO_TLS_FAST;
+// G_EXTERN_C because the interpreter, the backend and the collector read these
+// from C++, and mono/utils/mono-tls.c defines them.  A global variable keeps
+// its source name under the Itanium ABI whichever language declared it, so the
+// mismatch resolves by accident there; MSVC decorates the C++ spelling and the
+// reference then names nothing.
+G_EXTERN_C extern MONO_KEYWORD_THREAD MonoInternalThread *mono_tls_thread MONO_TLS_FAST;
+G_EXTERN_C extern MONO_KEYWORD_THREAD MonoJitTlsData     *mono_tls_jit_tls MONO_TLS_FAST;
+G_EXTERN_C extern MONO_KEYWORD_THREAD MonoDomain         *mono_tls_domain MONO_TLS_FAST;
+G_EXTERN_C extern MONO_KEYWORD_THREAD SgenThreadInfo     *mono_tls_sgen_thread_info MONO_TLS_FAST;
+G_EXTERN_C extern MONO_KEYWORD_THREAD MonoLMF           **mono_tls_lmf_addr MONO_TLS_FAST;
 
 #elif defined(DISABLE_THREADS)
 
-extern MonoInternalThread *mono_tls_thread;
-extern MonoJitTlsData     *mono_tls_jit_tls;
-extern MonoDomain         *mono_tls_domain;
-extern SgenThreadInfo     *mono_tls_sgen_thread_info;
-extern MonoLMF           **mono_tls_lmf_addr;
+G_EXTERN_C extern MonoInternalThread *mono_tls_thread;
+G_EXTERN_C extern MonoJitTlsData     *mono_tls_jit_tls;
+G_EXTERN_C extern MonoDomain         *mono_tls_domain;
+G_EXTERN_C extern SgenThreadInfo     *mono_tls_sgen_thread_info;
+G_EXTERN_C extern MonoLMF           **mono_tls_lmf_addr;
 
 #else
 

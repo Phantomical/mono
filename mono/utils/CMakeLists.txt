@@ -1,9 +1,26 @@
 # libmonoutils: the GC-agnostic, metadata-agnostic bottom layer -- threading,
 # memory, TLS, hardware capability probing, logging.
 
+# Most of what is here compiles on every host: a file named after one platform
+# guards its own body and lands empty on the others.  These four do not, and
+# the pair they form is what the automake build called $(platform_sources).
+if(MONO_HOST_WINDOWS)
+  set(monoutils_platform_sources
+    mono-os-semaphore-win32.c
+    mono-os-wait-win32.c
+    mono-windows-thread-name.c
+    os-event-win32.c
+    # mono_context_get_current () and the wrapper a coop suspend copies a
+    # stack through: both capture the caller's registers, which C cannot say.
+    win64.asm)
+else()
+  set(monoutils_platform_sources
+    dlmalloc.c
+    os-event-unix.c)
+endif()
+
 set(monoutils_sources
-  dlmalloc.c
-  os-event-unix.c
+  ${monoutils_platform_sources}
   mono-md5.c
   mono-sha1.c
   mono-logger.c
@@ -107,11 +124,13 @@ target_compile_definitions(monoutils PRIVATE LLVM_API_VERSION=0)
 
 # dlmalloc is Doug Lea's, kept close to upstream.  Mono's warning set is not
 # its problem.
-set_source_files_properties(dlmalloc.c PROPERTIES
-  COMPILE_OPTIONS "-Wno-gnu-null-pointer-arithmetic")
+if(NOT MONO_HOST_WINDOWS)
+  set_source_files_properties(dlmalloc.c PROPERTIES
+    COMPILE_OPTIONS "-Wno-gnu-null-pointer-arithmetic")
+endif()
 
 target_include_directories(monoutils PUBLIC "${CMAKE_SOURCE_DIR}/mono")
-target_link_libraries(monoutils PUBLIC Threads::Threads ${CMAKE_DL_LIBS} m)
+target_link_libraries(monoutils PUBLIC mono::platform)
 
 install(FILES
     mono-logger.h

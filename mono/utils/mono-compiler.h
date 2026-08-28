@@ -117,13 +117,25 @@ typedef ptrdiff_t ssize_t;
 #define MONO_RESTRICT
 #endif
 
-#if defined(__has_cpp_attribute)
+/*
+ * A tail call the compiler has to make a jump, which is what lets the
+ * interpreter thread one opcode's handler into the next without the native
+ * stack growing by an opcode.
+ *
+ * Left undefined where a compiler cannot promise that, and the interpreter then
+ * runs its handlers from a loop instead (mono/interp/interp.hpp).
+ *
+ * msvc::musttail is deliberately not taken. cl 14.51 answers
+ * __has_cpp_attribute for it and then emits an ordinary call for the indirect
+ * tail call the dispatch is written as, with no diagnostic -- so a promise that
+ * looks kept costs one stack frame per opcode, and the interpreter runs out of
+ * stack partway through a method.
+ */
+#if defined(__has_cpp_attribute) && !defined(_MSC_VER)
 #if __has_cpp_attribute(clang::musttail)
 #define MONO_MUSTTAIL [[clang::musttail]]
 #elif __has_cpp_attribute(gnu::musttail)
 #define MONO_MUSTTAIL [[gnu::musttail]]
-#elif __has_cpp_attribute(msvc::musttail)
-#define MONO_MUSTTAIL [[msvc::musttail]]
 #endif
 #endif
 
