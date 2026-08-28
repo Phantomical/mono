@@ -23,6 +23,8 @@
 #include "passes/top-down-inline.hpp"
 #include "timing.hpp"
 
+#include "mono/utils/mono-mmap.h"
+
 #include <llvm/CodeGen/TargetLowering.h>
 #include <llvm/CodeGen/TargetSubtargetInfo.h>
 #include <llvm/ExecutionEngine/JITLink/JITLink.h>
@@ -45,8 +47,6 @@
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
-
-#include <unistd.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -533,10 +533,17 @@ public:
 		/// Where a shared body's receiver lives in its frame, by name. A
 		/// body that is not a shared one has no entry here.
 		std::map<std::string, VarSlot> rgctx_slots;
-		/// The `__llvm_prf_cnts` section: every instrumented function's
-		/// counters, and how many fit. Null when the module was not
-		/// instrumented. Only the bound is read from here - which function
-		/// owns which part of it is what `__llvm_prf_data` says.
+		/// The `__llvm_prf_cnts` section, holding the counters of every
+		/// instrumented function in this object and how many fit. Null
+		/// when the module was not instrumented. Only the bound is read
+		/// from here - which function owns which part of it is what
+		/// `__llvm_prf_data` says.
+		///
+		/// Both names are the ELF spelling on every host. LLVM takes them
+		/// from the module's triple, and a module compiled here carries
+		/// none: setting one makes the instrumentation name
+		/// `__llvm_profile_runtime`, which lives in compiler-rt and
+		/// nothing links it.
 		const uint64_t *counters = nullptr;
 		size_t counter_slots = 0;
 		/// The `__llvm_prf_data` records, one per instrumented function.
@@ -917,6 +924,18 @@ host_target_machine_builder ()
 		// If codegen reaches an LLVM `unreachable`, a `ud2` beats falling
 		// through into whatever bytes come next.
 		b.getOptions ().TrapUnreachable = true;
+
+		/*
+		 * mono's own unwinder reads the frame descriptions this backend
+		 * writes into `.mono_unwind`, and compiler.cpp writes them from the
+		 * CFI program the MC layer records. A Windows target would otherwise
+		 * describe a frame in SEH instead, which records no such program and
+		 * leaves the section empty; it would also emit an .xdata naming the
+		 * personality through an image-relative relocation, which is
+		 * meaningless for code no image holds.
+		 */
+		if (b.getTargetTriple ().isOSWindows ())
+			b.getOptions ().ExceptionModel = ExceptionHandling::DwarfCFI;
 
 		StringMap<bool> features = sys::getHostCPUFeatures ();
 		std::vector<std::string> feature_vec;
@@ -1576,6 +1595,158 @@ MonoJit::triple () const
 	return jit_->getExecutionSession ().getTargetTriple ();
 }
 
+/*
+ * Bytes in memory a compiled body can reach with a 32-bit displacement.
+ *
+ * The code arena is mapped below 2GB so that any two addresses in it are within
+ * one of each other; this pool is mapped the same way, so anything in it is
+ * within one of the code too. It is executable as well as writable, because
+ * both of the things carved out of it -- the pointer an import is read through
+ * and the stub a call is made through -- sit on the path of an instruction.
+ *
+ * Nothing here is ever freed. Each piece is a word or a jump, and stands for
+ * something in the runtime that outlives every compile that named it.
+ *
+ * The lock is its own rather than named_symbols_mutex_: a compile defines the
+ * callee addresses of its own module without taking that one, and every compile
+ * worker does it at once.
+ */
+void *
+MonoJit::reachable_bytes (size_t size)
+{
+	constexpr size_t pool_size = 64 * 1024;
+	constexpr size_t align = 16;
+
+	if (size > pool_size)
+		return nullptr;
+
+	std::lock_guard<std::mutex> lock (low_pool_mutex_);
+
+	low_pool_used_ = (low_pool_used_ + align - 1) & ~(align - 1);
+
+	if (low_pool_ == nullptr || low_pool_used_ + size > low_pool_size_) {
+		void *pool = mono_valloc (nullptr, pool_size,
+		                          MONO_MMAP_READ | MONO_MMAP_WRITE
+		                                  | MONO_MMAP_EXEC | MONO_MMAP_JIT
+		                                  | MONO_MMAP_32BIT,
+		                          MONO_MEM_ACCOUNT_CODE);
+
+		if (pool == nullptr)
+			return nullptr;
+
+		low_pool_ = static_cast<uint8_t *> (pool);
+		low_pool_size_ = pool_size;
+		low_pool_used_ = 0;
+	}
+
+	uint8_t *at = low_pool_ + low_pool_used_;
+
+	low_pool_used_ += size;
+	return at;
+}
+
+/// The pointer a `__imp_` name stands for, holding \p addr. Generated code on a
+/// PE target reaches what the runtime owns by loading one of these; see
+/// mark_external_imports in compiler.cpp.
+void *
+MonoJit::import_slot (void *addr)
+{
+	void **slot = static_cast<void **> (reachable_bytes (sizeof (void *)));
+
+	if (slot != nullptr)
+		*slot = addr;
+	return slot;
+}
+
+/*
+ * A jump to \p target, for a call that cannot reach it directly.
+ *
+ * Codegen invents a call to a libcall -- memset, memmove and their neighbours
+ * -- after the module has been through every pass, so the module never declares
+ * one and it cannot be marked as an import. The call it emits is direct. An ELF
+ * link answers that with a stub of its own, which is what JITLink builds for a
+ * branch whose target its graph does not hold; the COFF one builds none, so the
+ * name stands for this instead.
+ */
+void *
+MonoJit::code_stub (void *target)
+{
+	/* jmp qword ptr [rip + 0]; the target follows the instruction. */
+	static const uint8_t jump[] = { 0xff, 0x25, 0x00, 0x00, 0x00, 0x00 };
+	uint8_t *stub = static_cast<uint8_t *> (
+		reachable_bytes (sizeof (jump) + sizeof (void *)));
+
+	if (stub == nullptr)
+		return nullptr;
+
+	std::memcpy (stub, jump, sizeof (jump));
+	std::memcpy (stub + sizeof (jump), &target, sizeof (target));
+	return stub;
+}
+
+/// Whether a compiled body can reach \p addr with a 32-bit displacement.
+///
+/// Everything the code links against is either in the arena or in the pool
+/// above, and both are mapped below 2GB, so that boundary is the whole test.
+static bool
+within_displacement (const void *addr)
+{
+	return reinterpret_cast<uintptr_t> (addr) < (uintptr_t) 0x80000000;
+}
+
+Error
+MonoJit::register_code_symbol (StringRef name, void *addr)
+{
+	if (triple ().isOSBinFormatCOFF () && !within_displacement (addr)) {
+		std::lock_guard<std::mutex> lock (named_symbols_mutex_);
+		/* One stub per target, so a helper registered under two names -- which
+		 * the libcall table does -- keeps standing for one address. */
+		auto [at, fresh] = code_stubs_.try_emplace (addr, nullptr);
+
+		if (fresh) {
+			at->second = code_stub (addr);
+
+			if (at->second == nullptr) {
+				code_stubs_.erase (at);
+				return createStringError (
+					inconvertibleErrorCode (),
+					"no memory below 2GB for a call stub to %s",
+					name.str ().c_str ());
+			}
+		}
+
+		addr = at->second;
+	}
+
+	return register_symbol (name, addr);
+}
+
+/// Adds \p name to \p symbols, with the `__imp_` pointer a PE target reaches
+/// it through where the target is one.
+Error
+MonoJit::add_symbol_definition (SymbolMap &symbols, StringRef name, void *addr)
+{
+	ExecutionSession &es = jit_->getExecutionSession ();
+	JITSymbolFlags flags = JITSymbolFlags::Exported | JITSymbolFlags::Callable;
+
+	symbols[es.intern (name)] = { ExecutorAddr::fromPtr (addr), flags };
+
+	if (!triple ().isOSBinFormatCOFF ())
+		return Error::success ();
+
+	void *slot = import_slot (addr);
+
+	if (slot == nullptr)
+		return createStringError (inconvertibleErrorCode (),
+		                          "no memory below 2GB for the import slot of %s",
+		                          name.str ().c_str ());
+
+	symbols[es.intern (("__imp_" + name).str ())] = {
+		ExecutorAddr::fromPtr (slot), flags
+	};
+	return Error::success ();
+}
+
 Error
 MonoJit::register_symbol (StringRef name, void *addr)
 {
@@ -1596,10 +1767,9 @@ MonoJit::register_symbol (StringRef name, void *addr)
 	}
 
 	SymbolMap symbols;
-	symbols[jit_->getExecutionSession ().intern (name)] = {
-		ExecutorAddr::fromPtr (addr),
-		JITSymbolFlags::Exported | JITSymbolFlags::Callable,
-	};
+
+	if (Error err = add_symbol_definition (symbols, name, addr))
+		return err;
 	if (Error err = helpers_->define (absoluteSymbols (std::move (symbols))))
 		return err;
 
@@ -1709,10 +1879,8 @@ MonoJit::compile_batch (ThreadSafeModule tsm, ArrayRef<StringRef> entries,
 		SymbolMap symbols;
 
 		for (const auto &[name, addr] : module_symbols)
-			symbols[es.intern (name)] = {
-				ExecutorAddr::fromPtr (addr),
-				JITSymbolFlags::Exported | JITSymbolFlags::Callable,
-			};
+			if (Error err = add_symbol_definition (symbols, name, addr))
+				return std::move (err);
 
 		if (Error err = jd.define (absoluteSymbols (std::move (symbols))))
 			return std::move (err);

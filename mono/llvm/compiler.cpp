@@ -41,6 +41,7 @@
 
 #include <llvm/Analysis/RuntimeLibcallInfo.h>
 #include <llvm/Analysis/TargetLibraryInfo.h>
+#include <llvm/BinaryFormat/COFF.h>
 #include <llvm/BinaryFormat/ELF.h>
 #include <llvm/CodeGen/AsmPrinter.h>
 #include <llvm/CodeGen/AsmPrinterHandler.h>
@@ -65,6 +66,7 @@
 #include <llvm/MC/MCExpr.h>
 #include <llvm/MC/MCInstPrinter.h>
 #include <llvm/MC/MCObjectWriter.h>
+#include <llvm/MC/MCSectionCOFF.h>
 #include <llvm/MC/MCSectionELF.h>
 #include <llvm/MC/MCStreamer.h>
 #include <llvm/MC/MCSubtargetInfo.h>
@@ -88,6 +90,24 @@ using namespace llvm;
 
 namespace mono {
 namespace {
+
+/**
+ * The section a side table goes in, named the way this object format does.
+ *
+ * These carry no relocations the loader has to act on and are read back by the
+ * runtime itself, so all either format is asked for is that the bytes land in a
+ * section of that name and are allocated with the code.  A COFF name longer
+ * than eight characters lives in the string table, which the writer arranges.
+ */
+MCSection *
+side_table_section (MCContext &ctx, StringRef name)
+{
+	if (ctx.getObjectFileType () == MCContext::IsCOFF)
+		return ctx.getCOFFSection (name, COFF::IMAGE_SCN_CNT_INITIALIZED_DATA
+		                                         | COFF::IMAGE_SCN_MEM_READ);
+
+	return ctx.getELFSection (name, ELF::SHT_PROGBITS, ELF::SHF_ALLOC);
+}
 
 /*
  * Where the two halves of codegen's run hand a start time over to the pass that
@@ -497,8 +517,7 @@ private:
 
 			MCSymbol *begin = ctx.getOrCreateSymbol (fn.function);
 
-			streamer.switchSection (ctx.getELFSection (
-				".mono_lsda", ELF::SHT_PROGBITS, ELF::SHF_ALLOC));
+			streamer.switchSection (side_table_section (ctx, ".mono_lsda"));
 
 			auto from_begin = [&] (const MCSymbol *sym) {
 				return MCBinaryExpr::createSub (
@@ -553,8 +572,7 @@ private:
 
 			MCSymbol *begin = ctx.getOrCreateSymbol (fn.function);
 
-			streamer.switchSection (ctx.getELFSection (
-				".mono_guards", ELF::SHT_PROGBITS, ELF::SHF_ALLOC));
+			streamer.switchSection (side_table_section (ctx, ".mono_guards"));
 
 			auto from_begin = [&] (const MCSymbol *sym) {
 				return MCBinaryExpr::createSub (
@@ -605,8 +623,7 @@ private:
 		const std::vector<MCCFIInstruction> &initial =
 			ctx.getAsmInfo ()->getInitialFrameState ();
 
-		streamer.switchSection (ctx.getELFSection (
-			".mono_unwind", ELF::SHT_PROGBITS, ELF::SHF_ALLOC));
+		streamer.switchSection (side_table_section (ctx, ".mono_unwind"));
 
 		for (const MCDwarfFrameInfo &frame : frames) {
 			auto emit_record = [&] (const UnwindRecord &r, bool at_entry) {
@@ -658,8 +675,7 @@ private:
 
 			MCSymbol *begin = ctx.getOrCreateSymbol (fn.name);
 
-			streamer.switchSection (ctx.getELFSection (
-				".mono_lines", ELF::SHT_PROGBITS, ELF::SHF_ALLOC));
+			streamer.switchSection (side_table_section (ctx, ".mono_lines"));
 
 			streamer.emitIntValue (lines_section_magic, 4);
 			streamer.emitIntValue (lines_section_version, 2);
@@ -699,8 +715,7 @@ private:
 
 			MCSymbol *begin = ctx.getOrCreateSymbol (fn.name);
 
-			streamer.switchSection (ctx.getELFSection (
-				".mono_inlines", ELF::SHT_PROGBITS, ELF::SHF_ALLOC));
+			streamer.switchSection (side_table_section (ctx, ".mono_inlines"));
 
 			streamer.emitIntValue (inlines_section_magic, 4);
 			streamer.emitIntValue (inlines_section_version, 2);
@@ -780,13 +795,24 @@ make_streamer (TargetMachine &tm, MCContext &ctx, raw_pwrite_stream &out,
 		                                inconvertibleErrorCode ());
 
 	std::unique_ptr<MCObjectWriter> ow = mab->createObjectWriter (out);
-	auto streamer = std::make_unique<MCELFStreamer> (
-		ctx, std::move (mab), std::move (ow), std::move (mce));
+	/*
+	 * The target picks the streamer, because the object format follows the
+	 * triple: an ELF one on Linux, a COFF one on Windows. Asking for a
+	 * particular streamer gets an MCObjectFileInfo that was set up for the
+	 * other format, whose sections are all null.
+	 */
+	std::unique_ptr<MCStreamer> streamer (tm.getTarget ().createMCObjectStreamer (
+		tm.getTargetTriple (), ctx, std::move (mab), std::move (ow),
+		std::move (mce), sti));
+
+	if (!streamer)
+		return make_error<StringError> ("target does not support an object streamer",
+		                                inconvertibleErrorCode ());
 
 	if (tm.Options.MCOptions.MCRelaxAll)
-		streamer->getAssembler ().setRelaxAll (true);
+		static_cast<MCObjectStreamer &> (*streamer).getAssembler ().setRelaxAll (true);
 
-	return std::unique_ptr<MCStreamer> (std::move (streamer));
+	return streamer;
 }
 
 /*
@@ -958,11 +984,41 @@ build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &
 	return Error::success ();
 }
 
-/// Runs the pipeline over m, which codegen consumes.
+/*
+ * Marks everything this module names but does not define as an import.
+ *
+ * A reference has to reach what it names, and the code arena is below 2GB while
+ * the runtime's own objects are wherever the allocator put them -- further than
+ * a 32-bit displacement spans.  An ELF target crosses that distance through the
+ * GOT, which the relocations ask for and JITLink builds.  COFF has no
+ * relocation that asks, so the module says it here instead: dllimport is that
+ * platform's word for "reach it through a pointer", and MonoJit puts the
+ * pointer beside the code, where a displacement does reach.
+ *
+ * The intrinsics are left alone: they are lowered rather than called, and one
+ * that survives to a call resolves against the runtime's own image.
+ */
 void
-run_object_pipeline (ObjectPipeline &p, Module &m)
+mark_external_imports (Module &m)
+{
+	for (GlobalVariable &g : m.globals ())
+		if (g.isDeclaration ())
+			g.setDLLStorageClass (GlobalValue::DLLImportStorageClass);
+
+	for (Function &f : m)
+		if (f.isDeclaration () && !f.isIntrinsic ())
+			f.setDLLStorageClass (GlobalValue::DLLImportStorageClass);
+}
+
+/// Runs the pipeline over m, which codegen consumes. The triple is the target
+/// machine's: a module reaching codegen need not carry one of its own.
+void
+run_object_pipeline (ObjectPipeline &p, Module &m, const Triple &triple)
 {
 	timing::Scope timed_run (timing::Phase::cgrun);
+
+	if (triple.isOSBinFormatCOFF ())
+		mark_external_imports (m);
 
 	g_object_started = 0;
 	p.pm->run (m);
@@ -1017,7 +1073,7 @@ emit_object_reused (TargetMachine &tm, Module &m, SmallVectorImpl<char> &object,
 
 	ObjectPipeline &p = **pipeline;
 
-	run_object_pipeline (p, m);
+	run_object_pipeline (p, m, tm.getTargetTriple ());
 
 	/*
 	 * The run ended in MachineModuleInfo::finalize (), which reset the MCContext
@@ -1043,7 +1099,7 @@ emit_object_fresh (TargetMachine &tm, Module &m, SmallVectorImpl<char> &object,
 	if (Error err = build_object_pipeline (tm, p, out, OutputKind::object))
 		return err;
 
-	run_object_pipeline (p, m);
+	run_object_pipeline (p, m, tm.getTargetTriple ());
 	side_channel = std::move (p.side_channel);
 	{
 		timing::Scope timed_free (timing::Phase::pmfree);
@@ -1061,7 +1117,7 @@ emit_assembly_text (TargetMachine &tm, Module &m, raw_pwrite_stream &out)
 	if (Error err = build_object_pipeline (tm, p, out, OutputKind::assembly))
 		return err;
 
-	run_object_pipeline (p, m);
+	run_object_pipeline (p, m, tm.getTargetTriple ());
 	return Error::success ();
 }
 

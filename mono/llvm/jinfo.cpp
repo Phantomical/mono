@@ -167,6 +167,27 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 		return mono_dwarf_reg_to_hw_reg (dwarf_reg);
 	};
 
+	/*
+	 * Whether dwarf_reg names one of xmm0-15, which the amd64 DWARF register
+	 * numbering puts at 17 through 32.
+	 *
+	 * Win64 makes xmm6-15 callee-saved, so codegen writes a save rule for each
+	 * one a body uses. Mono has no register to put such a rule in: the map in
+	 * mono/mini/unwind.c covers the general registers alone, and
+	 * mono_unwind_frame () restores only those. We drop the rule instead of
+	 * declining the method, which would leave every body that touches an SSE
+	 * callee-save at tier 0.
+	 *
+	 * What the drop costs is a float a frame holds in xmm6-15 across a try:
+	 * mono resumes into the landing pad with the general registers it
+	 * recovered and whatever the unwinding left in the SSE ones. Giving mono
+	 * the rule needs a wider dwarf map and an unwinder that writes
+	 * MonoContext::fregs.
+	 */
+	auto names_sse_reg = [] (int32_t dwarf_reg) {
+		return dwarf_reg >= 17 && dwarf_reg <= 32;
+	};
+
 	std::vector<std::pair<int32_t, int64_t>> entry_offsets;
 	bool in_entry_state = true;
 
@@ -234,6 +255,8 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 		case MONO_UNWIND_OP_OFFSET: {
 			int reg = hw_reg (r.reg);
 
+			if (reg < 0 && names_sse_reg (r.reg))
+				break;
 			if (reg < 0)
 				return fail (createStringError (
 					inconvertibleErrorCode (),
@@ -276,6 +299,8 @@ transcode_unwind (const std::vector<UnwindRecord> &records)
 		case MONO_UNWIND_OP_SAME_VALUE: {
 			int reg = hw_reg (r.reg);
 
+			if (reg < 0 && names_sse_reg (r.reg))
+				break;
 			if (reg < 0)
 				return fail (createStringError (
 					inconvertibleErrorCode (),

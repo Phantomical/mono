@@ -258,6 +258,16 @@ public:
 	/// error.
 	llvm::Error register_symbol (llvm::StringRef name, void *addr);
 
+	/// The same, for a name that stands for code a compiled body may reach with
+	/// a direct call.
+	///
+	/// Such a call is a 32-bit displacement, and a helper in the runtime's own
+	/// image is further away than that spans on a host whose loader places an
+	/// image high. Where it is, the name stands for a jump stub in reach
+	/// instead, and nothing can tell the difference: the stub's one instruction
+	/// is that jump.
+	llvm::Error register_code_symbol (llvm::StringRef name, void *addr);
+
 	/// Compile a module and return where its entry point and side tables landed.
 	///
 	/// The module lands in a JITDylib of its own. module_symbols is defined
@@ -342,6 +352,34 @@ private:
 
 	std::mutex named_symbols_mutex_;
 	std::unordered_map<std::string, void *> named_symbols_;
+
+	/// Adds \p name at \p addr to \p symbols, and on a PE target the `__imp_`
+	/// pointer generated code reaches it through.
+	llvm::Error add_symbol_definition (llvm::orc::SymbolMap &symbols,
+	                                   llvm::StringRef name, void *addr);
+
+	/// A word holding \p addr, in memory the code can reach with a 32-bit
+	/// displacement. Null when there is no such memory left.
+	void *import_slot (void *addr);
+
+	/// A jump to \p addr in that same memory. Null when there is none left.
+	void *code_stub (void *addr);
+
+	/// \p size bytes of it, aligned and executable.
+	void *reachable_bytes (size_t size);
+
+	/*
+	 * Where those come from. Bump-allocated out of pages mapped below 2GB,
+	 * under named_symbols_mutex_ like everything else here.
+	 */
+	std::mutex low_pool_mutex_;
+	uint8_t *low_pool_ = nullptr;
+	size_t low_pool_size_ = 0;
+	size_t low_pool_used_ = 0;
+
+	/// The stub each out-of-reach helper is called through, keyed by the
+	/// helper. Under named_symbols_mutex_.
+	std::unordered_map<void *, void *> code_stubs_;
 
 	std::atomic<uint64_t> module_counter_{0};
 
