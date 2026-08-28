@@ -38,8 +38,16 @@
 
 #ifdef _WIN64
 #include <mono/mini/mini.h>
-extern GList* g_dynamic_function_table_begin;
-extern SRWLOCK g_dynamic_function_table_lock;
+
+/*
+ * The unwind tables mini registers with Windows, which this file is the
+ * out-of-process reader of.  The storage is here rather than in
+ * mono/mini/mini-windows.c because monodis and pedump link the metadata layer
+ * without the JIT, and a reference from this file has to resolve for them too.
+ * A program with no JIT never has an entry in the list.
+ */
+GList* g_dynamic_function_table_begin;
+SRWLOCK g_dynamic_function_table_lock = SRWLOCK_INIT;
 #endif
 
 // petele: todo: move this structure into a mono header

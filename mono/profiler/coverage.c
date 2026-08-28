@@ -76,6 +76,7 @@
 #include <mono/utils/mono-conc-hashtable.h>
 #include <mono/utils/mono-error-internals.h>
 #include <mono/utils/mono-os-mutex.h>
+#include <mono/utils/mono-proclib.h>
 #include <mono/utils/mono-logger-internals.h>
 #include <mono/utils/mono-counters.h>
 #include <mono/utils/mono-publib.h>
@@ -1159,7 +1160,7 @@ mono_profiler_init_coverage (const char *desc)
 	if (!coverage_config.output_filename)
 		coverage_config.output_filename = "coverage.xml";
 	else if (*coverage_config.output_filename == '+')
-		coverage_config.output_filename = g_strdup_printf ("%s.%d", coverage_config.output_filename + 1, getpid ());
+		coverage_config.output_filename = g_strdup_printf ("%s.%d", coverage_config.output_filename + 1, mono_process_current_pid ());
 
 	if (*coverage_config.output_filename == '|') {
 #ifdef HAVE_POPEN

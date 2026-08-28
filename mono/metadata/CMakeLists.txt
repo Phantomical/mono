@@ -6,21 +6,43 @@
 # differ in their GC defines (-DHAVE_BOEHM_GC plus -DGC_THREADS, against
 # -DHAVE_SGEN_GC) and in which GC glue file they pull in.
 
+# The Win32 objects the runtime's object model is written against -- handles,
+# events, mutexes, sockets, the console -- are the host's own on Windows and
+# emulated everywhere else.  So each of these is a pair, and the file that
+# names the other host does not compile here.  A file named after a platform
+# and not in this list guards its own body instead.
+if(MONO_HOST_WINDOWS)
+  set(metadata_platform_sources
+    console-win32.c
+    w32file-win32.c
+    icall-windows.c
+    marshal-windows.c
+    mono-security-windows.c
+    w32mutex-win32.c
+    w32semaphore-win32.c
+    w32event-win32.c
+    w32process-win32.c
+    w32socket-win32.c
+    w32error-win32.c)
+else()
+  set(metadata_platform_sources
+    console-unix.c
+    w32mutex-unix.c
+    w32semaphore-unix.c
+    w32event-unix.c
+    w32process-unix.c
+    w32process-unix-osx.c
+    w32process-unix-bsd.c
+    w32process-unix-haiku.c
+    w32process-unix-default.c
+    w32socket-unix.c
+    w32file-unix.c
+    w32file-unix-glob.c
+    w32error-unix.c)
+endif()
+
 set(metadata_common_sources
-  # platform (unix)
-  console-unix.c
-  w32mutex-unix.c
-  w32semaphore-unix.c
-  w32event-unix.c
-  w32process-unix.c
-  w32process-unix-osx.c
-  w32process-unix-bsd.c
-  w32process-unix-haiku.c
-  w32process-unix-default.c
-  w32socket-unix.c
-  w32file-unix.c
-  w32file-unix-glob.c
-  w32error-unix.c
+  ${metadata_platform_sources}
   threadpool-worker-default.c
   # unity additions
   unity-memory-info.c
@@ -162,7 +184,7 @@ mono_add_object_library(monoruntime_config
 # HAVE_HIDDEN are the defines the zlib headers read.
 mono_add_object_library(monoruntime_support
   SOURCES support.c
-  DEFINITIONS HAVE_UNISTD_H HAVE_HIDDEN
+  DEFINITIONS HAVE_HIDDEN
   INCLUDES "${CMAKE_SOURCE_DIR}/mono"
   DEPENDS mono::hidden mono::eglib_headers)
 

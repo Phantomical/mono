@@ -223,7 +223,7 @@ helper_thread (void *arg)
 	mono_thread_info_set_flags (MONO_THREAD_INFO_FLAGS_NO_GC | MONO_THREAD_INFO_FLAGS_NO_SAMPLE);
 
 	if (aot_profiler.duration >= 0) {
-		sleep (aot_profiler.duration);
+		g_usleep ((gulong) aot_profiler.duration * 1000 * 1000);
 	} else if (aot_profiler.command_port >= 0) {
 		GArray *command_sockets = g_array_new (FALSE, FALSE, sizeof (int));
 

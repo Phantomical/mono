@@ -290,7 +290,12 @@ ICALL_SIG (8, (void, ptr, ptr, int32, ptr, ptrref, ptr, ptrref)) 	\
 
 // Declare each icall_sig as a MonoMethodSignature * const.
 // The address is constant but the contents are not quite.
-#define ICALL_SIG(n, types) extern MonoMethodSignature * const ICALL_SIG_NAME (n, types);
+//
+// G_EXTERN_C because mono/llvm/ registers icalls from C++ and these are defined
+// in mono/metadata/icall.c.  The Itanium ABI leaves a global variable's name
+// alone whichever language declared it, so the mismatch resolves by accident
+// there; MSVC decorates the C++ spelling and the reference finds nothing.
+#define ICALL_SIG(n, types) G_EXTERN_C extern MonoMethodSignature * const ICALL_SIG_NAME (n, types);
 
 ICALL_SIGS
 

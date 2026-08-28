@@ -2196,7 +2196,9 @@ ves_icall_System_Net_Sockets_Socket_SetSocketOption_icall (gsize sock, gint32 le
 		if (system_name == IP_MTU_DISCOVER) {
 			switch (system_level) {
 			case IP_PMTUDISC_DONT:
+#ifdef IP_PMTUDISC_WANT
 			case IP_PMTUDISC_WANT:
+#endif
 			case IP_PMTUDISC_DO:
 #ifdef IP_PMTUDISC_PROBE
 			case IP_PMTUDISC_PROBE:

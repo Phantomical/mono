@@ -106,7 +106,7 @@ target_compile_definitions(mono-native-static PRIVATE BROTLI_BUILD_NO_RBIT)
 if(MONO_HAS_WNO_TYPEDEF_REDEFINITION)
   target_compile_options(mono-native-static PRIVATE -Wno-typedef-redefinition)
 endif()
-set_target_properties(mono-native-static PROPERTIES OUTPUT_NAME mono-native)
+mono_static_twin_name(mono-native-static mono-native)
 
 install(TARGETS mono-native mono-native-static
         LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
