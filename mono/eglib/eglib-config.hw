@@ -36,6 +36,7 @@ typedef int pid_t;
 #endif
 
 // https://msdn.microsoft.com/en-us/library/40bbyw78.aspx
+#define STDIN_FILENO  (0)
 #define STDOUT_FILENO (1)
 #define STDERR_FILENO (2)
 

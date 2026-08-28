@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
+#include "../utils/mono-errno.h"
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <io.h>
@@ -127,7 +128,7 @@ void
 g_dir_close (GDir *dir)
 {
 	g_return_if_fail (dir != NULL && dir->handle != 0);
-	
+
 	if (dir->current)
 		g_free (dir->current);
 	dir->current = NULL;
@@ -137,6 +138,67 @@ g_dir_close (GDir *dir)
 	FindClose (dir->handle);
 	dir->handle = 0;
 	g_free (dir);
+}
+
+/*
+ * The mode argument is POSIX's and there is no Windows equivalent: a directory
+ * created here inherits its parent's ACL, which is what CreateDirectory does
+ * with a null descriptor.
+ *
+ * A component that already exists is not an error, and neither is a prefix that
+ * names a drive or a UNC share -- those are not directories anyone creates, and
+ * CreateDirectory answers ERROR_ACCESS_DENIED rather than ERROR_ALREADY_EXISTS
+ * for them.
+ */
+int
+g_mkdir_with_parents (const gchar *pathname, int mode)
+{
+	gunichar2 *path;
+	size_t i;
+
+	if (!pathname || *pathname == '\0') {
+		mono_set_errno (EINVAL);
+		return -1;
+	}
+
+	path = u8to16 (pathname);
+
+	for (i = 0; ; i++) {
+		gunichar2 orig;
+
+		if (path [i] != L'\\' && path [i] != L'/' && path [i] != L'\0')
+			continue;
+
+		/* A leading separator, and the one after a drive letter or a UNC
+		 * prefix, close off nothing there is to create. */
+		if (i == 0 || path [i - 1] == L':' || path [i - 1] == L'\\'
+		    || path [i - 1] == L'/') {
+			if (path [i] == L'\0')
+				break;
+			continue;
+		}
+
+		orig = path [i];
+		path [i] = L'\0';
+
+		if (!CreateDirectoryW (path, NULL)) {
+			DWORD err = GetLastError ();
+
+			if (err != ERROR_ALREADY_EXISTS && err != ERROR_ACCESS_DENIED) {
+				path [i] = orig;
+				g_free (path);
+				mono_set_errno (err == ERROR_PATH_NOT_FOUND ? ENOENT : EACCES);
+				return -1;
+			}
+		}
+
+		path [i] = orig;
+		if (orig == L'\0')
+			break;
+	}
+
+	g_free (path);
+	return 0;
 }
 
 
