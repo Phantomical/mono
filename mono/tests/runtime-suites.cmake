@@ -637,6 +637,17 @@ mono_runtime_suite(runtime-array-guard-off TESTS array-devirt.exe
                    ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=10000"
                        "MONO_LLVM_JIT_GUARD_ARRAYS=0")
 
+# The guess GuardDispatchPass takes on a receiver it cannot prove a class
+# for, behind the same array rule's guard. Tier 2 only, same as the array
+# arm above, and the same threshold: this file spends the same shape of
+# calls array-devirt.cs does to reach it. The off arm leaves every such site
+# dispatching, which is the answer the guess has to agree with.
+mono_runtime_suite(runtime-class-guard TESTS class-devirt.exe
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=10000")
+mono_runtime_suite(runtime-class-guard-off TESTS class-devirt.exe
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=10000"
+                       "MONO_LLVM_JIT_GUARD_CLASSES=0")
+
 # The bonuses mono adds to the cost model. Two arms, on and off, the way
 # runtime-tier2-cost-trigger has it. The root drives its own compiles, so
 # self-promotion is off the way the costed suite has it, and the trivial

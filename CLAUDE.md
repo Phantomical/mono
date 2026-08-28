@@ -437,6 +437,13 @@ and the note says which split:
   wrong target from a wrong compare. `mono/tests/array-devirt.cs` is the program that
   tells the arms apart, because the enumerator an array answers with names the element
   class the dispatch reached.
+- `MONO_LLVM_JIT_GUARD_CLASSES=<0|false|empty>` — turn the guessed-class dispatch guard
+  off, so a dispatch this compile can only guess a class for reads its callee out of the
+  receiver's vtable whatever the IR says the guess is. On by default, and tier 2 only.
+  The translator writes the same site either way, so the two arms differ in one pass,
+  which separates a wrong target from a wrong compare. `mono/tests/class-devirt.cs` is
+  the program that tells the arms apart, because its negative control changes what the
+  guessed field holds after the compile has already guessed it.
 
 Inlining. `MONO_LLVM_JIT_TRACE=1` prints a line for each fold, which is the only place a
 fold is visible from outside:
@@ -701,12 +708,18 @@ so the failure mode is a site left alone rather than a site left wrong. No later
 assembly load invalidates one.
 
 **One site is taken on a class it cannot prove, and a compare is what makes it safe.**
+`GuardDispatchPass` (`passes/devirtualize.cpp`) writes that compare, and it asks two
+rules for the class to compare against. The array rule is asked first and answers from
+the class the slot's declared type sets. The guess rule follows and answers from a class
+an allocation or an initonly static read states outright, on a site the array rule
+leaves alone. Neither class is one the compile can prove the receiver holds, so both
+rules stand behind the same compare.
+
 An array slot admits every array of its rank with the same cast class, so an `int[]`
 parameter also holds a `uint[]` and an array of an enum over int, each with a vtable of
-its own. `GuardArrayDispatchPass` (`passes/devirtualize.cpp`) sends such a dispatch
-through `receiver->vtable == <the slot's class>`, calls that class's implementation
-directly on the arm that matches, and keeps the dispatch on the arm that does not.
-`mono/tests/array-devirt.cs` gates both arms.
+its own. The array rule sends such a dispatch through `receiver->vtable == <the slot's
+class>`, calls that class's implementation directly on the arm that matches, and keeps
+the dispatch on the arm that does not. `mono/tests/array-devirt.cs` gates both arms.
 
 What it takes is the six reduced types ECMA-335 I.8.7 names, which is what I.8.7.1
 compares to decide that two array types hold each other's values: a cast class of
@@ -725,8 +738,20 @@ primitive element exact (`isExactTypeHelper`, `vm/jitinterface.cpp`), for the re
 above. RyuJIT's class GDV is the same instrument as this pass: a method-table compare
 with the original dispatch on the arm that misses.
 
-Type profiling and class-hierarchy analysis stay out of scope. Check with the user
-before speculating on anything but the shape above.
+A second rule answers where the array rule does not. `guessed_class ()`
+(`operand-class.cpp`) reads a class an allocation or an initonly static read states
+outright, reached through channels that are not proofs: a field whose object escapes
+still answers from the stores the walk can see, a merge answers where only some arms
+name a class, and the zero a fresh allocation reads is skipped. A parameter's declared
+class is refused, because a compare against a bound misses every subclass it admits.
+`MONO_LLVM_JIT_GUARD_CLASSES` turns the guess off on its own, which leaves a wrong
+target and a wrong compare one pass apart. `mono/tests/class-devirt.cs` gates it:
+`runtime-class-guard` is the arm whose threshold reaches the guard, and
+`runtime-class-guard-off` runs the same file with the guess off, which is the answer the
+guess has to agree with.
+
+Type profiling and class-hierarchy analysis stay out of scope beyond the two rules
+above. Check with the user before speculating past them.
 
 ### Inlining
 
