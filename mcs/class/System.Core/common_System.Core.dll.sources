@@ -101,7 +101,11 @@ System.Security.Cryptography/SHA512CryptoServiceProvider.cs
 ../../../external/corefx/src/System.Collections/src/System/Collections/Generic/HashSetEqualityComparer.cs
 ../../../external/corefx/src/System.Collections/src/System/Collections/Generic/ICollectionDebugView.cs
 
-../../../external/corefx/src/System.Linq/src/System/Linq/*.cs
+../../../external/corefx/src/System.Linq/src/System/Linq/*.cs:Iterator.cs,Where.cs,Select.cs
+
+../../../external/corefx-bugfix/src/System.Linq/src/System/Linq/Iterator.cs
+../../../external/corefx-bugfix/src/System.Linq/src/System/Linq/Where.cs
+../../../external/corefx-bugfix/src/System.Linq/src/System/Linq/Select.cs
 
 ../../../external/corefx/src/System.Linq.Expressions/src/System/Dynamic/*.cs
 ../../../external/corefx/src/System.Linq.Expressions/src/System/Dynamic/Utils/CachedReflectionInfo.cs
