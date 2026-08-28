@@ -16,7 +16,7 @@ endif()
 set(_src      "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_bin      "${CMAKE_CURRENT_BINARY_DIR}")
 set(_buildcls "${MONO_MCS_LIBDIR}/build")
-set(_wrapper  "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
+set(_wrapper  "${MONO_RUNTIME_WRAPPER}")
 
 mono_tools_runtime(_host MONO_PATH "${_buildcls}" AOT_PATH "${_buildcls}")
 set(_csc   ${_host} "${MONO_CSC}" -debug:portable -noconfig -nologo
