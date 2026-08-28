@@ -681,7 +681,24 @@ public:
 				}
 			}
 
-			std::map<const uint8_t *, std::string> by_address;
+			/*
+			 * An instrumented body carries a second callable symbol at
+			 * its own address: `__llvm_prf_data` names the function
+			 * through an alias, so that the profile record needs no
+			 * relocation against an exported symbol. The alias holds the
+			 * method's address, its size and its linkage, and differs
+			 * only in scope, which is local.
+			 *
+			 * A side table names the function it describes by address, and
+			 * belongs_to () matches that block back to a method by the
+			 * name the address resolves to. The alias matches no method,
+			 * so a method whose address the alias takes finds none of its
+			 * rows, and reports no IL offset and no inlined frame.
+			 * `defined_symbols ()` iterates a DenseSet keyed on the symbol
+			 * pointer, so the name an address publishes has to be chosen
+			 * rather than taken from whichever symbol arrives last.
+			 */
+			std::map<const uint8_t *, jitlink::Symbol *> owners;
 
 			for (jitlink::Symbol *sym : graph.defined_symbols ()) {
 				if (!sym->hasName ())
@@ -695,8 +712,19 @@ public:
 				extents.functions.emplace_back (
 					std::string (*sym->getName ()),
 					std::make_pair (code, (size_t) sym->getSize ()));
-				by_address[code] = std::string (*sym->getName ());
+
+				auto [owner, fresh] = owners.try_emplace (code, sym);
+
+				if (!fresh
+				    && owner->second->getScope () == jitlink::Scope::Local
+				    && sym->getScope () != jitlink::Scope::Local)
+					owner->second = sym;
 			}
+
+			std::map<const uint8_t *, std::string> by_address;
+
+			for (const auto &[code, sym] : owners)
+				by_address.emplace (code, std::string (*sym->getName ()));
 
 			if (line_table != nullptr)
 				parse_line_table (line_table, line_table_size, by_address,
