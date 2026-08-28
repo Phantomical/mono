@@ -1054,15 +1054,6 @@ mono_arch_unwindinfo_free_unwind_info (PUNWIND_INFO unwind_info)
 	g_free (unwind_info);
 }
 
-guint
-mono_arch_unwindinfo_init_method_unwind_info (gpointer cfg)
-{
-	MonoCompile * current_cfg = (MonoCompile *)cfg;
-	g_assert (current_cfg->arch.unwindinfo == NULL);
-	current_cfg->arch.unwindinfo = initialize_unwind_info_internal (current_cfg->unwind_ops);
-	return mono_arch_unwindinfo_get_size (((PUNWIND_INFO)(current_cfg->arch.unwindinfo))->CountOfCodes);
-}
-
 void
 mono_arch_unwindinfo_install_method_unwind_info (PUNWIND_INFO *monoui, gpointer code, guint code_size)
 {

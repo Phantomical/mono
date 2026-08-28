@@ -479,9 +479,6 @@ mono_arch_unwindinfo_alloc_unwind_info (GSList *unwind_ops);
 void
 mono_arch_unwindinfo_free_unwind_info (PUNWIND_INFO unwind_info);
 
-guint
-mono_arch_unwindinfo_init_method_unwind_info (gpointer cfg);
-
 void
 mono_arch_unwindinfo_install_method_unwind_info (PUNWIND_INFO *monoui, gpointer code, guint code_size);
 

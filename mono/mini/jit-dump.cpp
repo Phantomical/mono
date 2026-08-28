@@ -11,7 +11,14 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#ifdef HOST_WIN32
+// open (), fdopen () and the O_* flags.  The CRT declares them here rather
+// than in unistd.h, under their POSIX names because mono compiles with
+// _CRT_NONSTDC_NO_DEPRECATE.
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 
 #include <cctype>
 #include <cerrno>

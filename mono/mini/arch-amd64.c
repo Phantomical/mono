@@ -1980,6 +1980,10 @@ get_delegate_invoke_impl (MonoTrampInfo **info, gboolean has_target, guint32 par
 		g_free (name);
 	}
 
+	/* The buffer was reserved with MONO_TRAMPOLINE_UNWINDINFO_SIZE bytes
+	 * behind the code, which is where the Windows unwind table goes. */
+	(*info)->has_unwind_table_slack = TRUE;
+
 	if (mono_jit_map_is_enabled ()) {
 		char *buff;
 		if (has_target)
@@ -2246,7 +2250,14 @@ mono_arch_build_imt_trampoline (MonoVTable *vtable, MonoDomain *domain, MonoIMTC
 
 	MONO_PROFILER_RAISE (jit_code_buffer, (start, code - start, MONO_PROFILER_CODE_BUFFER_IMT_TRAMPOLINE, NULL));
 
-	mono_tramp_info_register (mono_tramp_info_create (NULL, start, code - start, NULL, unwind_ops), domain);
+	{
+		MonoTrampInfo *info = mono_tramp_info_create (NULL, start, code - start, NULL, unwind_ops);
+
+	/* The buffer was reserved with MONO_TRAMPOLINE_UNWINDINFO_SIZE bytes
+	 * behind the code, which is where the Windows unwind table goes. */
+		info->has_unwind_table_slack = TRUE;
+		mono_tramp_info_register (info, domain);
+	}
 
 	return start;
 }

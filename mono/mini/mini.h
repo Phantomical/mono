@@ -488,6 +488,19 @@ struct MonoTrampInfo
 	  * itself, batched with others. mono_tramp_info_register_internal ()
 	  * then skips its own (mini-runtime.c). */
 	 gboolean perf_dump_deferred;
+
+	 /*
+	  * Whether `code` was reserved with MONO_TRAMPOLINE_UNWINDINFO_SIZE bytes
+	  * behind it.
+	  *
+	  * On Windows the runtime writes an UNWIND_INFO into that room and hands
+	  * the OS a pointer to it, so a trampoline that reserved none would be
+	  * written past its end. Most of what registers here reserves none: a stub
+	  * or a thunk the LLVM back end planted carries its frame description in
+	  * the side tables mono's own unwinder reads, and a hand-written thunk in
+	  * the runtime's image carries whatever the linker gave it.
+	  */
+	 gboolean has_unwind_table_slack;
 };
 
 /* profiler support */

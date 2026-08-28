@@ -53,10 +53,25 @@ set(mini_sources
   tramp-amd64.c
   mini-amd64-gsharedvt.c
   tramp-amd64-gsharedvt.c
-  # posix
-  mini-posix.c
   # generated
   "${CMAKE_CURRENT_BINARY_DIR}/version.h")
+
+# The host file: signals, stack overflow, the profiler's sampling timer and the
+# runtime's own thread setup, all of which the two hosts do differently enough
+# that there is no shared body.  On Windows it brings three shims with it -- the
+# DLL entry point, the TLS callback that gives a thread its runtime state, and
+# the DAC surface a debugger reads a crashed process through.
+if(MONO_HOST_WINDOWS)
+  # mini-windows-dlldac.c is not here: it carries a DllMain and a memory
+  # reader of its own, for the separate DAC image a debugger loads to walk a
+  # crashed process, and both names collide with the runtime's.
+  list(APPEND mini_sources
+    mini-windows.c
+    mini-windows-dllmain.c
+    mini-windows-tls-callback.c)
+else()
+  list(APPEND mini_sources mini-posix.c)
+endif()
 
 # The JIT icalls, one file per icall or per family that shares a helper.  Globbed
 # so that adding an icall is adding a file; jit-icalls.h declares the lot.
@@ -108,19 +123,23 @@ if(MONO_ENABLE_DEBUGGER_AGENT)
   list(APPEND _mini_extra mono_dbg)
 endif()
 
+# The backend is an object library of its own, and a build configured without
+# MONO_LLVM_PREFIX does not have one.
+if(MONO_ENABLE_LLVM)
+  list(APPEND _mini_extra mono-llvm)
+endif()
+
 # Object libraries do not travel through an intermediate link, so each final
 # target names the whole set.
 set(MONO_SGEN_OBJECTS
     mini ${_mini_extra}
     monoruntime_sgen monoruntime_config monoruntime_support monoculture
     monosgen monoutils eglib
-    mono-llvm
     CACHE INTERNAL "object libraries making up the SGen runtime")
 set(MONO_BOEHM_OBJECTS
     mini ${_mini_extra}
     monoruntime_boehm monoruntime_config monoruntime_support monoculture
     monoutils eglib
-    mono-llvm
     CACHE INTERNAL "object libraries making up the Boehm runtime")
 
 if(ZLIB_FOUND)
@@ -147,13 +166,20 @@ function(_mono_add_runtime_library name)
   foreach(_o IN LISTS ARG_OBJECTS)
     target_link_libraries(${name} PRIVATE ${_o})
   endforeach()
-  target_link_libraries(${name} PRIVATE ${ARG_EXTRA} mono::llvm ${_mono_zlib} m)
+  target_link_libraries(${name} PRIVATE ${ARG_EXTRA} mono::llvm ${_mono_zlib} mono::platform)
   set_target_properties(${name} PROPERTIES
     VERSION 1.0.0
     SOVERSION 1
     BUILD_RPATH "\$ORIGIN"
     INSTALL_RPATH "\$ORIGIN"
     LINKER_LANGUAGE CXX)
+  # An ELF library exports everything the compile did not hide, and the runtime
+  # relies on that in two directions: the mono binaries call eglib and the
+  # collector out of it, and a profiler module dlopen'ed into the process
+  # resolves its mono_* against it.  MONO_API marks the embedding surface and
+  # nothing else, so a PE image built from the same sources exports far too
+  # little.  This asks the linker for the ELF answer.
+  set_target_properties(${name} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
   install(TARGETS ${name} LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 endfunction()
 
@@ -176,8 +202,8 @@ function(_mono_add_runtime_archive name)
   foreach(_o IN LISTS ARG_OBJECTS)
     target_link_libraries(${name} PUBLIC ${_o})
   endforeach()
-  target_link_libraries(${name} PUBLIC ${ARG_EXTRA} mono::llvm ${_mono_zlib} m)
-  set_target_properties(${name} PROPERTIES OUTPUT_NAME "${ARG_OUTPUT_NAME}")
+  target_link_libraries(${name} PUBLIC ${ARG_EXTRA} mono::llvm ${_mono_zlib} mono::platform)
+  mono_static_twin_name(${name} "${ARG_OUTPUT_NAME}")
   install(TARGETS ${name} ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 endfunction()
 
@@ -219,7 +245,7 @@ function(_mono_add_runtime_executable name main suffix)
     foreach(_o IN LISTS ARG_OBJECTS)
       target_link_libraries(${name} PRIVATE ${_o})
     endforeach()
-    target_link_libraries(${name} PRIVATE ${ARG_EXTRA} mono::llvm ${_mono_zlib} m)
+    target_link_libraries(${name} PRIVATE ${ARG_EXTRA} mono::llvm ${_mono_zlib} mono::platform)
   else()
     target_link_libraries(${name} PRIVATE mono${suffix}-2.0)
   endif()
@@ -237,14 +263,23 @@ if(MONO_ENABLE_EXECUTABLES)
     _mono_add_runtime_executable(mono-boehm main.c boehm OBJECTS ${MONO_BOEHM_OBJECTS} EXTRA monogc)
   endif()
 
-  # `mono` is a symlink to whichever collector is the default.
+  # `mono` is whichever collector is the default, under the plain name.  A
+  # symlink on Windows needs a privilege an ordinary account does not hold, so
+  # there it is a copy and the two names are two files.
+  set(_mono_alias "${CMAKE_CURRENT_BINARY_DIR}/mono${CMAKE_EXECUTABLE_SUFFIX}")
+  if(WIN32)
+    set(_mono_alias_command ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:mono-${MONO_DEFAULT_GC_SUFFIX}>" "${_mono_alias}")
+  else()
+    set(_mono_alias_command ${CMAKE_COMMAND} -E create_symlink
+        mono-${MONO_DEFAULT_GC_SUFFIX} "${_mono_alias}")
+  endif()
   add_custom_command(
-    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/mono"
-    COMMAND ${CMAKE_COMMAND} -E create_symlink
-            mono-${MONO_DEFAULT_GC_SUFFIX} "${CMAKE_CURRENT_BINARY_DIR}/mono"
+    OUTPUT "${_mono_alias}"
+    COMMAND ${_mono_alias_command}
     DEPENDS mono-${MONO_DEFAULT_GC_SUFFIX}
     VERBATIM)
-  add_custom_target(mono-symlink ALL DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/mono")
+  add_custom_target(mono-symlink ALL DEPENDS "${_mono_alias}")
 
   install(CODE "
     execute_process(COMMAND \${CMAKE_COMMAND} -E create_symlink

@@ -6,19 +6,39 @@
 #ifndef MONO_ARCH_AMD64_THUNK_HPP
 #define MONO_ARCH_AMD64_THUNK_HPP
 
+/* The unbox prologue below names the register the target's ABI passes the
+ * receiver in, so this header reads TARGET_WIN32 and has to define it itself.
+ * An includer that reaches this before config.h would otherwise get the System
+ * V spelling on Windows, with no diagnostic. */
+#include <config.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 
 namespace mono::arch {
 
+/*
+ * The ModRM byte that names the receiver in `add <reg>, imm8`: mod 11, /0 for
+ * add, and the r/m field naming the register the ABI passes the first argument
+ * in. Both spellings are one REX.W byte, one opcode and one immediate, so the
+ * two thunks below have the same offsets whichever is taken.
+ */
+#ifdef TARGET_WIN32
+// rcx
+#define MONO_THUNK_UNBOX_MODRM 0xc1
+#else
+// rdi
+#define MONO_THUNK_UNBOX_MODRM 0xc7
+#endif
+
 // clang-format off
 static constexpr std::uint8_t thunk_code[32] = {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // +0  slot: null until Thunk::redirect () sets it
 	0xCC, 0xCC, 0xCC, 0xCC,                         // +8  int3 padding
 
-	// +12 unbox: add rdi, sizeof(MonoObject)
-	0x48, 0x83, 0xc7, 0x10,
+	// +12 unbox: add <arg1>, sizeof(MonoObject)
+	0x48, 0x83, MONO_THUNK_UNBOX_MODRM, 0x10,
 
 	// +16 entry: jmp qword ptr [rip-0x16]  (-> +0, the slot)
 	0xFF, 0x25, 0xEA, 0xFF, 0xFF, 0xFF,
@@ -30,8 +50,8 @@ static constexpr std::uint8_t thunk_keyed_code[32] = {
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // +0  slot: null until Thunk::redirect () sets it
 	0xCC, 0xCC, 0xCC, 0xCC,                         // +8  int3 padding
 
-	// +12 unbox: add rdi, sizeof(MonoObject)
-	0x48, 0x83, 0xc7, 0x10,
+	// +12 unbox: add <arg1>, sizeof(MonoObject)
+	0x48, 0x83, MONO_THUNK_UNBOX_MODRM, 0x10,
 
 	// +16 entry: movabs r11, <key>
 	//

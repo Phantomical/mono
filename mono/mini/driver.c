@@ -19,6 +19,11 @@
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
+#ifdef HOST_WIN32
+// execvp (), which the --gc= switch re-executes the other collector's binary
+// through.  The CRT declares it here rather than in unistd.h.
+#include <process.h>
+#endif
 
 #include <mono/metadata/assembly-internals.h>
 #include <mono/metadata/image-internals.h>

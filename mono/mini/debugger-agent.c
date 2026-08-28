@@ -5317,7 +5317,7 @@ mono_debugger_agent_send_crash (char *json_dump, MonoStackHash *hashes, int paus
 
 	// It doesn't make sense to wait for lldb/gdb to finish if we're not
 	// actually enabled. Therefore we do the wait here.
-	sleep (pause);
+	g_usleep ((gulong) pause * 1000 * 1000);
 
 	// Don't heap allocate when we can avoid it
 	EventRequest request;
@@ -5349,7 +5349,7 @@ mono_debugger_agent_send_crash (char *json_dump, MonoStackHash *hashes, int paus
 		process_event (EVENT_KIND_CRASH, &ei, 0, NULL, events, suspend_policy);
 
 		// Don't die before it is sent.
-		sleep (4);
+		g_usleep (4 * 1000 * 1000);
 	} else {
 		g_async_safe_printf ("Cannot tell the debugger about the crash: the loader lock is not free.\n");
 	}

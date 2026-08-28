@@ -655,7 +655,7 @@ mono_tramp_info_register_internal (MonoTrampInfo *info, MonoDomain *domain, gboo
 	mixed_callstack_plugin_save_trampoline_info (info, domain);
 
 #ifdef MONO_ARCH_HAVE_UNWIND_TABLE
-	if (!aot)
+	if (!aot && info->has_unwind_table_slack)
 		mono_arch_unwindinfo_install_tramp_unwind_info (info->unwind_ops, info->code, info->code_size);
 #endif
 
