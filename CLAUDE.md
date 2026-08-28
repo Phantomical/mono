@@ -424,6 +424,13 @@ and the note says which split:
   than `method`, because an `ldvirtftn` delegate never writes back the override it
   resolves and a combined delegate leaves `method_ptr` null, so a match proves both.
   `mono/tests/delegate-fold.cs` gates it and carries the off arm.
+- `MONO_LLVM_JIT_GUARD_ARRAYS=<0|false|empty>` — turn the array dispatch guard off, so a
+  dispatch on an array receiver reads its callee out of the receiver's vtable whatever
+  the IR says the slot is declared with. On by default, and tier 2 only. The translator
+  writes the same site either way, so the two arms differ in one pass, which separates a
+  wrong target from a wrong compare. `mono/tests/array-devirt.cs` is the program that
+  tells the arms apart, because the enumerator an array answers with names the element
+  class the dispatch reached.
 
 Inlining. `MONO_LLVM_JIT_TRACE=1` prints a line for each fold, which is the only place a
 fold is visible from outside:
@@ -683,11 +690,37 @@ Two attributes ride on the declaration, and both are what the one shape buys:
   `runtime-alloc-kept` arm is what reaches the kept forms for a class nothing else marks.
 
 Beyond taking a site the IL already settled — non-virtual, `final`, or resolved by
-`constrained.` — the JIT does not devirtualize. If devirtualization does arrive, it is
-exact-only. A rewrite must prove the receiver's class exactly, so the failure mode is a
-site left alone rather than a site left wrong. No later assembly load invalidates one.
-Guarded devirtualization, type profiling and class-hierarchy analysis are out of scope.
-Check with the user first.
+`constrained.` — the JIT devirtualizes where it can prove the receiver's class exactly,
+so the failure mode is a site left alone rather than a site left wrong. No later
+assembly load invalidates one.
+
+**One site is taken on a class it cannot prove, and a compare is what makes it safe.**
+An array slot admits every array of its rank with the same cast class, so an `int[]`
+parameter also holds a `uint[]` and an array of an enum over int, each with a vtable of
+its own. `GuardArrayDispatchPass` (`passes/devirtualize.cpp`) sends such a dispatch
+through `receiver->vtable == <the slot's class>`, calls that class's implementation
+directly on the arm that matches, and keeps the dispatch on the arm that does not.
+`mono/tests/array-devirt.cs` gates both arms.
+
+What it takes is the six reduced types ECMA-335 I.8.7 names, which is what I.8.7.1
+compares to decide that two array types hold each other's values: a cast class of
+`byte`, `int16`, `int32`, `int64`, `char` or `bool`. An enum needs no case of its own,
+because II.14.3 admits only underlying types already in that set and an array of an enum
+takes its underlying type's cast class. A reference element is left dispatching because
+covariance puts a `Derived[]` in a `Base[]` slot whenever the program uses one and the
+compare would miss. `float[]`, `double[]` and an array of an ordinary struct are left
+dispatching because reaching one with another class needs an enum over a type II.14.3
+does not admit. This loader takes such an enum without complaint, which is why
+`exact_class ()` still refuses every array and no unguarded fold reaches those either.
+
+CoreCLR draws the same line from the other side. It rejects the enum at load
+(`MethodTableBuilder::SetupMethodTable2`) and still refuses to call any array with a
+primitive element exact (`isExactTypeHelper`, `vm/jitinterface.cpp`), for the reason
+above. RyuJIT's class GDV is the same instrument as this pass: a method-table compare
+with the original dispatch on the arm that misses.
+
+Type profiling and class-hierarchy analysis stay out of scope. Check with the user
+before speculating on anything but the shape above.
 
 ### Inlining
 

@@ -115,6 +115,14 @@ bool fold_casts ();
 /// either way, so the two arms differ in one pass.
 bool fold_delegates ();
 
+/// Whether MONO_LLVM_JIT_GUARD_ARRAYS left the array dispatch guard on.
+///
+/// A false value leaves every dispatch on an array receiver reading its callee
+/// out of the receiver's vtable, which is what separates a wrong target from a
+/// wrong compare. The translator writes the same site either way, so the two
+/// arms differ in one pass.
+bool guard_array_dispatch ();
+
 /// Whether MONO_LLVM_JIT_THREAD_STATIC left the thread-static fast path on.
 ///
 /// A false value sends every thread static back through mono_domain_get () and

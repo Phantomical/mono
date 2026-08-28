@@ -4,6 +4,7 @@
 #include "passes/builtins.hpp"
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init.hpp"
+#include "passes/devirtualize.hpp"
 #include "passes/fold-delegate.hpp"
 #include "passes/inline-copies.hpp"
 #include "passes/profile-counter-promoter.hpp"
@@ -541,17 +542,30 @@ MonoPassBuilder::buildTier2Pipeline ()
 
 	/*
 	 * Behind the reader above, which is what the counter indices are keyed on.
-	 * A guard is blocks the CFG tier 1 hashed does not have, and even entering
-	 * a target directly takes away the select the instrumentation counted. In
-	 * front of the inliner, so a cost model weighs the target the site now
-	 * names rather than a call through a delegate, which it can do nothing
-	 * with.
+	 * Each of these writes blocks the CFG tier 1 hashed does not have, and
+	 * entering a delegate's target directly takes away the select the
+	 * instrumentation counted as well. In front of the inliner, so a cost model
+	 * weighs the target a site now names rather than a call through a delegate
+	 * or a dispatch, which it can do nothing with.
 	 */
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
 		mono::FoldDelegateInvokesPass ()));
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
+		mono::GuardArrayDispatchPass ()));
+
+	/*
+	 * The array guard again between the inliner's rounds. A folded body brings
+	 * the caller's own array into a dispatch the caller never wrote, so the
+	 * sites it can take are mostly the ones a fold delivers, and the round after
+	 * each one reads what it named as an ordinary call site.
+	 */
+	llvm::FunctionPassManager between;
+
+	between.addPass (mono::GuardArrayDispatchPass ());
+	between.addPass (buildTier2FunctionSimplificationPipeline ());
 
 	MPM.addPass (mono::TopDownInlinerPass (*TM, buildTier2MaterializePipeline (),
-	                                       buildTier2FunctionSimplificationPipeline ()));
+	                                       std::move (between)));
 
 	MPM.addPass (mono::StripInlineCopiesPass ());
 

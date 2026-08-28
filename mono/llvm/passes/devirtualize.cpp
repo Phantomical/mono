@@ -16,7 +16,9 @@
 #include "compile-state.hpp"
 #include "direct-call.hpp"
 #include "method-symbols.hpp"
+#include "operand-class.hpp"
 #include "runtime/naming.hpp"
+#include "runtime/options.hpp"
 #include "vtable-func.hpp"
 
 #include "mini.h"
@@ -30,6 +32,8 @@
 #include "mono/metadata/object-internals.h"
 
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Analysis/BlockFrequencyInfo.h>
+#include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
@@ -37,7 +41,12 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Module.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <optional>
 
 using namespace llvm;
 
@@ -176,7 +185,9 @@ called_shape (CallBase *site)
 	return shape;
 }
 
-/// Rewrites \p call so it enters \p entry.
+/// Writes at the builder's position the call \p at makes, entering \p entry
+/// rather than the callee the site read. \p normal is where an invoke's
+/// ordinary edge goes.
 ///
 /// A value type's slot holds the unbox entry, which steps the receiver past the
 /// object header before it runs into the body. \p steps_receiver names an entry
@@ -187,43 +198,66 @@ called_shape (CallBase *site)
 /// \p drops_key names a site that carried the method it asked for in the IMT
 /// register. The thunk that read it is gone, and the target never did
 /// (emit_call () says so where it puts the key on), so the call is built again
-/// without it. That is also what leaves this site holding the same prototype a
+/// without it. That is also what leaves the call holding the same prototype a
 /// direct call to the same method holds anywhere else.
+CallBase *
+direct_call (IRBuilderBase &b, CallBase &at, Function *entry, bool steps_receiver,
+             bool drops_key, BasicBlock *normal)
+{
+	SmallVector<Value *, 8> args (at.args ().begin (), at.args ().end ());
+
+	if (steps_receiver)
+		args[0] = b.CreateGEP (b.getInt8Ty (), args[0],
+		                       b.getInt64 (MONO_ABI_SIZEOF (MonoObject)));
+
+	if (drops_key)
+		args.pop_back ();
+
+	CallBase *direct;
+
+	if (auto *unwinds = dyn_cast<InvokeInst> (&at))
+		direct = b.CreateInvoke (entry, normal, unwinds->getUnwindDest (), args);
+	else
+		direct = b.CreateCall (entry, args);
+
+	// The key's own slot goes with it. Everything else the site said about its
+	// arguments - which are extended, which are by value - still holds.
+	AttributeList was = at.getAttributes ();
+
+	direct->setAttributes (
+		drops_key ? was.removeParamAttributes (at.getContext (), at.arg_size () - 1)
+	                  : was);
+	direct->setCallingConv (at.getCallingConv ());
+	direct->setDebugLoc (at.getDebugLoc ());
+
+	if (auto *from = dyn_cast<CallInst> (&at))
+		if (auto *now = dyn_cast<CallInst> (direct))
+			now->setTailCallKind (from->getTailCallKind ());
+
+	return direct;
+}
+
+/// Rewrites \p call so it enters \p entry. The two flags carry the meaning
+/// direct_call () gives them.
 void
 enter_at (CallBase *call, Function *entry, bool steps_receiver, bool drops_key)
 {
 	IRBuilder<> builder (call);
-	SmallVector<Value *, 8> args (call->args ().begin (), call->args ().end ());
-
-	if (steps_receiver)
-		args[0] = builder.CreateGEP (builder.getInt8Ty (), args[0],
-		                             builder.getInt64 (MONO_ABI_SIZEOF (MonoObject)));
 
 	if (!drops_key) {
-		call->setArgOperand (0, args[0]);
+		if (steps_receiver)
+			call->setArgOperand (
+				0, builder.CreateGEP (
+					   builder.getInt8Ty (), call->getArgOperand (0),
+					   builder.getInt64 (MONO_ABI_SIZEOF (MonoObject))));
+
 		call->setCalledFunction (entry);
 		return;
 	}
 
-	args.pop_back ();
-
-	CallBase *direct;
-
-	if (auto *invoke = dyn_cast<InvokeInst> (call))
-		direct = builder.CreateInvoke (entry, invoke->getNormalDest (),
-		                               invoke->getUnwindDest (), args);
-	else
-		direct = builder.CreateCall (entry, args);
-
-	// The key's own slot goes with it. Everything else the site said about its
-	// arguments - which are extended, which are by value - still holds.
-	direct->setAttributes (call->getAttributes ().removeParamAttributes (
-		call->getContext (), call->arg_size () - 1));
-	direct->setCallingConv (call->getCallingConv ());
-	direct->setDebugLoc (call->getDebugLoc ());
-
-	if (auto *from = dyn_cast<CallInst> (call))
-		cast<CallInst> (direct)->setTailCallKind (from->getTailCallKind ());
+	CallBase *direct = direct_call (
+		builder, *call, entry, steps_receiver, drops_key,
+		isa<InvokeInst> (call) ? cast<InvokeInst> (call)->getNormalDest () : nullptr);
 
 	call->replaceAllUsesWith (direct);
 	call->eraseFromParent ();
@@ -251,6 +285,54 @@ enter_directly (CallBase *site, Function *entry, bool steps_receiver, bool drops
 /// from and whether the calls carry a key to drop.
 enum class Lookup { vtable, imt, generic_virtual };
 
+/// What a dispatch site resolves to: the method a receiver enters, and the
+/// prototype a caller calls it with.
+struct Dispatched {
+	MonoMethod *target;
+	FunctionType *shape;
+};
+
+/// What a receiver of \p klass reaching \p site enters, or nothing where the
+/// class does not settle it.
+std::optional<Dispatched>
+dispatched_at (CallBase *site, MonoClass *klass, Lookup lookup)
+{
+	auto *index = dyn_cast<ConstantInt> (site->getArgOperand (1));
+	FunctionType *shape = called_shape (site);
+
+	if (index == nullptr || shape == nullptr)
+		return std::nullopt;
+
+	if (lookup == Lookup::vtable) {
+		MonoMethod *target =
+			slot_target (klass, static_cast<int32_t> (index->getSExtValue ()));
+
+		if (target == nullptr)
+			return std::nullopt;
+
+		return Dispatched{ target, shape };
+	}
+
+	auto *key = dyn_cast<GlobalValue> (site->getArgOperand (2));
+	MonoMethod *asked = key != nullptr ? marked_method_pointer (*key) : nullptr;
+
+	// The key is the last argument, and what the call enters is the method's own
+	// prototype, which does not have it.
+	if (asked == nullptr || shape->getNumParams () < 1)
+		return std::nullopt;
+
+	MonoMethod *target = lookup == Lookup::imt ? imt_target (klass, asked)
+	                                           : generic_virtual_target (klass, asked);
+
+	if (target == nullptr)
+		return std::nullopt;
+
+	return Dispatched{ target,
+		           FunctionType::get (shape->getReturnType (),
+		                              shape->params ().drop_back (),
+		                              shape->isVarArg ()) };
+}
+
 /// Folds what it can of the sites in \p f that call the declaration \p name.
 bool
 fold_sites (Function &f, StringRef name, const CompileState &compile, Lookup lookup)
@@ -262,43 +344,18 @@ fold_sites (Function &f, StringRef name, const CompileState &compile, Lookup loo
 			continue;
 
 		auto *vtable = dyn_cast<GlobalValue> (site->getArgOperand (0));
-		auto *index = dyn_cast<ConstantInt> (site->getArgOperand (1));
+		MonoClass *klass = vtable != nullptr ? marked_class (*vtable) : nullptr;
 
-		if (vtable == nullptr || index == nullptr)
+		if (klass == nullptr)
 			continue;
 
-		MonoClass *klass = marked_class (*vtable);
-		FunctionType *shape = called_shape (site);
+		std::optional<Dispatched> found = dispatched_at (site, klass, lookup);
 
-		if (klass == nullptr || shape == nullptr)
+		if (!found)
 			continue;
 
-		MonoMethod *target = nullptr;
-
-		if (lookup == Lookup::vtable) {
-			target = slot_target (klass,
-			                      static_cast<int32_t> (index->getSExtValue ()));
-		} else {
-			auto *key = dyn_cast<GlobalValue> (site->getArgOperand (2));
-			MonoMethod *asked =
-				key != nullptr ? marked_method_pointer (*key) : nullptr;
-
-			// The key is the last argument, and what the call enters is the
-			// method's own prototype, which does not have it.
-			if (asked == nullptr || shape->getNumParams () < 1)
-				continue;
-
-			target = lookup == Lookup::imt ? imt_target (klass, asked)
-			                               : generic_virtual_target (klass, asked);
-			shape = FunctionType::get (shape->getReturnType (),
-			                           shape->params ().drop_back (),
-			                           shape->isVarArg ());
-		}
-
-		if (target == nullptr)
-			continue;
-
-		Function *entry = entry_for (*f.getParent (), target, shape, compile);
+		Function *entry =
+			entry_for (*f.getParent (), found->target, found->shape, compile);
 
 		if (entry == nullptr)
 			continue;
@@ -310,7 +367,7 @@ fold_sites (Function &f, StringRef name, const CompileState &compile, Lookup loo
 		 * the entry wants stepped and a key it does not take are the two cases
 		 * that have to reach the calls.
 		 */
-		enter_directly (site, entry, publishes_unbox_entry (target),
+		enter_directly (site, entry, publishes_unbox_entry (found->target),
 		                lookup != Lookup::vtable);
 		site->eraseFromParent ();
 		changed = true;
@@ -334,6 +391,268 @@ fold_dispatch_sites (Function &f)
 	changed |= fold_sites (f, imt_func_name, compile, Lookup::imt);
 
 	return fold_sites (f, vtable_gfunc_name, compile, Lookup::generic_virtual) || changed;
+}
+
+namespace {
+
+/// What a guard's true edge weighs where the function carries no profile.
+///
+/// Only the ratio against the zero beside it reaches BranchProbabilityInfo, so
+/// this stands in for a count rather than claiming one.
+constexpr uint64_t unprofiled_guard_weight = 1000;
+
+/// Marks the dispatch a guard has already been written around, which is the one
+/// left standing on the arm the compare did not pick. Reading the same bound off
+/// it again would nest a second guard inside the first.
+constexpr StringRef guarded_md = "mono.array.guarded";
+
+/// Whether a conformant image can put a class other than \p klass in a slot
+/// declared with it.
+///
+/// The six classes below are the reduced types ECMA-335 I.8.7 names, which is
+/// what I.8.7.1 compares to decide that two array types hold each other's
+/// values, and mono's own cast class is that reduced type -
+/// class_composite_fixup_cast_class () (mono/metadata/class-init.c) folds the
+/// signed and the unsigned form of each width, and an array of an enum takes
+/// the cast class of the enum's underlying type. II.14.3 admits `bool` and
+/// `char` as underlying types, so `char[]` shares its class with an array of an
+/// enum over char the same way `int[]` shares one with `uint[]`.
+///
+/// What is left out is left out for two reasons. A reference element is
+/// covariant, so a `Base[]` slot holds a `Derived[]` whenever the program uses
+/// one and the compare would miss. `float[]`, `double[]` and an array of an
+/// ordinary struct hold themselves alone, because reaching one needs an enum
+/// over a type II.14.3 does not admit. This loader takes such an enum without
+/// complaint, which is why exact_class () still refuses every array, but a
+/// compare written for an image no compiler emits pays for itself nowhere.
+bool
+guardable_array (MonoClass *klass)
+{
+	if (m_class_get_rank (klass) == 0)
+		return false;
+
+	MonoClass *element = m_class_get_element_class (klass);
+
+	if (element == nullptr || !m_class_is_valuetype (element))
+		return false;
+
+	MonoClass *shared = m_class_get_cast_class (klass);
+
+	return shared == mono_defaults.byte_class || shared == mono_defaults.int16_class
+	       || shared == mono_defaults.int32_class || shared == mono_defaults.int64_class
+	       || shared == mono_defaults.char_class || shared == mono_defaults.boolean_class;
+}
+
+/// The array class a receiver reaching \p site is declared with, or null where
+/// the IR gives none a guard pays for.
+MonoClass *
+guarded_class (CallBase *site, const Function &f)
+{
+	Value *object = object_vtable_read (site->getArgOperand (0));
+
+	if (object == nullptr || site->getMetadata (guarded_md) != nullptr)
+		return nullptr;
+
+	auto [klass, exact] = operand_class (object, f);
+
+	// An exact class needs no guard: fold_object_vtables () names its vtable and
+	// the fold above then takes the site.
+	if (klass == nullptr || exact || !guardable_array (klass))
+		return nullptr;
+
+	return klass;
+}
+
+/// The call that reads \p site's answer, or null where the answer does not
+/// reach exactly one call in the callee position.
+///
+/// The guard writes that call again on an arm of its own, so a site several
+/// calls read is one it leaves alone.
+CallBase *
+sole_call (CallBase *site)
+{
+	if (!site->hasOneUse ())
+		return nullptr;
+
+	auto *call = dyn_cast<CallBase> (site->user_back ());
+
+	return call != nullptr && call->getCalledOperand () == site ? call : nullptr;
+}
+
+/// A dispatch a guard can take, with the weights that guard will carry.
+struct Guardable {
+	CallBase *site;
+	CallBase *call;
+	MonoClass *klass;
+	Dispatched entered;
+	bool drops_key;
+	MDNode *weights;
+};
+
+/// Collects the sites in \p f that call \p name and that a guard can take.
+void
+collect_guardable (Function &f, StringRef name, Lookup lookup, BlockFrequencyInfo &counts,
+                   SmallVectorImpl<Guardable> &into)
+{
+	for (CallBase *site : builtin_sites (f, name)) {
+		CallBase *call = sole_call (site);
+		MonoClass *klass = call != nullptr ? guarded_class (site, f) : nullptr;
+
+		if (klass == nullptr)
+			continue;
+
+		std::optional<Dispatched> entered = dispatched_at (site, klass, lookup);
+
+		if (!entered)
+			continue;
+
+		/*
+		 * The zero on the other edge is the point: the site's whole count goes
+		 * to the direct call, which is what a cost model reading block counts
+		 * weighs the target at. The dispatching arm is a call nothing can
+		 * inline, so splitting the count with it buys nothing.
+		 */
+		MDBuilder md (f.getContext ());
+		uint64_t hot = std::max<uint64_t> (
+			counts.getBlockProfileCount (call->getParent ())
+				.value_or (unprofiled_guard_weight),
+			1);
+
+		into.push_back ({ site, call, klass, *entered, lookup != Lookup::vtable,
+		                  md.createBranchWeights (
+				          (uint32_t) std::min<uint64_t> (hot, UINT32_MAX), 0) });
+	}
+}
+
+/// Adds an incoming for \p arm to every phi in \p block that has one for
+/// \p had, carrying the same value.
+///
+/// A block both arms reach needs two incomings where it had one. Renaming the
+/// single incoming would leave the other arm's edge unnamed.
+void
+share_phis_with (BasicBlock *block, BasicBlock *had, BasicBlock *arm)
+{
+	for (PHINode &phi : block->phis ()) {
+		int at = phi.getBasicBlockIndex (had);
+
+		if (at >= 0)
+			phi.addIncoming (phi.getIncomingValue (at), arm);
+	}
+}
+
+/// Sends \p at's call through a compare of the receiver's vtable against
+/// \p vtable, with a call of \p entry on the arm that matches.
+void
+guard_dispatch (const Guardable &at, Constant *vtable, Function *entry)
+{
+	CallBase &call = *at.call;
+	LLVMContext &c = call.getContext ();
+	Function *f = call.getFunction ();
+	BasicBlock *head = call.getParent ();
+	Value *read = at.site->getArgOperand (0);
+	auto *unwinds = dyn_cast<InvokeInst> (&call);
+
+	BasicBlock *tail = unwinds != nullptr
+	                           ? unwinds->getNormalDest ()
+	                           : head->splitBasicBlock (call.getIterator (), "array_done");
+	BasicBlock *pad = unwinds != nullptr ? unwinds->getUnwindDest () : nullptr;
+
+	BasicBlock *fast = BasicBlock::Create (c, "array_direct", f, tail);
+	BasicBlock *slow = BasicBlock::Create (c, "array_dispatch", f, tail);
+
+	// The call and the site it reads its callee from move into the dispatching
+	// arm rather than being cloned. That is what keeps the matching arm's
+	// direct call off the vtable read.
+	call.removeFromParent ();
+	call.insertInto (slow, slow->end ());
+	at.site->removeFromParent ();
+	at.site->insertInto (slow, slow->begin ());
+	at.site->setMetadata (guarded_md, MDNode::get (c, {}));
+
+	IRBuilder<> b (fast);
+
+	b.SetCurrentDebugLocation (call.getDebugLoc ());
+
+	CallBase *direct = direct_call (b, call, entry, publishes_unbox_entry (at.entered.target),
+	                                at.drops_key, tail);
+
+	if (unwinds == nullptr) {
+		b.CreateBr (tail);
+		IRBuilder<> (slow).CreateBr (tail);
+	} else {
+		// Both arms reach the pad and the continuation now, where the one invoke
+		// reached each of them from the block above.
+		tail->replacePhiUsesWith (head, slow);
+		share_phis_with (tail, slow, fast);
+		pad->replacePhiUsesWith (head, slow);
+		share_phis_with (pad, slow, fast);
+	}
+
+	if (!call.getType ()->isVoidTy ()) {
+		PHINode *merged = PHINode::Create (call.getType (), 2, "array_result",
+		                                   tail->getFirstNonPHIIt ());
+
+		// Before the incoming values name it, so that replacing the call's uses
+		// does not reach into the phi's own operand for the dispatched answer.
+		call.replaceAllUsesWith (merged);
+		merged->addIncoming (direct, fast);
+		merged->addIncoming (&call, slow);
+	}
+
+	// head is left without a terminator either way: an invoke was the
+	// terminator, and a call left the branch the split wrote.
+	if (Instruction *stale = head->getTerminator ())
+		stale->eraseFromParent ();
+
+	IRBuilder<> guard (head);
+
+	guard.SetCurrentDebugLocation (call.getDebugLoc ());
+	guard.CreateCondBr (guard.CreateICmpEQ (read, vtable, "array_hit"), fast, slow)
+		->setMetadata (LLVMContext::MD_prof, at.weights);
+}
+
+} // namespace
+
+PreservedAnalyses
+GuardArrayDispatchPass::run (Function &f, FunctionAnalysisManager &fam)
+{
+	const CompileState &compile = current_compile ();
+
+	// The classes ride as pointers into this process, and the vtable the compare
+	// reads is a symbol resolved against this compile's domain.
+	if (compile.domain == nullptr || !compile.publish || !compile.vtable_of
+	    || !guard_array_dispatch ())
+		return PreservedAnalyses::all ();
+
+	BlockFrequencyInfo &counts = fam.getResult<BlockFrequencyAnalysis> (f);
+	SmallVector<Guardable, 4> pending;
+
+	// Every weight is read before the first split, because a block this pass
+	// makes has no count of its own and the analysis is stale the moment one
+	// appears.
+	collect_guardable (f, vtable_func_name, Lookup::vtable, counts, pending);
+	collect_guardable (f, imt_func_name, Lookup::imt, counts, pending);
+	collect_guardable (f, vtable_gfunc_name, Lookup::generic_virtual, counts, pending);
+
+	bool changed = false;
+
+	for (const Guardable &at : pending) {
+		Constant *vtable = compile.vtable_of (*f.getParent (), at.klass);
+
+		if (vtable == nullptr)
+			continue;
+
+		Function *entry = entry_for (*f.getParent (), at.entered.target,
+		                             at.entered.shape, compile);
+
+		if (entry == nullptr)
+			continue;
+
+		guard_dispatch (at, vtable, entry);
+		changed = true;
+	}
+
+	return changed ? PreservedAnalyses::none () : PreservedAnalyses::all ();
 }
 
 } // namespace mono

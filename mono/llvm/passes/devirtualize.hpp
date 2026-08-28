@@ -1,15 +1,23 @@
 /**
  * \file
- * \brief Folding a `mono.vtable.func` call whose operands are settled.
+ * \brief Answering a dispatch site from the class of the receiver that reaches
+ * it.
  *
  * The two operands of a dispatch site name the receiver's vtable and the slot.
  * Where the optimizer has made both constant - which the store at an allocation
  * is what produces - the entry the site reads is a method this compile can name,
  * and the call becomes a direct one.
+ *
+ * An array receiver never gets there, because the class its slot is declared
+ * with is a bound rather than an identity. The guard below takes that site on
+ * the same class behind a compare of the receiver's vtable, so the direct call
+ * runs on the arm that proves the bound was the class.
  */
 
 #ifndef MONO_LLVM_PASSES_DEVIRTUALIZE_HPP
 #define MONO_LLVM_PASSES_DEVIRTUALIZE_HPP
+
+#include <llvm/IR/PassManager.h>
 
 #include <cstdint>
 
@@ -37,6 +45,26 @@ MonoMethod *slot_target (MonoClass *klass, int32_t index);
 /// (compile-state.hpp), and it asks mono for the rest. Outside a compile it
 /// leaves every site alone.
 bool fold_dispatch_sites (llvm::Function &f);
+
+/// Sends each dispatch on an array receiver through a compare of that
+/// receiver's vtable against the array class its slot is declared with. The
+/// arm that matches calls that class's implementation directly and the arm
+/// that does not keeps the dispatch the site already had.
+///
+/// The compare is what makes the speculation safe. An array slot admits every
+/// array of its rank with the same cast class, and each of those carries a
+/// vtable of its own, so the arm the compare picks proves which one arrived.
+/// Which slots are taken is `guardable_array ()`'s rule.
+///
+/// Tier 2 only, and behind the pass that reads the profile. A guard adds
+/// blocks the CFG tier 1 hashed does not have. It runs again between the
+/// inliner's rounds, because a folded body brings dispatches on the caller's
+/// own array with it, and it marks each dispatch it has taken so that a later
+/// run leaves the arm the compare did not pick alone.
+class GuardArrayDispatchPass : public llvm::PassInfoMixin<GuardArrayDispatchPass> {
+public:
+	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+};
 
 } // namespace mono
 

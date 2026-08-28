@@ -16,6 +16,13 @@ using System.Runtime.CompilerServices;
  * `exact_class ()` (`mono/llvm/operand-class.cpp`) refuses an array, and this
  * file fails if that refusal comes out.
  *
+ * `GuardArrayDispatchPass` (`mono/llvm/passes/devirtualize.cpp`) takes the same
+ * site on the bound behind a compare of the receiver's vtable, so the arm it
+ * picks is what has to keep the rows below apart. The guard is tier 2's:
+ * `runtime-array-guard` is the arm whose threshold reaches it, and
+ * `runtime-array-guard-off` runs this file again with the guard off, which is
+ * the answer the guard has to agree with.
+ *
  * The enumerator is what separates the three, because its class names the
  * element type the slot reached. `Count` and `Contains` answer with bits that
  * all three arrays share, so neither one can fail here.
@@ -65,8 +72,10 @@ public class ArrayDevirt {
 		int[] enums = (int[]) (object) new E32[] { E32.A, E32.B };
 
 		// The first rounds run interpreted, and the later ones run whatever the
-		// thresholds promoted. Both answer through this same code.
-		for (int i = 0; i < 200; ++i)
+		// thresholds promoted. Both answer through this same code. The count is
+		// what gives a promotion time to land: a tier-1 compile is asynchronous,
+		// and a few hundred interpreted rounds are over before one arrives.
+		for (int i = 0; i < 20000; ++i)
 			Round (ints, uints, enums);
 
 		if (failures != 0) {

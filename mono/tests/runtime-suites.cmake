@@ -627,6 +627,16 @@ mono_runtime_suite(runtime-delegate-fold-off TESTS ${_delegate_fold}
                    ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
                        "MONO_LLVM_JIT_FOLD_DELEGATES=0")
 
+# The guard a dispatch on an array receiver goes through. It is tier 2's, and
+# the default threshold is far past what this program runs, so the arm that
+# reaches it names one of its own. The off arm leaves every such site
+# dispatching, which is the answer the guard has to agree with.
+mono_runtime_suite(runtime-array-guard TESTS array-devirt.exe
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=10000")
+mono_runtime_suite(runtime-array-guard-off TESTS array-devirt.exe
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=10000"
+                       "MONO_LLVM_JIT_GUARD_ARRAYS=0")
+
 # The bonuses mono adds to the cost model. Two arms, on and off, the way
 # runtime-tier2-cost-trigger has it. The root drives its own compiles, so
 # self-promotion is off the way the costed suite has it, and the trivial
