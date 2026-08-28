@@ -6,8 +6,23 @@ class Driver
 	[DllImport ("libtest")]
 	static extern void mono_test_native_to_managed_exception_rethrow (Action action);
 
-	[DllImport ("libc")]
-	static extern void _exit (int exitCode);
+	[DllImport ("libc", EntryPoint = "_exit")]
+	static extern void unix_exit (int exitCode);
+
+	[DllImport ("msvcrt", EntryPoint = "_exit")]
+	static extern void win32_exit (int exitCode);
+
+	/* The handler below runs on an exception that is already unhandled, so it
+	 * has to leave without unwinding any further. Windows has no libc, and
+	 * msvcrt is the CRT that is always present. */
+	static void _exit (int exitCode)
+	{
+		if (Environment.OSVersion.Platform == PlatformID.Unix
+		    || Environment.OSVersion.Platform == PlatformID.MacOSX)
+			unix_exit (exitCode);
+		else
+			win32_exit (exitCode);
+	}
 
 	static int Main (string[] args)
 	{

@@ -17,18 +17,22 @@ using System.Runtime.InteropServices;
 // instead, which mono/unit-tests/gtest/runtime/test-detour.cpp covers. Harmony
 // is patched to take that route.
 //
-// The jump below is amd64, and the page permissions are POSIX. Both match the
-// scope of this corpus.
+// The jump below is amd64, which matches the scope of this corpus.
 class Test {
 	const int PROT_READ = 1;
 	const int PROT_WRITE = 2;
 	const int PROT_EXEC = 4;
+
+	const uint PAGE_EXECUTE_READWRITE = 0x40;
 
 	/* MonoTier::tier1, as PromoteNow takes it. */
 	const int tier1 = 2;
 
 	[DllImport ("libc", SetLastError = true)]
 	static extern int mprotect (IntPtr addr, ulong len, int prot);
+
+	[DllImport ("kernel32", SetLastError = true)]
+	static extern bool VirtualProtect (IntPtr addr, UIntPtr len, uint prot, out uint old);
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int Patched () { return 1; }
@@ -52,6 +56,23 @@ class Test {
 		return MethodOf (name).MethodHandle.GetFunctionPointer ();
 	}
 
+	static void MakeWritable (IntPtr start, ulong length)
+	{
+		if (Environment.OSVersion.Platform == PlatformID.Unix
+		    || Environment.OSVersion.Platform == PlatformID.MacOSX) {
+			if (mprotect (start, length, PROT_READ | PROT_WRITE | PROT_EXEC) != 0)
+				throw new Exception ("mprotect refused the page holding the entry: errno "
+						     + Marshal.GetLastWin32Error ());
+			return;
+		}
+
+		uint old;
+
+		if (!VirtualProtect (start, new UIntPtr (length), PAGE_EXECUTE_READWRITE, out old))
+			throw new Exception ("VirtualProtect refused the page holding the entry: error "
+					     + Marshal.GetLastWin32Error ());
+	}
+
 	// movabs $target, %rax ; jmp *%rax - twelve bytes, which is what fits in the
 	// sixteen a stub block holds.
 	static void WriteDetour (IntPtr at, IntPtr target)
@@ -60,9 +81,7 @@ class Test {
 		IntPtr start = new IntPtr (at.ToInt64 () & ~(page - 1));
 		ulong length = (ulong) (at.ToInt64 () + 16 - start.ToInt64 ());
 
-		if (mprotect (start, length, PROT_READ | PROT_WRITE | PROT_EXEC) != 0)
-			throw new Exception ("mprotect refused the page holding the entry: errno "
-					     + Marshal.GetLastWin32Error ());
+		MakeWritable (start, length);
 
 		Marshal.WriteByte (at, 0, 0x48);
 		Marshal.WriteByte (at, 1, 0xB8);

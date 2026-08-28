@@ -33,6 +33,21 @@ class X {
 		Exception a = new Win32Exception (99999);
 		a = new Win32Exception (9805);
 
+		//
+		// Windows answers with FormatMessage, so the text is the OS's own
+		// and is translated. mono's table is what the other hosts read, and
+		// that table is what this test is about, so only they can check the
+		// text against a literal.
+		//
+		if (Environment.OSVersion.Platform == PlatformID.Win32NT) {
+			if (String.IsNullOrEmpty (msg (2))) {
+				Console.Error.WriteLine ("For 2 expected the OS message, got nothing");
+				return 1;
+			}
+
+			return 0;
+		}
+
 		if (!check (2, "Cannot find the specified file"))
 			return 1;
 

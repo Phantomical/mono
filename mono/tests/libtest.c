@@ -18,6 +18,10 @@
 
 #ifdef WIN32
 #include <windows.h>
+/* The COM marshalling tests below allocate through the task allocator and pass
+ * VARIANT and BSTR. windows.h declares none of the three. */
+#include <objbase.h>
+#include <oleauto.h>
 #include "initguid.h"
 #else
 #include <pthread.h>
@@ -29,6 +33,12 @@ extern "C" {
 
 #ifdef WIN32
 #define STDCALL __stdcall
+/* cl takes __thiscall on a member function alone, and every use below is a free
+ * function or a plain function pointer. Those want the default convention, which
+ * is what the tests calling them expect. */
+#ifdef _MSC_VER
+#define __thiscall
+#endif
 #else
 #define STDCALL
 #define __thiscall /* nothing */
@@ -36,10 +46,6 @@ extern "C" {
 
 #ifdef __GNUC__
 #pragma GCC diagnostic ignored "-Wmissing-prototypes"
-#endif
-
-#ifdef WIN32
-extern __declspec(dllimport) void __stdcall CoTaskMemFree(void *ptr);
 #endif
 
 typedef int (STDCALL *SimpleDelegate) (int a);
@@ -7852,9 +7858,11 @@ mono_test_marshal_pointer_array (int *arr[])
 	return 0;
 }
 
-#ifndef WIN32
-
+/* The callback runs on a thread of its own. That is what the test is about: the
+ * exception it throws has no managed frame below it. */
 typedef void (*NativeToManagedExceptionRethrowFunc) (void);
+
+#ifndef WIN32
 
 void *mono_test_native_to_managed_exception_rethrow_thread (void *arg)
 {
@@ -7870,6 +7878,30 @@ mono_test_native_to_managed_exception_rethrow (NativeToManagedExceptionRethrowFu
 	pthread_create (&t, NULL, mono_test_native_to_managed_exception_rethrow_thread, (gpointer)func);
 	pthread_join (t, NULL);
 }
+
+#else
+
+static DWORD WINAPI
+mono_test_native_to_managed_exception_rethrow_thread (LPVOID arg)
+{
+	NativeToManagedExceptionRethrowFunc func = (NativeToManagedExceptionRethrowFunc) arg;
+	func ();
+	return 0;
+}
+
+LIBTEST_API void STDCALL
+mono_test_native_to_managed_exception_rethrow (NativeToManagedExceptionRethrowFunc func)
+{
+	HANDLE t = CreateThread (NULL, 0, mono_test_native_to_managed_exception_rethrow_thread,
+				 (LPVOID) func, 0, NULL);
+
+	if (t == NULL)
+		return;
+
+	WaitForSingleObject (t, INFINITE);
+	CloseHandle (t);
+}
+
 #endif
 
 typedef void (*VoidVoidCallback) (void);
@@ -7973,6 +8005,18 @@ mono_test_setjmp_and_call (VoidVoidCallback managedCallback, intptr_t *out_handl
 {
 	mono_test_init_symbols ();
 	if (setjmp (test_jmp_buf) == 0) {
+#if defined (_MSC_VER) && defined (_M_X64)
+		/*
+		 * The Microsoft longjmp unwinds every frame it passes, and asks
+		 * the OS for a function table entry for each one. The frames
+		 * between the callback and here are JIT'd, and this backend
+		 * publishes no .pdata for them, so the unwind ends the process
+		 * with STATUS_BAD_FUNCTION_TABLE. A zero frame in the buffer is
+		 * what asks longjmp to restore the registers and jump instead,
+		 * which is what it does on the other hosts here.
+		 */
+		((_JUMP_BUFFER *) &test_jmp_buf)->Frame = 0;
+#endif
 		*out_handle = 0;
 		sym_mono_install_ftnptr_eh_callback (mono_test_longjmp_callback);
 		managedCallback ();

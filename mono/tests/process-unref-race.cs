@@ -24,9 +24,16 @@ class Driver
 		};
 
 		Thread t1 = new Thread (() => {
+			/* Windows has echo as a shell builtin rather than a program,
+			 * so the shell has to run it. The race this test drives is in
+			 * the runtime's own process handling, and any short-lived
+			 * child reaches it. */
+			bool unix = Environment.OSVersion.Platform == PlatformID.Unix
+				|| Environment.OSVersion.Platform == PlatformID.MacOSX;
+
 			ProcessStartInfo psi = new ProcessStartInfo () {
-				FileName = "echo",
-				Arguments = "hello",
+				FileName = unix ? "echo" : "cmd.exe",
+				Arguments = unix ? "hello" : "/c echo hello",
 				RedirectStandardOutput = true,
 				UseShellExecute = false
 			};
