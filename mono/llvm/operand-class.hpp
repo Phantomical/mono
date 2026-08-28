@@ -89,13 +89,18 @@ void mark_parameter_classes (llvm::Function &f,
 /// relaxed, for its one caller.
 ///
 /// Where \p v is a load, this also reads back the field it loads, the same
-/// way it reads a merge's arms, when that field belongs to an object this
-/// function allocates and keeps to itself: every use of the object, other
-/// than a load or store through it, makes the answer no class instead. The
-/// object starts zero-filled, so the merge also carries a null for the path
-/// where the load runs before any store to that field does, which is what a
-/// caller here needs: this answers no class for a field with exactly one
-/// store, because the null path is still live.
+/// way it reads a merge's arms. The field's base can itself be a phi, a
+/// select or a further load, resolved to every allocation it can name; the
+/// field must belong to each of those allocations and each must keep it to
+/// itself, in the same sense a single allocation must: every use of it,
+/// other than a load or store through it, makes the answer no class
+/// instead. That sense refuses an allocation reached only by reading it back
+/// out of a field, because the read is proof a store put it there first,
+/// and that store's own use of the allocation is what the rule above
+/// refuses. Every allocation starts zero-filled, so the merge also carries a
+/// null for the path where the load runs before any store to that field
+/// does, which is what a caller here needs: this answers no class for a
+/// field with exactly one store, because the null path is still live.
 std::pair<MonoClass *, bool> operand_class (const llvm::Value *v, const llvm::Function &f);
 
 /// The class \p v is, or null where the IR gives only a bound this cannot

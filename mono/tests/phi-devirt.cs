@@ -179,6 +179,37 @@ public static class Program {
 		return h.s.Which ();
 	}
 
+	/*
+	 * The field's own base is a merge of two allocations rather than one.
+	 * Both branches make their own `Holder` and store a `Narrow` into it, so
+	 * the receiver a caller reads off `.s` is a load whose base a phi names,
+	 * and only both incoming `Holder`s' own field stores together settle it.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int FieldOfAMergedReceiver (bool which)
+	{
+		Holder h = which ? new Holder { s = new Narrow () } : new Holder { s = new Narrow () };
+		return h.s.Which ();
+	}
+
+	sealed class DoubleHolder {
+		public Holder h;
+	}
+
+	/*
+	 * The receiver is a field of a field. `d.h` is itself a load, so
+	 * resolving `d.h.s`'s base needs `d.h`'s own single store read back
+	 * before `.s` can be answered at all.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int FieldOfAFieldReceiver ()
+	{
+		DoubleHolder d = new DoubleHolder ();
+		d.h = new Holder ();
+		d.h.s = new Narrow ();
+		return d.h.s.Which ();
+	}
+
 	static void CheckAll (string tier)
 	{
 		Check (tier + ": same class, true arm", SameClass (true), 1);
@@ -196,6 +227,11 @@ public static class Program {
 		Check (tier + ": allocated in a try block", AllocatedInATryBlock (), 1);
 
 		Check (tier + ": field receiver", FieldReceiver (), 1);
+
+		Check (tier + ": field of a merged receiver, true arm", FieldOfAMergedReceiver (true), 1);
+		Check (tier + ": field of a merged receiver, false arm", FieldOfAMergedReceiver (false), 1);
+
+		Check (tier + ": field of a field receiver", FieldOfAFieldReceiver (), 1);
 	}
 
 	static bool Promote (string name, int tier)
@@ -215,7 +251,8 @@ public static class Program {
 	{
 		return Promote ("SameClass", tier) & Promote ("DifferentClasses", tier)
 		       & Promote ("LoopReceiver", tier) & Promote ("IsNarrow", tier)
-		       & Promote ("AllocatedInATryBlock", tier) & Promote ("FieldReceiver", tier);
+		       & Promote ("AllocatedInATryBlock", tier) & Promote ("FieldReceiver", tier)
+		       & Promote ("FieldOfAMergedReceiver", tier) & Promote ("FieldOfAFieldReceiver", tier);
 	}
 
 	public static int Main ()

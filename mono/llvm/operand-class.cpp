@@ -377,6 +377,14 @@ constexpr unsigned merge_walk_budget = 24;
 /// work.
 constexpr unsigned field_use_walk_budget = 128;
 
+/// Bounds how many distinct allocations one field load's base can resolve
+/// to, so a wide merge of objects still costs a compile only a small, fixed
+/// amount of work. `resolve_base_candidates ()` below refuses outright once
+/// this is reached, rather than settling for a partial set: a candidate set
+/// this walk could not finish enumerating is not one `field_stores_reaching
+/// ()` can be run over completely either.
+constexpr unsigned base_candidate_cap = 8;
+
 /// \p site cannot write through the pointer at \p arg_no. This reads what
 /// the call states about itself. It does not read the name of the callee.
 ///
@@ -399,8 +407,13 @@ cannot_write_through (const CallBase &site, unsigned arg_no)
 }
 
 /// Every store that writes through \p base, followed across a
-/// getelementptr with constant indices, or nothing where some other use of
-/// \p base makes that unsafe to answer.
+/// getelementptr with constant indices and across a phi or a select that
+/// renames \p base without computing a new address, or nothing where some
+/// other use of \p base makes that unsafe to answer. Every name this walk
+/// followed with no getelementptr in between - \p base itself, and every phi
+/// or select it renamed through - is appended to \p aliases, because a store
+/// found through one of those names is a write through \p base at the same
+/// offset a store found through \p base itself would be.
 ///
 /// A refusal covers four uses. One is a store of \p base itself into memory.
 /// Another is a getelementptr with an index this cannot read at compile
@@ -423,19 +436,41 @@ cannot_write_through (const CallBase &site, unsigned arg_no)
 /// argument is not kept, and the callee can still write through it for the
 /// length of the call. `cannot_write_through ()` above is the separate check
 /// this function still needs for the first condition.
+///
+/// A phi or a select renaming \p base can cycle back to a name this walk
+/// already holds - `resolve_base_candidates ()` above resolves a base
+/// through exactly such a cycle. Revisiting a phi or a select this walk has
+/// already queued contributes nothing rather than refusing the whole
+/// answer: every use it has was already queued the first time it was
+/// reached, the same rule the class walk's own cycle rule rests on.
 std::optional<SmallVector<StoreInst *, 4>>
-field_stores_reaching (Value *base)
+field_stores_reaching (Value *base, SmallPtrSetImpl<Value *> &aliases)
 {
 	SmallVector<StoreInst *, 4> stores;
 	SmallVector<Value *, 8> work { base };
 	SmallPtrSet<Value *, 16> seen { base };
 	unsigned budget = field_use_walk_budget;
 
+	aliases.insert (base);
+
 	while (!work.empty ()) {
 		Value *v = work.pop_back_val ();
 
 		for (Use &use : v->uses ()) {
 			User *user = use.getUser ();
+
+			if (isa<PHINode> (user) || isa<SelectInst> (user)) {
+				if (!seen.insert (user).second)
+					continue;
+
+				if (budget == 0)
+					return std::nullopt;
+				--budget;
+
+				aliases.insert (user);
+				work.push_back (user);
+				continue;
+			}
 
 			if (budget == 0 || !seen.insert (user).second)
 				return std::nullopt;
@@ -487,12 +522,126 @@ field_stores_reaching (Value *base)
 	return stores;
 }
 
+SmallVector<const Value *, 4>
+matching_field_stores (const LoadInst &load, SmallPtrSetImpl<const Value *> &visiting,
+                       unsigned &budget);
+
+/// Resolves \p v to the allocation call sites a field load's base can name,
+/// appending each to \p out once. Answers false where \p v cannot be
+/// resolved this way, in which case \p out must be discarded rather than
+/// treated as partial.
+///
+/// \p v is an allocation call (the one candidate for itself), a `PHINode` or
+/// a `SelectInst` (every value it merges resolves in turn), or a `LoadInst`
+/// (every value `matching_field_stores ()` finds for the field it reads
+/// resolves in turn, which makes the two functions mutually recursive). This
+/// is what settles a base that mixes a load in with a phi or a select.
+///
+/// A candidate this arm alone reaches still fails later, at
+/// `field_stores_reaching ()` below. The field held the candidate because
+/// some store put it there, and that store's *value* operand is the
+/// candidate itself - the same shape `field_stores_reaching ()` refuses a
+/// direct base under, so it refuses this candidate on sight too.
+/// `OperandClassTest
+/// .LoadThroughALoadAsBaseAnswersNoClassBecauseTheDiscoveryStoreEscapes`
+/// gates that this is the answer, and not a missed case.
+///
+/// A null constant is skipped rather than refused: this file has two rules
+/// for a null merge arm (`operand_class ()`'s and `exact_class ()`'s, both
+/// in the header), and the one that applies here is `exact_class ()`'s,
+/// because a base is always about to be dereferenced. The load whose class
+/// this resolution is for only runs to completion, and hands its answer to
+/// a caller, on a path where every base it was computed from was non-null -
+/// a null one would have faulted at the dereference that used it, on the
+/// same path, before this load ran at all. Every other unresolved value
+/// refuses the whole resolution.
+///
+/// \p visiting and \p budget are the class walk's own. A `PHINode`, a
+/// `SelectInst` and a `LoadInst` each spend the shared budget the way a phi
+/// or a select does in `walk_operand_class ()`, and a value already on the
+/// walk's call stack - this function's own or the class walk's - answers
+/// true with nothing added to \p out rather than being visited again. That
+/// is sound for the reason the class walk's own cycle rule is: an
+/// allocation reachable only by going around the cycle is already reachable
+/// by the path that first walked into it.
+bool
+resolve_base_candidates (Value *v, SmallVectorImpl<CallBase *> &out,
+                         SmallPtrSetImpl<const Value *> &visiting, unsigned &budget)
+{
+	v = const_cast<Value *> (strip_casts (v));
+
+	if (isa<ConstantPointerNull> (v) || visiting.count (v))
+		return true;
+
+	if (auto *call = dyn_cast<CallBase> (v)) {
+		if (allocation_class (*call) == nullptr)
+			return false;
+
+		for (CallBase *seen : out)
+			if (seen == call)
+				return true;
+
+		if (out.size () >= base_candidate_cap)
+			return false;
+
+		out.push_back (call);
+		return true;
+	}
+
+	auto *phi = dyn_cast<PHINode> (v);
+	auto *select = phi == nullptr ? dyn_cast<SelectInst> (v) : nullptr;
+	auto *load = phi == nullptr && select == nullptr ? dyn_cast<LoadInst> (v) : nullptr;
+
+	if (phi == nullptr && select == nullptr && load == nullptr)
+		return false;
+
+	if (budget == 0)
+		return false;
+
+	--budget;
+	visiting.insert (v);
+
+	bool ok = true;
+
+	if (phi != nullptr) {
+		for (Value *incoming : phi->incoming_values ()) {
+			if (!resolve_base_candidates (incoming, out, visiting, budget)) {
+				ok = false;
+				break;
+			}
+		}
+	} else if (select != nullptr) {
+		ok = resolve_base_candidates (select->getTrueValue (), out, visiting, budget)
+		     && resolve_base_candidates (select->getFalseValue (), out, visiting, budget);
+	} else {
+		SmallVector<const Value *, 4> stores = matching_field_stores (*load, visiting, budget);
+
+		if (stores.empty ())
+			ok = false;
+
+		for (const Value *stored : stores) {
+			if (!resolve_base_candidates (const_cast<Value *> (stored), out, visiting, budget)) {
+				ok = false;
+				break;
+			}
+		}
+	}
+
+	visiting.erase (v);
+	return ok;
+}
+
 /// The values stored into the field \p load reads, where \p load reads a
-/// constant-offset field of an allocation this file recognizes
-/// (`allocation_class ()` above) and `field_stores_reaching ()` answers for,
-/// plus a trailing null standing for the field's initial value. Empty where
-/// \p load answers to neither, in which case the caller falls back to the
-/// ordinary leaf answer for a load with no mark of its own.
+/// constant-offset field of one or more allocations `resolve_base_candidates
+/// ()` above resolves \p load's base to, plus a trailing null standing for
+/// the field's initial value. Empty where \p load answers to none of that,
+/// in which case the caller falls back to the ordinary leaf answer for a
+/// load with no mark of its own.
+///
+/// Every resolved candidate has to clear `field_stores_reaching ()` below:
+/// one candidate this compile cannot rule out as written from outside makes
+/// the whole answer empty, because the stores gathered from the rest would
+/// no longer be every store the field can see.
 ///
 /// `mono.alloc.object` zero-fills what it allocates, so the field reads null
 /// until a store runs. A load a store does not dominate, or a load reached on
@@ -505,31 +654,38 @@ field_stores_reaching (Value *base)
 /// `operand_class ()` does not skip it, which is right here too: a type test
 /// on this field must see null as an answer the allocation can still give.
 SmallVector<const Value *, 4>
-matching_field_stores (const LoadInst &load)
+matching_field_stores (const LoadInst &load, SmallPtrSetImpl<const Value *> &visiting,
+                       unsigned &budget)
 {
 	const DataLayout &dl = load.getModule ()->getDataLayout ();
 	Value *address = const_cast<Value *> (load.getPointerOperand ());
 	APInt offset (64, 0);
-	auto *base = dyn_cast<CallBase> (
-		address->stripAndAccumulateConstantOffsets (dl, offset, /*AllowNonInbounds=*/true));
+	Value *base =
+		address->stripAndAccumulateConstantOffsets (dl, offset, /*AllowNonInbounds=*/true);
 
-	if (base == nullptr || allocation_class (*base) == nullptr)
-		return {};
+	SmallVector<CallBase *, 4> candidates;
 
-	std::optional<SmallVector<StoreInst *, 4>> stores = field_stores_reaching (base);
-
-	if (!stores)
+	if (!resolve_base_candidates (base, candidates, visiting, budget) || candidates.empty ())
 		return {};
 
 	SmallVector<const Value *, 4> matching;
 
-	for (StoreInst *store : *stores) {
-		APInt at (64, 0);
-		Value *store_base = store->getPointerOperand ()->stripAndAccumulateConstantOffsets (
-			dl, at, /*AllowNonInbounds=*/true);
+	for (CallBase *candidate : candidates) {
+		SmallPtrSet<Value *, 8> aliases;
+		std::optional<SmallVector<StoreInst *, 4>> stores =
+			field_stores_reaching (candidate, aliases);
 
-		if (store_base == base && at == offset)
-			matching.push_back (store->getValueOperand ());
+		if (!stores)
+			return {};
+
+		for (StoreInst *store : *stores) {
+			APInt at (64, 0);
+			Value *store_base = store->getPointerOperand ()->stripAndAccumulateConstantOffsets (
+				dl, at, /*AllowNonInbounds=*/true);
+
+			if (aliases.count (store_base) && at == offset)
+				matching.push_back (store->getValueOperand ());
+		}
 	}
 
 	if (!matching.empty ())
@@ -592,8 +748,18 @@ walk_operand_class (const Value *v, const Function &f, bool ignore_null,
 	const auto *load = phi == nullptr && select == nullptr ? dyn_cast<LoadInst> (v) : nullptr;
 	SmallVector<const Value *, 4> stores;
 
-	if (load != nullptr)
-		stores = matching_field_stores (*load);
+	if (load != nullptr) {
+		// Resolving this load's base can lead back to this same load,
+		// through a further load or a phi web that cycles - `%139` in the
+		// LINQ-over-`List<int>` fixture this walk was built for is one.
+		// Marking the load "visiting" for this call keeps that from
+		// recursing forever: `resolve_base_candidates ()` shares `visiting`
+		// and stops at a value already on this walk's call stack, this one
+		// included.
+		visiting.insert (v);
+		stores = matching_field_stores (*load, visiting, budget);
+		visiting.erase (v);
+	}
 
 	if (phi == nullptr && select == nullptr && stores.empty ())
 		return leaf_operand_class (v, f);
