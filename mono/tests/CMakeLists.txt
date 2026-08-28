@@ -18,7 +18,7 @@ set(_src      "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_bin      "${CMAKE_CURRENT_BINARY_DIR}")
 set(_class    "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
 set(_buildcls "${MONO_MCS_LIBDIR}/build")
-set(_wrapper  "${CMAKE_BINARY_DIR}/runtime/mono-wrapper")
+set(_wrapper  "${MONO_RUNTIME_WRAPPER}")
 
 # csc and ilasm run on whichever mono MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS selected,
 # against the build profile of the class libraries. See MonoToolsRuntime.cmake.
@@ -161,14 +161,27 @@ add_custom_command(
 # libtest is the P/Invoke target for the marshalling and cominterop tests. It
 # is dlopen'ed by bare name, so no version suffix.
 add_library(libtest SHARED libtest.c)
+# The DllImport names `libtest`, and only the platforms that put a `lib` in
+# front of a library get there from an output name of `test`. Windows adds
+# nothing, so it takes the whole name. A DLL is a runtime artifact rather than
+# a library one, so both output directories have to name the corpus directory
+# for the file to land beside the programs that load it.
+if(WIN32)
+  set(_libtest_name libtest)
+else()
+  set(_libtest_name test)
+endif()
 set_target_properties(libtest PROPERTIES
-  OUTPUT_NAME test
+  OUTPUT_NAME "${_libtest_name}"
+  RUNTIME_OUTPUT_DIRECTORY "${_bin}"
   LIBRARY_OUTPUT_DIRECTORY "${_bin}")
 target_link_libraries(libtest PRIVATE mono::common mono::eglib_headers eglib)
 target_include_directories(libtest PRIVATE "${CMAKE_SOURCE_DIR}")
 # mono_test_marshal_delegate () makes indirect calls to stdcall functions.
 # Turning them into tail calls miscompiles on some gcc versions.
-target_compile_options(libtest PRIVATE -fno-optimize-sibling-calls)
+if(NOT MSVC)
+  target_compile_options(libtest PRIVATE -fno-optimize-sibling-calls)
+endif()
 
 add_custom_target(mono-test-toolchain
   DEPENDS "${_bin}/TestDriver.dll" "${_bin}/test-runner.exe" libtest)
@@ -179,14 +192,23 @@ mono_tools_runtime_depends(mono-test-toolchain)
 
 # Generated sources: three array tests are the same body instantiated over a
 # big struct, a small struct and an int.
+# Each variant is the shared head, the type it instantiates over, and the shared
+# body, in that order.
 foreach(_variant bigvt smallvt int)
-  # add_custom_command has no output redirection, and the generators write to
-  # stdout, so these go through a shell.
+  string(JOIN ";" _ac_cmd
+         "${CMAKE_COMMAND}" -E cat
+         "${_src}/array-coop-1.cs"
+         "${_src}/array-coop-${_variant}-mid.cs"
+         "${_src}/array-coop-2.cs")
   add_custom_command(
     OUTPUT "${_bin}/array-coop-${_variant}.cs"
-    COMMAND sh -c "'${_src}/array-coop-${_variant}.sh' '${_src}' > '${_bin}/array-coop-${_variant}.cs'"
-    DEPENDS "${_src}/array-coop-${_variant}.sh"
-            "${_src}/array-coop-1.cs" "${_src}/array-coop-2.cs"
+    COMMAND "${CMAKE_COMMAND}" -D "CMD=${_ac_cmd}"
+            -D "OUTPUT=${_bin}/array-coop-${_variant}.cs"
+            -P "${CMAKE_SOURCE_DIR}/cmake/MonoRunRedirected.cmake"
+    DEPENDS "${_src}/array-coop-1.cs"
+            "${_src}/array-coop-${_variant}-mid.cs"
+            "${_src}/array-coop-2.cs"
+            "${CMAKE_SOURCE_DIR}/cmake/MonoRunRedirected.cmake"
     COMMENT "GEN array-coop-${_variant}.cs"
     VERBATIM)
 endforeach()
@@ -203,10 +225,15 @@ foreach(_pair "gen-runtime-invoke:runtime-invoke.gen" "make-imt-test:imt_big_ifa
     DEPENDS "${_src}/${_gen}.cs" mono-test-toolchain
     COMMENT "CSC ${_gen}.exe"
     VERBATIM)
+  string(JOIN ";" _gen_cmd "${_wrapper}" "${_bin}/${_gen}.exe")
   add_custom_command(
     OUTPUT "${_bin}/${_out}.cs"
-    COMMAND sh -c "MONO_PATH='${_class}' '${_wrapper}' '${_bin}/${_gen}.exe' > '${_bin}/${_out}.cs'"
+    COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class}"
+            "${CMAKE_COMMAND}" -D "CMD=${_gen_cmd}"
+            -D "OUTPUT=${_bin}/${_out}.cs"
+            -P "${CMAKE_SOURCE_DIR}/cmake/MonoRunRedirected.cmake"
     DEPENDS "${_bin}/${_gen}.exe"
+            "${CMAKE_SOURCE_DIR}/cmake/MonoRunRedirected.cmake"
     WORKING_DIRECTORY "${_bin}"
     COMMENT "GEN ${_out}.cs"
     VERBATIM)
@@ -234,8 +261,11 @@ function(_mono_split_il splitter input outdir)
   add_custom_command(
     OUTPUT ${_outs}
     COMMAND "${CMAKE_COMMAND}" -E make_directory "${_bin}/${outdir}"
-    COMMAND sh -c "'$<TARGET_FILE:${splitter}>' < '${_src}/${input}'"
+    COMMAND "${CMAKE_COMMAND}" -D "CMD=$<TARGET_FILE:${splitter}>"
+            -D "INPUT=${_src}/${input}"
+            -P "${CMAKE_SOURCE_DIR}/cmake/MonoRunRedirected.cmake"
     DEPENDS ${splitter} "${_src}/${input}"
+            "${CMAKE_SOURCE_DIR}/cmake/MonoRunRedirected.cmake"
     WORKING_DIRECTORY "${_bin}"
     COMMENT "SPLIT ${input}"
     VERBATIM)

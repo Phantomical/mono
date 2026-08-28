@@ -20,12 +20,24 @@
 set(_class_dir "${_class}")
 set(_run_test "${CMAKE_SOURCE_DIR}/cmake/MonoRunTest.cmake")
 
-# Where the per-test temporary directories go. Under /tmp rather than the build
-# tree so that TMPDIR still means what the corpus expects of it, and keyed by
-# the build directory so two worktrees running the suite at once get their own.
+# Where the per-test temporary directories go. Under the host's temporary root
+# rather than the build tree so that TMPDIR still means what the corpus expects
+# of it, and keyed by the build directory so two worktrees running the suite at
+# once get their own.
 string(SHA256 _tmp_key "${CMAKE_BINARY_DIR}")
 string(SUBSTRING "${_tmp_key}" 0 12 _tmp_key)
-set(_tmp_root "/tmp/mono-tests-${_tmp_key}")
+if(WIN32)
+  # A path with no drive letter is rooted on whichever drive is current, and
+  # mono reads TMPDIR ahead of TEMP. A test that resolves an assembly against
+  # Path.GetTempPath () then looks on the wrong volume and does not find it.
+  file(TO_CMAKE_PATH "$ENV{TEMP}" _tmp_base)
+  if(NOT _tmp_base)
+    set(_tmp_base "${CMAKE_BINARY_DIR}/tmp")
+  endif()
+else()
+  set(_tmp_base "/tmp")
+endif()
+set(_tmp_root "${_tmp_base}/mono-tests-${_tmp_key}")
 
 # Which collector each suite runs on. The corpus is collector-agnostic, so it
 # runs on every runtime that was built -- mono-wrapper picks the binary out of
@@ -594,8 +606,13 @@ _mono_unhandled_suite(255 ON  ${_unhandled_255})
 # A thread that leaves through pthread_exit drags glibc's forced unwind over
 # every JIT'd frame below it. 42 is the exit code the program asks for once it
 # has come back out of that.
-_mono_exe_list(_forced_unwind ${MONO_TESTS_FORCED_UNWIND_SRC})
-mono_runtime_suite(runtime-forced-unwind TESTS ${_forced_unwind} EXPECT 42)
+#
+# Windows has no forced unwind: the mechanism the suite is about belongs to the
+# Itanium C++ ABI, and the personality routine it drives is never reached here.
+if(NOT WIN32)
+  _mono_exe_list(_forced_unwind ${MONO_TESTS_FORCED_UNWIND_SRC})
+  mono_runtime_suite(runtime-forced-unwind TESTS ${_forced_unwind} EXPECT 42)
+endif()
 
 # Shapes no threshold produces. One is an exception caught in a compiled frame
 # with two interpreted frames under it, and a compiled one between them. The

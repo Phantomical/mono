@@ -10,10 +10,19 @@ foreach(_f descriptor-tests-driver.cs descriptor-tests-prefix.cs)
   configure_file("${_gcd_src}/${_f}" "${_gcd_bin}/${_f}" COPYONLY)
 endforeach()
 
+# The generator writes the test to its standard output, and the interpreter is
+# named rather than left to the shebang: Windows answers a bare .py with the
+# Microsoft Store installer stub.
+string(JOIN ";" _gcd_cmd
+       "${Python3_EXECUTABLE}" "${_gcd_src}/gen-descriptor-tests.py")
+
 add_custom_command(
   OUTPUT "${_gcd_bin}/descriptor-tests.cs"
-  COMMAND sh -c "'${_gcd_src}/gen-descriptor-tests.py' > '${_gcd_bin}/descriptor-tests.cs'"
+  COMMAND ${CMAKE_COMMAND} -D "CMD=${_gcd_cmd}"
+          -D "OUTPUT=${_gcd_bin}/descriptor-tests.cs"
+          -P "${CMAKE_SOURCE_DIR}/cmake/MonoRunRedirected.cmake"
   DEPENDS "${_gcd_src}/gen-descriptor-tests.py"
+          "${CMAKE_SOURCE_DIR}/cmake/MonoRunRedirected.cmake"
           "${_gcd_bin}/descriptor-tests-driver.cs"
           "${_gcd_bin}/descriptor-tests-prefix.cs"
   WORKING_DIRECTORY "${_gcd_bin}"
