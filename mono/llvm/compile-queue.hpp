@@ -185,7 +185,12 @@ public:
 	/// idle timeout retired, so a caller can take apart what the hook gives its
 	/// thread back to. A thread inside Worker::start () is the exception, and it
 	/// gets Worker::abandon () instead.
-	void stop ();
+	///
+	/// \p wait says whether to wait for any of that. A caller that passes false
+	/// gets the queue closed and the threads let go of instead: nothing after
+	/// it is ordered against a worker, and there is a host where waiting here
+	/// cannot end -- see the exit teardown in runtime/backend.cpp.
+	void stop (bool wait = true);
 
 	uint64_t completed () const;
 

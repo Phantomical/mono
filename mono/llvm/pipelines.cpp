@@ -421,7 +421,10 @@ MonoPassBuilder::buildPgoInstrumentationPipeline ()
 	 * as a load and a store loses a count when two of them reach one block
 	 * together.
 	 */
-	MPM.addPass (llvm::InstrProfilingLoweringPass (llvm::InstrProfOptions{ .Atomic = true }));
+	llvm::InstrProfOptions instr_prof;
+
+	instr_prof.Atomic = true;
+	MPM.addPass (llvm::InstrProfilingLoweringPass (instr_prof));
 	MPM.addPass (mono::ProfileLocalizePass ());
 
 	return MPM;

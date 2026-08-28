@@ -106,7 +106,7 @@ CompileQueue::drain ()
 }
 
 void
-CompileQueue::stop ()
+CompileQueue::stop (bool wait)
 {
 	std::vector<std::thread> joining;
 
@@ -161,11 +161,16 @@ CompileQueue::stop ()
 		 * also keeps each join short. By the time one runs, its thread is past
 		 * Worker::stop ().
 		 */
-		hooks_done_.wait (lock, [this] { return in_hooks_ == 0; });
+		if (wait)
+			hooks_done_.wait (lock, [this] { return in_hooks_ == 0; });
 	}
 
-	for (std::thread &thread : joining)
-		thread.join ();
+	for (std::thread &thread : joining) {
+		if (wait)
+			thread.join ();
+		else
+			thread.detach ();
+	}
 }
 
 void

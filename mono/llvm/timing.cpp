@@ -16,6 +16,8 @@
  * actually made of.
  */
 
+#include <config.h>
+
 #include "timing.hpp"
 
 #include "runtime/options.hpp"
@@ -26,6 +28,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#ifdef HOST_WIN32
+#include <windows.h>
+#endif
 #include <string_view>
 
 namespace mono {
@@ -46,7 +51,6 @@ thread_local Scope *g_current = nullptr;
 constexpr Phase first_fine = Phase::ctxnew;
 
 bool g_cpu_clock = false;
-clockid_t g_clock = CLOCK_MONOTONIC;
 
 bool
 names (std::string_view setting, std::string_view word)
@@ -65,14 +69,60 @@ names (std::string_view setting, std::string_view word)
 	return false;
 }
 
+#ifdef HOST_WIN32
+
+/*
+ * QueryPerformanceCounter is the wall clock and GetThreadTimes the thread's
+ * own. The two are unrelated counters, which is fine: a phase is measured
+ * against itself, and `cpu` changes every reading in a run rather than one.
+ */
+uint64_t
+now_ns ()
+{
+	if (g_cpu_clock) {
+		FILETIME creation, exit, kernel, user;
+		ULARGE_INTEGER k, u;
+
+		if (!GetThreadTimes (GetCurrentThread (), &creation, &exit, &kernel, &user))
+			return 0;
+
+		k.LowPart = kernel.dwLowDateTime;
+		k.HighPart = kernel.dwHighDateTime;
+		u.LowPart = user.dwLowDateTime;
+		u.HighPart = user.dwHighDateTime;
+
+		// Both are counts of 100ns intervals.
+		return (uint64_t) (k.QuadPart + u.QuadPart) * 100;
+	}
+
+	static const LONGLONG frequency = [] {
+		LARGE_INTEGER f;
+
+		return QueryPerformanceFrequency (&f) ? f.QuadPart : 0;
+	}();
+	LARGE_INTEGER now;
+
+	if (frequency == 0 || !QueryPerformanceCounter (&now))
+		return 0;
+
+	/* Divide before multiplying, so a counter well past 2^32 does not overflow
+	 * on the way to nanoseconds, then add back what the division dropped. */
+	return (uint64_t) (now.QuadPart / frequency) * 1000000000ull
+	       + (uint64_t) ((now.QuadPart % frequency) * 1000000000ll / frequency);
+}
+
+#else
+
 uint64_t
 now_ns ()
 {
 	struct timespec ts;
 
-	clock_gettime (g_clock, &ts);
+	clock_gettime (g_cpu_clock ? CLOCK_THREAD_CPUTIME_ID : CLOCK_MONOTONIC, &ts);
 	return (uint64_t) ts.tv_sec * 1000000000ull + (uint64_t) ts.tv_nsec;
 }
+
+#endif
 
 const char *
 name_of (Phase phase)
@@ -212,10 +262,8 @@ enabled ()
 
 		if (setting == nullptr)
 			return false;
-		if (names (setting, "cpu")) {
+		if (names (setting, "cpu"))
 			g_cpu_clock = true;
-			g_clock = CLOCK_THREAD_CPUTIME_ID;
-		}
 		std::atexit (report);
 		return true;
 	}();

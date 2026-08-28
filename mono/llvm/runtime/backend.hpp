@@ -58,7 +58,9 @@ public:
 	/// memory that thread is running in.
 	static void release_method (MonoMethod *method);
 
-	static void stop_compilation ();
+	/// \p wait says whether to wait for the compile workers to finish; see
+	/// CompileQueue::stop ().
+	static void stop_compilation (bool wait = true);
 
 	static void *body_of (MonoDomain *domain, MonoMethod *method);
 

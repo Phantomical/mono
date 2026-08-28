@@ -17,7 +17,6 @@
 #include <llvm/TargetParser/Triple.h>
 #include <llvm/IR/RuntimeLibcalls.h>
 
-#include <unwind.h>
 #include <initializer_list>
 #include <cmath>
 
@@ -29,11 +28,15 @@ extern "C" {
 
 /// The personality function for the landing pads we generate. Mono uses its own
 /// custom unwinder, so this is never called by us.
-_Unwind_Reason_Code
-mono_personality (int, _Unwind_Action, _Unwind_Exception_Class, struct _Unwind_Exception *,
-                  struct _Unwind_Context *)
+///
+/// These are the Itanium personality routine's parameters written with plain
+/// types.  <unwind.h> is a compiler-provided header, and MSVC ships none; since
+/// no argument is read, the shape is all that a landing pad needs.  8 is
+/// _URC_CONTINUE_UNWIND, what a routine that handles nothing answers.
+int
+mono_personality (int, int, uint64_t, void *, void *)
 {
-	return _URC_CONTINUE_UNWIND;
+	return 8;
 }
 
 /*

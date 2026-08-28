@@ -16,7 +16,15 @@
 #include <algorithm>
 #include <map>
 #include <mutex>
+#ifdef HOST_WIN32
+// write (), getpid () and _exit ().  The CRT declares them across these two
+// rather than in unistd.h, under their POSIX names because mono compiles with
+// _CRT_NONSTDC_NO_DEPRECATE.
+#include <io.h>
+#include <process.h>
+#else
 #include <unistd.h>
+#endif
 #include <mono/mini/thunk.hpp>
 #include <llvm/Support/Memory.h>
 #include "util/lock.hpp"
@@ -162,7 +170,10 @@ struct MonoBackend::DomainState {
 
 		auto builtins = MonoBuiltin::get_platform_builtins (state->jit->triple ());
 		for (const auto &b : builtins) {
-			if (auto err = state->jit->register_symbol (b.name, b.address))
+			/* Every one of these is a function, and codegen reaches some --
+			 * the libcalls -- with a call it invents after the module is
+			 * closed, so the name has to be one a direct call can reach. */
+			if (auto err = state->jit->register_code_symbol (b.name, b.address))
 				return std::move (err);
 		}
 
@@ -232,7 +243,19 @@ MonoBackend::register_exit_teardown ()
 			 * a finalizer through. A delete here would free mutex_ under
 			 * such a thread, which takes it in MonoBackend::state ().
 			 */
+#ifdef HOST_WIN32
+			/*
+			 * The CRT runs this from the loader's process-detach
+			 * notification, with the loader lock held and every other thread
+			 * in the process already gone. Waiting for a worker there is a
+			 * wait on a thread that cannot answer, and it is a wait for
+			 * nothing: no teardown follows that a worker could be ordered
+			 * against.
+			 */
+			stop_compilation (false);
+#else
 			stop_compilation ();
+#endif
 		});
 	});
 }
@@ -1491,12 +1514,12 @@ MonoBackend::state (MonoDomain *domain)
 }
 
 void
-MonoBackend::stop_compilation ()
+MonoBackend::stop_compilation (bool wait)
 {
 	if (!instance)
 		return;
 
-	instance->queue_.stop ();
+	instance->queue_.stop (wait);
 }
 
 void

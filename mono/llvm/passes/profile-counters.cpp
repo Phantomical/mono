@@ -1,3 +1,7 @@
+/* read_profile_arrays () reads HOST_WIN32 to recover a counter distance the
+ * PE link truncates, so this has to define it. */
+#include <config.h>
+
 #include "profile-counters.hpp"
 #include "tier-counter.hpp"
 
@@ -216,10 +220,26 @@ read_profile_arrays (const uint8_t *data, size_t size)
 		array.name_key = record.NameRef;
 		array.hash = record.FuncHash;
 		array.count = record.NumCounters;
-		// CounterPtr is the distance from the record to its own counters - a
-		// label difference, so the link is what filled it in.
+
+		/*
+		 * CounterPtr is the distance from the record to its own counters - a
+		 * label difference, so the link is what filled it in.
+		 *
+		 * The counters sit in a section of their own, and PE has no relocation
+		 * for a 64-bit difference across two sections. The link writes the low
+		 * 32 bits and leaves the rest zero, so a record whose counters sit
+		 * below it reads 4GB too high. The distance is between two sections of
+		 * one object, which is far inside what 32 bits hold, so taking the
+		 * value back to its signed 32-bit self recovers it exactly.
+		 */
+		intptr_t distance = record.CounterPtr;
+
+#ifdef HOST_WIN32
+		distance = (int32_t) distance;
+#endif
+
 		array.counters = reinterpret_cast<const uint64_t *> (
-			reinterpret_cast<const char *> (&record) + record.CounterPtr);
+			reinterpret_cast<const char *> (&record) + distance);
 
 		arrays.push_back (array);
 	}

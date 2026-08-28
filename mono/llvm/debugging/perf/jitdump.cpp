@@ -38,6 +38,20 @@ put (std::vector<uint8_t> &out, uint64_t value, size_t width)
 		out.push_back ((uint8_t) (value >> (8 * i)));
 }
 
+/// The monotonic clock, which mono names differently per host.
+mono_clock_id_t
+monotonic_clock ()
+{
+	static const mono_clock_id_t id = [] {
+		mono_clock_id_t clk;
+
+		mono_clock_init (&clk);
+		return clk;
+	}();
+
+	return id;
+}
+
 /// A JIT_CODE_UNWINDING_INFO record around a frame description.
 ///
 /// mapped_size covers the whole description, which is what puts it inside the
@@ -60,7 +74,7 @@ unwinding_record (const EhFrame &frame)
 	/* The clock the dump's other records are stamped from
 	 * (mono_emit_jit_dump_code). perf cannot line a dump of two clocks up
 	 * against its samples. */
-	put (record, mono_clock_get_time_ns (CLOCK_MONOTONIC), 8);
+	put (record, mono_clock_get_time_ns (monotonic_clock ()), 8);
 	put (record, frame.bytes.size (), 8);
 	put (record, frame.header_size, 8);
 	put (record, frame.bytes.size (), 8);

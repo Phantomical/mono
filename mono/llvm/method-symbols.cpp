@@ -8,6 +8,8 @@
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/Module.h>
 
+#include <cinttypes>
+#include <cstdint>
 #include <cstdio>
 #include <optional>
 
@@ -17,7 +19,17 @@ namespace mono {
 
 namespace {
 
-/// The attribute holding a marked declaration's MonoMethod, printed as `%p`.
+/*
+ * A pointer travels on an attribute as bare hexadecimal, and the radix is
+ * spelled out at both ends.  %p is what a host's C library makes of it -- glibc
+ * writes a 0x prefix and MSVC writes zero-padded digits with none -- and a
+ * reader that lets the string say which radix it is reads the second as octal
+ * and stops at the first letter.
+ */
+constexpr const char *pointer_format = "%" PRIxPTR;
+constexpr unsigned pointer_radix = 16;
+
+/// The attribute holding a marked declaration's MonoMethod.
 constexpr StringRef method_attribute = "mono-method";
 
 /// The same for the MonoClass a per-class symbol stands for.
@@ -50,7 +62,7 @@ pointer_marker (const GlobalValue &value, StringRef name)
 
 	uintptr_t address = 0;
 
-	if (printed.getAsInteger (0, address) || address == 0)
+	if (printed.getAsInteger (pointer_radix, address) || address == 0)
 		return std::nullopt;
 	return address;
 }
@@ -60,7 +72,7 @@ mark_pointer (GlobalValue &value, StringRef name, const void *pointer)
 {
 	char printed[32];
 
-	snprintf (printed, sizeof (printed), "%p", pointer);
+	snprintf (printed, sizeof (printed), pointer_format, (uintptr_t) pointer);
 
 	if (auto *fn = dyn_cast<Function> (&value))
 		fn->addFnAttr (name, printed);
