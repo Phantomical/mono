@@ -4,6 +4,7 @@
 #include "passes/builtins.hpp"
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init.hpp"
+#include "passes/dead-alloc.hpp"
 #include "passes/devirtualize.hpp"
 #include "passes/dump-ir.hpp"
 #include "passes/fold-delegate.hpp"
@@ -605,6 +606,17 @@ MonoPassBuilder::buildTier2Pipeline ()
 
 	MPM.addPass (buildModuleOptimizationPipeline (llvm::OptimizationLevel::O3,
 	                                              llvm::ThinOrFullLTOPhase::None));
+
+	/*
+	 * Behind the pipeline above. A fold brings the constructor in and SROA takes
+	 * away the reads, which is what leaves an object with its stores and no
+	 * reader. LLVM stops at the barriers. Each one writes the card table as well
+	 * as the field, and takes the address of the field rather than of the object.
+	 *
+	 * In front of the lowering below, where a barrier stops being one call.
+	 */
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
+		mono::EraseDeadAllocationsPass ()));
 
 	/*
 	 * Behind the pipeline above, because an allocation and a barrier say more as
