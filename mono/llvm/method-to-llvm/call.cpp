@@ -27,6 +27,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Type.h>
+#include <llvm/Support/ModRef.h>
 
 #include <string_view>
 
@@ -421,11 +422,25 @@ MethodLLVMEmitter::delegate_invoke_callee (MonoIrBuilder &builder, llvm::Value *
 static void
 keep_alive (llvm::IRBuilderBase &builder, llvm::Value *value)
 {
-	builder.CreateCall (
+	llvm::CallInst *held = builder.CreateCall (
 		llvm::InlineAsm::get (llvm::FunctionType::get (builder.getVoidTy (),
 	                                                       { value->getType () }, false),
 	                              "", "r", /*hasSideEffects=*/true),
 		{ value });
+
+	/*
+	 * An inline asm has no callee to read a memory attribute off, and a call of
+	 * one carries none itself. Alias analysis then reads this as touching every
+	 * location, and LICM leaves a loop's invariant loads where they are.
+	 *
+	 * The asm touches less than this claims, and the wider claim is what holds
+	 * the call at its site. LICM does not lift a call that writes out of a loop,
+	 * and lifting this one would stop rooting the delegate.
+	 *
+	 * `llvm.fake.use` carries the same effects. FastISel ignores it, so tier 1
+	 * would keep the delegate nowhere.
+	 */
+	held->setMemoryEffects (llvm::MemoryEffects::inaccessibleMemOnly ());
 }
 
 /// Names the address the engine must resolve for target's own MonoMethod, the
