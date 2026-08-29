@@ -2,10 +2,12 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
 #include "passes/cast-func.hpp"
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/Type.h>
+#include <llvm/Support/ModRef.h>
 
 namespace mono {
 
@@ -180,6 +182,28 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	llvm::Value *result =
 		emit_protected_call (builder, cast_func_decl (*module, throw_on_fail),
 	                             { obj.value, *tested, cache, *test });
+
+	/*
+	 * The test answers with the operand or with null and keeps it nowhere
+	 * else, so the operand leaves through the return value alone.
+	 * `mono_object_isinst_with_cache ()` (`mono/mini/icalls/castclass.c`)
+	 * writes the operand's vtable into the cache rather than the operand, and
+	 * the walk behind it compares classes.
+	 *
+	 * An interface and a marshal-by-ref class are the two `subtype_test_applies
+	 * ()` (`passes/cast-func.cpp`) refuses for the same reason: they reach
+	 * `mono_object_handle_isinst_mbyref ()`, which asks a transparent proxy's
+	 * own CanCastTo (). That is managed code holding the operand, so a site
+	 * naming one of them keeps the claim a call with no attribute makes.
+	 *
+	 * The claim is about reach and not about memory. `mono_class_init_internal
+	 * ()` runs a static constructor from in here, so what the call writes stays
+	 * whatever LLVM assumes.
+	 */
+	if (auto *site = llvm::dyn_cast<llvm::CallBase> (result))
+		if (!mono_class_is_interface (klass) && !m_class_get_marshalbyref (klass))
+			site->addParamAttr (0, llvm::Attribute::getWithCaptureInfo (
+			                               context (), llvm::CaptureInfo::retOnly ()));
 
 	// A value-type token means the boxed form. What comes back is still an
 	// object reference, not the token's own type.
