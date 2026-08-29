@@ -1,6 +1,6 @@
 #include "method-to-llvm.hpp"
 #include "analysis/operand-class.hpp"
-#include "analysis/vtable-facts.hpp"
+#include "analysis/vtable-info.hpp"
 #include "method-symbols.hpp"
 #include "runtime-error.hpp"
 #include "../passes/class-init.hpp"
@@ -249,8 +249,8 @@ MethodLLVMEmitter::vtable_symbol (MonoClass *klass, const std::string &symbol)
 	                                         false, llvm::GlobalValue::ExternalLinkage,
 	                                         nullptr, symbol);
 
-	if (std::optional<VTableFacts> facts = vtable_facts_for (klass))
-		mark_vtable_facts (*global, *facts);
+	if (std::optional<VTableInfo> info = vtable_info_for (klass))
+		mark_vtable_info (*global, *info);
 
 	return global;
 }
@@ -259,8 +259,8 @@ MethodLLVMEmitter::vtable_symbol (MonoClass *klass, const std::string &symbol)
 /// compile cannot state every field.
 ///
 /// Nothing leaves the symbol unmarked rather than marked with a hole in it.
-std::optional<VTableFacts>
-MethodLLVMEmitter::vtable_facts_for (MonoClass *klass)
+std::optional<VTableInfo>
+MethodLLVMEmitter::vtable_info_for (MonoClass *klass)
 {
 	llvm::Expected<llvm::Constant *> named =
 		typeof_symbol (m_class_get_byval_arg (klass));
@@ -273,15 +273,15 @@ MethodLLVMEmitter::vtable_facts_for (MonoClass *klass)
 	if (*named == nullptr)
 		return std::nullopt;
 
-	VTableFacts facts;
+	VTableInfo info;
 
 	// Each pointer is the symbol something else compares against: a type test
 	// reads the class word, and typeof names the System.Type object. The two
 	// sides have to be one value for the comparison to fold.
-	facts.klass = class_symbol (klass, "mono_class_");
-	facts.type = *named;
-	facts.rank = uint8_t (m_class_get_rank (klass));
-	return facts;
+	info.klass = class_symbol (klass, "mono_class_");
+	info.type = *named;
+	info.rank = uint8_t (m_class_get_rank (klass));
+	return info;
 }
 
 void

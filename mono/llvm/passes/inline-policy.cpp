@@ -2,7 +2,7 @@
 
 #include "analysis/operand-class.hpp"
 #include "analysis/strip-casts.hpp"
-#include "analysis/vtable-facts.hpp"
+#include "analysis/vtable-info.hpp"
 #include "cast-func.hpp"
 #include "compile-state.hpp"
 #include "fold-cast.hpp"
@@ -205,7 +205,7 @@ dispatches_unresolved_on (const Value *object, const Function &f)
 /// what lets a walk with no memory model follow one store.
 ///
 /// Null covers a class whose allocation can return a transparent proxy, which
-/// gets no such store, and a class the translator could state no facts about.
+/// gets no such store, and a class whose vtable symbol carries no info.
 GlobalVariable *
 stored_vtable (Value *object, const DataLayout &dl)
 {
@@ -246,7 +246,7 @@ stored_vtable (Value *object, const DataLayout &dl)
 
 		// A store this cannot read leaves the word unknown, and two that
 		// disagree leave it unknown as well.
-		if (named == nullptr || !vtable_facts (*named))
+		if (named == nullptr || !vtable_info (*named))
 			return nullptr;
 		if (found != nullptr && found != named)
 			return nullptr;
@@ -354,18 +354,18 @@ folded_vtable_read (CallBase &call, SettledValue settled)
 		operand = const_cast<Value *> (strip_casts (caller_side));
 
 	auto *named = dyn_cast<GlobalObject> (operand);
-	std::optional<VTableFacts> facts =
-		named != nullptr ? vtable_facts (*named) : std::nullopt;
+	std::optional<VTableInfo> info =
+		named != nullptr ? vtable_info (*named) : std::nullopt;
 
-	if (!facts)
+	if (!info)
 		return nullptr;
 
 	if (name == vtable_klass_name)
-		return facts->klass;
+		return info->klass;
 	if (name == vtable_type_name)
-		return facts->type;
+		return info->type;
 
-	return ConstantInt::get (call.getType (), facts->rank);
+	return ConstantInt::get (call.getType (), info->rank);
 }
 
 Value *

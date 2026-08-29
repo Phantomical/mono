@@ -522,7 +522,7 @@ as well as by `amd64.hpp`, so it holds nothing but `#define`s.
   emit nothing and instead fill in the side channel the EH sections are written from.
 - **`analysis/`** — what a pass asks about the IR, answering rather than rewriting.
   `operand-class` says what class a value holds, `escape` whether an allocation's
-  pointer leaves the function, and `vtable-facts` what a class's vtable symbol
+  pointer leaves the function, and `vtable-info` what a class's vtable symbol
   carries. `value-walk` and `strip-casts` are the traversals each such rule runs.
 
 Where a pass needs something only the front end knew, the front end emits a call to a

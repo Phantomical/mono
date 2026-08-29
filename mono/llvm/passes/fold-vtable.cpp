@@ -1,7 +1,7 @@
 #include "fold-vtable.hpp"
 
 #include "analysis/operand-class.hpp"
-#include "analysis/vtable-facts.hpp"
+#include "analysis/vtable-info.hpp"
 #include "builtins.hpp"
 #include "compile-state.hpp"
 #include "vtable-func.hpp"
@@ -23,18 +23,18 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-/// What a site of the declaration \p name reads, taken off \p facts.
+/// What a site of the declaration \p name reads, taken off \p info.
 Constant *
-field_of (StringRef name, const VTableFacts &facts, Type *held)
+field_of (StringRef name, const VTableInfo &info, Type *held)
 {
 	if (name == vtable_klass_name)
-		return facts.klass;
+		return info.klass;
 
 	if (name == vtable_type_name)
-		return facts.type;
+		return info.type;
 
 	if (name == vtable_rank_name)
-		return ConstantInt::get (held, facts.rank);
+		return ConstantInt::get (held, info.rank);
 
 	llvm_unreachable ("a vtable field with no value");
 }
@@ -50,12 +50,12 @@ fold_field (Function &f, StringRef name)
 		if (vtable == nullptr)
 			continue;
 
-		std::optional<VTableFacts> facts = vtable_facts (*vtable);
+		std::optional<VTableInfo> info = vtable_info (*vtable);
 
-		if (!facts)
+		if (!info)
 			continue;
 
-		site->replaceAllUsesWith (field_of (name, *facts, site->getType ()));
+		site->replaceAllUsesWith (field_of (name, *info, site->getType ()));
 		site->eraseFromParent ();
 		changed = true;
 	}

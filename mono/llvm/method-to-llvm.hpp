@@ -12,7 +12,7 @@
 
 #include "arch/arch.hpp"
 
-#include "analysis/vtable-facts.hpp"
+#include "analysis/vtable-info.hpp"
 #include "il-line-table.hpp"
 #include "method-symbols.hpp"
 #include "mini.h"
@@ -652,7 +652,7 @@ public:
 	/// when it was translated without any.
 	const SeqPointGraph &sequence_points () const { return seq_point_graph; }
 
-	/// The symbol standing for \p klass's vtable, carrying the facts a fold
+	/// The symbol standing for \p klass's vtable, carrying the info a fold
 	/// reads off it, or null for a class this compile cannot name.
 	///
 	/// It records an external, which the caller has to resolve. A fold reaches
@@ -1009,7 +1009,7 @@ private:
 	std::string identity_symbol (const std::string &name, const void *object);
 	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
 	llvm::Constant *vtable_symbol (MonoClass *klass, const std::string &symbol);
-	std::optional<VTableFacts> vtable_facts_for (MonoClass *klass);
+	std::optional<VTableInfo> vtable_info_for (MonoClass *klass);
 	llvm::Expected<llvm::Constant *> typeof_symbol (MonoType *type);
 	MonoClass *parameter_class (MonoType *type);
 	llvm::Constant *field_symbol (MonoClassField *field);
