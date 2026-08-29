@@ -19,6 +19,7 @@
 #include "operand-class.hpp"
 #include "runtime/naming.hpp"
 #include "runtime/options.hpp"
+#include "value-walk.hpp"
 #include "vtable-func.hpp"
 
 #include "mini.h"
@@ -263,24 +264,6 @@ enter_at (CallBase *call, Function *entry, bool steps_receiver, bool drops_key)
 	call->eraseFromParent ();
 }
 
-/// Points every call that reads \p site at \p entry instead.
-void
-enter_directly (CallBase *site, Function *entry, bool steps_receiver, bool drops_key)
-{
-	if (!steps_receiver && !drops_key) {
-		site->replaceAllUsesWith (entry);
-		return;
-	}
-
-	SmallVector<CallBase *, 2> calls;
-
-	for (User *user : site->users ())
-		calls.push_back (cast<CallBase> (user));
-
-	for (CallBase *call : calls)
-		enter_at (call, entry, steps_receiver, drops_key);
-}
-
 /// Which declaration a set of sites calls, which decides where the method comes
 /// from and whether the calls carry a key to drop.
 enum class Lookup { vtable, imt, generic_virtual };
@@ -333,47 +316,118 @@ dispatched_at (CallBase *site, MonoClass *klass, Lookup lookup)
 		                              shape->isVarArg ()) };
 }
 
-/// Folds what it can of the sites in \p f that call the declaration \p name.
-bool
-fold_sites (Function &f, StringRef name, const CompileState &compile, Lookup lookup)
+/// Which of the three declarations \p v is a call to, or nothing where it is
+/// not a call to one of them.
+std::optional<Lookup>
+lookup_at (const Value *v)
 {
-	bool changed = false;
+	const auto *site = dyn_cast<CallBase> (v);
+	const Function *decl = site != nullptr ? site->getCalledFunction () : nullptr;
 
-	for (CallBase *site : builtin_sites (f, name)) {
-		if (site->use_empty ())
-			continue;
+	if (decl == nullptr)
+		return std::nullopt;
 
-		auto *vtable = dyn_cast<GlobalValue> (site->getArgOperand (0));
-		MonoClass *klass = vtable != nullptr ? marked_class (*vtable) : nullptr;
+	StringRef name = decl->getName ();
 
-		if (klass == nullptr)
-			continue;
+	if (name == vtable_func_name)
+		return Lookup::vtable;
+	if (name == imt_func_name)
+		return Lookup::imt;
+	if (name == vtable_gfunc_name)
+		return Lookup::generic_virtual;
 
-		std::optional<Dispatched> found = dispatched_at (site, klass, lookup);
+	return std::nullopt;
+}
 
-		if (!found)
-			continue;
+/// The method \p site reads, or null where its operands do not settle one.
+MonoMethod *
+site_target (const CallBase *site, Lookup lookup)
+{
+	const auto *vtable = dyn_cast<GlobalValue> (site->getArgOperand (0));
+	MonoClass *klass = vtable != nullptr ? marked_class (*vtable) : nullptr;
+	const auto *index = dyn_cast<ConstantInt> (site->getArgOperand (1));
 
-		Function *entry =
-			entry_for (*f.getParent (), found->target, found->shape, compile);
+	if (klass == nullptr || index == nullptr)
+		return nullptr;
 
-		if (entry == nullptr)
-			continue;
+	if (lookup == Lookup::vtable)
+		return slot_target (klass, static_cast<int32_t> (index->getSExtValue ()));
 
-		/*
-		 * The entry replaces the value the site answered rather than the calls
-		 * that read it. Each of those is then a call of a constant, which the
-		 * simplification behind this pass turns into a direct one. A receiver
-		 * the entry wants stepped and a key it does not take are the two cases
-		 * that have to reach the calls.
-		 */
-		enter_directly (site, entry, publishes_unbox_entry (found->target),
-		                lookup != Lookup::vtable);
-		site->eraseFromParent ();
-		changed = true;
+	const auto *key = dyn_cast<GlobalValue> (site->getArgOperand (2));
+	MonoMethod *asked = key != nullptr ? marked_method_pointer (*key) : nullptr;
+
+	if (asked == nullptr)
+		return nullptr;
+
+	return lookup == Lookup::imt ? imt_target (klass, asked)
+	                             : generic_virtual_target (klass, asked);
+}
+
+/// What the sites reaching a call's callee agree that call enters.
+///
+/// A dispatch site is one value among the merges in front of the callee rather
+/// than the callee itself. GVN's partial-redundancy elimination is what puts one
+/// there: it inserts a second copy of the site in the predecessor that lacked
+/// one and merges the two with a phi, so a call reads its callee off that phi.
+/// Reading the call rather than the site is what still answers for such a site,
+/// and every value the phi merges has to name the same method before the call
+/// can be rewritten.
+class DispatchWalk {
+public:
+	struct Answer {
+		MonoMethod *target;
+		Lookup lookup;
+	};
+
+	bool skips_null () const { return false; }
+
+	Answer exhausted () const { return { nullptr, Lookup::vtable }; }
+
+	/// A rule with no merge node of its own.
+	SmallVector<const Value *, 4> arms (const Value *, WalkState &) const { return {}; }
+
+	std::optional<Answer> leaf (const Value *v) const
+	{
+		std::optional<Lookup> lookup = lookup_at (v);
+
+		if (!lookup)
+			return exhausted ();
+
+		return Answer{ site_target (cast<CallBase> (v), *lookup), *lookup };
 	}
 
-	return changed;
+	/// Settles the merge at no method where an arm names none, and where two
+	/// arms name different ones. A call enters one method, so an arm this walk
+	/// cannot answer for is not one another arm can cover.
+	bool fold (std::optional<Answer> &acc, Answer arm) const
+	{
+		if (arm.target == nullptr
+		    || (acc && (acc->target != arm.target || acc->lookup != arm.lookup))) {
+			acc = exhausted ();
+			return false;
+		}
+
+		acc = arm;
+		return true;
+	}
+};
+
+/// The calls in \p f that read their callee rather than naming it.
+SmallVector<CallBase *, 8>
+indirect_calls (Function &f)
+{
+	SmallVector<CallBase *, 8> found;
+
+	for (BasicBlock &block : f)
+		for (Instruction &i : block)
+			if (auto *call = dyn_cast<CallBase> (&i))
+				// Only a method with a receiver reaches a vtable slot, so a
+				// call with no arguments is a shape this pass does not read.
+				if (call->arg_size () >= 1
+				    && !isa<Function> (call->getCalledOperand ()))
+					found.push_back (call);
+
+	return found;
 }
 
 } // namespace
@@ -386,11 +440,50 @@ fold_dispatch_sites (Function &f)
 	if (compile.domain == nullptr || !compile.publish)
 		return false;
 
-	bool changed = fold_sites (f, vtable_func_name, compile, Lookup::vtable);
+	bool changed = false;
 
-	changed |= fold_sites (f, imt_func_name, compile, Lookup::imt);
+	for (CallBase *call : indirect_calls (f)) {
+		DispatchWalk walk;
+		WalkState state;
+		std::optional<DispatchWalk::Answer> found =
+			walk_value (call->getCalledOperand (), walk, state);
 
-	return fold_sites (f, vtable_gfunc_name, compile, Lookup::generic_virtual) || changed;
+		if (!found || found->target == nullptr)
+			continue;
+
+		// The key is the last argument, and what the call enters is the
+		// method's own prototype, which does not have it.
+		bool drops_key = found->lookup != Lookup::vtable;
+		FunctionType *shape = call->getFunctionType ();
+
+		if (drops_key) {
+			if (shape->getNumParams () < 1)
+				continue;
+
+			shape = FunctionType::get (shape->getReturnType (),
+			                           shape->params ().drop_back (),
+			                           shape->isVarArg ());
+		}
+
+		Function *entry = entry_for (*f.getParent (), found->target, shape, compile);
+
+		if (entry == nullptr)
+			continue;
+
+		enter_at (call, entry, publishes_unbox_entry (found->target), drops_key);
+		changed = true;
+	}
+
+	// Erase a site no call reads any more, so `lower_vtable_reads ()` does not
+	// write a load of the slot for it. A site a phi still holds stays here. That
+	// phi is dead as well, and DCE takes the two together, because the
+	// declarations are `memory(none)` and nothing else holds them live.
+	for (StringRef name : { vtable_func_name, imt_func_name, vtable_gfunc_name })
+		for (CallBase *site : builtin_sites (f, name))
+			if (site->use_empty ())
+				site->eraseFromParent ();
+
+	return changed;
 }
 
 namespace {
