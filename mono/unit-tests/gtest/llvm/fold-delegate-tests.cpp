@@ -163,6 +163,24 @@ TEST (FoldDelegateTest, ReadsThroughASelect)
 	EXPECT_TRUE (found.settled);
 }
 
+TEST (FoldDelegateTest, ReadsThroughAFreeze)
+{
+	MergeModule m;
+	IRBuilder<> b (m.merge);
+
+	// SimpleLoopUnswitch freezes a condition it hoists out of a loop, and a null
+	// test on the delegate is such a condition. A real body reaches the walk in
+	// this shape.
+	Value *frozen = b.CreateFreeze (m.produce (m.left, first));
+
+	b.CreateRet (frozen);
+
+	DelegateTarget found = delegate_target_at (frozen);
+
+	EXPECT_EQ (found.method, first);
+	EXPECT_TRUE (found.settled);
+}
+
 TEST (FoldDelegateTest, TerminatesOnAMergeThatReachesItself)
 {
 	MergeModule m;

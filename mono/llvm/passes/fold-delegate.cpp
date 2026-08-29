@@ -278,7 +278,9 @@ reads_callee_off_delegate (const CallBase &site)
 	const Value *object = address->stripAndAccumulateConstantOffsets (
 		layout, offset, /*AllowNonInbounds=*/true);
 
-	return object == strip_casts (site.getArgOperand (0))
+	// stripAndAccumulateConstantOffsets () peels offsets and stops, so it leaves
+	// a freeze that the other side's peel takes off.
+	return strip_casts (object) == strip_casts (site.getArgOperand (0))
 	       && offset == MONO_STRUCT_OFFSET (MonoDelegate, invoke_impl);
 }
 

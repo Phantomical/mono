@@ -11,8 +11,12 @@
 
 namespace mono {
 
-/// Returns v with any address-preserving cast peeled off, so two spellings of
-/// one runtime address compare equal.
+/// Returns v with the operations that do not change its address peeled off, so
+/// two spellings of one runtime address compare equal.
+///
+/// A `freeze` is peeled as well. It gives an arbitrary address for a poison
+/// operand. So the peel changes the answer only where a use of the unfrozen
+/// value is undefined behaviour already.
 inline const llvm::Value *
 strip_casts (const llvm::Value *v)
 {
@@ -21,7 +25,8 @@ strip_casts (const llvm::Value *v)
 
 		if (opcode != llvm::Instruction::BitCast
 		    && opcode != llvm::Instruction::PtrToInt
-		    && opcode != llvm::Instruction::IntToPtr)
+		    && opcode != llvm::Instruction::IntToPtr
+		    && opcode != llvm::Instruction::Freeze)
 			break;
 		v = op->getOperand (0);
 	}
