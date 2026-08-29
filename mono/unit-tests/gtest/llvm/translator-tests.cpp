@@ -14,8 +14,8 @@
 // For buffer_copy_for (), which one case asks directly rather than through the
 // IR, because the sibling it has to refuse has no reachable call site to
 // translate.
+#include "analysis/operand-class.hpp"
 #include "method-to-llvm.hpp"
-#include "operand-class.hpp"
 #include "passes/gc-barrier.hpp"
 
 #include "config.h"
@@ -1685,7 +1685,7 @@ TEST_F (TranslatorTest, ACastToAnInterfaceKeepsTheHelper)
 /*
  * A reference parameter's declared class is recorded on the function, which is
  * what lets a fold answer a test on an argument once inlining has brought the
- * two together. operand-class.hpp has the format.
+ * two together. `mark_parameter_classes ()` has the format.
  */
 TEST_F (TranslatorTest, AMethodRecordsItsReferenceParameterClasses)
 {

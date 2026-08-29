@@ -3,8 +3,8 @@
  * \brief Comparing two operands that name one runtime value.
  */
 
-#ifndef MONO_LLVM_PASSES_STRIP_CASTS_HPP
-#define MONO_LLVM_PASSES_STRIP_CASTS_HPP
+#ifndef MONO_LLVM_ANALYSIS_STRIP_CASTS_HPP
+#define MONO_LLVM_ANALYSIS_STRIP_CASTS_HPP
 
 #include <llvm/IR/Operator.h>
 #include <llvm/IR/Value.h>

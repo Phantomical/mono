@@ -10,13 +10,13 @@
 
 #include "fold-cast.hpp"
 
+#include "analysis/operand-class.hpp"
+#include "analysis/strip-casts.hpp"
 #include "builtins.hpp"
 #include "cast-func.hpp"
 #include "compile-state.hpp"
 #include "method-symbols.hpp"
-#include "operand-class.hpp"
 #include "runtime/options.hpp"
-#include "strip-casts.hpp"
 
 #include "mono/metadata/class-init.h"
 #include "mono/metadata/class-inlines.h"

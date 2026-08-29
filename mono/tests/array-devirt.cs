@@ -13,8 +13,8 @@ using System.Runtime.CompilerServices;
  *
  * A dispatch does not follow from it. Each of the three classes carries a vtable
  * of its own, and the interface slot holds a different method in each. So
- * `exact_class ()` (`mono/llvm/operand-class.cpp`) refuses an array, and this
- * file fails if that refusal comes out.
+ * `exact_class ()` refuses an array, and this file fails if that refusal comes
+ * out.
  *
  * `GuardDispatchPass` (`mono/llvm/passes/devirtualize.cpp`) takes the same
  * site on the bound behind a compare of the receiver's vtable, so the arm it

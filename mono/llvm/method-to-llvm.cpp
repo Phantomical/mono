@@ -1,7 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
 #include "domain-method.hpp"
-#include "operand-class.hpp"
+#include "analysis/operand-class.hpp"
 #include "passes/tier-counter.hpp"
 #include "runtime/options.hpp"
 #include "runtime-error.hpp"

@@ -7,8 +7,8 @@
 #include "dead-alloc.hpp"
 
 #include "alloc-func.hpp"
+#include "analysis/escape.hpp"
 #include "builtins.hpp"
-#include "escape.hpp"
 #include "gc-barrier.hpp"
 
 #include <llvm/ADT/DenseMap.h>

@@ -4,10 +4,9 @@ using System.Runtime.CompilerServices;
 /*
  * A dispatch on a receiver whose class GuardDispatchPass only guesses.
  *
- * guessed_class () (mono/llvm/operand-class.cpp) reads a class off an
- * allocation through two channels that carry no proof: a field whose
- * object escapes into another object, and a phi where only one arm
- * names a class. The guess can be wrong. GuardDispatchPass
+ * guessed_class () reads a class off an allocation through two channels that
+ * carry no proof: a field whose object escapes into another object, and a phi
+ * where only one arm names a class. The guess can be wrong. GuardDispatchPass
  * (mono/llvm/passes/devirtualize.cpp) compares the receiver's real
  * vtable against the guess, calls the guessed class directly on the
  * arm that matches, and keeps the ordinary dispatch on the arm that

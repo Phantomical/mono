@@ -12,9 +12,9 @@
 
 #include "arch/arch.hpp"
 
+#include "analysis/vtable-facts.hpp"
 #include "il-line-table.hpp"
 #include "method-symbols.hpp"
-#include "vtable-facts.hpp"
 #include "mini.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-forward.h"

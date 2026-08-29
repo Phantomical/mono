@@ -34,8 +34,8 @@
  * against this compile's domain.
  */
 
-#ifndef MONO_LLVM_OPERAND_CLASS_HPP
-#define MONO_LLVM_OPERAND_CLASS_HPP
+#ifndef MONO_LLVM_ANALYSIS_OPERAND_CLASS_HPP
+#define MONO_LLVM_ANALYSIS_OPERAND_CLASS_HPP
 
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/SmallVector.h>

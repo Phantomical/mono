@@ -9,10 +9,10 @@
 
 #include "fold-delegate.hpp"
 
+#include "analysis/operand-class.hpp"
+#include "analysis/strip-casts.hpp"
 #include "compile-state.hpp"
 #include "direct-call.hpp"
-#include "operand-class.hpp"
-#include "strip-casts.hpp"
 #include "runtime/naming.hpp"
 #include "runtime/options.hpp"
 

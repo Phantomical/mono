@@ -23,7 +23,7 @@
  */
 
 #include "class-init.hpp"
-#include "strip-casts.hpp"
+#include "analysis/strip-casts.hpp"
 
 #include <llvm/ADT/MapVector.h>
 #include <llvm/ADT/SmallVector.h>

@@ -11,8 +11,8 @@
  * same symbol elsewhere folds.
  */
 
-#ifndef MONO_LLVM_VTABLE_FACTS_HPP
-#define MONO_LLVM_VTABLE_FACTS_HPP
+#ifndef MONO_LLVM_ANALYSIS_VTABLE_FACTS_HPP
+#define MONO_LLVM_ANALYSIS_VTABLE_FACTS_HPP
 
 #include <llvm/ADT/StringRef.h>
 

@@ -1,5 +1,5 @@
 #include "method-to-llvm.hpp"
-#include "operand-class.hpp"
+#include "analysis/operand-class.hpp"
 #include "runtime-error.hpp"
 #include "../passes/alloc-func.hpp"
 #include "../passes/vtable-func.hpp"

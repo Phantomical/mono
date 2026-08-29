@@ -9,7 +9,7 @@
 
 #include "passes/fold-delegate.hpp"
 
-#include "operand-class.hpp"
+#include "analysis/operand-class.hpp"
 
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/DerivedTypes.h>

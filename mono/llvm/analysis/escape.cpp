@@ -6,7 +6,7 @@
 
 #include "escape.hpp"
 
-#include "alloc-func.hpp"
+#include "passes/alloc-func.hpp"
 
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Analysis/CaptureTracking.h>

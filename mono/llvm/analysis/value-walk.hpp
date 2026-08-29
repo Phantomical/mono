@@ -13,10 +13,10 @@
  * cycle and bounds the work.
  */
 
-#ifndef MONO_LLVM_VALUE_WALK_HPP
-#define MONO_LLVM_VALUE_WALK_HPP
+#ifndef MONO_LLVM_ANALYSIS_VALUE_WALK_HPP
+#define MONO_LLVM_ANALYSIS_VALUE_WALK_HPP
 
-#include "passes/strip-casts.hpp"
+#include "strip-casts.hpp"
 
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/SmallPtrSet.h>

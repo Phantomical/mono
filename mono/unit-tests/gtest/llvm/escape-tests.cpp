@@ -6,8 +6,9 @@
  * and no collector stands under the walk.
  */
 
+#include "analysis/escape.hpp"
+
 #include "passes/alloc-func.hpp"
-#include "passes/escape.hpp"
 #include "passes/gc-barrier.hpp"
 
 #include <llvm/IR/BasicBlock.h>

@@ -12,7 +12,7 @@
  * runtime and mark a real class.
  */
 
-#include "operand-class.hpp"
+#include "analysis/operand-class.hpp"
 
 #include "harness.hpp"
 #include "method-symbols.hpp"
@@ -798,8 +798,8 @@ struct PhiOfAllocationsFieldModule {
 /// The base is a phi of two allocations, each storing an instance of the
 /// same class into the field the caller reads back. Resolving the base
 /// through the phi to both allocations, and reading each one's own field
-/// store, is what `resolve_base_candidates ()` (`operand-class.cpp`) adds
-/// over a single allocation base.
+/// store, is what `resolve_base_candidates ()` adds over a single allocation
+/// base.
 TEST (OperandClassTest, LoadThroughAPhiOfAllocationsAnswersTheClass)
 {
 	mono::test::init_runtime ();

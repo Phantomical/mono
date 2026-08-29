@@ -5,8 +5,8 @@ using System.Runtime.CompilerServices;
 /*
  * A virtual dispatch through a merged receiver -- a phi or a select -- can
  * fold to a direct call. It folds only where exact_class () and
- * operand_class () (mono/llvm/operand-class.cpp) answer one class for the
- * receiver, and it falls back to an ordinary dispatch everywhere else.
+ * operand_class () answer one class for the receiver, and it falls back to an
+ * ordinary dispatch everywhere else.
  *
  * The receiver in each case below is a value two or more paths write. Each
  * case gates one rule the merge walk must get right:

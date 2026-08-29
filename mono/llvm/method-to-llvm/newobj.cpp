@@ -1,6 +1,6 @@
 #include "method-to-llvm.hpp"
+#include "analysis/operand-class.hpp"
 #include "method-symbols.hpp"
-#include "operand-class.hpp"
 #include "runtime-error.hpp"
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"

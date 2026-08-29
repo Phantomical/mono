@@ -8,7 +8,7 @@
 #include "compile-state.hpp"
 #include "method-symbols.hpp"
 #include "passes/alloc-func.hpp"
-#include "passes/strip-casts.hpp"
+#include "strip-casts.hpp"
 #include "value-walk.hpp"
 
 #include "mono/metadata/class.h"

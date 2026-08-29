@@ -6,10 +6,10 @@
 #include "promote-alloc.hpp"
 
 #include "alloc-func.hpp"
+#include "analysis/escape.hpp"
 #include "builtins.hpp"
-#include "escape.hpp"
 
-#include "operand-class.hpp"
+#include "analysis/operand-class.hpp"
 
 #include "mono/metadata/abi-details.h"
 
@@ -118,8 +118,8 @@ promote (CallInst &alloc, uint64_t bytes)
 
 	/*
 	 * The class the site named moves to the slot. `leaf_operand_class ()`
-	 * (`operand-class.cpp`) reads it off the instruction that answers with the
-	 * object, so a dispatch this object settles keeps its answer.
+	 * reads it off the instruction that answers with the object, so a
+	 * dispatch this object settles keeps its answer.
 	 */
 	if (MDNode *klass = alloc.getMetadata (exact_class_md))
 		slot->setMetadata (exact_class_md, klass);

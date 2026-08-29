@@ -4,8 +4,8 @@
  * function that makes it.
  */
 
-#ifndef MONO_LLVM_PASSES_ESCAPE_HPP
-#define MONO_LLVM_PASSES_ESCAPE_HPP
+#ifndef MONO_LLVM_ANALYSIS_ESCAPE_HPP
+#define MONO_LLVM_ANALYSIS_ESCAPE_HPP
 
 #include <llvm/ADT/STLFunctionalExtras.h>
 

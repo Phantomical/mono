@@ -1,13 +1,13 @@
 #include "inline-policy.hpp"
 
+#include "analysis/operand-class.hpp"
+#include "analysis/strip-casts.hpp"
+#include "analysis/vtable-facts.hpp"
 #include "cast-func.hpp"
 #include "compile-state.hpp"
 #include "fold-cast.hpp"
 #include "method-symbols.hpp"
-#include "operand-class.hpp"
-#include "strip-casts.hpp"
 #include "tier-counter.hpp"
-#include "vtable-facts.hpp"
 #include "vtable-func.hpp"
 
 #include "mono/metadata/abi-details.h"

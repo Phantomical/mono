@@ -1,9 +1,9 @@
 #include "fold-vtable.hpp"
 
+#include "analysis/operand-class.hpp"
+#include "analysis/vtable-facts.hpp"
 #include "builtins.hpp"
 #include "compile-state.hpp"
-#include "operand-class.hpp"
-#include "vtable-facts.hpp"
 #include "vtable-func.hpp"
 
 #include <llvm/ADT/SmallVector.h>

@@ -12,14 +12,14 @@
 
 #include "devirtualize.hpp"
 
+#include "analysis/operand-class.hpp"
+#include "analysis/value-walk.hpp"
 #include "builtins.hpp"
 #include "compile-state.hpp"
 #include "direct-call.hpp"
 #include "method-symbols.hpp"
-#include "operand-class.hpp"
 #include "runtime/naming.hpp"
 #include "runtime/options.hpp"
-#include "value-walk.hpp"
 #include "vtable-func.hpp"
 
 #include "mini.h"

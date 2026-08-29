@@ -520,6 +520,10 @@ as well as by `amd64.hpp`, so it holds nothing but `#define`s.
   the optimizer settled. `top-down-inline` is tier 2's cost model and `inline-copies`
   the sweep behind it. `eh-gather` and `finally-range` are `MachineFunctionPass`es that
   emit nothing and instead fill in the side channel the EH sections are written from.
+- **`analysis/`** — what a pass asks about the IR, answering rather than rewriting.
+  `operand-class` says what class a value holds, `escape` whether an allocation's
+  pointer leaves the function, and `vtable-facts` what a class's vtable symbol
+  carries. `value-walk` and `strip-casts` are the traversals each such rule runs.
 
 Where a pass needs something only the front end knew, the front end emits a call to a
 declaration. That declaration's *name* says what the site means (`mono.array.address.*`,
@@ -738,9 +742,9 @@ primitive element exact (`isExactTypeHelper`, `vm/jitinterface.cpp`), for the re
 above. RyuJIT's class GDV is the same instrument as this pass: a method-table compare
 with the original dispatch on the arm that misses.
 
-A second rule answers where the array rule does not. `guessed_class ()`
-(`operand-class.cpp`) reads a class an allocation or an initonly static read states
-outright, reached through channels that are not proofs: a field whose object escapes
+A second rule answers where the array rule does not. `guessed_class ()` reads a class
+an allocation or an initonly static read states outright, reached through channels
+that are not proofs: a field whose object escapes
 still answers from the stores the walk can see, a merge answers where only some arms
 name a class, and the zero a fresh allocation reads is skipped. A parameter's declared
 class is refused, because a compare against a bound misses every subclass it admits.
