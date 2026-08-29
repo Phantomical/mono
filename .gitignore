@@ -155,7 +155,5 @@ external/buildscripts/build.gen.*
 
 # Working notes and helper scripts under .claude/.  The skills beside them are
 # tracked, so this names the local directories rather than the whole tree.
-/.claude/TASKS.md
-/.claude/scripts/
-/.claude/plans/
-/.claude/handoff/
+/.claude
+!/.claude/skills
