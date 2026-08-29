@@ -141,15 +141,12 @@ struct Settled {
 
 	const ValueSources &sources () const { return values.sources (&question ()); }
 
-	/// Whether the walk named every value the marked instruction can hold.
-	///
-	/// A value with a path the walk could not name stands for that path itself,
-	/// so its own presence in its set is what says the set is not all of them.
+	/// Whether the walk settled every path into the marked instruction.
 	bool complete () const { return !sources ().sources.contains (&question ()); }
 
 	/// The values the marked instruction is reached by, named the way
-	/// `answer ()` names one. The instruction itself is left out, because it is
-	/// what `complete ()` reports rather than a value the instruction holds.
+	/// `answer ()` names one. The instruction itself is left out, because
+	/// `complete ()` reports it.
 	std::vector<std::string> reached () const
 	{
 		std::vector<std::string> named;
@@ -608,10 +605,8 @@ merge:
 	EXPECT_EQ (m.reached (), (std::vector<std::string> { "null", "vtable_Bar" }));
 }
 
-/// The header store `emit_object_alloc ()` writes is what states a fresh
-/// object's class, so the read of that word forwards to it. The read carries no
-/// `!invariant.load`: MemorySSA answers such a load live-on-entry whatever
-/// stores stand in front of it, and the walk would read the allocation's zero.
+/// The read carries no `!invariant.load`. MemorySSA would put such a load in
+/// front of the header store, and the walk would read the allocation's zero.
 TEST (ConstantValuesTest, AVtableReadForwardsToTheHeaderStore)
 {
 	Settled m (R"(

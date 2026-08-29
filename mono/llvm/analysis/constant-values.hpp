@@ -26,11 +26,7 @@ class ConstantValuesSolver;
 
 /// All original source values that a later instruction could result in.
 ///
-/// A value reached by a path this walk cannot name stands for that path itself,
-/// so its own presence in its set is what says the set is not every value it
-/// holds. That is what a caller folding a rule over the set already handles: the
-/// rule reads the value, answers nothing for it, and the merge gives up. There
-/// is no second field to consult and forget.
+/// A set holds the value itself where the walk did not settle all of its paths.
 struct ValueSources {
 	llvm::SmallPtrSet<llvm::Value *, 1> sources;
 
@@ -39,8 +35,6 @@ struct ValueSources {
 	/// Reached by \p v and by nothing else.
 	explicit ValueSources (llvm::Value *v) { sources.insert (v); }
 
-	/// Whether nothing has settled here yet, which is what a value the walk
-	/// has not reached holds. Distinct from a value that stands for itself.
 	bool is_empty () const { return sources.empty (); }
 
 	/// Insert a new value into the set.
@@ -58,12 +52,12 @@ struct ValueSources {
 		return isz != sources.size ();
 	}
 
-	/// The same, with \p transform applied to each source \p other names.
+	/// The same, with \p transform applied to each of \p other's sources.
 	///
-	/// A transform answering null has no value to put here for that source, so
-	/// \p stands_for goes in instead and the set stops naming every value.
+	/// \p owner is the value this set belongs to. A transform that returns null
+	/// puts it in place of that source.
 	template<typename F>
-	bool insert (const ValueSources &other, llvm::Value *stands_for, F transform)
+	bool insert (const ValueSources &other, llvm::Value *owner, F transform)
 	{
 		if (other.is_empty ())
 			return false;
@@ -74,7 +68,7 @@ struct ValueSources {
 			llvm::Value *held = transform (source);
 
 			if (held == nullptr)
-				held = stands_for;
+				held = owner;
 
 			modified |= sources.insert (held).second;
 		}
@@ -96,10 +90,6 @@ public:
 	}
 
 	/// Every value \p inst can be reached by.
-	///
-	/// A set holding \p inst itself has a path this walk could not name, and
-	/// \p inst is what stands for it. So a caller reading a rule off each
-	/// source needs no separate test: the rule answers nothing for that one.
 	const ValueSources &sources (llvm::Value *inst) const;
 
 	/// Answered off MemorySSA, so a caller that keeps this has to drop it when

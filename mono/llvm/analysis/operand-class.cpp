@@ -480,8 +480,8 @@ field_load_values (LoadInst &load, const ConstantValues &values)
 	FieldValues answer { {}, true };
 
 	for (Value *v : from.sources) {
-		// The load stands for the path the walk could not name, so its own
-		// presence is what says these are not every value the field holds.
+		// The load is a path the walk did not settle, not a value the
+		// field holds.
 		if (v == &load) {
 			answer.complete = false;
 			continue;

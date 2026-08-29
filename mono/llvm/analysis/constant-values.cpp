@@ -97,8 +97,8 @@ value_copy_target (const CallBase &call)
 	return MemoryLocation (call.getArgOperand (0), LocationSize::precise (bytes.getZExtValue ()));
 }
 
-/// Returns \p held as a constant of type \p want, or null where it cannot be
-/// one.
+/// Returns \p held as a constant of type \p want, or null where no such
+/// constant exists.
 Constant *
 as_type (Constant *held, Type *want, const DataLayout &dl)
 {
@@ -122,28 +122,25 @@ class ConstantValuesSolver : public InstVisitor<ConstantValuesSolver, bool> {
 	const DataLayout &dl;
 	MemorySSA &mssa;
 
-	/// Maps a stored value to the loads that read it, so a load is visited
-	/// again when a store into it grows.
+	/// The loads that read each stored value.
 	DenseMap<Value *, SmallPtrSet<Value *, 2>> dependents;
 
 	/// What one load is built from.
 	struct MemoryDeps {
-		/// The value operand of each store this walk can read the load out of.
+		/// The value operand of each store that reaches the load.
 		SmallVector<Value *, 4> stored;
 
-		/// Whether a path reaches memory an allocation zeroed and nothing
-		/// here wrote, so the load reads that zero.
+		/// Whether a path reaches an allocation's zero fill with no store
+		/// over it.
 		bool zeroed = false;
 
-		/// Whether a path reaches a write this analysis cannot read, or
-		/// memory nothing here promises anything about.
 		bool opaque = false;
 	};
 
 	DenseMap<LoadInst *, MemoryDeps> memory_deps;
 
-	/// Alias analysis for the whole pre-pass, because a BatchAAResults caches
-	/// what it is asked and one built per load throws that cache away.
+	/// Built once for the pre-pass. BatchAAResults caches its queries, and one
+	/// per load discards that cache.
 	std::optional<BatchAAResults> aa;
 
 	llvm::DenseMap<llvm::Value *, ValueSources> sources;
@@ -184,9 +181,8 @@ public:
 		for (llvm::Argument &arg : f.args ())
 			sources.try_emplace (&arg, ValueSources (&arg));
 
-		// Backwards, because scc_begin () enumerates in reverse topological
-		// order: it hands back the exits first and the entry block last. A
-		// value has to settle before the values built from it are read.
+		// scc_begin () enumerates in reverse topological order, entry block
+		// last.
 		for (const SCC &scc : llvm::reverse (sccs)) {
 			const auto &blocks = scc.blocks;
 
@@ -227,8 +223,8 @@ public:
 					queue.push_back (inst);
 				}
 
-				// A load reads a store's value operand while being a use of
-				// neither, so the loop above never reaches one.
+				// The loop above misses a load, which is not a use of the
+				// value operand it reads.
 				auto reads = dependents.find (inst);
 				if (reads == dependents.end ())
 					continue;
@@ -285,8 +281,7 @@ public:
 
 	bool visitFreezeInst (llvm::FreezeInst &inst)
 	{
-		// A freeze answers with one value of its own choosing, and no value
-		// here names which, so it stands for itself.
+		// A freeze of undef takes one value of its own choosing.
 		return uses (&inst, inst.getOperand (0), [&] (llvm::Value *v) -> llvm::Value * {
 			if (llvm::isa<llvm::UndefValue> (v))
 				return nullptr;
@@ -302,8 +297,7 @@ public:
 		for (Instruction &at : instructions (f)) {
 			auto *load = dyn_cast<LoadInst> (&at);
 
-			// An atomic or volatile load reads memory this function does
-			// not own, so no store here says what it answers.
+			// An atomic or volatile load can change outside this function.
 			if (load == nullptr || !load->isSimple ())
 				continue;
 
@@ -316,19 +310,16 @@ public:
 		}
 	}
 
-	/// Records what \p load reads out of the allocation it was made from, on
-	/// the path where nothing in this function has written it.
+	/// Records what \p load reads where no store in this function reaches it.
 	void reached_unwritten (LoadInst &load, MemoryDeps &deps)
 	{
 		SmallVector<const Value *, 4> objects;
 
-		// The plural form, because it crosses a merge: a load off a phi of
-		// two allocations has each of them answer for itself.
+		// The plural form crosses a phi, where getUnderlyingObject () stops.
 		getUnderlyingObjects (load.getPointerOperand (), objects);
 
 		for (const Value *object : objects) {
-			// Loading through a null pointer is UB, so no path that does
-			// it reaches an answer.
+			// Loading through a null pointer is UB.
 			if (isa<ConstantPointerNull> (object))
 				continue;
 
@@ -419,10 +410,8 @@ public:
 			step_past ();
 		}
 
-		// A walk that every arm led back into itself reads no write at all,
-		// which is not the same as reading that nothing writes here. Left
-		// alone, such a load answers with a set naming no value and claiming
-		// to hold them all.
+		// A cyclic MemoryPhi can end the walk before it records a store. An
+		// empty set here reads as a field with no values in it.
 		if (deps.stored.empty () && !deps.zeroed)
 			deps.opaque = true;
 
@@ -433,8 +422,7 @@ public:
 	{
 		auto found = memory_deps.find (&load);
 
-		// The only load with no entry is one gather_memory_deps () passed
-		// over: atomic or volatile, so nothing here says what it reads.
+		// gather_memory_deps () passes over an atomic or volatile load.
 		if (found == memory_deps.end ())
 			return unknown (&load);
 
@@ -455,8 +443,7 @@ public:
 
 	bool visitInstruction (llvm::Instruction &inst)
 	{
-		// A void instruction is an operand of nothing, so settling one answers
-		// no question and costs an entry.
+		// A void instruction is nobody's operand.
 		if (inst.getType ()->isVoidTy ())
 			return false;
 
@@ -518,9 +505,7 @@ private:
 		return set.insert (it->getSecond (), inst, std::move (transform));
 	}
 
-	/// These three keep the address and change the type, so what reaches the
-	/// cast is what reaches its operand. Every other cast computes a value of
-	/// its own and is left to the fold in visitInstruction ().
+	/// Looks through a cast that keeps the address and changes only the type.
 	bool casts (llvm::Instruction &inst, llvm::Instruction::CastOps op)
 	{
 		return uses (&inst, inst.getOperand (0), [&] (llvm::Value *v) -> llvm::Value * {
@@ -533,10 +518,7 @@ private:
 		});
 	}
 
-	/// Records that \p inst is reached by a path this walk cannot name.
-	///
-	/// \p inst is what stands for that path, so a caller reading a rule off
-	/// each source finds one it can say nothing about and gives up there.
+	/// Records \p inst as its own source, for a path the walk did not settle.
 	bool unknown (llvm::Instruction *inst)
 	{
 		ValueSources &set = sources.try_emplace (inst).first->getSecond ();
@@ -551,8 +533,8 @@ private:
 	bool forwards (llvm::LoadInst &load, llvm::Value *stored)
 	{
 		return uses (&load, stored, [&] (llvm::Value *held) -> llvm::Value * {
-			// Only a constant is written back where the caller asked, so
-			// only a constant needs the type it asked with.
+			// Only a constant is written back into the IR under the
+			// load's type.
 			auto c = llvm::dyn_cast<llvm::Constant> (held);
 
 			if (c == nullptr)
@@ -583,7 +565,6 @@ private:
 	}
 };
 
-/// What a value this walk never reached answers with: nothing settled.
 static const ValueSources nothing;
 
 const ValueSources &
