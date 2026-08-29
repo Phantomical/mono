@@ -571,6 +571,12 @@ private:
 	size_t offset = 0;
 	size_t ip = 0;
 
+	/// The IL offset the count below belongs to, and how many checks that offset has
+	/// asked for. next_check_index () restarts the count at each new offset, so an
+	/// index names one check of an instruction rather than one check of the body.
+	size_t check_site = 0;
+	unsigned checks_at_site = 0;
+
 	/// The compile's debug info, and this function's scope within it. The map a
 	/// stack trace reads back is built from the locations these stamp on the
 	/// emitted instructions. Both are null when the caller wants none.
@@ -818,6 +824,8 @@ private:
 	void mark_for_tier2_instrumentation ();
 	llvm::Error seed_handler_entry_stacks (MonoIrBuilder &builder);
 	llvm::BasicBlock *create_cold_block (const llvm::Twine &name);
+	static std::string il_label (size_t offset);
+	unsigned next_check_index ();
 	llvm::AllocaInst *entry_alloca (llvm::Type *type, const llvm::Twine &name);
 	llvm::AllocaInst *spill_slot (size_t depth, llvm::Type *type);
 	std::vector<Slot> spill_stack (MonoIrBuilder &builder);

@@ -157,12 +157,8 @@ MethodLLVMEmitter::unsupported_il (const llvm::Twine &what)
 	std::string where = disassemble_one (method, offset);
 	ERROR_DECL (error);
 
-	if (where.empty ()) {
-		char buffer[16];
-
-		g_snprintf (buffer, sizeof (buffer), "IL_%04x", static_cast<unsigned> (offset));
-		where = buffer;
-	}
+	if (where.empty ())
+		where = il_label (offset);
 
 	mono_error_set_execution_engine (error, "Cannot translate %s: %s: %s", name,
 	                                 where.c_str (), what.str ().c_str ());

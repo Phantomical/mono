@@ -394,6 +394,17 @@ MethodLLVMEmitter::Flow::falls_through () const
 	}
 }
 
+/// Formats an IL offset the way a block name and a diagnostic both print it,
+/// "IL_0012".
+std::string
+MethodLLVMEmitter::il_label (size_t offset)
+{
+	char name[16];
+
+	g_snprintf (name, sizeof (name), "IL_%04x", static_cast<unsigned> (offset));
+	return name;
+}
+
 /// Find every offset a block starts at and give each one an empty LLVM block.
 ///
 /// A block starts where something branches to it, and after anything that does not
@@ -450,13 +461,11 @@ MethodLLVMEmitter::find_block_leaders ()
 			continue;
 
 		Block &block = blocks[leader];
-		char name[16];
 
 		if (block.block != nullptr)
 			continue;
 
-		g_snprintf (name, sizeof (name), "IL_%04x", static_cast<unsigned> (leader));
-		block.block = llvm::BasicBlock::Create (context (), name, function);
+		block.block = llvm::BasicBlock::Create (context (), il_label (leader), function);
 	}
 
 	mark_reachable_blocks ();
@@ -1982,14 +1991,30 @@ MethodLLVMEmitter::emit_throw_corlib_exception (MonoIrBuilder &builder, const ch
 	                     { builder.getInt32 (token) });
 }
 
+/// Numbers the checks one instruction asks for, from zero at each instruction.
+unsigned
+MethodLLVMEmitter::next_check_index ()
+{
+	if (check_site != offset) {
+		check_site = offset;
+		checks_at_site = 0;
+	}
+
+	return checks_at_site++;
+}
+
 /// Throw the corlib exception `name` when `condition` holds, and go on emitting into
 /// the block where it did not.
 llvm::BranchInst *
 MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
                                         const char *name)
 {
-	llvm::BasicBlock *throw_bb = create_cold_block (llvm::Twine ("throw_") + name);
-	llvm::BasicBlock *next_bb = llvm::BasicBlock::Create (context (), "no_throw", function);
+	std::string site = il_label (offset) + ".";
+	std::string index = "." + std::to_string (next_check_index ());
+
+	llvm::BasicBlock *throw_bb = create_cold_block (site + "throw_" + name + index);
+	llvm::BasicBlock *next_bb =
+		llvm::BasicBlock::Create (context (), site + "no_throw" + index, function);
 	llvm::BranchInst *branch = builder.CreateCondBr (condition, throw_bb, next_bb);
 
 	// These guards sit in the fallthrough path of ordinary arithmetic, so this states
