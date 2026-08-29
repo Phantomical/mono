@@ -31,8 +31,18 @@ public:
 
 	void tooManyUses () override { escaped = true; }
 
-	Action captured (const Use *use, UseCaptureInfo) override
+	Action captured (const Use *use, UseCaptureInfo info) override
 	{
+		/*
+		 * Only provenance is a way to the object. A use that learns the
+		 * address alone, such as a compare against null, says where the
+		 * object is and gives nothing that can read it. The walk follows the
+		 * result as well, because a use that hands the pointer back through
+		 * its return value carries the provenance there.
+		 */
+		if (!capturesAnything (info.UseCC & CaptureComponents::Provenance))
+			return Continue;
+
 		auto *store = dyn_cast<StoreInst> (use->getUser ());
 
 		// Operand zero is the value a store writes, which is where our
