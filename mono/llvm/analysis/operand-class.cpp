@@ -9,7 +9,7 @@
 #include "method-symbols.hpp"
 #include "passes/alloc-func.hpp"
 #include "strip-casts.hpp"
-#include "value-walk.hpp"
+#include "constant-values.hpp"
 
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
@@ -287,10 +287,6 @@ allocation_class (const CallBase &site)
 	return klass;
 }
 
-/// The class \p v answers on its own, without looking through a `PHINode` or
-/// a `SelectInst`. This is the class marked on \p v, the class an initonly
-/// static read off it settles, the class an allocation site names through its
-/// vtable operand, or the class its parameter type bounds it with.
 std::pair<MonoClass *, bool>
 leaf_operand_class (const Value *v, const Function &f)
 {
@@ -338,22 +334,16 @@ leaf_operand_class (const Value *v, const Function &f)
 }
 
 /*
- * Below is the class rule `value-walk.hpp` runs. `operand_class ()`,
- * `exact_class ()` and `guessed_class ()` are each one call into that walk,
- * each under its own `ClassRule`.
- *
- * A load reaching a matching store joins the walk as a third kind of merge
- * node, beside a phi and a select: `matching_field_stores ()` below gives it
- * arms of its own, one value per store plus a trailing null for the field's
- * zero-filled initial value. The walk's cycle rule covers a store that names
- * the load back, directly or through another merge.
+ * Below are the three class queries. Each folds `leaf_operand_class ()` over
+ * the values `MonoConstantValues` says reach the operand, and they differ only
+ * in how they read a null source and an incomplete set.
  */
 
-/// How strong an answer the caller needs, which is what decides how the class
-/// rule below treats a path it cannot see the end of.
+/// How strong an answer the caller needs, which is what decides how the rule
+/// below reads a path it cannot see the end of.
 enum class ClassRule {
-	/// The answer has to hold on every path, and a null is one of the values a
-	/// path can carry. `operand_class ()`.
+	/// The answer has to hold on every path, and a null is one of the values
+	/// a path can carry. `operand_class ()`.
 	settled,
 
 	/// The caller dereferences the answer, so a null path faults in front of
@@ -361,477 +351,56 @@ enum class ClassRule {
 	dereferenced,
 
 	/// The caller compares against the answer before it acts on it, so a path
-	/// this walk was wrong about costs it nothing. `guessed_class ()`.
+	/// this was wrong about costs it nothing. `guessed ()`.
 	guessed,
 };
 
-/// Whether \p rule lets a null skip rather than settle the answer at no class.
-bool
-skips_null (ClassRule rule)
+/// Reads the class \p v holds under \p rule, and whether that is the class it
+/// is rather than a bound on it. No class where nothing settles one.
+std::pair<MonoClass *, bool>
+class_of (Value *v, const Function &f, ClassRule rule, const ConstantValues &values)
 {
-	return rule != ClassRule::settled;
-}
+	const ValueSources &from = values.sources (v);
+	std::pair<MonoClass *, bool> agreed { nullptr, false };
+	bool constrained = false;
 
-/// The stores a walk over one object's uses found, and whether the object
-/// stays inside that walk. `field_stores_reaching ()` below fills both in.
-struct ReachingStores {
-	SmallVector<StoreInst *, 4> stores;
-	bool complete;
-};
+	// A set the walk could not close leaves out a value the operand can hold,
+	// which only a caller that compares before it acts can pay for.
+	if (!from.complete && rule != ClassRule::guessed)
+		return { nullptr, false };
 
-/// Bounds how many uses of one allocation `field_stores_reaching ()` below
-/// visits, so a large use graph costs a compile only a small, fixed amount of
-/// work.
-constexpr unsigned field_use_walk_budget = 128;
+	for (const Value *source : from.sources) {
+		if (rule != ClassRule::settled && isa<ConstantPointerNull> (source))
+			continue;
 
-/// Bounds how many distinct allocations one field load's base can resolve
-/// to, so a wide merge of objects still costs a compile only a small, fixed
-/// amount of work. `resolve_base_candidates ()` below refuses outright once
-/// this is reached, rather than settling for a partial set: a candidate set
-/// this walk could not finish enumerating is not one `field_stores_reaching
-/// ()` can be run over completely either.
-constexpr unsigned base_candidate_cap = 8;
-
-/// \p site cannot write through the pointer at \p arg_no. This reads what
-/// the call states about itself. It does not read the name of the callee.
-///
-/// `CallBase::onlyReadsMemory (OpNo)` reads only the parameter attributes
-/// `readonly` and `readnone`. It does not read the callee's own
-/// `MemoryEffects`. A call can state at the function level that argument
-/// memory is read-only, with no attribute on the parameter itself.
-/// `onlyReadsMemory` then answers false for that call. Checking
-/// `getMemoryEffects ().getModRef (IRMemLocation::ArgMem)` as well catches
-/// that case. Either check on its own is enough.
-bool
-cannot_write_through (const CallBase &site, unsigned arg_no)
-{
-	if (site.onlyReadsMemory (arg_no))
-		return true;
-
-	ModRefInfo arg_effect = site.getMemoryEffects ().getModRef (IRMemLocation::ArgMem);
-
-	return !isModSet (arg_effect);
-}
-
-/// Every store that writes through \p base, followed across a
-/// getelementptr with constant indices and across a phi or a select that
-/// renames \p base without computing a new address, or nothing where some
-/// other use of \p base makes that unsafe to answer. Every name this walk
-/// followed with no getelementptr in between - \p base itself, and every phi
-/// or select it renamed through - is appended to \p aliases, because a store
-/// found through one of those names is a write through \p base at the same
-/// offset a store found through \p base itself would be.
-///
-/// A refusal covers four uses. One is a store of \p base itself into memory.
-/// Another is a getelementptr with an index this cannot read at compile
-/// time. Another is a conversion such as `ptrtoint`: a store this walk never
-/// sees can turn the integer back into a pointer and write through it. The
-/// last is a call argument the call can write through, or keep past the call
-/// returning. Each of these lets code outside this walk reach the object, or
-/// reach a field this walk cannot rule out as the one \p base's caller is
-/// asking about.
-///
-/// Two other uses are safe, and this walk does not follow past either one. A
-/// pointer compare writes nothing and answers an `i1`. It is not a route by
-/// which the object is written. A call argument is also safe when this walk
-/// can prove two things about the call: it does not write through the
-/// pointer, and it does not keep the pointer past the call returning. The
-/// write barrier every reference-field store carries meets both conditions.
-///
-/// `PointerMayBeCaptured ()` answers only the second condition: whether a
-/// pointer stays alive past the call it is passed to. A `captures(none)`
-/// argument is not kept, and the callee can still write through it for the
-/// length of the call. `cannot_write_through ()` above is the separate check
-/// this function still needs for the first condition.
-///
-/// A phi or a select renaming \p base can cycle back to a name this walk
-/// already holds - `resolve_base_candidates ()` above resolves a base
-/// through exactly such a cycle. Revisiting a phi or a select this walk has
-/// already queued contributes nothing rather than refusing the whole
-/// answer: every use it has was already queued the first time it was
-/// reached, the same rule the class walk's own cycle rule rests on.
-///
-/// A refused use clears `complete` and the walk carries on over the rest.
-/// The stores it still collects are then a subset of what the field can
-/// hold, which is what a guessed answer wants and what a settled one has to
-/// throw away. Carrying on is also what makes that subset worth having: a
-/// walk that stopped at the first refusal would leave `aliases` half filled,
-/// so which stores it had found would depend on the order the uses came in.
-/// A spent budget stops the walk all the same, because it bounds the work
-/// rather than describing the object.
-ReachingStores
-field_stores_reaching (Value *base, SmallPtrSetImpl<Value *> &aliases)
-{
-	ReachingStores found { {}, true };
-	SmallVector<Value *, 8> work { base };
-	SmallPtrSet<Value *, 16> seen { base };
-	unsigned budget = field_use_walk_budget;
-
-	aliases.insert (base);
-
-	while (!work.empty ()) {
-		Value *v = work.pop_back_val ();
-
-		for (Use &use : v->uses ()) {
-			User *user = use.getUser ();
-
-			if (isa<PHINode> (user) || isa<SelectInst> (user)) {
-				if (!seen.insert (user).second)
-					continue;
-
-				if (budget == 0) {
-					found.complete = false;
-					return found;
-				}
-				--budget;
-
-				aliases.insert (user);
-				work.push_back (user);
-				continue;
-			}
-
-			// A user that names v twice is seen twice. Only the first of the
-			// two uses is read below, so the second one is a use this walk
-			// did not clear rather than one it can skip: a call can take the
-			// same pointer as an argument it keeps and an argument it does
-			// not.
-			if (!seen.insert (user).second) {
-				found.complete = false;
-				continue;
-			}
-
-			if (budget == 0) {
-				found.complete = false;
-				return found;
-			}
-			--budget;
-
-			if (const auto *gep = dyn_cast<GEPOperator> (user)) {
-				if (!gep->hasAllConstantIndices ()) {
-					found.complete = false;
-					continue;
-				}
-				work.push_back (user);
-				continue;
-			}
-
-			if (const auto *load = dyn_cast<LoadInst> (user)) {
-				if (load->getPointerOperand () != v)
-					found.complete = false;
-				continue;
-			}
-
-			if (isa<ICmpInst> (user))
-				continue;
-
-			if (auto *call = dyn_cast<CallBase> (user)) {
-				// `use` names v itself as an operand, so this covers both a
-				// data argument and the callee operand of an indirect call
-				// through v. Only the former is safe to skip past. The write
-				// barrier passes the field address as a plain argument.
-				// Nothing calls through a field's own address.
-				if (!call->isArgOperand (&use)) {
-					found.complete = false;
-					continue;
-				}
-
-				unsigned arg_no = call->getArgOperandNo (&use);
-
-				if (!call->doesNotCapture (arg_no)
-				    || !cannot_write_through (*call, arg_no))
-					found.complete = false;
-
-				continue;
-			}
-
-			auto *store = dyn_cast<StoreInst> (user);
-
-			if (store == nullptr) {
-				found.complete = false;
-				continue;
-			}
-
-			// A store of the object itself into memory hands it to code this
-			// walk cannot see. The LINQ iterators reach each other this way,
-			// each cached in the next one's field.
-			if (store->getPointerOperand () != v) {
-				found.complete = false;
-				continue;
-			}
-
-			found.stores.push_back (store);
-		}
-	}
-
-	return found;
-}
-
-SmallVector<const Value *, 4>
-matching_field_stores (const LoadInst &load, ClassRule rule,
-                       SmallPtrSetImpl<const Value *> &visiting, unsigned &budget,
-                       bool *complete = nullptr);
-
-/// Resolves \p v to the allocation call sites a field load's base can name,
-/// appending each to \p out once. Answers false where \p v cannot be
-/// resolved this way, in which case \p out must be discarded rather than
-/// treated as partial.
-///
-/// \p v is an allocation call (the one candidate for itself), a `PHINode` or
-/// a `SelectInst` (every value it merges resolves in turn), or a `LoadInst`
-/// (every value `matching_field_stores ()` finds for the field it reads
-/// resolves in turn, which makes the two functions mutually recursive). This
-/// is what settles a base that mixes a load in with a phi or a select.
-///
-/// A candidate this arm alone reaches still fails later, at
-/// `field_stores_reaching ()` below. The field held the candidate because
-/// some store put it there, and that store's *value* operand is the
-/// candidate itself - the same shape `field_stores_reaching ()` refuses a
-/// direct base under, so it refuses this candidate on sight too.
-/// `OperandClassTest
-/// .LoadThroughALoadAsBaseAnswersNoClassBecauseTheDiscoveryStoreEscapes`
-/// gates that this is the answer, and not a missed case.
-///
-/// A null constant is skipped rather than refused: this file has two rules
-/// for a null merge arm (`operand_class ()`'s and `exact_class ()`'s, both
-/// in the header), and the one that applies here is `exact_class ()`'s,
-/// because a base is always about to be dereferenced. The load whose class
-/// this resolution is for only runs to completion, and hands its answer to
-/// a caller, on a path where every base it was computed from was non-null -
-/// a null one would have faulted at the dereference that used it, on the
-/// same path, before this load ran at all. Every other unresolved value
-/// refuses the whole resolution.
-///
-/// \p visiting and \p budget are the class walk's own. A `PHINode`, a
-/// `SelectInst` and a `LoadInst` each spend the shared budget the way a phi
-/// or a select does in `walk_operand_class ()`, and a value already on the
-/// walk's call stack - this function's own or the class walk's - answers
-/// true with nothing added to \p out rather than being visited again. That
-/// is sound for the reason the class walk's own cycle rule is: an
-/// allocation reachable only by going around the cycle is already reachable
-/// by the path that first walked into it.
-bool
-resolve_base_candidates (Value *v, ClassRule rule, SmallVectorImpl<CallBase *> &out,
-                         SmallPtrSetImpl<const Value *> &visiting, unsigned &budget)
-{
-	v = const_cast<Value *> (strip_casts (v));
-
-	if (isa<ConstantPointerNull> (v) || visiting.count (v))
-		return true;
-
-	if (auto *call = dyn_cast<CallBase> (v)) {
-		if (allocation_class (*call) == nullptr)
-			return false;
-
-		for (CallBase *seen : out)
-			if (seen == call)
-				return true;
-
-		if (out.size () >= base_candidate_cap)
-			return false;
-
-		out.push_back (call);
-		return true;
-	}
-
-	auto *phi = dyn_cast<PHINode> (v);
-	auto *select = phi == nullptr ? dyn_cast<SelectInst> (v) : nullptr;
-	auto *load = phi == nullptr && select == nullptr ? dyn_cast<LoadInst> (v) : nullptr;
-
-	if (phi == nullptr && select == nullptr && load == nullptr)
-		return false;
-
-	if (budget == 0)
-		return false;
-
-	--budget;
-	visiting.insert (v);
-
-	bool ok = true;
-
-	if (phi != nullptr) {
-		for (Value *incoming : phi->incoming_values ()) {
-			if (!resolve_base_candidates (incoming, rule, out, visiting, budget)) {
-				ok = false;
-				break;
-			}
-		}
-	} else if (select != nullptr) {
-		ok = resolve_base_candidates (select->getTrueValue (), rule, out, visiting, budget)
-		     && resolve_base_candidates (select->getFalseValue (), rule, out, visiting,
-		                                 budget);
-	} else {
-		SmallVector<const Value *, 4> stores =
-			matching_field_stores (*load, rule, visiting, budget);
-
-		if (stores.empty ())
-			ok = false;
-
-		for (const Value *stored : stores) {
-			if (!resolve_base_candidates (const_cast<Value *> (stored), rule, out,
-			                              visiting, budget)) {
-				ok = false;
-				break;
-			}
-		}
-	}
-
-	visiting.erase (v);
-	return ok;
-}
-
-/// The values stored into the field \p load reads, where \p load reads a
-/// constant-offset field of one or more allocations `resolve_base_candidates
-/// ()` above resolves \p load's base to, plus a trailing null standing for
-/// the field's initial value. Empty where \p load answers to none of that,
-/// in which case the caller falls back to the ordinary leaf answer for a
-/// load with no mark of its own.
-///
-/// Under `ClassRule::settled` and `ClassRule::dereferenced` every resolved
-/// candidate has to clear `field_stores_reaching ()` below: one candidate
-/// this compile cannot rule out as written from outside makes the whole
-/// answer empty, because the stores gathered from the rest would no longer
-/// be every store the field can see. `ClassRule::guessed` takes those stores
-/// all the same and reports through \p complete that they are a subset.
-///
-/// `mono.alloc.object` zero-fills what it allocates, so the field reads null
-/// until a store runs. A load a store does not dominate, or a load reached on
-/// a path where no store to this field ran first, still reads that null. The
-/// null this appends stands for that path, and it needs no dominance or
-/// reachability proof of its own: `merged_class ()` already settles a merge
-/// with a null arm the same way for a phi, by the same rule `exact_class ()`
-/// and `operand_class ()` split on. `exact_class ()` skips the null, because
-/// its caller dereferences the answer and the null path faults first.
-/// `operand_class ()` does not skip it, which is right here too: a type test
-/// on this field must see null as an answer the allocation can still give.
-SmallVector<const Value *, 4>
-matching_field_stores (const LoadInst &load, ClassRule rule,
-                       SmallPtrSetImpl<const Value *> &visiting, unsigned &budget,
-                       bool *complete)
-{
-	const DataLayout &dl = load.getModule ()->getDataLayout ();
-	Value *address = const_cast<Value *> (load.getPointerOperand ());
-	APInt offset (64, 0);
-	Value *base =
-		address->stripAndAccumulateConstantOffsets (dl, offset, /*AllowNonInbounds=*/true);
-
-	SmallVector<CallBase *, 4> candidates;
-
-	if (!resolve_base_candidates (base, rule, candidates, visiting, budget)
-	    || candidates.empty ()) {
-		if (complete != nullptr)
-			*complete = false;
-		return {};
-	}
-
-	SmallVector<const Value *, 4> matching;
-
-	for (CallBase *candidate : candidates) {
-		SmallPtrSet<Value *, 8> aliases;
-		ReachingStores found = field_stores_reaching (candidate, aliases);
-
-		if (!found.complete) {
-			if (complete != nullptr)
-				*complete = false;
-			if (rule != ClassRule::guessed)
-				return {};
-		}
-
-		for (StoreInst *store : found.stores) {
-			APInt at (64, 0);
-			Value *store_base = store->getPointerOperand ()->stripAndAccumulateConstantOffsets (
-				dl, at, /*AllowNonInbounds=*/true);
-
-			if (aliases.count (store_base) && at == offset)
-				matching.push_back (store->getValueOperand ());
-		}
-	}
-
-	if (!matching.empty ())
-		matching.push_back (ConstantPointerNull::get (cast<PointerType> (load.getType ())));
-
-	return matching;
-}
-
-/// Reads a class off one value and merges two class answers. `walk_value ()`
-/// (`value-walk.hpp`) runs this rule over the merges in front of a value.
-class ClassWalk {
-public:
-	using Answer = std::pair<MonoClass *, bool>;
-
-	ClassWalk (const Function &f, ClassRule rule) : f (f), rule (rule) {}
-
-	bool skips_null () const { return mono::skips_null (rule); }
-
-	Answer exhausted () const { return no_class (); }
-
-	std::optional<Answer> leaf (const Value *v) const
-	{
-		Answer got = leaf_operand_class (v, f);
+		std::pair<MonoClass *, bool> held = leaf_operand_class (source, f);
 
 		// A guess names a class this function saw an object made under. A
 		// parameter's declared class is a bound instead, so a compare
 		// against it misses every subclass the slot admits.
-		if (rule == ClassRule::guessed && !got.second)
-			return std::nullopt;
+		if (rule == ClassRule::guessed && !held.second)
+			continue;
 
-		return got;
-	}
-
-	/// Gives a load the values that reach the field it reads. Empty for every
-	/// other value.
-	SmallVector<const Value *, 4> arms (const Value *v, WalkState &state) const
-	{
-		const auto *load = dyn_cast<LoadInst> (v);
-
-		if (load == nullptr)
-			return {};
-
-		return matching_field_stores (*load, rule, state.visiting, state.budget);
-	}
-
-	/// Folds one arm into \p acc. Returns false, and settles the merge at no
-	/// class, when an arm names no class itself or when two arms disagree.
-	bool fold (std::optional<Answer> &acc, Answer arm) const
-	{
-		if (arm.first == nullptr) {
-			// A guess is one arm of a compare the caller writes, so an arm
-			// with no class is one more path that compare covers. Skip it
-			// rather than settle the merge.
+		if (held.first == nullptr) {
+			// A guess is one arm of a compare the caller writes, so a
+			// source with no class is one more path that compare covers.
 			if (rule == ClassRule::guessed)
-				return true;
+				continue;
 
-			acc = no_class ();
-			return false;
+			return { nullptr, false };
 		}
 
-		// Two arms that name two classes still settle the merge. One compare
-		// picks one class, and picking either leaves the other arm's whole
-		// count on the dispatch.
-		if (acc && acc->first != arm.first) {
-			acc = no_class ();
-			return false;
-		}
+		// Two sources that name two classes settle nothing. One compare
+		// picks one class, and picking either leaves the other's whole count
+		// on the dispatch.
+		if (constrained && agreed.first != held.first)
+			return { nullptr, false };
 
-		acc = Answer{ arm.first, (!acc || acc->second) && arm.second };
-		return true;
+		agreed = { held.first, (!constrained || agreed.second) && held.second };
+		constrained = true;
 	}
 
-private:
-	static Answer no_class () { return { nullptr, false }; }
-
-	const Function &f;
-	ClassRule rule;
-};
-
-/// Reads the class \p v holds under \p rule, and whether that is the class it
-/// is rather than a bound on it. No class where the walk found none.
-std::pair<MonoClass *, bool>
-class_of (const Value *v, const Function &f, ClassRule rule)
-{
-	ClassWalk walk (f, rule);
-	WalkState state;
-
-	return walk_value (v, walk, state).value_or (std::make_pair (nullptr, false));
+	return agreed;
 }
 
 } // namespace
@@ -863,15 +432,21 @@ mark_parameter_classes (Function &f, ArrayRef<std::pair<unsigned, MonoClass *>> 
 }
 
 std::pair<MonoClass *, bool>
-operand_class (const Value *v, const Function &f)
+stated_class (const Value *v, const Function &f)
 {
-	return class_of (v, f, ClassRule::settled);
+	return leaf_operand_class (strip_casts (v), f);
+}
+
+std::pair<MonoClass *, bool>
+operand_class (Value *v, const Function &f, const ConstantValues &values)
+{
+	return class_of (v, f, ClassRule::settled, values);
 }
 
 MonoClass *
-exact_class (const Value *v, const Function &f)
+exact_class (Value *v, const Function &f, const ConstantValues &values)
 {
-	auto [klass, exact] = class_of (v, f, ClassRule::dereferenced);
+	auto [klass, exact] = class_of (v, f, ClassRule::dereferenced, values);
 
 	if (klass == nullptr || exact)
 		return klass;
@@ -897,24 +472,27 @@ exact_class (const Value *v, const Function &f)
 }
 
 MonoClass *
-guessed_class (const Value *v, const Function &f)
+guessed_class (Value *v, const Function &f, const ConstantValues &values)
 {
 	// Every leaf this rule reads answers exactly, so a merge of them does too.
-	return class_of (v, f, ClassRule::guessed).first;
+	return class_of (v, f, ClassRule::guessed, values).first;
 }
 
 FieldValues
-field_load_values (const LoadInst &load)
+field_load_values (LoadInst &load, const ConstantValues &values)
 {
-	SmallPtrSet<const Value *, 8> visiting { &load };
-	unsigned budget = merge_walk_budget;
-	FieldValues answer { {}, true };
-	SmallVector<const Value *, 4> stores = matching_field_stores (
-		load, ClassRule::guessed, visiting, budget, &answer.complete);
+	const ValueSources &from = values.sources (&load);
+	FieldValues answer { {}, from.complete };
 
-	for (const Value *v : stores)
+	// A load nothing forwarded is reached by itself, which names no value the
+	// field holds.
+	if (from.sources.size () == 1 && from.sources.count (&load) != 0)
+		return { {}, false };
+
+	for (Value *v : from.sources) {
 		if (!isa<ConstantPointerNull> (v))
 			answer.values.push_back (v);
+	}
 
 	return answer;
 }

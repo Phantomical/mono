@@ -30,6 +30,8 @@ typedef struct _MonoMethod MonoMethod;
 
 namespace mono {
 
+class ConstantValues;
+
 /// The method in slot \p index of \p klass's vtable that a caller can name
 /// directly, or null where it cannot name what stands there.
 ///
@@ -44,7 +46,7 @@ MonoMethod *slot_target (MonoClass *klass, int32_t index);
 /// What it needs of the running compile it reads from current_compile ()
 /// (compile-state.hpp), and it asks mono for the rest. Outside a compile it
 /// leaves every site alone.
-bool fold_dispatch_sites (llvm::Function &f);
+bool fold_dispatch_sites (llvm::Function &f, const ConstantValues &values);
 
 /// Sends each dispatch on an array receiver through a compare of that
 /// receiver's vtable against the array class its slot is declared with. The

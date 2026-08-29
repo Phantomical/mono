@@ -10,6 +10,7 @@
 
 #include "fold-cast.hpp"
 
+#include "analysis/constant-values.hpp"
 #include "analysis/operand-class.hpp"
 #include "analysis/strip-casts.hpp"
 #include "builtins.hpp"
@@ -160,44 +161,33 @@ answer_with (CallBase *site, Value *value)
 /**
  * How a test against \p target comes out for every value \p v can be.
  *
- * A phi and a select each name more than one value, and the answer is theirs
- * only where all of them agree. A null arm agrees with either answer, because
- * both rewrites leave null where the operand is null.
+ * The answer is settled only where every value reaching \p v agrees. Two of
+ * them can name two classes and still agree, which is why this folds the answer
+ * over the sources rather than reading the one class they settle to.
  *
- * \p seen holds the values this walk is already inside. A phi in a loop names
- * itself, and the values a self-reference stands for are the ones its other
- * arms already put in, so leaving it out changes no answer.
+ * A null source agrees with either answer, because both rewrites leave null
+ * where the operand is null.
  */
 CastAnswer
-answer_for (const Value *v, MonoClass *target, const Function &f,
-            SmallPtrSetImpl<const Value *> &seen)
+answer_for (Value *v, MonoClass *target, const Function &f,
+            const ConstantValues &values)
 {
-	v = strip_casts (v);
+	const ValueSources &from_v = values.sources (v);
 
-	SmallVector<const Value *, 4> arms;
-
-	if (const auto *phi = dyn_cast<PHINode> (v))
-		arms.append (phi->incoming_values ().begin (), phi->incoming_values ().end ());
-	else if (const auto *select = dyn_cast<SelectInst> (v))
-		arms = { select->getTrueValue (), select->getFalseValue () };
-
-	if (arms.empty ()) {
-		std::pair<MonoClass *, bool> held = operand_class (v, f);
-
-		return cast_answer (target, held.first, held.second);
-	}
-
-	if (!seen.insert (v).second)
+	// A set that does not name every value it stands for has values this fold
+	// never weighs, and one of those is free to answer the other way.
+	if (!from_v.complete)
 		return CastAnswer::Unknown;
 
 	CastAnswer agreed = CastAnswer::Unknown;
 	bool constrained = false;
 
-	for (const Value *arm : arms) {
-		if (isa<ConstantPointerNull> (strip_casts (arm)))
+	for (Value *from : from_v.sources) {
+		if (isa<ConstantPointerNull> (from))
 			continue;
 
-		CastAnswer answer = answer_for (arm, target, f, seen);
+		std::pair<MonoClass *, bool> held = stated_class (from, f);
+		CastAnswer answer = cast_answer (target, held.first, held.second);
 
 		if (answer == CastAnswer::Unknown)
 			return CastAnswer::Unknown;
@@ -208,31 +198,31 @@ answer_for (const Value *v, MonoClass *target, const Function &f,
 		constrained = true;
 	}
 
-	// Every arm null, which the walk above reaches only through a cycle it
-	// dropped. Nothing is known about what the phi holds.
+	// Every source null, or none at all. Nothing is known about what \p v
+	// holds.
 	return constrained ? agreed : CastAnswer::Unknown;
 }
 
 /// The class the site tests against, or null where an rgctx fetch answered for
 /// it and the IR holds no class.
 MonoClass *
-tested_class (const CallBase *site)
+tested_class (const CallBase *site, const ConstantValues &values)
 {
-	auto *global = dyn_cast<GlobalValue> (site->getArgOperand (1));
+	const GlobalValue *global = values.global (site->getArgOperand (1));
 
 	return global != nullptr ? marked_class (*global) : nullptr;
 }
 
 /// Folds what it can of the sites in \p f that call the declaration \p name.
 bool
-fold_sites (Function &f, StringRef name, bool throw_on_fail)
+fold_sites (Function &f, StringRef name, bool throw_on_fail,
+            const ConstantValues &values)
 {
 	bool changed = false;
 
 	for (CallBase *site : builtin_sites (f, name)) {
 		Value *obj = site->getArgOperand (0);
-		SmallPtrSet<const Value *, 8> seen;
-		CastAnswer answer = answer_for (obj, tested_class (site), f, seen);
+		CastAnswer answer = answer_for (obj, tested_class (site, values), f, values);
 
 		// Both forms answer the operand where the test passes, since both
 		// answer null for null and neither changes what it is handed.
@@ -258,16 +248,16 @@ fold_sites (Function &f, StringRef name, bool throw_on_fail)
 } // namespace
 
 bool
-fold_type_tests (Function &f)
+fold_type_tests (Function &f, const ConstantValues &values)
 {
 	// The classes ride as pointers into this process. An offline run over a
 	// dumped module would read them as addresses of its own.
 	if (current_compile ().domain == nullptr || !fold_casts ())
 		return false;
 
-	bool changed = fold_sites (f, cast_isinst_name, false);
+	bool changed = fold_sites (f, cast_isinst_name, false, values);
 
-	return fold_sites (f, cast_castclass_name, true) || changed;
+	return fold_sites (f, cast_castclass_name, true, values) || changed;
 }
 
 } // namespace mono

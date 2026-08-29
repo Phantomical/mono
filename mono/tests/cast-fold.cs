@@ -24,6 +24,8 @@ class Base { }
 class Derived : Base, IMarker { }
 class Unrelated { }
 
+class Field { public object Held; }
+
 sealed class Sealed : Base { }
 
 class Holder<T> { }
@@ -156,6 +158,24 @@ public class CastFold {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool FreshBaseArrayIsMarkerArray () => (object) new Base[1] is IMarker[];
 
+	/*
+	 * A call between a store and a load of what it stored leaves `sources ()`
+	 * naming the stored object and reporting that it did not name every value,
+	 * because the call is free to have written the field as well. Answering the
+	 * test off the named value alone gives `true` here, and the call is what
+	 * makes `false` right.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void Overwrite (Field f) => f.Held = new Unrelated ();
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static bool OverwrittenFieldIsBase (Field f)
+	{
+		f.Held = new Derived ();
+		Overwrite (f);
+		return f.Held is Base;
+	}
+
 	static void Round ()
 	{
 		int[] ints = new int[2];
@@ -254,6 +274,8 @@ public class CastFold {
 		Check ("fresh int[] is Unrelated", FreshIntArrayIsUnrelated (), false);
 		Check ("fresh Derived[] is IMarker[]", FreshDerivedArrayIsMarkerArray (), true);
 		Check ("fresh Base[] is IMarker[]", FreshBaseArrayIsMarkerArray (), false);
+
+		Check ("overwritten field is Base", OverwrittenFieldIsBase (new Field ()), false);
 	}
 
 	public static int Main ()

@@ -55,6 +55,8 @@ typedef struct _MonoMethod MonoMethod;
 
 namespace mono {
 
+class ConstantValues;
+
 /// Names the class a value is an instance of. It sits on the instruction that
 /// produces the value, so a fold carries it along with that instruction.
 constexpr llvm::StringRef exact_class_md = "mono.exact.class";
@@ -77,36 +79,32 @@ void mark_exact_class (llvm::Instruction &site, MonoClass *klass);
 void mark_parameter_classes (llvm::Function &f,
                              llvm::ArrayRef<std::pair<unsigned, MonoClass *>> classes);
 
-/// What \p v's class is, and whether that is the class it is rather than a
-/// bound on it. Answers a null class where the IR says nothing.
+/// Returns the class \p v states on its own, and whether that is the class it
+/// is rather than a bound on it. Null where the IR says nothing.
+///
+/// Nothing in front of \p v is looked through. Use this where the merges are
+/// already resolved for the value in hand, and `operand_class ()` below where
+/// they are not.
 ///
 /// \p f must be the function v belongs to, because a parameter's class is
 /// recorded there.
-///
-/// Where \p v is a `PHINode` or a `SelectInst`, this looks through the values
-/// it merges, including through a further merge one of them leads to. It
-/// stays safe when those merges form a cycle. The answer is the class every
-/// contributing value names. A null constant among them makes the answer no
-/// class. `exact_class ()` below answers the same merge with that null rule
-/// relaxed, for its one caller.
-///
-/// Where \p v is a load, this also reads back the field it loads, the same
-/// way it reads a merge's arms. The field's base can itself be a phi, a
-/// select or a further load, resolved to every allocation it can name; the
-/// field must belong to each of those allocations and each must keep it to
-/// itself, in the same sense a single allocation must: every use of it,
-/// other than a load or store through it, makes the answer no class
-/// instead. That sense refuses an allocation reached only by reading it back
-/// out of a field, because the read is proof a store put it there first,
-/// and that store's own use of the allocation is what the rule above
-/// refuses. Every allocation starts zero-filled, so the merge also carries a
-/// null for the path where the load runs before any store to that field
-/// does, which is what a caller here needs: this answers no class for a
-/// field with exactly one store, because the null path is still live.
-std::pair<MonoClass *, bool> operand_class (const llvm::Value *v, const llvm::Function &f);
+std::pair<MonoClass *, bool> stated_class (const llvm::Value *v, const llvm::Function &f);
 
-/// The class \p v is, or null where the IR gives only a bound this cannot
-/// sharpen. \p f carries the same rule as above.
+/// Returns \p v's class, and whether that is the class it is rather than a
+/// bound on it. Null where the IR says nothing.
+///
+/// \p f must be the function v belongs to, because a parameter's class is
+/// recorded there. \p values is what looks through the merges in front of \p v.
+///
+/// Every value reaching \p v has to name one class, and \p values has to have
+/// found all of them. A null among them gives no class, so a field with exactly
+/// one store gets none: the allocation's own zero still reaches the load.
+/// `exact_class ()` below relaxes that null rule.
+std::pair<MonoClass *, bool> operand_class (llvm::Value *v, const llvm::Function &f,
+                                            const ConstantValues &values);
+
+/// Returns the class \p v is, or null where the IR gives only a bound this
+/// cannot sharpen. \p f and \p values carry the same rule as above.
 ///
 /// A sealed class admits itself alone, so a bound on one is the class the value
 /// is. Two shapes are marked sealed and are not exact all the same. An array
@@ -114,38 +112,29 @@ std::pair<MonoClass *, bool> operand_class (const llvm::Value *v, const llvm::Fu
 /// marshal-by-ref class, because such a slot can hold a transparent proxy,
 /// whose vtable is not the class's.
 ///
-/// A bound holds for a null reference as well, which no class answers for.
-/// Unlike `operand_class ()`, a null among the values a merge combines does
-/// not make the answer no class here. This assumes the caller dereferences
-/// \p v right after. The path that carries null then faults before that
-/// dereference runs, so the answer never has to cover it. A caller that does
-/// not dereference \p v has no such fault to rely on and must call
-/// `operand_class ()` instead.
-MonoClass *exact_class (const llvm::Value *v, const llvm::Function &f);
+/// Unlike `operand_class ()`, a null reaching \p v does not make the answer no
+/// class. This assumes the caller dereferences \p v right after, so the path
+/// carrying null faults before the use and the answer never has to cover it. A
+/// caller that does not dereference \p v must call `operand_class ()` instead.
+MonoClass *exact_class (llvm::Value *v, const llvm::Function &f, const ConstantValues &values);
 
 /// What a field load can read, and how much of that a caller may trust.
 struct FieldValues {
-	/// Every value a store this walk found can leave in the field, minus the
-	/// allocation's own initial zero.
-	llvm::SmallVector<const llvm::Value *, 4> values;
+	/// Every value a store can leave in the field, minus the allocation's own
+	/// initial zero.
+	llvm::SmallVector<llvm::Value *, 4> values;
 
-	/// Whether `values` is every value the field can hold. False where the
-	/// object reaches somewhere this walk cannot follow, so code it cannot see
-	/// writes the field too. A caller may still take a value from an
-	/// incomplete set as a candidate, and must then compare against what it
-	/// reads rather than trust the answer.
+	/// Whether `values` is every value the field can hold. A caller may still
+	/// take a value from an incomplete set as a candidate, and must then
+	/// compare against what it reads rather than trust it.
 	bool complete;
 };
 
-/// What the field \p load reads can hold.
+/// What the field \p load reads can hold, taken from \p values.
 ///
-/// This runs the same walk `operand_class ()` runs over a field load - \p
-/// load's base resolved to every allocation it can name, each allocation's
-/// field checked for whether it escapes anywhere but a load or a store
-/// through it - with a budget of its own rather than one shared across a
-/// wider merge. An allocation this cannot resolve the base to empties the
-/// answer, because there is then no field to read the stores of.
-FieldValues field_load_values (const llvm::LoadInst &load);
+/// Empty where no store reaches the field, which covers a base \p values could
+/// not resolve to an allocation: there is then no field to read the stores of.
+FieldValues field_load_values (llvm::LoadInst &load, const ConstantValues &values);
 
 /// A class \p v plausibly has, for a caller that compares against it before it
 /// acts on the answer. Null where this walk names none.
@@ -161,7 +150,7 @@ FieldValues field_load_values (const llvm::LoadInst &load);
 /// bound, and a compare against a bound misses every subclass, so a guard
 /// written on one pays for itself nowhere. Every class this answers is one an
 /// allocation or an initonly static states.
-MonoClass *guessed_class (const llvm::Value *v, const llvm::Function &f);
+MonoClass *guessed_class (llvm::Value *v, const llvm::Function &f, const ConstantValues &values);
 
 /// Says that \p site produces a delegate whose target method is \p target.
 ///

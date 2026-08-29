@@ -9,6 +9,8 @@
 
 #include "passes/fold-delegate.hpp"
 
+#include "analysis/constant-values.hpp"
+
 #include "analysis/operand-class.hpp"
 
 #include <llvm/IR/BasicBlock.h>
@@ -18,6 +20,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Passes/PassBuilder.h>
 
 #include <gtest/gtest.h>
 
@@ -97,10 +100,32 @@ struct MergeModule {
 	}
 };
 
+/// Settles \p f, which the queries below take.
+ConstantValues
+settled_for (const Function &f)
+{
+	FunctionAnalysisManager fam;
+	ModuleAnalysisManager mam;
+	LoopAnalysisManager lam;
+	CGSCCAnalysisManager cgam;
+	PassBuilder pb;
+
+	// All four, because MemorySSA asks alias analysis for GlobalsAA, which is
+	// a module analysis it reaches through the proxy.
+	pb.registerModuleAnalyses (mam);
+	pb.registerCGSCCAnalyses (cgam);
+	pb.registerFunctionAnalyses (fam);
+	pb.registerLoopAnalyses (lam);
+	pb.crossRegisterProxies (lam, fam, cgam, mam);
+
+	return MonoConstantValues ().run (const_cast<Function &> (f), fam);
+}
+
 TEST (FoldDelegateTest, ReadsAMarkedProducer)
 {
 	MergeModule m;
-	DelegateTarget found = delegate_target_at (m.produce (m.left, first));
+	DelegateTarget found = delegate_target_at (m.produce (m.left, first),
+	                                                  settled_for (*m.caller));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
@@ -109,7 +134,8 @@ TEST (FoldDelegateTest, ReadsAMarkedProducer)
 TEST (FoldDelegateTest, SaysNothingAboutAnUnmarkedValue)
 {
 	MergeModule m;
-	DelegateTarget found = delegate_target_at (m.caller->getArg (1));
+	DelegateTarget found = delegate_target_at (m.caller->getArg (1),
+	                                                  settled_for (*m.caller));
 
 	EXPECT_EQ (found.method, nullptr);
 	EXPECT_FALSE (found.settled);
@@ -119,7 +145,8 @@ TEST (FoldDelegateTest, SettlesAMergeWhoseArmsAgree)
 {
 	MergeModule m;
 	DelegateTarget found = delegate_target_at (
-		m.joined (m.produce (m.left, first), m.produce (m.right, first)));
+		m.joined (m.produce (m.left, first), m.produce (m.right, first)),
+	                                                  settled_for (*m.caller));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
@@ -129,7 +156,8 @@ TEST (FoldDelegateTest, OffersACandidateWhenOneArmIsOpaque)
 {
 	MergeModule m;
 	DelegateTarget found = delegate_target_at (
-		m.joined (m.produce (m.left, first), m.produce (m.right, nullptr)));
+		m.joined (m.produce (m.left, first), m.produce (m.right, nullptr)),
+	                                                  settled_for (*m.caller));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_FALSE (found.settled);
@@ -139,7 +167,8 @@ TEST (FoldDelegateTest, RefusesAMergeWhoseArmsDisagree)
 {
 	MergeModule m;
 	DelegateTarget found = delegate_target_at (
-		m.joined (m.produce (m.left, first), m.produce (m.right, second)));
+		m.joined (m.produce (m.left, first), m.produce (m.right, second)),
+	                                                  settled_for (*m.caller));
 
 	// Naming one of them would be a guess, and a profile is what would have to
 	// settle it.
@@ -157,7 +186,8 @@ TEST (FoldDelegateTest, ReadsThroughASelect)
 
 	b.CreateRet (pick);
 
-	DelegateTarget found = delegate_target_at (pick);
+	DelegateTarget found = delegate_target_at (pick,
+	                                                  settled_for (*m.caller));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
@@ -193,32 +223,11 @@ TEST (FoldDelegateTest, TerminatesOnAMergeThatReachesItself)
 
 	// The value going round the loop is the phi, so it says nothing the arm
 	// below it has not already said.
-	DelegateTarget found = delegate_target_at (phi);
+	DelegateTarget found = delegate_target_at (phi,
+	                                                  settled_for (*m.caller));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
-}
-
-TEST (FoldDelegateTest, GivesUpPastTheWalkBudget)
-{
-	MergeModule m;
-	IRBuilder<> b (m.merge);
-	std::vector<Value *> chain;
-
-	// A chain of selects longer than the budget, every leaf naming one method.
-	// Answering from the part reached would be answering from a walk that
-	// stopped early.
-	Value *at = m.produce (m.left, first);
-
-	for (unsigned i = 0; i < 40; i++)
-		at = b.CreateSelect (m.caller->getArg (0), at, m.produce (m.right, first));
-
-	b.CreateRet (at);
-
-	DelegateTarget found = delegate_target_at (at);
-
-	EXPECT_EQ (found.method, nullptr);
-	EXPECT_FALSE (found.settled);
 }
 
 } // namespace

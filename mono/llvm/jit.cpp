@@ -6,6 +6,7 @@
 
 #include "jit.hpp"
 
+#include "analysis/constant-values.hpp"
 #include "arch/arch.hpp"
 #include "compiler.hpp"
 #include "jitlink-memory.hpp"
@@ -1186,6 +1187,7 @@ ThreadPipelines::tier1 ()
 	pb.registerFunctionAnalyses (tier.fam);
 	pb.registerLoopAnalyses (tier.lam);
 	pb.crossRegisterProxies (tier.lam, tier.fam, tier.cgam, tier.mam);
+	register_mono_analyses (tier.fam);
 	instrument (tier);
 
 	tier.mpm = pb.buildTier1Pipeline ();
@@ -1207,6 +1209,7 @@ ThreadPipelines::tier2 ()
 	pb.registerFunctionAnalyses (tier.fam);
 	pb.registerLoopAnalyses (tier.lam);
 	pb.crossRegisterProxies (tier.lam, tier.fam, tier.cgam, tier.mam);
+	register_mono_analyses (tier.fam);
 	instrument (tier);
 
 	// Over the slot rather than over an engine, because the pipeline is built

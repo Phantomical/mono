@@ -76,6 +76,13 @@ public:
 /// A pipeline it returns owns what it needs, so the builder can go as soon
 /// as the pipeline is built. The target machine and the file system are the
 /// caller's, and both have to outlive every pipeline built against them.
+/// Registers the analyses this backend's own passes ask for.
+///
+/// A pass that asks a manager for an analysis it does not hold aborts, so every
+/// manager a pipeline here runs under needs this beside
+/// `PassBuilder::registerFunctionAnalyses ()`.
+void register_mono_analyses (llvm::FunctionAnalysisManager &fam);
+
 class MonoPassBuilder : public llvm::PassBuilder {
 	llvm::TargetMachine *TM;
 	MonoPipelineTuningOptions PTO;

@@ -6,6 +6,7 @@
 #include "promote-alloc.hpp"
 
 #include "alloc-func.hpp"
+#include "analysis/constant-values.hpp"
 #include "analysis/escape.hpp"
 #include "builtins.hpp"
 
@@ -45,9 +46,9 @@ object_align ()
 /// A zero names a class whose layout this compile does not know, which
 /// `alloc-func.hpp` states for the operand.
 std::optional<uint64_t>
-promotable_size (const CallInst &alloc)
+promotable_size (CallInst &alloc, const ConstantValues &values)
 {
-	const auto *size = dyn_cast<ConstantInt> (alloc.getArgOperand (1));
+	const auto *size = dyn_cast_or_null<ConstantInt> (values.value (alloc.getArgOperand (1)));
 
 	if (size == nullptr)
 		return std::nullopt;
@@ -98,7 +99,7 @@ promote (CallInst &alloc, uint64_t bytes)
 } // namespace
 
 bool
-promote_allocations (Function &f, const LoopInfo &loops)
+promote_allocations (Function &f, const LoopInfo &loops, const ConstantValues &values)
 {
 	SmallVector<AllocaInst *, 4> slots;
 
@@ -115,7 +116,7 @@ promote_allocations (Function &f, const LoopInfo &loops)
 		if (loops.getLoopFor (alloc->getParent ()) != nullptr)
 			continue;
 
-		std::optional<uint64_t> bytes = promotable_size (*alloc);
+		std::optional<uint64_t> bytes = promotable_size (*alloc, values);
 
 		if (!bytes)
 			continue;
@@ -136,7 +137,8 @@ promote_allocations (Function &f, const LoopInfo &loops)
 PreservedAnalyses
 PromoteAllocationsPass::run (Function &f, FunctionAnalysisManager &fam)
 {
-	if (!promote_allocations (f, fam.getResult<LoopAnalysis> (f)))
+	if (!promote_allocations (f, fam.getResult<LoopAnalysis> (f),
+	                          fam.getResult<MonoConstantValues> (f)))
 		return PreservedAnalyses::all ();
 
 	PreservedAnalyses preserved;

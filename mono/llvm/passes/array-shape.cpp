@@ -16,6 +16,8 @@
 
 #include "array-shape.hpp"
 
+#include "analysis/constant-values.hpp"
+
 #include "array-address.hpp"
 #include "builtins.hpp"
 
@@ -234,13 +236,14 @@ shape_decls (Module &m)
 } // namespace
 
 bool
-fold_array_shapes (Function &f)
+fold_array_shapes (Function &f, const ConstantValues &values)
 {
 	bool changed = false;
 
 	for (auto [decl, kind] : shape_decls (*f.getParent ())) {
 		for (CallBase *site : builtin_sites (f, decl->getName ())) {
-			auto *dimension = dyn_cast<ConstantInt> (site->getArgOperand (1));
+			const auto *dimension = dyn_cast_or_null<ConstantInt> (
+				values.value (site->getArgOperand (1)));
 
 			if (dimension == nullptr || !dimension->isZero ())
 				continue;

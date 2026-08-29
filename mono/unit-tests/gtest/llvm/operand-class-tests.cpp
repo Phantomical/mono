@@ -1,17 +1,17 @@
 /*
- * Tests for operand_class () and exact_class (), the walk that answers what
- * class a value is, including where the value is a merge.
+ * Tests for operand_class () and exact_class (), the walk that says what class
+ * a value is, including where the value is a merge.
  *
- * Most cases are pure LLVM. Every producer the walk reads is marked with a
- * fake MonoClass pointer of a test's own choosing, and no test asks a runtime
- * for anything.
+ * Each case gives its IR as text and names the value it asks about with an
+ * `!ask` mark.
  *
- * The allocation-site cases near the end are the exception. Reading a class
- * off an allocation's vtable operand checks that class is not marshal-by-ref
- * or a COM object, and that check reads real fields, so those cases boot a
- * runtime and mark a real class.
+ * A class the walk reads off metadata is a fake MonoClass pointer of the
+ * test's own choosing. A class read off an allocation's vtable operand is
+ * checked for marshal-by-ref and COM. That check reads real fields, so a case
+ * with an allocation boots a runtime and marks a real class.
  */
 
+#include "analysis/constant-values.hpp"
 #include "analysis/operand-class.hpp"
 
 #include "harness.hpp"
@@ -23,19 +23,24 @@
 #include <mono/metadata/class.h>
 
 #include <llvm/ADT/STLExtras.h>
-#include <llvm/IR/Attributes.h>
+#include <llvm/AsmParser/Parser.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InstIterator.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
-#include <llvm/Support/ModRef.h>
+#include <llvm/IR/Verifier.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/SourceMgr.h>
 
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <string>
 
 using namespace llvm;
 
@@ -43,293 +48,365 @@ namespace mono {
 namespace test {
 namespace {
 
-/// Two classes a mark can name. The walk only ever compares them, so what
-/// they point at is never read.
-MonoClass *const classX = reinterpret_cast<MonoClass *> (0x1000);
-MonoClass *const classY = reinterpret_cast<MonoClass *> (0x2000);
+/*
+ * The queries take the values a function settled to, and each case here parses
+ * one function and asks about it once. So the four below settle the function on
+ * each call rather than keeping an answer between them.
+ */
 
-/// A function whose entry branches to a merge, so a test can hand each arm a
-/// value of its own.
-struct MergeModule {
-	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
+ConstantValues
+settled_for (const Function &f)
+{
+	FunctionAnalysisManager fam;
+	ModuleAnalysisManager mam;
+	LoopAnalysisManager lam;
+	CGSCCAnalysisManager cgam;
+	PassBuilder pb;
+
+	// All four, because MemorySSA asks alias analysis for GlobalsAA, which is
+	// a module analysis it reaches through the proxy.
+	pb.registerModuleAnalyses (mam);
+	pb.registerCGSCCAnalyses (cgam);
+	pb.registerFunctionAnalyses (fam);
+	pb.registerLoopAnalyses (lam);
+	pb.crossRegisterProxies (lam, fam, cgam, mam);
+
+	return MonoConstantValues ().run (const_cast<Function &> (f), fam);
+}
+
+std::pair<MonoClass *, bool>
+operand_class_of (Value *v, const Function &f)
+{
+	return operand_class (v, f, settled_for (f));
+}
+
+MonoClass *
+exact_class_of (Value *v, const Function &f)
+{
+	return exact_class (v, f, settled_for (f));
+}
+
+FieldValues
+field_load_values_of (LoadInst &load)
+{
+	return field_load_values (load, settled_for (*load.getFunction ()));
+}
+
+/// Two classes a mark can name, written `!1` and `!2` in the IR below. The
+/// walk only ever compares them, so what they point at is never read.
+MonoClass *const classX = reinterpret_cast<MonoClass *> (4096);
+[[maybe_unused]] MonoClass *const classY = reinterpret_cast<MonoClass *> (8192);
+
+/// What every module below declares. `!1` and `!2` are the two class pointers
+/// above, written the way `mark_exact_class ()` encodes one.
+///
+/// The allocation declaration carries the attributes `alloc_func_decl ()` puts
+/// on it. The alloc kind is what tells the walk that an untouched field reads
+/// as zero, so a case that drops it gets a different answer.
+constexpr const char *preamble = R"(
+declare noalias ptr @"mono.alloc.object"(ptr, i64, ptr)
+    allockind("alloc,zeroed") memory(argmem: read, inaccessiblemem: readwrite)
+declare void @opaque(ptr)
+@vtable = external global i8
+!0 = !{}
+!1 = !{i64 4096}
+!2 = !{i64 8192}
+)";
+
+/// A module a case asks its question about.
+struct Parsed {
+	LLVMContext context;
 	std::unique_ptr<Module> module;
 	Function *caller = nullptr;
-	BasicBlock *entry = nullptr;
-	BasicBlock *left = nullptr;
-	BasicBlock *right = nullptr;
-	BasicBlock *merge = nullptr;
 
-	MergeModule ()
+	/// \p vtable_class marks the `@vtable` global the allocation sites name.
+	explicit Parsed (const std::string &ir, MonoClass *vtable_class = nullptr)
 	{
-		module = std::make_unique<Module> ("merge", *context);
+		SMDiagnostic problem;
 
-		Type *ptr = PointerType::get (*context, 0);
+		module = parseAssemblyString (ir + preamble, problem, context);
 
-		caller = Function::Create (
-			FunctionType::get (ptr, { Type::getInt1Ty (*context), ptr }, false),
-			GlobalValue::ExternalLinkage, "caller", module.get ());
+		if (module == nullptr) {
+			std::string complaint;
+			raw_string_ostream out (complaint);
 
-		entry = BasicBlock::Create (*context, "entry", caller);
-		left = BasicBlock::Create (*context, "left", caller);
-		right = BasicBlock::Create (*context, "right", caller);
-		merge = BasicBlock::Create (*context, "merge", caller);
+			problem.print ("", out);
+			ADD_FAILURE () << complaint;
+			return;
+		}
 
-		IRBuilder<> (entry).CreateCondBr (caller->getArg (0), left, right);
-		IRBuilder<> (left).CreateBr (merge);
-		IRBuilder<> (right).CreateBr (merge);
+		caller = module->getFunction ("caller");
+
+		if (caller == nullptr) {
+			ADD_FAILURE () << "the module declares no caller";
+			return;
+		}
+
+		if (vtable_class != nullptr)
+			mark_class_reference (*module->getNamedGlobal ("vtable"), vtable_class);
+
+		std::string complaint;
+		raw_string_ostream out (complaint);
+
+		EXPECT_FALSE (verifyModule (*module, &out)) << complaint;
 	}
 
-	/// A load in \p block, marked as an instance of \p klass when \p klass is
-	/// given.
-	///
-	/// A load rather than anything cheaper, because the builder folds an
-	/// operation over constants into a constant expression and a mark has to
-	/// sit on an instruction.
-	Instruction *allocation (BasicBlock *block, MonoClass *klass)
+	/// The instruction the module marked \p name.
+	Instruction &marked (StringRef name) const
 	{
-		IRBuilder<> b (block->getTerminator ());
-		Instruction *made = b.CreateLoad (b.getPtrTy (), caller->getArg (1));
+		for (Instruction &at : instructions (*caller))
+			if (at.getMetadata (name) != nullptr)
+				return at;
 
-		if (klass != nullptr)
-			mark_exact_class (*made, klass);
-
-		return made;
+		ADD_FAILURE () << "no instruction carries !" << name.str ();
+		return *caller->getEntryBlock ().begin ();
 	}
 
-	/// A phi in the merge block over the two arms.
-	PHINode *joined (Value *from_left, Value *from_right)
-	{
-		IRBuilder<> b (merge);
-		PHINode *phi = b.CreatePHI (b.getPtrTy (), 2);
-
-		phi->addIncoming (from_left, left);
-		phi->addIncoming (from_right, right);
-		b.CreateRet (phi);
-
-		return phi;
-	}
-};
-
-/// A function that carries a receiver around a loop, the way the LINQ
-/// iterator chain that motivated this walk does. The value the loop
-/// dispatches on and the value it carries to the next round name each other.
-///
-///     entry -> header: %carried = phi [ null, entry ], [ %current, latch ]
-///                      br (%carried == null) ? make : reuse
-///     make:   %fresh = <marked allocation>; br merge
-///     reuse:  br merge
-///     merge:  %current = phi [ %fresh, make ], [ %carried, reuse ]
-///             br %again ? latch : exit
-///     latch:  br header
-///     exit:   ret %current
-///
-/// `%carried` and `%current` are the mutual cycle: `%carried`'s non-null
-/// incoming is `%current`, and `%current`'s incoming for the "already have
-/// one" arm is `%carried`.
-struct CycleModule {
-	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
-	std::unique_ptr<Module> module;
-	Function *caller = nullptr;
-	PHINode *carried = nullptr;
-	PHINode *current = nullptr;
-
-	explicit CycleModule (MonoClass *fresh_klass)
-	{
-		module = std::make_unique<Module> ("cycle", *context);
-
-		Type *ptr = PointerType::get (*context, 0);
-		Type *i1 = Type::getInt1Ty (*context);
-
-		caller = Function::Create (FunctionType::get (ptr, { i1, ptr }, false),
-		                           GlobalValue::ExternalLinkage, "caller", module.get ());
-
-		auto *entry = BasicBlock::Create (*context, "entry", caller);
-		auto *header = BasicBlock::Create (*context, "header", caller);
-		auto *make = BasicBlock::Create (*context, "make", caller);
-		auto *reuse = BasicBlock::Create (*context, "reuse", caller);
-		auto *merge = BasicBlock::Create (*context, "merge", caller);
-		auto *latch = BasicBlock::Create (*context, "latch", caller);
-		auto *exit = BasicBlock::Create (*context, "exit", caller);
-
-		IRBuilder<> (entry).CreateBr (header);
-
-		IRBuilder<> hb (header);
-		carried = hb.CreatePHI (ptr, 2);
-		Value *is_null = hb.CreateICmpEQ (carried, ConstantPointerNull::get (
-		                                                cast<PointerType> (ptr)));
-		hb.CreateCondBr (is_null, make, reuse);
-
-		IRBuilder<> mb (make);
-		Instruction *fresh = mb.CreateLoad (ptr, caller->getArg (1));
-
-		if (fresh_klass != nullptr)
-			mark_exact_class (*fresh, fresh_klass);
-
-		mb.CreateBr (merge);
-
-		IRBuilder<> (reuse).CreateBr (merge);
-
-		IRBuilder<> gb (merge);
-		current = gb.CreatePHI (ptr, 2);
-		current->addIncoming (fresh, make);
-		current->addIncoming (carried, reuse);
-		gb.CreateCondBr (caller->getArg (0), latch, exit);
-
-		IRBuilder<> (latch).CreateBr (header);
-		carried->addIncoming (ConstantPointerNull::get (cast<PointerType> (ptr)), entry);
-		carried->addIncoming (current, latch);
-
-		IRBuilder<> (exit).CreateRet (current);
-	}
+	/// The instruction the case asks about.
+	Instruction &question () const { return marked ("ask"); }
 };
 
 TEST (OperandClassTest, PhiWithAgreeingExactArmsAnswersTheClass)
 {
-	MergeModule m;
-	Instruction *left = m.allocation (m.left, classX);
-	Instruction *right = m.allocation (m.right, classX);
-	PHINode *phi = m.joined (left, right);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  br i1 %c, label %left, label %right
+left:
+  %a = load ptr, ptr %p, !mono.exact.class !1
+  br label %merge
+right:
+  %b = load ptr, ptr %p, !mono.exact.class !1
+  br label %merge
+merge:
+  %held = phi ptr [ %a, %left ], [ %b, %right ], !ask !0
+  ret ptr %held
+}
+)");
 
-	auto [klass, exact] = operand_class (phi, *m.caller);
+	auto [klass, exact] = operand_class_of (&m.question (), *m.caller);
 
 	EXPECT_EQ (klass, classX);
 	EXPECT_TRUE (exact);
-	EXPECT_EQ (exact_class (phi, *m.caller), classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
 TEST (OperandClassTest, PhiWithDisagreeingArmsAnswersNoClass)
 {
-	MergeModule m;
-	Instruction *left = m.allocation (m.left, classX);
-	Instruction *right = m.allocation (m.right, classY);
-	PHINode *phi = m.joined (left, right);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  br i1 %c, label %left, label %right
+left:
+  %a = load ptr, ptr %p, !mono.exact.class !1
+  br label %merge
+right:
+  %b = load ptr, ptr %p, !mono.exact.class !2
+  br label %merge
+merge:
+  %held = phi ptr [ %a, %left ], [ %b, %right ], !ask !0
+  ret ptr %held
+}
+)");
 
-	EXPECT_EQ (operand_class (phi, *m.caller).first, nullptr);
-	EXPECT_EQ (exact_class (phi, *m.caller), nullptr);
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, nullptr);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), nullptr);
 }
 
 TEST (OperandClassTest, SelectWithAgreeingArmsAnswersTheClass)
 {
-	MergeModule m;
-	Instruction *left = m.allocation (m.left, classX);
-	Instruction *right = m.allocation (m.right, classX);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  %a = load ptr, ptr %p, !mono.exact.class !1
+  %b = load ptr, ptr %p, !mono.exact.class !1
+  %held = select i1 %c, ptr %a, ptr %b, !ask !0
+  ret ptr %held
+}
+)");
 
-	IRBuilder<> b (m.left->getTerminator ());
-	Value *selected = b.CreateSelect (m.caller->getArg (0), left, right);
-
-	auto [klass, exact] = operand_class (selected, *m.caller);
+	auto [klass, exact] = operand_class_of (&m.question (), *m.caller);
 
 	EXPECT_EQ (klass, classX);
 	EXPECT_TRUE (exact);
 }
 
-/// The default entry point never resolves a merge through a null arm: an
-/// `isinst` reads a null answer itself, so guessing a class here would be a
-/// wrong answer rather than a missing optimization.
+/// `operand_class ()` never resolves a merge through a null arm: an `isinst`
+/// reads a null itself, so a class guessed here is a wrong answer rather than a
+/// missing optimization.
 TEST (OperandClassTest, OperandClassAnswersNoClassAcrossANullArm)
 {
-	MergeModule m;
-	Instruction *left = m.allocation (m.left, classX);
-	Value *null_value = ConstantPointerNull::get (cast<PointerType> (m.caller->getArg (1)->getType ()));
-	PHINode *phi = m.joined (left, null_value);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  br i1 %c, label %left, label %right
+left:
+  %a = load ptr, ptr %p, !mono.exact.class !1
+  br label %merge
+right:
+  br label %merge
+merge:
+  %held = phi ptr [ %a, %left ], [ null, %right ], !ask !0
+  ret ptr %held
+}
+)");
 
-	EXPECT_EQ (operand_class (phi, *m.caller).first, nullptr);
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, nullptr);
 }
 
-/// `exact_class ()` is for a caller about to dereference the value, and a
-/// null arm faults before that dereference runs. So it reads past the null
-/// arm to the class every other arm agrees on.
+/// `exact_class ()` is for a caller about to dereference the value, and a null
+/// arm faults before that dereference runs. So it reads past the null arm to
+/// the class every other arm agrees on.
 TEST (OperandClassTest, ExactClassIgnoresANullArm)
 {
-	MergeModule m;
-	Instruction *left = m.allocation (m.left, classX);
-	Value *null_value = ConstantPointerNull::get (cast<PointerType> (m.caller->getArg (1)->getType ()));
-	PHINode *phi = m.joined (left, null_value);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  br i1 %c, label %left, label %right
+left:
+  %a = load ptr, ptr %p, !mono.exact.class !1
+  br label %merge
+right:
+  br label %merge
+merge:
+  %held = phi ptr [ %a, %left ], [ null, %right ], !ask !0
+  ret ptr %held
+}
+)");
 
-	EXPECT_EQ (exact_class (phi, *m.caller), classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
-/// The mutual cycle a loop-carried receiver forms (`%carried` and `%current`
-/// name each other) must not defeat the walk. The null `%carried` starts
-/// with must not stop it from answering either, because the header tests
-/// for null before the value can reach a dereference.
+/// The mutual cycle a loop-carried receiver forms must not defeat the walk.
+/// Neither must the null `%carried` starts with, because the header tests for
+/// null before the value can reach a dereference.
 TEST (OperandClassTest, ExactClassResolvesAMutualCycleThroughNull)
 {
-	CycleModule m (classX);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  br label %header
+header:
+  %carried = phi ptr [ null, %entry ], [ %current, %latch ], !carried !0
+  %empty = icmp eq ptr %carried, null
+  br i1 %empty, label %make, label %reuse
+make:
+  %fresh = load ptr, ptr %p, !mono.exact.class !1
+  br label %merge
+reuse:
+  br label %merge
+merge:
+  %current = phi ptr [ %fresh, %make ], [ %carried, %reuse ], !ask !0
+  br i1 %c, label %latch, label %exit
+latch:
+  br label %header
+exit:
+  ret ptr %current
+}
+)");
 
-	EXPECT_EQ (exact_class (m.current, *m.caller), classX);
-	EXPECT_EQ (exact_class (m.carried, *m.caller), classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
+	EXPECT_EQ (exact_class_of (&m.marked ("carried"), *m.caller), classX);
 }
 
-/// `operand_class ()` does not get the same answer for the same cycle,
-/// because it does not ignore the null `%carried` starts with. The null
-/// incoming settles `%carried` at no class, which settles `%current` at no
-/// class too.
+/// `operand_class ()` does not get the same answer for the same cycle, because
+/// it does not ignore the null `%carried` starts with. The null incoming
+/// settles `%carried` at no class, which settles `%current` at no class too.
 TEST (OperandClassTest, OperandClassDoesNotResolveTheSameCycle)
 {
-	CycleModule m (classX);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  br label %header
+header:
+  %carried = phi ptr [ null, %entry ], [ %current, %latch ]
+  %empty = icmp eq ptr %carried, null
+  br i1 %empty, label %make, label %reuse
+make:
+  %fresh = load ptr, ptr %p, !mono.exact.class !1
+  br label %merge
+reuse:
+  br label %merge
+merge:
+  %current = phi ptr [ %fresh, %make ], [ %carried, %reuse ], !ask !0
+  br i1 %c, label %latch, label %exit
+latch:
+  br label %header
+exit:
+  ret ptr %current
+}
+)");
 
-	EXPECT_EQ (operand_class (m.current, *m.caller).first, nullptr);
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, nullptr);
 }
 
-/// A cycle carrying two different classes must not answer either one, with
-/// or without the null rule relaxed.
+/// A cycle carrying two different classes must not answer either one, with or
+/// without the null rule relaxed.
 TEST (OperandClassTest, ExactClassRefusesACycleThatDisagrees)
 {
-	CycleModule m (classY);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  %other = load ptr, ptr %p, !mono.exact.class !1
+  br label %header
+header:
+  %carried = phi ptr [ %other, %entry ], [ %current, %latch ]
+  %empty = icmp eq ptr %carried, null
+  br i1 %empty, label %make, label %reuse
+make:
+  %fresh = load ptr, ptr %p, !mono.exact.class !2
+  br label %merge
+reuse:
+  br label %merge
+merge:
+  %current = phi ptr [ %fresh, %make ], [ %carried, %reuse ], !ask !0
+  br i1 %c, label %latch, label %exit
+latch:
+  br label %header
+exit:
+  ret ptr %current
+}
+)");
 
-	IRBuilder<> b (m.caller->getEntryBlock ().getTerminator ());
-	Instruction *other = b.CreateLoad (PointerType::get (*m.context, 0), m.caller->getArg (1));
-	mark_exact_class (*other, classX);
-	m.carried->setIncomingValueForBlock (&m.caller->getEntryBlock (), other);
-
-	EXPECT_EQ (exact_class (m.current, *m.caller), nullptr);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), nullptr);
 }
 
-/// A chain of phis deep enough to exceed the walk's budget answers no class
-/// rather than pay for the whole chain. Each phi's two incoming edges carry
-/// the same upstream phi, which doubles the walk's work at every level.
-/// Only the shared budget keeps that doubling from costing exponential time.
-TEST (OperandClassTest, ExceedingTheWalkBudgetAnswersNoClass)
+/// A chain of \p levels merges, each phi's two incoming edges carrying the phi
+/// from the level above.
+std::string
+chain_of_merges (unsigned levels)
 {
-	LLVMContext context;
-	Module module ("chain", context);
-	Type *ptr = PointerType::get (context, 0);
+	std::string ir = R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  %held0 = load ptr, ptr %p, !mono.exact.class !1
+  br i1 %c, label %left1, label %right1
+)";
 
-	Function *caller = Function::Create (
-		FunctionType::get (ptr, { Type::getInt1Ty (context), ptr }, false),
-		GlobalValue::ExternalLinkage, "caller", &module);
+	for (unsigned level = 1; level <= levels; ++level) {
+		std::string at = std::to_string (level);
+		std::string above = std::to_string (level - 1);
+		std::string next = std::to_string (level + 1);
 
-	auto *entry = BasicBlock::Create (context, "entry", caller);
-	Instruction *made = IRBuilder<> (entry).CreateLoad (ptr, caller->getArg (1));
-	mark_exact_class (*made, classX);
-
-	Value *previous = made;
-	BasicBlock *previous_block = entry;
-
-	// One level past the budget's 24 is enough to make sure the walk answers
-	// rather than paying for the whole chain.
-	for (unsigned level = 0; level < 25; ++level) {
-		auto *left = BasicBlock::Create (context, "left", caller);
-		auto *right = BasicBlock::Create (context, "right", caller);
-		auto *join = BasicBlock::Create (context, "join", caller);
-
-		IRBuilder<> (previous_block).CreateCondBr (caller->getArg (0), left, right);
-		IRBuilder<> (left).CreateBr (join);
-		IRBuilder<> (right).CreateBr (join);
-
-		IRBuilder<> jb (join);
-		PHINode *phi = jb.CreatePHI (ptr, 2);
-		phi->addIncoming (previous, left);
-		phi->addIncoming (previous, right);
-
-		previous = phi;
-		previous_block = join;
+		ir += "left" + at + ":\n  br label %join" + at + "\n";
+		ir += "right" + at + ":\n  br label %join" + at + "\n";
+		ir += "join" + at + ":\n  %held" + at + " = phi ptr [ %held" + above
+		      + ", %left" + at + " ], [ %held" + above + ", %right" + at + " ]";
+		ir += level == levels
+		              ? ", !ask !0\n  ret ptr %held" + at + "\n"
+		              : "\n  br i1 %c, label %left" + next + ", label %right" + next + "\n";
 	}
 
-	IRBuilder<> (previous_block).CreateRet (previous);
+	return ir + "}\n";
+}
 
-	EXPECT_EQ (exact_class (previous, *caller), nullptr);
+/// A walk that read the merges on demand would double its work at every level.
+/// This one visits each phi a bounded number of times and answers.
+TEST (OperandClassTest, ADeepChainOfMergesAnswersTheClassItCarries)
+{
+	Parsed m (chain_of_merges (25));
+
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
 /// A function with one call to the object-allocation builtin, the vtable
@@ -377,7 +454,7 @@ TEST (OperandClassTest, AllocationSiteAnswersItsVtableClassWithNoMark)
 	mono::test::init_runtime ();
 
 	AllocationModule m (mono_defaults.object_class, alloc_object_name);
-	auto [klass, exact] = operand_class (m.site, *m.caller);
+	auto [klass, exact] = operand_class_of (m.site, *m.caller);
 
 	EXPECT_EQ (klass, mono_defaults.object_class);
 	EXPECT_TRUE (exact);
@@ -391,7 +468,7 @@ TEST (OperandClassTest, KeptAllocationSiteAnswersItsVtableClassWithNoMark)
 
 	AllocationModule m (mono_defaults.object_class, alloc_object_kept_name);
 
-	EXPECT_EQ (operand_class (m.site, *m.caller).first, mono_defaults.object_class);
+	EXPECT_EQ (operand_class_of (m.site, *m.caller).first, mono_defaults.object_class);
 }
 
 /// A marshal-by-ref class's allocator can answer with a transparent proxy
@@ -406,109 +483,68 @@ TEST (OperandClassTest, AllocationSiteRefusesAMarshalByRefClass)
 
 	AllocationModule m (klass, alloc_object_name);
 
-	EXPECT_EQ (operand_class (m.site, *m.caller).first, nullptr);
+	EXPECT_EQ (operand_class_of (m.site, *m.caller).first, nullptr);
 }
 
-/// A function with one allocation site real enough for `allocation_class ()`
-/// to answer it, a field at a fixed offset off that allocation, and the
-/// pieces a test needs to store into and load back from that field.
-///
-/// A store is legal any time after the allocation and before the load that
-/// reads it back: `matching_field_stores ()` gathers every store to the
-/// field by walking uses, not by tracing which one a particular path
-/// executes, so two stores in the same straight line stand for two stores on
-/// two different paths as far as the walk is concerned.
-struct FieldModule {
-	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
-	std::unique_ptr<Module> module;
-	Function *caller = nullptr;
-	CallInst *base = nullptr;
-	Value *field_address = nullptr;
-	BasicBlock *entry = nullptr;
+/*
+ * The cases below read a field off an allocation. The walk gathers the stores
+ * to a field by walking the object's uses, and reads the dominator tree to
+ * decide which of them the load is bound to see.
+ */
 
-	static constexpr int64_t field_offset = 8;
-
-	explicit FieldModule (MonoClass *base_klass)
-	{
-		module = std::make_unique<Module> ("field", *context);
-
-		Type *ptr = PointerType::get (*context, 0);
-		Type *word = Type::getInt64Ty (*context);
-
-		Function *decl = Function::Create (
-			FunctionType::get (ptr, { ptr, word, ptr }, false),
-			GlobalValue::ExternalLinkage, alloc_object_name, module.get ());
-
-		auto *vtable = new GlobalVariable (*module, Type::getInt8Ty (*context), false,
-		                                   GlobalValue::ExternalLinkage, nullptr, "vtable");
-		mark_class_reference (*vtable, base_klass);
-
-		caller = Function::Create (
-			FunctionType::get (ptr, { PointerType::get (*context, 0) }, false),
-			GlobalValue::ExternalLinkage, "caller", module.get ());
-
-		entry = BasicBlock::Create (*context, "entry", caller);
-
-		IRBuilder<> b (entry);
-
-		base = b.CreateCall (
-			decl, { vtable, ConstantInt::get (word, 64),
-			        ConstantPointerNull::get (cast<PointerType> (ptr)) });
-		field_address = b.CreateGEP (Type::getInt8Ty (*context), base,
-		                             { ConstantInt::get (word, field_offset) });
-	}
-
-	/// A store of \p value into the field, appended to \p block.
-	void store_field (BasicBlock *block, Value *value)
-	{
-		IRBuilder<> (block).CreateStore (value, field_address);
-	}
-
-	/// A load in \p block, marked as an instance of \p klass when \p klass is
-	/// given, standing for a value a test stores into the field. This reuses
-	/// `MergeModule::allocation ()`'s reason for a load rather than a
-	/// constant: a mark has to sit on an instruction.
-	Instruction *marked_value (BasicBlock *block, MonoClass *klass)
-	{
-		IRBuilder<> b (block);
-		Instruction *made = b.CreateLoad (b.getPtrTy (), caller->getArg (0));
-
-		if (klass != nullptr)
-			mark_exact_class (*made, klass);
-
-		return made;
-	}
-
-	/// Ends \p block with a load of the field and a return of it.
-	LoadInst *load_and_return (BasicBlock *block)
-	{
-		IRBuilder<> b (block);
-		LoadInst *load = b.CreateLoad (b.getPtrTy (), field_address);
-
-		b.CreateRet (load);
-
-		return load;
-	}
-};
-
-/// The split this whole rule stands on: the allocation starts zero-filled,
-/// so a path where the load runs before the store is still live, and
-/// `operand_class ()` must answer no class for it the way it would for an
-/// `isinst` reading this field. `exact_class ()` is for a caller that
-/// dereferences right after, so the null path faults there before it
-/// matters, and that entry reads past it to the one store's class.
+/// The split this whole rule stands on. The store is on one arm, so a path
+/// reaches the load without it and the allocation's zero is still one of the
+/// values the field holds. `operand_class ()` must answer no class for that,
+/// the way it would for an `isinst` reading this field. `exact_class ()` is
+/// for a caller that dereferences right after, so the null path faults there
+/// before it matters and that entry reads past it to the one store's class.
 TEST (OperandClassTest, LoadWithOneStoreSplitsOperandClassFromExactClass)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *value = m.marked_value (m.entry, classX);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %v = load ptr, ptr %p, !mono.exact.class !1
+  br i1 %c, label %wrote, label %merge
+wrote:
+  store ptr %v, ptr %f, align 8
+  br label %merge
+merge:
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, value);
-	LoadInst *load = m.load_and_return (m.entry);
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, nullptr);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
+}
 
-	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
-	EXPECT_EQ (exact_class (load, *m.caller), classX);
+/// The same shape with the store in a straight line. It dominates the load,
+/// so the zero is gone and `operand_class ()` answers what `exact_class ()`
+/// does.
+TEST (OperandClassTest, LoadWithADominatingStoreAnswersOperandClass)
+{
+	mono::test::init_runtime ();
+
+	Parsed m (R"(
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %v = load ptr, ptr %p, !mono.exact.class !1
+  store ptr %v, ptr %f, align 8
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
+
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
 /// The class every store agrees on settles the load even where the objects
@@ -520,33 +556,47 @@ TEST (OperandClassTest, LoadAnswersWhereTwoStoresNameDifferentObjectsOfTheSameCl
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *first = m.marked_value (m.entry, classX);
-	Instruction *second = m.marked_value (m.entry, classX);
+	Parsed m (R"(
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %first = load ptr, ptr %p, !mono.exact.class !1
+  %second = load ptr, ptr %p, !mono.exact.class !1
+  store ptr %first, ptr %f, align 8
+  store ptr %second, ptr %f, align 8
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, first);
-	m.store_field (m.entry, second);
-	LoadInst *load = m.load_and_return (m.entry);
-
-	EXPECT_EQ (exact_class (load, *m.caller), classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
-/// Two stores that disagree settle the merge at no class before the null arm
-/// even enters into it, so both entry points refuse here.
-TEST (OperandClassTest, LoadAnswersNoClassWhereTwoStoresDisagree)
+/// The second store kills the first, so the class the load reads is the one
+/// the surviving store names rather than no class at all.
+TEST (OperandClassTest, LoadAnswersTheLastOfTwoStoresThatDisagree)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *first = m.marked_value (m.entry, classX);
-	Instruction *second = m.marked_value (m.entry, classY);
+	Parsed m (R"(
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %first = load ptr, ptr %p, !mono.exact.class !1
+  %second = load ptr, ptr %p, !mono.exact.class !2
+  store ptr %first, ptr %f, align 8
+  store ptr %second, ptr %f, align 8
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, first);
-	m.store_field (m.entry, second);
-	LoadInst *load = m.load_and_return (m.entry);
-
-	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
-	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, classY);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classY);
 }
 
 /// The escape guard is what this rule stands on: passing the allocation to a
@@ -557,82 +607,74 @@ TEST (OperandClassTest, LoadAnswersNoClassWhereTheAllocationEscapesToACall)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *value = m.marked_value (m.entry, classX);
+	Parsed m (R"(
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %v = load ptr, ptr %p, !mono.exact.class !1
+  store ptr %v, ptr %f, align 8
+  call void @opaque(ptr %o)
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, value);
-
-	Function *sink = Function::Create (
-		FunctionType::get (Type::getVoidTy (*m.context), { m.base->getType () }, false),
-		GlobalValue::ExternalLinkage, "sink", m.module.get ());
-	IRBuilder<> (m.entry).CreateCall (sink, { m.base });
-
-	LoadInst *load = m.load_and_return (m.entry);
-
-	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
-	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, nullptr);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), nullptr);
 }
 
-/// The same guard covers the allocation escaping as the value a store writes
-/// into another object, rather than as the address a store writes through.
-TEST (OperandClassTest, LoadAnswersNoClassWhereTheAllocationIsStoredIntoAnotherObject)
+/// Writing the allocation's address out to another object does not put the
+/// field beyond reach. Nothing between the store and the load can act on the
+/// address that left, and a store through a pointer the function was handed
+/// cannot land in memory this call made.
+TEST (OperandClassTest, LoadAnswersWhereTheAllocationIsStoredIntoAnotherObject)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *value = m.marked_value (m.entry, classX);
-
-	m.store_field (m.entry, value);
-	IRBuilder<> (m.entry).CreateStore (m.base, m.caller->getArg (0));
-
-	LoadInst *load = m.load_and_return (m.entry);
-
-	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
-	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
+	Parsed m (R"(
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %v = load ptr, ptr %p, !mono.exact.class !1
+  store ptr %v, ptr %f, align 8
+  store ptr %o, ptr %p, align 8
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
 }
+)",
+	          mono_defaults.object_class);
 
-/// A declaration shaped like the write barrier's own
-/// (`gc_barrier_decl ()`, `passes/gc-barrier.cpp`): one pointer parameter
-/// carrying whatever \p captures and \p effects a test asks for.
-Function *
-declare_sink (Module &m, Type *param, bool captures, MemoryEffects effects)
-{
-	Function *decl = Function::Create (
-		FunctionType::get (Type::getVoidTy (m.getContext ()), { param }, false),
-		GlobalValue::ExternalLinkage, "sink", &m);
-
-	if (!captures)
-		decl->addParamAttr (
-			0, Attribute::getWithCaptureInfo (m.getContext (), CaptureInfo::none ()));
-
-	decl->setMemoryEffects (effects);
-	return decl;
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
 /// A call the write barrier's own attributes mark as safe must not stop the
-/// walk from reaching the store behind it.
-///
-/// Read the effects off `getMemoryEffects ()` rather than off a `readonly`
-/// parameter attribute. `CallBase::onlyReadsMemory (OpNo)` answers only the
-/// parameter attribute, and says nothing about the callee's own memory
-/// effects. A callee that states argument memory is read-only at the
-/// function level, the way the barrier declaration does, must still count.
+/// walk from reaching the store behind it. The barrier states its effects at
+/// the function level rather than on its parameter, so the declaration below
+/// does too.
 TEST (OperandClassTest, LoadAnswersWhereTheFieldAddressReachesACallThatCannotWriteOrCapture)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *value = m.marked_value (m.entry, classX);
+	Parsed m (R"(
+declare void @sink(ptr captures(none)) memory(argmem: read)
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %v = load ptr, ptr %p, !mono.exact.class !1
+  store ptr %v, ptr %f, align 8
+  call void @sink(ptr %f)
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, value);
-
-	Function *sink = declare_sink (*m.module, m.field_address->getType (), /*captures=*/false,
-	                               MemoryEffects::argMemOnly (ModRefInfo::Ref));
-	IRBuilder<> (m.entry).CreateCall (sink, { m.field_address });
-
-	LoadInst *load = m.load_and_return (m.entry);
-
-	EXPECT_EQ (exact_class (load, *m.caller), classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
 /// A callee whose memory effects say it can write argument memory is refused
@@ -642,41 +684,50 @@ TEST (OperandClassTest, LoadAnswersNoClassWhereTheCallMayWriteTheFieldAddress)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *value = m.marked_value (m.entry, classX);
+	Parsed m (R"(
+declare void @sink(ptr captures(none)) memory(argmem: readwrite)
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %v = load ptr, ptr %p, !mono.exact.class !1
+  store ptr %v, ptr %f, align 8
+  call void @sink(ptr %f)
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, value);
-
-	Function *sink = declare_sink (*m.module, m.field_address->getType (), /*captures=*/false,
-	                               MemoryEffects::argMemOnly (ModRefInfo::ModRef));
-	IRBuilder<> (m.entry).CreateCall (sink, { m.field_address });
-
-	LoadInst *load = m.load_and_return (m.entry);
-
-	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
-	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, nullptr);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), nullptr);
 }
 
-/// A callee that can keep the field address is refused even though it never
-/// writes through it. A kept pointer can be written back to later, from code
-/// this walk never sees.
-TEST (OperandClassTest, LoadAnswersNoClassWhereTheCallMayCaptureTheFieldAddress)
+/// A callee that keeps the field address but cannot write through it leaves
+/// the store in reach. Keeping a pointer settles nothing on its own: a write
+/// through the copy it kept is a later call, and that call is what the walk
+/// stops at.
+TEST (OperandClassTest, LoadAnswersWhereTheCallMayOnlyCaptureTheFieldAddress)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *value = m.marked_value (m.entry, classX);
+	Parsed m (R"(
+declare void @sink(ptr) memory(argmem: read)
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %v = load ptr, ptr %p, !mono.exact.class !1
+  store ptr %v, ptr %f, align 8
+  call void @sink(ptr %f)
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, value);
-
-	Function *sink = declare_sink (*m.module, m.field_address->getType (), /*captures=*/true,
-	                               MemoryEffects::argMemOnly (ModRefInfo::Ref));
-	IRBuilder<> (m.entry).CreateCall (sink, { m.field_address });
-
-	LoadInst *load = m.load_and_return (m.entry);
-
-	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
-	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
 /// A pointer compare writes nothing and yields an `i1`, so it is not a route
@@ -687,367 +738,183 @@ TEST (OperandClassTest, LoadAnswersWhereTheAllocationOrAFieldIsCompared)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *value = m.marked_value (m.entry, classX);
+	Parsed m (R"(
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %v = load ptr, ptr %p, !mono.exact.class !1
+  store ptr %v, ptr %f, align 8
+  %base_is_null = icmp eq ptr %o, null
+  %field_is_null = icmp eq ptr %f, null
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, value);
-
-	Value *null_base = ConstantPointerNull::get (cast<PointerType> (m.base->getType ()));
-	Value *null_field = ConstantPointerNull::get (cast<PointerType> (m.field_address->getType ()));
-
-	IRBuilder<> (m.entry).CreateICmpEQ (m.base, null_base);
-	IRBuilder<> (m.entry).CreateICmpEQ (m.field_address, null_field);
-
-	LoadInst *load = m.load_and_return (m.entry);
-
-	EXPECT_EQ (exact_class (load, *m.caller), classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
-/// `ptrtoint` stays refused: an integer can be turned back into a pointer and
-/// written through, and this walk cannot see where that happens.
-TEST (OperandClassTest, LoadAnswersNoClassWhereTheAllocationIsConvertedToAnInteger)
+/// `ptrtoint` writes nothing. Turning the integer back into a pointer and
+/// writing through it takes an instruction or a call, and either of those is
+/// what the walk stops at.
+TEST (OperandClassTest, LoadAnswersWhereTheAllocationIsConvertedToAnInteger)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *value = m.marked_value (m.entry, classX);
+	Parsed m (R"(
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %v = load ptr, ptr %p, !mono.exact.class !1
+  store ptr %v, ptr %f, align 8
+  %word = ptrtoint ptr %o to i64
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, value);
-	IRBuilder<> (m.entry).CreatePtrToInt (m.base, Type::getInt64Ty (*m.context));
-
-	LoadInst *load = m.load_and_return (m.entry);
-
-	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
-	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
-/// A function that reads a field off a phi of two allocations of \p
-/// base_klass, one made on each arm of a branch. `store_into ()` lets a test
-/// write a marked value into one allocation's own field, right after it is
-/// made.
-struct PhiOfAllocationsFieldModule {
-	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
-	std::unique_ptr<Module> module;
-	Function *caller = nullptr;
-	CallInst *alloc1 = nullptr;
-	CallInst *alloc2 = nullptr;
-	BasicBlock *left = nullptr;
-	LoadInst *load = nullptr;
-
-	static constexpr int64_t field_offset = 8;
-
-	explicit PhiOfAllocationsFieldModule (MonoClass *base_klass)
-	{
-		module = std::make_unique<Module> ("phi-field", *context);
-
-		Type *ptr = PointerType::get (*context, 0);
-		Type *word = Type::getInt64Ty (*context);
-
-		Function *decl = Function::Create (
-			FunctionType::get (ptr, { ptr, word, ptr }, false),
-			GlobalValue::ExternalLinkage, alloc_object_name, module.get ());
-
-		auto *vtable = new GlobalVariable (*module, Type::getInt8Ty (*context), false,
-		                                   GlobalValue::ExternalLinkage, nullptr, "vtable");
-		mark_class_reference (*vtable, base_klass);
-
-		caller = Function::Create (
-			FunctionType::get (ptr, { Type::getInt1Ty (*context), ptr }, false),
-			GlobalValue::ExternalLinkage, "caller", module.get ());
-
-		auto *entry = BasicBlock::Create (*context, "entry", caller);
-		left = BasicBlock::Create (*context, "left", caller);
-		auto *right = BasicBlock::Create (*context, "right", caller);
-		auto *merge = BasicBlock::Create (*context, "merge", caller);
-
-		IRBuilder<> (entry).CreateCondBr (caller->getArg (0), left, right);
-
-		Value *null_val = ConstantPointerNull::get (cast<PointerType> (ptr));
-
-		IRBuilder<> lb (left);
-		alloc1 = lb.CreateCall (decl, { vtable, ConstantInt::get (word, 64), null_val });
-		lb.CreateBr (merge);
-
-		IRBuilder<> rb (right);
-		alloc2 = rb.CreateCall (decl, { vtable, ConstantInt::get (word, 64), null_val });
-		rb.CreateBr (merge);
-
-		IRBuilder<> mb (merge);
-		PHINode *phi = mb.CreatePHI (ptr, 2);
-		phi->addIncoming (alloc1, left);
-		phi->addIncoming (alloc2, right);
-		Value *field_address =
-			mb.CreateGEP (Type::getInt8Ty (*context), phi, { ConstantInt::get (word, field_offset) });
-		load = mb.CreateLoad (ptr, field_address);
-		mb.CreateRet (load);
-	}
-
-	/// Stores a value marked \p klass into \p alloc's own field, right after
-	/// \p alloc is made.
-	void store_into (CallInst *alloc, MonoClass *klass)
-	{
-		IRBuilder<> b (alloc->getNextNode ());
-		Instruction *value = b.CreateLoad (b.getPtrTy (), caller->getArg (1));
-		mark_exact_class (*value, klass);
-		Value *addr = b.CreateGEP (Type::getInt8Ty (*context), alloc,
-		                          { ConstantInt::get (Type::getInt64Ty (*context), field_offset) });
-		b.CreateStore (value, addr);
-	}
-};
-
-/// The base is a phi of two allocations, each storing an instance of the
-/// same class into the field the caller reads back. Resolving the base
-/// through the phi to both allocations, and reading each one's own field
-/// store, is what `resolve_base_candidates ()` adds over a single allocation
-/// base.
+/// Resolving the base through the phi to both allocations, and reading each
+/// one's own field store, is what `resolve_base_candidates ()` adds over a
+/// single allocation base.
 TEST (OperandClassTest, LoadThroughAPhiOfAllocationsAnswersTheClass)
 {
 	mono::test::init_runtime ();
 
-	PhiOfAllocationsFieldModule m (mono_defaults.object_class);
-	m.store_into (m.alloc1, classX);
-	m.store_into (m.alloc2, classX);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  br i1 %c, label %left, label %right
+left:
+  %a = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %av = load ptr, ptr %p, !mono.exact.class !1
+  %af = getelementptr inbounds i8, ptr %a, i64 8
+  store ptr %av, ptr %af, align 8
+  br label %merge
+right:
+  %b = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %bv = load ptr, ptr %p, !mono.exact.class !1
+  %bf = getelementptr inbounds i8, ptr %b, i64 8
+  store ptr %bv, ptr %bf, align 8
+  br label %merge
+merge:
+  %o = phi ptr [ %a, %left ], [ %b, %right ]
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	EXPECT_EQ (exact_class (m.load, *m.caller), classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
-/// One of the two candidates escapes - its address is stored into another
-/// object, the same route `LoadAnswersNoClassWhereTheAllocationIsStoredIntoAnotherObject`
-/// above gates for a single allocation. `resolve_base_candidates ()` runs
-/// `field_stores_reaching ()` over every candidate it finds, so the escaping
-/// one is what settles the whole answer at no class, not just its own arm.
-TEST (OperandClassTest, LoadThroughAPhiOfAllocationsAnswersNoClassWhereOneEscapes)
+/// One arm writes its allocation's address out to another object before the
+/// merge. Nothing downstream of either store can reach the field, so the
+/// answer is the one the arm above gives without that store.
+TEST (OperandClassTest, LoadThroughAPhiOfAllocationsAnswersTheClassWhereOneEscapes)
 {
 	mono::test::init_runtime ();
 
-	PhiOfAllocationsFieldModule m (mono_defaults.object_class);
-	m.store_into (m.alloc1, classX);
-	m.store_into (m.alloc2, classX);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  br i1 %c, label %left, label %right
+left:
+  %a = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %av = load ptr, ptr %p, !mono.exact.class !1
+  %af = getelementptr inbounds i8, ptr %a, i64 8
+  store ptr %av, ptr %af, align 8
+  store ptr %a, ptr %p, align 8
+  br label %merge
+right:
+  %b = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %bv = load ptr, ptr %p, !mono.exact.class !1
+  %bf = getelementptr inbounds i8, ptr %b, i64 8
+  store ptr %bv, ptr %bf, align 8
+  br label %merge
+merge:
+  %o = phi ptr [ %a, %left ], [ %b, %right ]
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	IRBuilder<> (m.left->getTerminator ()).CreateStore (m.alloc1, m.caller->getArg (1));
-
-	EXPECT_EQ (operand_class (m.load, *m.caller).first, nullptr);
-	EXPECT_EQ (exact_class (m.load, *m.caller), nullptr);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
-/// The two candidates store different classes into the field. Agreeing on
-/// two different objects of the same class settles a merge; agreeing on
-/// nothing must not.
+/// Agreeing on two different objects of the same class settles a merge;
+/// agreeing on nothing must not.
 TEST (OperandClassTest, LoadThroughAPhiOfAllocationsAnswersNoClassWhereTheyDisagree)
 {
 	mono::test::init_runtime ();
 
-	PhiOfAllocationsFieldModule m (mono_defaults.object_class);
-	m.store_into (m.alloc1, classX);
-	m.store_into (m.alloc2, classY);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  br i1 %c, label %left, label %right
+left:
+  %a = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %av = load ptr, ptr %p, !mono.exact.class !1
+  %af = getelementptr inbounds i8, ptr %a, i64 8
+  store ptr %av, ptr %af, align 8
+  br label %merge
+right:
+  %b = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %bv = load ptr, ptr %p, !mono.exact.class !2
+  %bf = getelementptr inbounds i8, ptr %b, i64 8
+  store ptr %bv, ptr %bf, align 8
+  br label %merge
+merge:
+  %o = phi ptr [ %a, %left ], [ %b, %right ]
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	EXPECT_EQ (operand_class (m.load, *m.caller).first, nullptr);
-	EXPECT_EQ (exact_class (m.load, *m.caller), nullptr);
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, nullptr);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), nullptr);
 }
 
-/// A function with two allocations, an outer one and an inner one, where the
-/// inner's own address is the outer's one field store. Reading the inner's
-/// own field back therefore needs a base resolved through a load - the
-/// outer's field read - rather than through a phi or a select.
-struct LoadAsBaseModule {
-	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
-	std::unique_ptr<Module> module;
-	Function *caller = nullptr;
-	Value *inner_field_address = nullptr;
-
-	static constexpr int64_t outer_field_offset = 8;
-	static constexpr int64_t inner_field_offset = 16;
-
-	LoadAsBaseModule (MonoClass *outer_klass, MonoClass *inner_klass)
-	{
-		module = std::make_unique<Module> ("load-base", *context);
-
-		Type *ptr = PointerType::get (*context, 0);
-		Type *word = Type::getInt64Ty (*context);
-
-		Function *decl = Function::Create (
-			FunctionType::get (ptr, { ptr, word, ptr }, false),
-			GlobalValue::ExternalLinkage, alloc_object_name, module.get ());
-
-		auto *outer_vtable = new GlobalVariable (
-			*module, Type::getInt8Ty (*context), false,
-			GlobalValue::ExternalLinkage, nullptr, "outer_vtable");
-		mark_class_reference (*outer_vtable, outer_klass);
-
-		auto *inner_vtable = new GlobalVariable (
-			*module, Type::getInt8Ty (*context), false,
-			GlobalValue::ExternalLinkage, nullptr, "inner_vtable");
-		mark_class_reference (*inner_vtable, inner_klass);
-
-		caller = Function::Create (FunctionType::get (ptr, { ptr }, false),
-		                          GlobalValue::ExternalLinkage, "caller", module.get ());
-
-		auto *entry = BasicBlock::Create (*context, "entry", caller);
-		IRBuilder<> b (entry);
-
-		Value *null_val = ConstantPointerNull::get (cast<PointerType> (ptr));
-		CallInst *outer = b.CreateCall (decl, { outer_vtable, ConstantInt::get (word, 64), null_val });
-		CallInst *inner = b.CreateCall (decl, { inner_vtable, ConstantInt::get (word, 64), null_val });
-
-		Value *outer_field_address = b.CreateGEP (
-			Type::getInt8Ty (*context), outer, { ConstantInt::get (word, outer_field_offset) });
-		b.CreateStore (inner, outer_field_address);
-
-		Value *inner_read_back = b.CreateLoad (ptr, outer_field_address);
-		inner_field_address = b.CreateGEP (
-			Type::getInt8Ty (*context), inner_read_back, { ConstantInt::get (word, inner_field_offset) });
-	}
-
-	/// A load in \p block, marked as an instance of \p klass when \p klass is
-	/// given, standing for a value a test stores into the inner allocation's
-	/// own field.
-	Instruction *marked_value (BasicBlock *block, MonoClass *klass)
-	{
-		IRBuilder<> b (block);
-		Instruction *made = b.CreateLoad (b.getPtrTy (), caller->getArg (0));
-
-		if (klass != nullptr)
-			mark_exact_class (*made, klass);
-
-		return made;
-	}
-
-	/// A store of \p value into the inner allocation's own field, appended to
-	/// \p block.
-	void store_field (BasicBlock *block, Value *value)
-	{
-		IRBuilder<> (block).CreateStore (value, inner_field_address);
-	}
-
-	/// Ends \p block with a load of the inner allocation's own field and a
-	/// return of it.
-	LoadInst *load_and_return (BasicBlock *block)
-	{
-		IRBuilder<> b (block);
-		LoadInst *load = b.CreateLoad (b.getPtrTy (), inner_field_address);
-
-		b.CreateRet (load);
-
-		return load;
-	}
-};
-
-/// The base of the field this reads is itself a load - the outer
+/// The base of the field this reads is itself a load, of the outer
 /// allocation's own field, which the inner allocation's address was stored
-/// into once. `resolve_base_candidates ()` reads that store back through
-/// `matching_field_stores ()`, the mutual recursion the two functions form,
-/// and does reach the inner allocation as a candidate.
-///
-/// The answer is still no class, and this is the boundary of what the
-/// generalization can reach rather than a bug in it. The inner allocation
-/// is discoverable through the outer's field only because its own address
-/// was written there - `store inner, outer_field_address` is a store whose
-/// *value* operand is the candidate, the same shape
-/// `LoadAnswersNoClassWhereTheAllocationIsStoredIntoAnotherObject` above
-/// gates for a direct base. `field_stores_reaching ()` refuses a candidate
-/// on exactly that shape, so a candidate this walk can only reach by
-/// reading it back out of a field can never itself clear the escape check:
-/// the read is proof the candidate was written out to memory first.
-TEST (OperandClassTest, LoadThroughALoadAsBaseAnswersNoClassBecauseTheDiscoveryStoreEscapes)
+/// into once. Forwarding that read back to the inner allocation is what makes
+/// the store into the inner object's field reachable.
+TEST (OperandClassTest, LoadThroughALoadAsBaseAnswersTheClass)
 {
 	mono::test::init_runtime ();
 
-	LoadAsBaseModule m (mono_defaults.object_class, mono_defaults.object_class);
-	BasicBlock &entry = m.caller->getEntryBlock ();
-	Instruction *value = m.marked_value (&entry, classX);
-
-	m.store_field (&entry, value);
-	LoadInst *load = m.load_and_return (&entry);
-
-	EXPECT_EQ (operand_class (load, *m.caller).first, nullptr);
-	EXPECT_EQ (exact_class (load, *m.caller), nullptr);
+	Parsed m (R"(
+define ptr @caller(ptr %p) {
+entry:
+  %outer = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %inner = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %outer_field = getelementptr inbounds i8, ptr %outer, i64 8
+  store ptr %inner, ptr %outer_field, align 8
+  %read_back = load ptr, ptr %outer_field, align 8
+  %inner_field = getelementptr inbounds i8, ptr %read_back, i64 16
+  %v = load ptr, ptr %p, !mono.exact.class !1
+  store ptr %v, ptr %inner_field, align 8
+  %held = load ptr, ptr %inner_field, align 8, !ask !0
+  ret ptr %held
 }
+)",
+	          mono_defaults.object_class);
 
-/// A function that carries a receiver around a loop the way `CycleModule`
-/// above does, but returns a field of the carried value rather than the
-/// value itself, so resolving that field's base has to terminate on the same
-/// mutual cycle `resolve_base_candidates ()` walks.
-struct CyclicFieldModule {
-	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
-	std::unique_ptr<Module> module;
-	Function *caller = nullptr;
-	CallInst *fresh = nullptr;
-	LoadInst *load = nullptr;
-
-	static constexpr int64_t field_offset = 8;
-
-	explicit CyclicFieldModule (MonoClass *base_klass)
-	{
-		module = std::make_unique<Module> ("cyclic-field", *context);
-
-		Type *ptr = PointerType::get (*context, 0);
-		Type *i1 = Type::getInt1Ty (*context);
-		Type *word = Type::getInt64Ty (*context);
-
-		Function *decl = Function::Create (
-			FunctionType::get (ptr, { ptr, word, ptr }, false),
-			GlobalValue::ExternalLinkage, alloc_object_name, module.get ());
-
-		auto *vtable = new GlobalVariable (*module, Type::getInt8Ty (*context), false,
-		                                   GlobalValue::ExternalLinkage, nullptr, "vtable");
-		mark_class_reference (*vtable, base_klass);
-
-		caller = Function::Create (FunctionType::get (ptr, { i1, ptr }, false),
-		                          GlobalValue::ExternalLinkage, "caller", module.get ());
-
-		auto *entry = BasicBlock::Create (*context, "entry", caller);
-		auto *header = BasicBlock::Create (*context, "header", caller);
-		auto *make = BasicBlock::Create (*context, "make", caller);
-		auto *reuse = BasicBlock::Create (*context, "reuse", caller);
-		auto *merge = BasicBlock::Create (*context, "merge", caller);
-		auto *latch = BasicBlock::Create (*context, "latch", caller);
-		auto *exit = BasicBlock::Create (*context, "exit", caller);
-
-		IRBuilder<> (entry).CreateBr (header);
-
-		IRBuilder<> hb (header);
-		PHINode *carried = hb.CreatePHI (ptr, 2);
-		Value *is_null = hb.CreateICmpEQ (
-			carried, ConstantPointerNull::get (cast<PointerType> (ptr)));
-		hb.CreateCondBr (is_null, make, reuse);
-
-		IRBuilder<> mb (make);
-		fresh = mb.CreateCall (
-			decl, { vtable, ConstantInt::get (word, 64),
-			        ConstantPointerNull::get (cast<PointerType> (ptr)) });
-		mb.CreateBr (merge);
-
-		IRBuilder<> (reuse).CreateBr (merge);
-
-		IRBuilder<> gb (merge);
-		PHINode *current = gb.CreatePHI (ptr, 2);
-		current->addIncoming (fresh, make);
-		current->addIncoming (carried, reuse);
-		gb.CreateCondBr (caller->getArg (0), latch, exit);
-
-		IRBuilder<> (latch).CreateBr (header);
-		carried->addIncoming (ConstantPointerNull::get (cast<PointerType> (ptr)), entry);
-		carried->addIncoming (current, latch);
-
-		IRBuilder<> eb (exit);
-		Value *field_address = eb.CreateGEP (
-			Type::getInt8Ty (*context), current, { ConstantInt::get (word, field_offset) });
-		load = eb.CreateLoad (ptr, field_address);
-		eb.CreateRet (load);
-	}
-
-	/// Stores a value marked \p klass into the fresh allocation's own field,
-	/// right after it is made.
-	void store_field (MonoClass *klass)
-	{
-		IRBuilder<> b (fresh->getNextNode ());
-		Instruction *value = b.CreateLoad (b.getPtrTy (), caller->getArg (1));
-		mark_exact_class (*value, klass);
-		Value *addr = b.CreateGEP (Type::getInt8Ty (*context), fresh,
-		                          { ConstantInt::get (Type::getInt64Ty (*context), field_offset) });
-		b.CreateStore (value, addr);
-	}
-};
+	EXPECT_EQ (operand_class_of (&m.question (), *m.caller).first, classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
+}
 
 /// The load's base is a phi that is itself part of the mutual cycle
 /// `ExactClassResolvesAMutualCycleThroughNull` above gates for a bare
@@ -1058,34 +925,66 @@ TEST (OperandClassTest, LoadThroughACyclicPhiBaseTerminatesAndAnswers)
 {
 	mono::test::init_runtime ();
 
-	CyclicFieldModule m (mono_defaults.object_class);
-	m.store_field (classX);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  br label %header
+header:
+  %carried = phi ptr [ null, %entry ], [ %current, %latch ]
+  %empty = icmp eq ptr %carried, null
+  br i1 %empty, label %make, label %reuse
+make:
+  %fresh = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %v = load ptr, ptr %p, !mono.exact.class !1
+  %vf = getelementptr inbounds i8, ptr %fresh, i64 8
+  store ptr %v, ptr %vf, align 8
+  br label %merge
+reuse:
+  br label %merge
+merge:
+  %current = phi ptr [ %fresh, %make ], [ %carried, %reuse ]
+  br i1 %c, label %latch, label %exit
+latch:
+  br label %header
+exit:
+  %f = getelementptr inbounds i8, ptr %current, i64 8
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	EXPECT_EQ (exact_class (m.load, *m.caller), classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
 /*
- * Below is `field_load_values ()`, the same walk `operand_class ()` runs over
- * a field load, exported for a caller that wants the values a store can leave
- * rather than the class they agree on. `FieldModule` is reused from above:
- * these tests answer with the store's own value, so `marked_value ()`'s class
- * mark plays no part in them.
+ * Below is `field_load_values ()`, the same walk `operand_class ()` runs over a
+ * field load, exported for a caller that wants the values a store can leave
+ * rather than the class they agree on. These cases answer with the store's own
+ * value, so the stored value carries no class mark.
  */
 
 TEST (OperandClassTest, FieldLoadValuesAnswersTheOneStore)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *value = m.marked_value (m.entry, nullptr);
+	Parsed m (R"(
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %v = load ptr, ptr %p, !stored !0
+  store ptr %v, ptr %f, align 8
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, value);
-	LoadInst *load = m.load_and_return (m.entry);
-
-	FieldValues got = field_load_values (*load);
+	FieldValues got = field_load_values_of (cast<LoadInst> (m.question ()));
 
 	ASSERT_EQ (got.values.size (), 1u);
-	EXPECT_EQ (got.values[0], value);
+	EXPECT_EQ (got.values[0], &m.marked ("stored"));
 	EXPECT_TRUE (got.complete);
 }
 
@@ -1096,19 +995,32 @@ TEST (OperandClassTest, FieldLoadValuesAnswersEveryDistinctStore)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *first = m.marked_value (m.entry, nullptr);
-	Instruction *second = m.marked_value (m.entry, nullptr);
+	Parsed m (R"(
+define ptr @caller(i1 %c, ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  br i1 %c, label %left, label %right
+left:
+  %v1 = load ptr, ptr %p, !first !0
+  store ptr %v1, ptr %f, align 8
+  br label %merge
+right:
+  %v2 = load ptr, ptr %p, !second !0
+  store ptr %v2, ptr %f, align 8
+  br label %merge
+merge:
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, first);
-	m.store_field (m.entry, second);
-	LoadInst *load = m.load_and_return (m.entry);
-
-	FieldValues got = field_load_values (*load);
+	FieldValues got = field_load_values_of (cast<LoadInst> (m.question ()));
 
 	ASSERT_EQ (got.values.size (), 2u);
-	EXPECT_TRUE (is_contained (got.values, first));
-	EXPECT_TRUE (is_contained (got.values, second));
+	EXPECT_TRUE (is_contained (got.values, &m.marked ("first")));
+	EXPECT_TRUE (is_contained (got.values, &m.marked ("second")));
 }
 
 /// The field's own zero-filled initial value is left out of the answer: a
@@ -1118,13 +1030,20 @@ TEST (OperandClassTest, FieldLoadValuesLeavesOutTheZeroFilledInitialValue)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *value = m.marked_value (m.entry, nullptr);
+	Parsed m (R"(
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %v = load ptr, ptr %p, !stored !0
+  store ptr %v, ptr %f, align 8
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, value);
-	LoadInst *load = m.load_and_return (m.entry);
-
-	FieldValues got = field_load_values (*load);
+	FieldValues got = field_load_values_of (cast<LoadInst> (m.question ()));
 
 	for (const Value *v : got.values)
 		EXPECT_FALSE (isa<ConstantPointerNull> (v));
@@ -1136,10 +1055,18 @@ TEST (OperandClassTest, FieldLoadValuesIsEmptyWhereNoStoreReachesTheField)
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	LoadInst *load = m.load_and_return (m.entry);
+	Parsed m (R"(
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	EXPECT_TRUE (field_load_values (*load).values.empty ());
+	EXPECT_TRUE (field_load_values_of (cast<LoadInst> (m.question ())).values.empty ());
 }
 
 /// `field_load_values ()` runs the walk under `ClassRule::guessed`, so an
@@ -1150,22 +1077,24 @@ TEST (OperandClassTest, FieldLoadValuesAnswersIncompleteWhereTheAllocationEscape
 {
 	mono::test::init_runtime ();
 
-	FieldModule m (mono_defaults.object_class);
-	Instruction *value = m.marked_value (m.entry, nullptr);
+	Parsed m (R"(
+define ptr @caller(ptr %p) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable, i64 64, ptr null)
+  %f = getelementptr inbounds i8, ptr %o, i64 8
+  %v = load ptr, ptr %p, !stored !0
+  store ptr %v, ptr %f, align 8
+  call void @opaque(ptr %o)
+  %held = load ptr, ptr %f, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	          mono_defaults.object_class);
 
-	m.store_field (m.entry, value);
-
-	Function *sink = Function::Create (
-		FunctionType::get (Type::getVoidTy (*m.context), { m.base->getType () }, false),
-		GlobalValue::ExternalLinkage, "sink", m.module.get ());
-	IRBuilder<> (m.entry).CreateCall (sink, { m.base });
-
-	LoadInst *load = m.load_and_return (m.entry);
-
-	FieldValues got = field_load_values (*load);
+	FieldValues got = field_load_values_of (cast<LoadInst> (m.question ()));
 
 	ASSERT_EQ (got.values.size (), 1u);
-	EXPECT_EQ (got.values[0], value);
+	EXPECT_EQ (got.values[0], &m.marked ("stored"));
 	EXPECT_FALSE (got.complete);
 }
 

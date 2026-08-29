@@ -12,6 +12,8 @@
 
 #include "passes/array-shape.hpp"
 
+#include "analysis/constant-values.hpp"
+
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
@@ -21,6 +23,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Passes/PassBuilder.h>
 
 #include <gtest/gtest.h>
 
@@ -119,6 +122,27 @@ struct ShapeModule {
 
 /// Dimension zero is read out of the array: the bounds pointer, then either
 /// max_length or the first dimension's length.
+/// Settles \p f, which the queries below take.
+ConstantValues
+settled_for (const Function &f)
+{
+	FunctionAnalysisManager fam;
+	ModuleAnalysisManager mam;
+	LoopAnalysisManager lam;
+	CGSCCAnalysisManager cgam;
+	PassBuilder pb;
+
+	// All four, because MemorySSA asks alias analysis for GlobalsAA, which is
+	// a module analysis it reaches through the proxy.
+	pb.registerModuleAnalyses (mam);
+	pb.registerCGSCCAnalyses (cgam);
+	pb.registerFunctionAnalyses (fam);
+	pb.registerLoopAnalyses (lam);
+	pb.crossRegisterProxies (lam, fam, cgam, mam);
+
+	return MonoConstantValues ().run (const_cast<Function &> (f), fam);
+}
+
 TEST (ArrayShape, ZeroReadsTheHeader)
 {
 	ShapeModule m (array_shape_length, 0);
@@ -164,7 +188,8 @@ TEST (ArrayShape, AFoldKeepsASiteItCannotRead)
 {
 	ShapeModule m (array_shape_length, 1);
 
-	fold_array_shapes (*m.module->getFunction ("caller"));
+	fold_array_shapes (*m.module->getFunction ("caller"),
+	                   settled_for (*m.module->getFunction ("caller")));
 	ASSERT_FALSE (verifyModule (*m.module, &errs ()));
 	EXPECT_NE (m.module->getFunction (m.decl_name), nullptr);
 	EXPECT_EQ (m.count_calls (), 0u);

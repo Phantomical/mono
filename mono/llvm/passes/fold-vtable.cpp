@@ -1,5 +1,6 @@
 #include "fold-vtable.hpp"
 
+#include "analysis/constant-values.hpp"
 #include "analysis/operand-class.hpp"
 #include "analysis/vtable-info.hpp"
 #include "builtins.hpp"
@@ -40,12 +41,13 @@ field_of (StringRef name, const VTableInfo &info, Type *held)
 }
 
 bool
-fold_field (Function &f, StringRef name)
+fold_field (Function &f, StringRef name, const ConstantValues &values)
 {
 	bool changed = false;
 
 	for (CallBase *site : builtin_sites (f, name)) {
-		auto *vtable = dyn_cast<GlobalObject> (site->getArgOperand (0));
+		const auto *vtable = dyn_cast_or_null<GlobalObject> (
+			values.global (site->getArgOperand (0)));
 
 		if (vtable == nullptr)
 			continue;
@@ -66,7 +68,7 @@ fold_field (Function &f, StringRef name)
 } // namespace
 
 bool
-fold_object_vtables (Function &f)
+fold_object_vtables (Function &f, const ConstantValues &values)
 {
 	const CompileState &compile = current_compile ();
 
@@ -84,7 +86,7 @@ fold_object_vtables (Function &f)
 	bool changed = false;
 
 	for (LoadInst *read : reads) {
-		MonoClass *klass = exact_class (object_vtable_read (read), f);
+		MonoClass *klass = exact_class (object_vtable_read (read), f, values);
 
 		if (klass == nullptr)
 			continue;
@@ -103,13 +105,13 @@ fold_object_vtables (Function &f)
 }
 
 bool
-fold_vtable_fields (Function &f)
+fold_vtable_fields (Function &f, const ConstantValues &values)
 {
-	bool changed = fold_field (f, vtable_klass_name);
+	bool changed = fold_field (f, vtable_klass_name, values);
 
-	changed |= fold_field (f, vtable_type_name);
+	changed |= fold_field (f, vtable_type_name, values);
 
-	return fold_field (f, vtable_rank_name) || changed;
+	return fold_field (f, vtable_rank_name, values) || changed;
 }
 
 } // namespace mono

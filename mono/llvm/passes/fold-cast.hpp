@@ -19,6 +19,8 @@ typedef struct _MonoClass MonoClass;
 
 namespace mono {
 
+class ConstantValues;
+
 /// What a test of an operand against a class answers for every class the
 /// operand can hold.
 enum class CastAnswer { Unknown, Yes, No };
@@ -35,7 +37,7 @@ CastAnswer cast_answer (MonoClass *target, MonoClass *held, bool exact);
 
 /// Replaces each type test in \p f that the operand's own class decides with
 /// the value it stands for. Says whether it changed anything.
-bool fold_type_tests (llvm::Function &f);
+bool fold_type_tests (llvm::Function &f, const ConstantValues &values);
 
 } // namespace mono
 

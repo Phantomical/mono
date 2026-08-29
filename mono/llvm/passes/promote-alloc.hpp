@@ -16,6 +16,8 @@ class LoopInfo;
 
 namespace mono {
 
+class ConstantValues;
+
 /// The largest object this takes to the frame, in bytes.
 ///
 /// A frame is not a heap. The bound is what stops a method with many promotable
@@ -42,7 +44,8 @@ constexpr uint64_t promote_alloc_limit = 1024;
 /// would hand every turn the same slot, where the heap gives each one an object
 /// of its own.
 ///
-bool promote_allocations (llvm::Function &f, const llvm::LoopInfo &loops);
+bool promote_allocations (llvm::Function &f, const llvm::LoopInfo &loops,
+                          const ConstantValues &values);
 
 /// Runs promote_allocations () over one function.
 class PromoteAllocationsPass : public llvm::PassInfoMixin<PromoteAllocationsPass> {

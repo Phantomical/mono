@@ -16,6 +16,7 @@
 
 #include "passes/alloc-func.hpp"
 #include "passes/promote-alloc.hpp"
+#include "pipelines.hpp"
 
 #include <llvm/AsmParser/Parser.h>
 #include <llvm/IR/Function.h>
@@ -93,6 +94,7 @@ struct Promoted {
 		pb.registerLoopAnalyses (lam);
 		pb.registerCGSCCAnalyses (cgam);
 		pb.crossRegisterProxies (lam, fam, cgam, mam);
+		register_mono_analyses (fam);
 
 		changed = !PromoteAllocationsPass ().run (*caller, fam).areAllPreserved ();
 

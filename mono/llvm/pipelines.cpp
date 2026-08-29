@@ -1,4 +1,6 @@
 #include "pipelines.hpp"
+
+#include "analysis/constant-values.hpp"
 #include "arch/arch.hpp"
 #include "jit.hpp"
 #include "passes/builtins.hpp"
@@ -75,6 +77,13 @@
 #include <string>
 
 namespace mono {
+
+void
+register_mono_analyses (llvm::FunctionAnalysisManager &fam)
+{
+	fam.registerPass ([] { return MonoConstantValues (); });
+}
+
 
 namespace {
 

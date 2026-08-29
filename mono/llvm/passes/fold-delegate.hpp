@@ -45,6 +45,8 @@ namespace mono {
 /// pointer still equate to each other across whatever runs between them.
 void mark_delegate_method_ptr_read (llvm::LoadInst *load);
 
+class ConstantValues;
+
 /// What the IR says about the delegate arriving at a site.
 struct DelegateTarget {
 	/// The method named, or null where no arm named one or two arms disagreed.
@@ -62,7 +64,8 @@ struct DelegateTarget {
 /// `field_load_values ()`: the delegate a caller stored into an object of its
 /// own, read back out. The walk is bounded by a node budget and answers nothing
 /// at all once it runs out, rather than answering from the part it reached.
-DelegateTarget delegate_target_at (const llvm::Value *receiver);
+DelegateTarget delegate_target_at (llvm::Value *receiver,
+                                  const ConstantValues &values);
 
 /// Enters the delegate's target at each Invoke in \p f the IR names one for: a
 /// settled target directly, a candidate behind a compare against the delegate's

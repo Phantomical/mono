@@ -13,7 +13,7 @@
 #include "devirtualize.hpp"
 
 #include "analysis/operand-class.hpp"
-#include "analysis/value-walk.hpp"
+#include "analysis/constant-values.hpp"
 #include "builtins.hpp"
 #include "compile-state.hpp"
 #include "direct-call.hpp"
@@ -278,9 +278,11 @@ struct Dispatched {
 /// What a receiver of \p klass reaching \p site enters, or nothing where the
 /// class does not settle it.
 std::optional<Dispatched>
-dispatched_at (CallBase *site, MonoClass *klass, Lookup lookup)
+dispatched_at (CallBase *site, MonoClass *klass, Lookup lookup,
+               const ConstantValues &values)
 {
-	auto *index = dyn_cast<ConstantInt> (site->getArgOperand (1));
+	const auto *index =
+		dyn_cast_or_null<ConstantInt> (values.value (site->getArgOperand (1)));
 	FunctionType *shape = called_shape (site);
 
 	if (index == nullptr || shape == nullptr)
@@ -296,7 +298,7 @@ dispatched_at (CallBase *site, MonoClass *klass, Lookup lookup)
 		return Dispatched{ target, shape };
 	}
 
-	auto *key = dyn_cast<GlobalValue> (site->getArgOperand (2));
+	const GlobalValue *key = values.global (site->getArgOperand (2));
 	MonoMethod *asked = key != nullptr ? marked_method_pointer (*key) : nullptr;
 
 	// The key is the last argument, and what the call enters is the method's own
@@ -341,11 +343,12 @@ lookup_at (const Value *v)
 
 /// The method \p site reads, or null where its operands do not settle one.
 MonoMethod *
-site_target (const CallBase *site, Lookup lookup)
+site_target (const CallBase *site, Lookup lookup, const ConstantValues &values)
 {
-	const auto *vtable = dyn_cast<GlobalValue> (site->getArgOperand (0));
+	const GlobalValue *vtable = values.global (site->getArgOperand (0));
 	MonoClass *klass = vtable != nullptr ? marked_class (*vtable) : nullptr;
-	const auto *index = dyn_cast<ConstantInt> (site->getArgOperand (1));
+	const auto *index =
+		dyn_cast_or_null<ConstantInt> (values.value (site->getArgOperand (1)));
 
 	if (klass == nullptr || index == nullptr)
 		return nullptr;
@@ -353,7 +356,7 @@ site_target (const CallBase *site, Lookup lookup)
 	if (lookup == Lookup::vtable)
 		return slot_target (klass, static_cast<int32_t> (index->getSExtValue ()));
 
-	const auto *key = dyn_cast<GlobalValue> (site->getArgOperand (2));
+	const GlobalValue *key = values.global (site->getArgOperand (2));
 	MonoMethod *asked = key != nullptr ? marked_method_pointer (*key) : nullptr;
 
 	if (asked == nullptr)
@@ -363,54 +366,51 @@ site_target (const CallBase *site, Lookup lookup)
 	                             : generic_virtual_target (klass, asked);
 }
 
-/// What the sites reaching a call's callee agree that call enters.
+/// The method and lookup a dispatch site reads.
+struct Reached {
+	MonoMethod *target;
+	Lookup lookup;
+};
+
+/// What the dispatch sites reaching \p callee agree the call enters, or nothing
+/// where they do not agree on one method.
 ///
-/// A dispatch site is one value among the merges in front of the callee rather
-/// than the callee itself. GVN's partial-redundancy elimination is what puts one
-/// there: it inserts a second copy of the site in the predecessor that lacked
-/// one and merges the two with a phi, so a call reads its callee off that phi.
-/// Reading the call rather than the site is what still answers for such a site,
-/// and every value the phi merges has to name the same method before the call
-/// can be rewritten.
-class DispatchWalk {
-public:
-	struct Answer {
-		MonoMethod *target;
-		Lookup lookup;
-	};
+/// A dispatch site is one of the values reaching the callee rather than the
+/// callee itself. GVN's partial-redundancy elimination puts a second copy of
+/// the site in the predecessor that lacked one and merges the two with a phi,
+/// so a call reads its callee off that phi. Two copies of one site name one
+/// method while being two values, which is why this folds over the sources.
+std::optional<Reached>
+reached_target (Value *callee, const ConstantValues &values)
+{
+	const ValueSources &from = values.sources (callee);
 
-	bool skips_null () const { return false; }
+	if (!from.complete || from.sources.empty ())
+		return std::nullopt;
 
-	Answer exhausted () const { return { nullptr, Lookup::vtable }; }
+	std::optional<Reached> agreed;
 
-	/// A rule with no merge node of its own.
-	SmallVector<const Value *, 4> arms (const Value *, WalkState &) const { return {}; }
-
-	std::optional<Answer> leaf (const Value *v) const
-	{
+	for (const Value *v : from.sources) {
 		std::optional<Lookup> lookup = lookup_at (v);
 
 		if (!lookup)
-			return exhausted ();
+			return std::nullopt;
 
-		return Answer{ site_target (cast<CallBase> (v), *lookup), *lookup };
+		MonoMethod *target = site_target (cast<CallBase> (v), *lookup, values);
+
+		if (target == nullptr)
+			return std::nullopt;
+
+		// A call enters one method, so a source another cannot cover is one
+		// the whole answer has to give up on.
+		if (agreed && (agreed->target != target || agreed->lookup != *lookup))
+			return std::nullopt;
+
+		agreed = Reached{ target, *lookup };
 	}
 
-	/// Settles the merge at no method where an arm names none, and where two
-	/// arms name different ones. A call enters one method, so an arm this walk
-	/// cannot answer for is not one another arm can cover.
-	bool fold (std::optional<Answer> &acc, Answer arm) const
-	{
-		if (arm.target == nullptr
-		    || (acc && (acc->target != arm.target || acc->lookup != arm.lookup))) {
-			acc = exhausted ();
-			return false;
-		}
-
-		acc = arm;
-		return true;
-	}
-};
+	return agreed;
+}
 
 /// The calls in \p f that read their callee rather than naming it.
 SmallVector<CallBase *, 8>
@@ -433,7 +433,7 @@ indirect_calls (Function &f)
 } // namespace
 
 bool
-fold_dispatch_sites (Function &f)
+fold_dispatch_sites (Function &f, const ConstantValues &values)
 {
 	const CompileState &compile = current_compile ();
 
@@ -443,12 +443,10 @@ fold_dispatch_sites (Function &f)
 	bool changed = false;
 
 	for (CallBase *call : indirect_calls (f)) {
-		DispatchWalk walk;
-		WalkState state;
-		std::optional<DispatchWalk::Answer> found =
-			walk_value (call->getCalledOperand (), walk, state);
+		std::optional<Reached> found =
+			reached_target (call->getCalledOperand (), values);
 
-		if (!found || found->target == nullptr)
+		if (!found)
 			continue;
 
 		// The key is the last argument, and what the call enters is the
@@ -550,7 +548,7 @@ guardable_array (MonoClass *klass)
  * every array in the slot's set while a guess answers for one of them.
  */
 MonoClass *
-guarded_class (CallBase *site, const Function &f)
+guarded_class (CallBase *site, const Function &f, const ConstantValues &values)
 {
 	Value *object = object_vtable_read (site->getArgOperand (0));
 
@@ -562,15 +560,15 @@ guarded_class (CallBase *site, const Function &f)
 	// site from there. Asking it rather than reading `exact` below is what keeps
 	// the two in step, since it has a rule of its own for a bound on a sealed
 	// class.
-	if (exact_class (object, f) != nullptr)
+	if (exact_class (object, f, values) != nullptr)
 		return nullptr;
 
-	auto [klass, exact] = operand_class (object, f);
+	auto [klass, exact] = operand_class (object, f, values);
 
 	if (klass != nullptr && guard_array_dispatch () && guardable_array (klass))
 		return klass;
 
-	return guard_class_dispatch () ? guessed_class (object, f) : nullptr;
+	return guard_class_dispatch () ? guessed_class (object, f, values) : nullptr;
 }
 
 /// The call that reads \p site's answer, or null where the answer does not
@@ -633,7 +631,7 @@ struct Guardable {
 /// Collects the sites in \p f that call \p name and that a guard can take.
 void
 collect_guardable (Function &f, StringRef name, Lookup lookup, BlockFrequencyInfo &counts,
-                   SmallVectorImpl<Guardable> &into)
+                   const ConstantValues &values, SmallVectorImpl<Guardable> &into)
 {
 	for (CallBase *site : builtin_sites (f, name)) {
 		CallBase *call = sole_call (site);
@@ -641,12 +639,13 @@ collect_guardable (Function &f, StringRef name, Lookup lookup, BlockFrequencyInf
 		if (call == nullptr || !guard_fits (call))
 			continue;
 
-		MonoClass *klass = guarded_class (site, f);
+		MonoClass *klass = guarded_class (site, f, values);
 
 		if (klass == nullptr)
 			continue;
 
-		std::optional<Dispatched> entered = dispatched_at (site, klass, lookup);
+		std::optional<Dispatched> entered =
+			dispatched_at (site, klass, lookup, values);
 
 		if (!entered)
 			continue;
@@ -770,14 +769,16 @@ GuardDispatchPass::run (Function &f, FunctionAnalysisManager &fam)
 		return PreservedAnalyses::all ();
 
 	BlockFrequencyInfo &counts = fam.getResult<BlockFrequencyAnalysis> (f);
+	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
 	SmallVector<Guardable, 4> pending;
 
 	// Every weight is read before the first split, because a block this pass
 	// makes has no count of its own and the analysis is stale the moment one
 	// appears.
-	collect_guardable (f, vtable_func_name, Lookup::vtable, counts, pending);
-	collect_guardable (f, imt_func_name, Lookup::imt, counts, pending);
-	collect_guardable (f, vtable_gfunc_name, Lookup::generic_virtual, counts, pending);
+	collect_guardable (f, vtable_func_name, Lookup::vtable, counts, values, pending);
+	collect_guardable (f, imt_func_name, Lookup::imt, counts, values, pending);
+	collect_guardable (f, vtable_gfunc_name, Lookup::generic_virtual, counts, values,
+	                   pending);
 
 	bool changed = false;
 

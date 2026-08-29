@@ -27,6 +27,8 @@ class Module;
 
 namespace mono {
 
+class ConstantValues;
+
 /// The name prefix of the shape declarations, the attribute naming which
 /// accessor one stands for, and the attribute naming the method a declined
 /// site falls back to. Only the translator writes these three.
@@ -46,7 +48,7 @@ constexpr llvm::StringRef array_shape_lower_bound = "lower_bound";
 /// A dimension the IL settled reads as a constant straight away. One that
 /// arrives through an inlined parameter is a load until SROA has run, which is
 /// why the folds take a function's sites up more than once.
-bool fold_array_shapes (llvm::Function &f);
+bool fold_array_shapes (llvm::Function &f, const ConstantValues &values);
 
 /// Rewrites every site left in \p m, erases the declarations, and says whether
 /// it changed anything.

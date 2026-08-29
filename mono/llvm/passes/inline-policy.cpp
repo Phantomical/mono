@@ -263,10 +263,14 @@ stored_vtable (Value *object, const DataLayout &dl)
 /// \p walked is the function being weighed, and it is what answers for a value
 /// the call site settled nothing about.
 ///
-/// `operand_class ()` reads a parameter's class off the function that declares
+/// `stated_class ()` reads a parameter's class off the function that declares
 /// it, so the function it is handed has to own the value. Handing it the caller
 /// for a callee's argument reads whatever class the caller declares at the same
 /// index, which is a wrong answer that looks like a right one.
+///
+/// The leaf read rather than the merge walk, because the cost model runs with
+/// no analysis manager and the value a site settled has its merges resolved
+/// already.
 std::pair<MonoClass *, bool>
 settled_class (Value *v, const Function &walked, SettledValue settled)
 {
@@ -274,12 +278,12 @@ settled_class (Value *v, const Function &walked, SettledValue settled)
 
 	if (Value *caller_side = settled (v)) {
 		if (const auto *arg = dyn_cast<Argument> (caller_side))
-			return operand_class (caller_side, *arg->getParent ());
+			return stated_class (caller_side, *arg->getParent ());
 		if (const auto *made = dyn_cast<Instruction> (caller_side))
-			return operand_class (caller_side, *made->getFunction ());
+			return stated_class (caller_side, *made->getFunction ());
 	}
 
-	return operand_class (v, walked);
+	return stated_class (v, walked);
 }
 
 /// Whether the profile counted any block of \p f at \p bar or above.

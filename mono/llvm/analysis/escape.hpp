@@ -17,7 +17,8 @@ class Value;
 namespace mono {
 
 /// The allocation \p pointer settles to, or null where it settles to something
-/// else. It reads the four allocation builtins, the `.kept` forms included.
+/// else. It reads every `mono.alloc.` builtin, so an `alloca` and a global are
+/// both something else.
 llvm::CallBase *allocation_behind (llvm::Value *pointer);
 
 /**

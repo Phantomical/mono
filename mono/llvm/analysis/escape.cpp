@@ -79,13 +79,10 @@ allocation_behind (Value *pointer)
 	if (callee == nullptr)
 		return nullptr;
 
-	StringRef name = callee->getName ();
+	if (!callee->getName ().starts_with ("mono.alloc."))
+		return nullptr;
 
-	return name == alloc_object_name || name == alloc_vector_name
-	                       || name == alloc_object_kept_name
-	                       || name == alloc_vector_kept_name
-	               ? call
-	               : nullptr;
+	return call;
 }
 
 bool

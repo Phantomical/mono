@@ -1,5 +1,7 @@
 #include "top-down-inline.hpp"
 
+#include "pipelines.hpp"
+
 #include "inline-copies.hpp"
 #include "inline-cost.hpp"
 #include "tier-counter.hpp"
@@ -71,6 +73,7 @@ struct ScratchAnalyses {
 		pb.registerModuleAnalyses (mam);
 		pb.registerCGSCCAnalyses (cgam);
 		pb.registerFunctionAnalyses (fam);
+		register_mono_analyses (fam);
 		pb.registerLoopAnalyses (lam);
 		pb.crossRegisterProxies (lam, fam, cgam, mam);
 	}

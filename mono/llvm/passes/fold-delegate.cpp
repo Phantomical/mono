@@ -9,6 +9,7 @@
 
 #include "fold-delegate.hpp"
 
+#include "analysis/constant-values.hpp"
 #include "analysis/operand-class.hpp"
 #include "analysis/strip-casts.hpp"
 #include "compile-state.hpp"
@@ -43,13 +44,6 @@ using namespace llvm;
 
 namespace mono {
 namespace {
-
-/// Values the walk below will read before it gives up.
-///
-/// A merge that needs more than this to reach a construction is one where the
-/// delegate came from far enough away that the arm we would guard on is not
-/// obviously the arm that runs.
-constexpr unsigned walk_budget = 16;
 
 /// What a guard's true edge weighs where the function carries no profile.
 ///
@@ -468,74 +462,45 @@ mark_delegate_method_ptr_read (LoadInst *load)
 }
 
 DelegateTarget
-delegate_target_at (const Value *receiver)
+delegate_target_at (Value *receiver, const ConstantValues &values)
 {
-	SmallPtrSet<const Value *, walk_budget> seen;
-	SmallVector<const Value *, walk_budget> pending{ receiver };
+	const ValueSources &from = values.sources (receiver);
 	DelegateTarget answer;
-	bool opaque = false;
 
-	while (!pending.empty ()) {
-		const Value *at = strip_casts (pending.pop_back_val ());
+	/*
+	 * A delegate copied into a field and read back is answered by the store
+	 * walk behind `sources ()`. That answer leaves out the field's own
+	 * zero-filled initial value, which is safe here for a reason no class
+	 * caller has: the Invoke this receiver feeds dereferences it, so a null
+	 * delegate faults at the site instead of reaching a wrong target.
+	 *
+	 * A field whose object escapes still names the delegates the stores this
+	 * walk can see put there. Such an answer is a candidate rather than the
+	 * target, which is what leaves `settled` false and sends the site to the
+	 * guarded form.
+	 */
+	bool opaque = !from.complete;
 
-		if (!seen.insert (at).second)
+	for (const Value *at : from.sources) {
+		if (isa<ConstantPointerNull> (at))
 			continue;
 
-		if (seen.size () > walk_budget)
+		MonoMethod *named = delegate_target (at);
+
+		// A source naming no method is one more path the compare covers, so
+		// it leaves a candidate rather than emptying the answer.
+		if (named == nullptr) {
+			opaque = true;
+			continue;
+		}
+
+		// Two sources naming different methods leave nothing to compare
+		// against: picking one is a guess a profile would have to settle,
+		// and there is no profile here.
+		if (answer.method != nullptr && answer.method != named)
 			return {};
 
-		if (MonoMethod *named = delegate_target (at)) {
-			// Two arms naming different methods leave nothing to compare
-			// against: picking one of them is a guess a profile would have to
-			// settle, and there is no profile here.
-			if (answer.method != nullptr && answer.method != named)
-				return {};
-
-			answer.method = named;
-			continue;
-		}
-
-		if (const auto *merge = dyn_cast<PHINode> (at)) {
-			pending.append (merge->incoming_values ().begin (),
-			                merge->incoming_values ().end ());
-			continue;
-		}
-
-		if (const auto *pick = dyn_cast<SelectInst> (at)) {
-			pending.push_back (pick->getTrueValue ());
-			pending.push_back (pick->getFalseValue ());
-			continue;
-		}
-
-		/*
-		 * A delegate copied into a field and read back is answered by
-		 * `field_load_values ()`, the same field-store walk `operand_class ()`
-		 * runs. The answer leaves out the field's own zero-filled initial
-		 * value, which is safe here for a reason no class caller has: the
-		 * Invoke this receiver feeds dereferences it, so a null delegate
-		 * faults at the site instead of reaching a wrong target.
-		 *
-		 * A field whose object escapes still names the delegates the stores
-		 * this walk can see put there. Such an answer is a candidate rather
-		 * than the target, so it goes on the pending list and marks the whole
-		 * receiver opaque, which is what leaves `settled` false and sends the
-		 * site to the guarded form.
-		 *
-		 * An empty answer, whether because no store reaches a candidate or
-		 * because the field held only that zero, falls through to opaque
-		 * below exactly as any other load did before this case existed.
-		 */
-		if (const auto *load = dyn_cast<LoadInst> (at)) {
-			FieldValues from = field_load_values (*load);
-
-			if (!from.values.empty ()) {
-				pending.append (from.values.begin (), from.values.end ());
-				opaque |= !from.complete;
-				continue;
-			}
-		}
-
-		opaque = true;
+		answer.method = named;
 	}
 
 	answer.settled = answer.method != nullptr && !opaque;
@@ -551,6 +516,7 @@ FoldDelegateInvokesPass::run (Function &f, FunctionAnalysisManager &fam)
 
 	const CompileState &compile = current_compile ();
 	BlockFrequencyInfo &counts = fam.getResult<BlockFrequencyAnalysis> (f);
+	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
 
 	/// A site to rewrite, with the weights its guard will carry. Null weights
 	/// are a settled target, which is entered without one.
@@ -566,7 +532,7 @@ FoldDelegateInvokesPass::run (Function &f, FunctionAnalysisManager &fam)
 	SmallVector<Pending, 8> pending;
 
 	for (CallBase *site : invoke_sites (f)) {
-		DelegateTarget found = delegate_target_at (site->getArgOperand (0));
+		DelegateTarget found = delegate_target_at (site->getArgOperand (0), values);
 
 		if (found.method == nullptr)
 			continue;

@@ -1,6 +1,7 @@
 #include "builtins.hpp"
 
 #include "alloc-func.hpp"
+#include "analysis/constant-values.hpp"
 #include "array-address.hpp"
 #include "array-shape.hpp"
 #include "cast-func.hpp"
@@ -89,19 +90,26 @@ erase_builtin (Module &m, StringRef name)
 }
 
 PreservedAnalyses
-MonoBuiltinConstProp::run (Function &f, FunctionAnalysisManager &)
+MonoBuiltinConstProp::run (Function &f, FunctionAnalysisManager &fam)
 {
 	bool changed = false;
 
 	for (unsigned round = 0; round < fold_rounds; ++round) {
+		// A round rewrites what the round before it read, so each one asks
+		// again rather than folding against a stale answer.
+		if (changed)
+			fam.invalidate (f, PreservedAnalyses::none ());
+
+		const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
+
 		// Type tests first: folding one is what delivers the allocation a
 		// chain's receiver comes from.
-		bool again = fold_type_tests (f);
+		bool again = fold_type_tests (f, values);
 
-		again |= fold_object_vtables (f);
-		again |= fold_vtable_fields (f);
-		again |= fold_dispatch_sites (f);
-		again |= fold_array_shapes (f);
+		again |= fold_object_vtables (f, values);
+		again |= fold_vtable_fields (f, values);
+		again |= fold_dispatch_sites (f, values);
+		again |= fold_array_shapes (f, values);
 
 		/*
 		 * Placed with the folds, ahead of the post_optimization lowering,

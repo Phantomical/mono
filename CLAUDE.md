@@ -521,9 +521,12 @@ as well as by `amd64.hpp`, so it holds nothing but `#define`s.
   the sweep behind it. `eh-gather` and `finally-range` are `MachineFunctionPass`es that
   emit nothing and instead fill in the side channel the EH sections are written from.
 - **`analysis/`** — what a pass asks about the IR, answering rather than rewriting.
-  `operand-class` says what class a value holds, `escape` whether an allocation's
-  pointer leaves the function, and `vtable-info` what a class's vtable symbol
-  carries. `value-walk` and `strip-casts` are the traversals each such rule runs.
+  `constant-values` is `MonoConstantValues`, the function analysis every rule below
+  reads a value through: it settles the whole function once, and answers the constant
+  a value holds or the set of values it can be reached by. `operand-class` says what
+  class a value holds, `escape` whether an allocation's pointer leaves the function,
+  and `vtable-info` what a class's vtable symbol carries. `strip-casts` is the one
+  traversal left, for a rule that compares two spellings of one address.
 
 Where a pass needs something only the front end knew, the front end emits a call to a
 declaration. That declaration's *name* says what the site means (`mono.array.address.*`,
