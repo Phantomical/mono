@@ -5,10 +5,10 @@ description: Review the comments and doc comments in this tree's C/C++ sources a
 
 # Comment review
 
-The house rules are in `CLAUDE.md` ("Commenting Guidelines", "A comment is a claim",
-"Register"). This skill is the procedure for applying them, plus the catalogue of what
-people actually write instead. The full evidence — commits, pushback wording, worked
-before/after pairs — is in `.claude/docs/comment-review.md`.
+This skill holds the house rules, the procedure for applying them, and the catalogue of
+what people write instead. `CLAUDE.md` points here and carries none of them. The full
+evidence — commits, pushback wording, worked before/after pairs — is in
+`.claude/docs/comment-review.md`.
 
 Read `reference/catalogue.md` before reporting anything. Read
 `reference/calibration.md` when a finding feels borderline: it holds the before/after
@@ -55,10 +55,90 @@ This bias does **not** reach the four keeps: a quotation, a live hazard, a speci
 and rationale that still has code to justify. Those are decided by their own rules below,
 and F1 and F2 are what happens when a bias runs over them.
 
+## The house rules
+
+The tree's style guide. The passes below are how these get applied to a diff, and each
+pass carries the diagnostics for the rules it enforces.
+
+Comments are read by humans who know this codebase and know JIT compilation. Write for
+them. Dense or cryptic comments that cannot be understood are not useful.
+
+**Length.** Match it to what the thing needs. A subtle invariant is usually arguable in a
+few sentences. If IR or pseudocode conveys the shape of a transform faster than prose,
+use that instead. A wall of text is not more rigorous than a short one: past a certain
+length it hides the one or two sentences that matter, which is worse than being terse.
+
+**What a doc comment is for.** It states the contract: what the thing does, and what a
+caller needs to use it correctly and safely. Explain *what*, not *how* — anyone
+who needs the mechanism reads the implementation. These are internal docs, so a short
+introduction plus whatever heads off a non-obvious misuse is enough.
+
+What earns its place is what a caller cannot see from the signature and would otherwise
+get wrong: a locking rule, a precondition, what NULL means, an operation that can
+silently not happen, a lifetime or stability guarantee. Internal ordering, which helper
+does the work, and why the function exists at all are none of the caller's business.
+Cut them.
+
+Before you keep a fact, make sure that this function is what enforces it. A rule some
+caller observes belongs to that caller, and stating it here reads as a guarantee this
+function makes. `mono_llvm_jit_compile_method ()` compiles into whatever domain it is
+handed. That icall wrappers get handed the root domain is mini's policy, so mini
+documents it.
+
+**Where rationale goes.** Beside the line it justifies. A doc comment that argues why the
+code takes one approach is holding text the body wants: move it down, do not erase it.
+The doc then keeps the contract and the body keeps the argument. Moving it usually
+sharpens it too, because next to the code you can say which case it is about. Comments
+inside a method are otherwise minimal, and explain *why*.
+
+**One home per fact.** A convention several functions obey gets one block above the code
+that builds it, not a piece in each doc comment. The mono vararg cookie was spelled out
+in five places, each carrying the part its own function needed, and none of them said
+what the buffer looks like. Hoist the mechanism, then cut every restatement. A comment
+that points at the home stays. The same rule covers restating the signature, the file
+extension, or who calls a function: two copies disagree eventually, and the copy a
+reader finds first is the one they believe.
+
+**Do not write:**
+- Archeology. A comment about deleted or legacy code goes stale the next time the code
+  moves.
+- A reference to the current plan or task list. For a later reader without the plan
+  documents, these hide what is actually going on.
+- An explanation of what is *not* happening. Justify the code that is there. Do not
+  narrate the absence of some other mechanism, unless that absence is itself the
+  non-obvious thing a reader needs to trust the code.
+
+**Do not write a count the reader cannot check from the sentence.** "Its whole surface is
+sixteen functions" is wrong the next time someone adds one, and a reader who doubts it has
+to leave the document to find out. Say what bounds the set instead — "keep that surface
+small" is the actual rule, and the count only ever stood in for it. A count is fine when
+the same sentence enumerates what it counts, as in "the three places a call arrives:" and
+then the three. A fourth site then contradicts the list in the place someone adding one is
+already typing. This is the one claim grepping a name does not catch, because the number
+greps clean while the set moves under it.
+
+**Quoted standards are never rewritten.** Several files carry the ECMA-335 Partition III
+passage for the opcode they emit, verbatim, and that is deliberate. It is the normative
+text the code has to satisfy, and it belongs next to the code that satisfies it.
+Summarising one turns the thing you check against into a paraphrase that nothing checks.
+These style rules govern what we write about the code, not the quote. If a block is
+genuinely in the wrong file, move it. Do not shorten it.
+
+Where a quoted block documents the function, it is the whole doc comment. Do not add a
+summary above an emitter saying what the passage below already says. Add a comment only
+for what the standard does not cover: what this backend does with the instruction, which
+local table governs it, or why it departs from the text.
+
+**A comment is a claim.** Treat every comment that names something — an identifier, a
+file, a section, a pass, an environment variable — as an assertion to be checked, and grep
+it before you keep it. This holds when writing as much as when reviewing: assert a
+mechanism only after you observe it, because where a cheap observation exists it beats
+reasoning about what the code probably does. Pass 1 is where a review runs the check.
+
 ## The tree is not the standard
 
 **The style guide outranks the comments in the tree, always.** A block is measured against
-`CLAUDE.md` and the references beside this file, and against nothing else. Most of the
+the house rules below and the references beside this file, and against nothing else. Most of the
 comments here were written by an assistant and most of them fail those rules, so the tree
 is a body of defects rather than a body of examples.
 
@@ -115,7 +195,10 @@ This is by a wide margin the most productive check.
   reword (D1).
 - Read the claim against **every path**, the early returns included. A sentence true on
   the main path and false on an early return is a false sentence, and worse than a
-  missing one, because it reads as a guarantee.
+  missing one, because it reads as a guarantee. `code_address_symbol ()` promised that a
+  call through the pointer it hands back uses this backend's convention, which holds for a
+  method this backend compiles and fails on the early return above it, where a no-wrapper
+  icall's published address is a registered C function.
 - `every` / `each` / `all` / `always` / `never` claim a scope. What is it counted over,
   and does the code hold all of it? A doc promising a container holds many when the code
   puts one in it is a bug in the type — fix the type, not the sentence.
@@ -284,8 +367,10 @@ do it.
 
 ### 5. Pass 4 — register (lowest severity)
 
-Invoke the `simple-english:simple-english` skill rather than working from memory of it.
-Descriptive register.
+Comments here are written in ASD-STE100 Simplified Technical English, descriptive
+register. Invoke the `simple-english:simple-english` skill rather than working from
+memory of it. This is not a style preference: the constraints strip out exactly the
+padding that makes a comment take three reads.
 
 - Modals: `can`, `will` and `must` in an indicative sentence. `should` and `might` are
   hedges — say what happens, or say in the report that you could not establish it.
