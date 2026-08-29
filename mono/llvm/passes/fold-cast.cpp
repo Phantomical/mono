@@ -173,12 +173,6 @@ answer_for (Value *v, MonoClass *target, const Function &f,
             const ConstantValues &values)
 {
 	const ValueSources &from_v = values.sources (v);
-
-	// A set that does not name every value it stands for has values this fold
-	// never weighs, and one of those is free to answer the other way.
-	if (!from_v.complete)
-		return CastAnswer::Unknown;
-
 	CastAnswer agreed = CastAnswer::Unknown;
 	bool constrained = false;
 

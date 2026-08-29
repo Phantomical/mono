@@ -364,11 +364,6 @@ class_of (Value *v, const Function &f, ClassRule rule, const ConstantValues &val
 	std::pair<MonoClass *, bool> agreed { nullptr, false };
 	bool constrained = false;
 
-	// A set the walk could not close leaves out a value the operand can hold,
-	// which only a caller that compares before it acts can pay for.
-	if (!from.complete && rule != ClassRule::guessed)
-		return { nullptr, false };
-
 	for (const Value *source : from.sources) {
 		if (rule != ClassRule::settled && isa<ConstantPointerNull> (source))
 			continue;
@@ -482,14 +477,16 @@ FieldValues
 field_load_values (LoadInst &load, const ConstantValues &values)
 {
 	const ValueSources &from = values.sources (&load);
-	FieldValues answer { {}, from.complete };
-
-	// A load nothing forwarded is reached by itself, which names no value the
-	// field holds.
-	if (from.sources.size () == 1 && from.sources.count (&load) != 0)
-		return { {}, false };
+	FieldValues answer { {}, true };
 
 	for (Value *v : from.sources) {
+		// The load stands for the path the walk could not name, so its own
+		// presence is what says these are not every value the field holds.
+		if (v == &load) {
+			answer.complete = false;
+			continue;
+		}
+
 		if (!isa<ConstantPointerNull> (v))
 			answer.values.push_back (v);
 	}

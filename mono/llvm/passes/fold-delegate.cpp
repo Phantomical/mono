@@ -479,7 +479,7 @@ delegate_target_at (Value *receiver, const ConstantValues &values)
 	 * target, which is what leaves `settled` false and sends the site to the
 	 * guarded form.
 	 */
-	bool opaque = !from.complete;
+	bool opaque = false;
 
 	for (const Value *at : from.sources) {
 		if (isa<ConstantPointerNull> (at))

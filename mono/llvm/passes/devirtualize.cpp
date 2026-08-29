@@ -385,7 +385,7 @@ reached_target (Value *callee, const ConstantValues &values)
 {
 	const ValueSources &from = values.sources (callee);
 
-	if (!from.complete || from.sources.empty ())
+	if (from.sources.empty ())
 		return std::nullopt;
 
 	std::optional<Reached> agreed;

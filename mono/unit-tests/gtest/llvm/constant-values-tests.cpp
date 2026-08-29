@@ -141,13 +141,23 @@ struct Settled {
 
 	const ValueSources &sources () const { return values.sources (&question ()); }
 
+	/// Whether the walk named every value the marked instruction can hold.
+	///
+	/// A value with a path the walk could not name stands for that path itself,
+	/// so its own presence in its set is what says the set is not all of them.
+	bool complete () const { return !sources ().sources.contains (&question ()); }
+
 	/// The values the marked instruction is reached by, named the way
-	/// `answer ()` names one.
+	/// `answer ()` names one. The instruction itself is left out, because it is
+	/// what `complete ()` reports rather than a value the instruction holds.
 	std::vector<std::string> reached () const
 	{
 		std::vector<std::string> named;
 
 		for (const Value *v : sources ().sources) {
+			if (v == &question ())
+				continue;
+
 			if (const auto *global = dyn_cast<GlobalValue> (v)) {
 				named.push_back (global->getName ().str ());
 				continue;
@@ -183,7 +193,8 @@ entry:
 
 	ASSERT_NE (held, nullptr);
 	EXPECT_EQ (held->getType (), m.question ().getType ());
-	EXPECT_EQ (m.reached (), std::vector<std::string> { "vtable_Foo" });
+	EXPECT_EQ (m.reached (),
+	           std::vector<std::string> { "ptrtoint (ptr @vtable_Foo to i64)" });
 }
 
 TEST (ConstantValuesTest, AConstantHoldsItself)
@@ -240,8 +251,8 @@ declare ptr @opaque2()
 )");
 
 	EXPECT_EQ (m.answer (), "-");
-	EXPECT_TRUE (m.sources ().complete);
-	EXPECT_EQ (m.reached (), std::vector<std::string> { "%o" });
+	EXPECT_FALSE (m.complete ());
+	EXPECT_TRUE (m.reached ().empty ());
 }
 
 TEST (ConstantValuesTest, AMergeOfOneConstantAnswersIt)
@@ -280,7 +291,7 @@ merge:
 )");
 
 	EXPECT_EQ (m.answer (), "-");
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_EQ (m.reached (), (std::vector<std::string> { "7", "9" }));
 }
 
@@ -321,7 +332,7 @@ entry:
 )");
 
 	EXPECT_EQ (m.answer (), "-");
-	EXPECT_FALSE (m.sources ().complete);
+	EXPECT_FALSE (m.complete ());
 }
 
 // A walk that drops a back edge to stop a cycle finds nothing here. This one
@@ -396,7 +407,7 @@ entry:
 }
 )");
 
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_EQ (m.reached (), std::vector<std::string> { "vtable_Bar" });
 }
 
@@ -426,7 +437,7 @@ merge:
 }
 )");
 
-	EXPECT_FALSE (m.sources ().complete);
+	EXPECT_FALSE (m.complete ());
 	EXPECT_TRUE (is_contained (m.reached (), "5"));
 	EXPECT_FALSE (is_contained (m.reached (), "9"));
 }
@@ -445,7 +456,7 @@ entry:
 }
 )");
 
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_EQ (m.reached (), std::vector<std::string> { "vtable_Bar" });
 }
 
@@ -469,7 +480,7 @@ merge:
 }
 )");
 
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_EQ (m.reached (), (std::vector<std::string> { "vtable_Bar", "vtable_Foo" }));
 }
 
@@ -492,7 +503,7 @@ merge:
 }
 )");
 
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_EQ (m.reached (), (std::vector<std::string> { "null", "vtable_Bar" }));
 }
 
@@ -515,7 +526,7 @@ merge:
 }
 )");
 
-	EXPECT_FALSE (m.sources ().complete);
+	EXPECT_FALSE (m.complete ());
 	EXPECT_EQ (m.reached (), std::vector<std::string> { "vtable_Bar" });
 }
 
@@ -533,7 +544,7 @@ entry:
 }
 )");
 
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_EQ (m.reached (), std::vector<std::string> { "null" });
 }
 
@@ -563,7 +574,7 @@ merge:
 }
 )");
 
-	EXPECT_FALSE (m.sources ().complete);
+	EXPECT_FALSE (m.complete ());
 	EXPECT_EQ (m.reached (), (std::vector<std::string> { "null", "vtable_Bar" }));
 }
 
@@ -593,8 +604,27 @@ merge:
 }
 )");
 
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_EQ (m.reached (), (std::vector<std::string> { "null", "vtable_Bar" }));
+}
+
+/// The header store `emit_object_alloc ()` writes is what states a fresh
+/// object's class, so the read of that word forwards to it. The read carries no
+/// `!invariant.load`: MemorySSA answers such a load live-on-entry whatever
+/// stores stand in front of it, and the walk would read the allocation's zero.
+TEST (ConstantValuesTest, AVtableReadForwardsToTheHeaderStore)
+{
+	Settled m (R"(
+define ptr @caller(i1 %c, ptr %p, i64 %n) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable_Foo, i64 128, ptr @allocator)
+  store ptr @vtable_Foo, ptr %o, align 8
+  %held = load ptr, ptr %o, align 8, !ask !0
+  ret ptr %held
+}
+)");
+
+	EXPECT_EQ (m.answer (), "vtable_Foo");
 }
 
 TEST (ConstantValuesTest, AFieldTwoStoresAgreeOnIsReachedByOneValue)
@@ -619,7 +649,7 @@ merge:
 
 	// Every path stores, so the zero the allocation was made holding is not
 	// one of the values the load can read.
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_EQ (m.reached (), std::vector<std::string> { "vtable_Bar" });
 }
 
@@ -637,7 +667,7 @@ entry:
 }
 )");
 
-	EXPECT_FALSE (m.sources ().complete);
+	EXPECT_FALSE (m.complete ());
 	EXPECT_TRUE (is_contained (m.reached (), "vtable_Bar"));
 }
 
@@ -655,7 +685,7 @@ entry:
 }
 )");
 
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_TRUE (is_contained (m.reached (), "vtable_Bar"));
 }
 
@@ -673,7 +703,7 @@ entry:
 }
 )");
 
-	EXPECT_FALSE (m.sources ().complete);
+	EXPECT_FALSE (m.complete ());
 }
 
 /// A store between the copy and the load runs on every path that reaches the
@@ -692,7 +722,7 @@ entry:
 }
 )");
 
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_EQ (m.reached (), std::vector<std::string> { "vtable_Bar" });
 }
 
@@ -716,7 +746,7 @@ merge:
 }
 )");
 
-	EXPECT_FALSE (m.sources ().complete);
+	EXPECT_FALSE (m.complete ());
 }
 
 TEST (ConstantValuesTest, AMemcpyElsewhereLeavesTheFieldAlone)
@@ -734,7 +764,7 @@ entry:
 }
 )");
 
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_TRUE (is_contained (m.reached (), "vtable_Bar"));
 }
 
@@ -752,7 +782,7 @@ entry:
 }
 )");
 
-	EXPECT_FALSE (m.sources ().complete);
+	EXPECT_FALSE (m.complete ());
 }
 
 TEST (ConstantValuesTest, AValueCopyElsewhereLeavesTheFieldAlone)
@@ -770,7 +800,7 @@ entry:
 }
 )");
 
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_TRUE (is_contained (m.reached (), "vtable_Bar"));
 }
 
@@ -789,7 +819,7 @@ entry:
 }
 )");
 
-	EXPECT_FALSE (m.sources ().complete);
+	EXPECT_FALSE (m.complete ());
 }
 
 TEST (ConstantValuesTest, AValueCopyReadingTheObjectIsNotAWrite)
@@ -806,7 +836,7 @@ entry:
 }
 )");
 
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_TRUE (is_contained (m.reached (), "vtable_Bar"));
 }
 
@@ -829,13 +859,13 @@ merge:
 )");
 
 	EXPECT_EQ (m.answer (), "-");
-	EXPECT_TRUE (m.sources ().complete);
+	EXPECT_TRUE (m.complete ());
 	EXPECT_EQ (m.reached (), (std::vector<std::string> { "%a", "%b" }));
 }
 
 /// Nothing bounds the set, so a wide merge keeps every value it is reached by
 /// and stays complete.
-TEST (ConstantValuesTest, AMergeWiderThanTheCapStopsNamingValues)
+TEST (ConstantValuesTest, AWideMergeKeepsEveryValue)
 {
 	Settled m (R"(
 define i64 @caller(i1 %c, ptr %p, i64 %n) {
@@ -876,8 +906,8 @@ merge:
 )");
 
 	EXPECT_EQ (m.answer (), "-");
-	EXPECT_FALSE (m.sources ().complete);
-	EXPECT_EQ (m.sources ().sources.size (), 8u);
+	EXPECT_TRUE (m.complete ());
+	EXPECT_EQ (m.sources ().sources.size (), 10u);
 }
 
 } // namespace
