@@ -20,6 +20,18 @@ namespace mono {
 /// holds is found without a remembered-set entry.
 bool fold_stack_barriers (llvm::Function &f);
 
+/// Rewrites each value copy in \p f that the IR settles as safe in the open into
+/// a memcpy or a memmove with the cards behind it. Says whether it changed
+/// anything.
+///
+/// A copy the optimizer can read is what lets SROA scalarize a value type and
+/// what lets the dead-allocation walk erase the object behind it. The site the
+/// translator wrote hides all of that inside one call, because an open copy is
+/// wrong where a copied reference lands somewhere no conservative scan reaches.
+/// `gc_value_copy_name` (`passes/gc-barrier.hpp`) states that rule, and this is
+/// the fold that reads the IR against it.
+bool open_value_copies (llvm::Function &f);
+
 } // namespace mono
 
 #endif

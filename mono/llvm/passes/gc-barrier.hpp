@@ -14,6 +14,7 @@
 namespace llvm {
 class Function;
 class Module;
+class Value;
 } // namespace llvm
 
 namespace mono {
@@ -67,6 +68,37 @@ struct GcBarrierLayout {
 /// Marks the card for a reference the caller has already stored.
 constexpr llvm::StringRef gc_barrier_name = "mono.gc.wbarrier";
 
+/*
+ * The value-copy form is the copy and the cards together:
+ *
+ *   void @mono.gc.wbarrier.value.copy (ptr dest, ptr src, i32 count, i64 size,
+ *                                      ptr klass)
+ *
+ * The translator writes every copy of a value type that holds references as this
+ * one call. count and klass are what the icall behind it takes. size is the
+ * bytes one element holds, which is what the fold needs and the icall works out
+ * again from klass.
+ *
+ * The copy stays inside the call, so the optimizer reads neither end of it. What
+ * the declaration buys is the claims: the icall on its own carries none, so it
+ * captures both pointers and writes every location the module holds.
+ *
+ * `open_value_copies ()` (`passes/fold-barrier.cpp`) replaces the call with a
+ * bare memcpy or memmove where dest is a stack slot. A card records an
+ * old-to-young reference in the heap, and the collector scans a frame as a root
+ * at every collection, so a copy that lands in one owes no card.
+ *
+ * The declaration writes through dest, so it claims argmem readwrite where the
+ * single-reference form above claims argmem read.
+ */
+
+/// Copies a value type that holds references, and marks the cards it owes.
+constexpr llvm::StringRef gc_value_copy_name = "mono.gc.wbarrier.value.copy";
+
+/// The site attribute that says the destination and the source cannot overlap,
+/// which is what lets the fold write a memcpy in place of a memmove.
+constexpr llvm::StringRef gc_no_overlap_attr = "mono-gc-copy-no-overlap";
+
 // The card path names these two addresses. The lowering makes a global for each
 // one. The translator records the address under the same name, because a pass
 // cannot reach the engine's list of externals. Both addresses are fixed for the
@@ -80,13 +112,44 @@ constexpr llvm::StringRef gc_concurrent_flag_symbol =
 constexpr llvm::StringRef gc_barrier_helper_name =
 	"mono_gc_wbarrier_generic_nostore_internal";
 
+/// The icall that copies a value and marks the cards inside one call. Every
+/// collector has one, so the value-copy form lowers to this whatever the layout
+/// says.
+constexpr llvm::StringRef gc_value_copy_helper_name =
+	"mono_gc_wbarrier_value_copy_internal";
+
 /// The declaration in \p m, made on first use and stamped with \p layout.
 llvm::Function *gc_barrier_decl (llvm::Module &m, const GcBarrierLayout &layout);
+
+/// The value-copy declaration in \p m, made on first use and stamped with
+/// \p layout.
+llvm::Function *gc_value_copy_decl (llvm::Module &m, const GcBarrierLayout &layout);
+
+/// The layout \p decl was stamped with. \p decl must be one of the two
+/// declarations above.
+GcBarrierLayout gc_barrier_layout (const llvm::Function &decl);
+
+/// Whether the IR settles \p pointer to a slot in the frame.
+///
+/// The collector reads a card to find a heap field that names a young object. It
+/// scans a frame as a root at each collection instead, so a write into a frame
+/// slot owes no card. `mono_gc_wbarrier_value_copy_internal ()`
+/// (`mono/metadata/sgen-mono.c`) takes the same decision at run time, on
+/// `ptr_on_stack (dest)`.
+///
+/// `getUnderlyingObject ()` stops at a phi and at a select, so a pointer that is
+/// a frame slot on one arm and an object on the other reads as neither.
+bool points_to_the_frame (const llvm::Value *pointer);
 
 /// Rewrites every barrier call into the card path the layout on its declaration
 /// describes, or into the collector's own helper where that layout holds no card
 /// table. Erases the declaration, and says whether it changed anything.
 bool lower_gc_barriers (llvm::Module &m);
+
+/// Rewrites every value-copy call the fold left standing into the collector's
+/// own copy-and-mark icall. Erases the declaration, and says whether it changed
+/// anything.
+bool lower_gc_value_copies (llvm::Module &m);
 
 } // namespace mono
 

@@ -198,7 +198,6 @@ MONO_JIT_ICALL (mono_gc_alloc_string) \
 MONO_JIT_ICALL (mono_gc_alloc_vector) \
 MONO_JIT_ICALL (mono_gc_wbarrier_generic_nostore_internal) \
 MONO_JIT_ICALL (mono_gc_wbarrier_generic_store_internal) \
-MONO_JIT_ICALL (mono_gc_wbarrier_range_copy) \
 MONO_JIT_ICALL (mono_gc_wbarrier_value_copy_internal) \
 MONO_JIT_ICALL (mono_gchandle_get_target_internal) \
 MONO_JIT_ICALL (mono_generic_class_init) \

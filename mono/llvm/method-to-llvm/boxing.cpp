@@ -383,18 +383,16 @@ MethodLLVMEmitter::box_value (MonoIrBuilder &builder, MonoClass *klass, MonoType
 	llvm::Value *payload = builder.CreateGEP (builder.getInt8Ty (), obj,
 	                                          builder.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
 
-	// This matches the copy stobj makes: through the collector when klass has
-	// reference fields, and a plain copy otherwise.
+	// This matches the copy stobj makes: with the cards when klass has reference
+	// fields, and a plain copy otherwise.
 	if (!held_in_memory (type)) {
 		builder.CreateAlignedStore (value, payload, type_alignment (type));
 	} else if (m_class_has_references (klass)) {
-		llvm::Expected<llvm::Value *> cls = class_operand (builder, klass, "mono_class_");
-
-		if (!cls)
-			return cls.takeError ();
-
-		builder.CreateCall (value_copy_decl (),
-		                    {payload, value, builder.getInt32 (1), *cls});
+		// The destination is the object allocated above, so the source cannot
+		// reach it.
+		if (llvm::Error copied =
+		            emit_value_copy (builder, payload, value, klass, /*may_overlap=*/false))
+			return std::move (copied);
 	} else {
 		copy_vtype (builder, payload, value, type, /*native=*/false);
 	}

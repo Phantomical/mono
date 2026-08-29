@@ -199,21 +199,6 @@ MethodLLVMEmitter::emit_stind (MonoIrBuilder &builder, MonoType *element)
 	return llvm::Error::success ();
 }
 
-/// Declares the collector's copy barrier for a value type that holds references.
-///
-/// The barrier copies the bytes and marks the cards for the references it copies,
-/// in one call. The class argument tells it where those reference fields sit.
-llvm::FunctionCallee
-MethodLLVMEmitter::value_copy_decl ()
-{
-	llvm::LLVMContext &ctx = context ();
-	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
-
-	return module->getOrInsertFunction ("mono_gc_wbarrier_value_copy_internal",
-	                                    llvm::Type::getVoidTy (ctx), ptr, ptr,
-	                                    llvm::Type::getInt32Ty (ctx), ptr);
-}
-
 /*
  * III.4.13  ldobj - copy a value from an address to the stack
  *
@@ -405,13 +390,10 @@ MethodLLVMEmitter::emit_cpobj (MonoIrBuilder &builder, uint32_t token)
 		emit_reference_store (builder, *dest, value,
 		                      llvm::Align (TARGET_SIZEOF_VOID_P));
 	} else if (m_class_has_references (klass)) {
-		llvm::Expected<llvm::Value *> cls = class_operand (builder, klass, "mono_class_");
-
-		if (!cls)
-			return cls.takeError ();
-
-		builder.CreateCall (value_copy_decl (),
-		                    {*dest, *src, builder.getInt32 (1), *cls});
+		// The IL says nothing about the two addresses, so they may overlap.
+		if (llvm::Error copied =
+		            emit_value_copy (builder, *dest, *src, klass, /*may_overlap=*/true))
+			return copied;
 	} else {
 		guint32 align = 0;
 		guint32 size = mono_class_value_size (klass, &align);

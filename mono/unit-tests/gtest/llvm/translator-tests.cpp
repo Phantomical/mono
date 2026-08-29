@@ -543,19 +543,51 @@ TEST_F (TranslatorTest, AConcurrentCollectorsFlagRidesOnTheDeclaration)
 	EXPECT_FALSE (decl->hasFnAttribute ("mono-gc-value-decides"));
 }
 
-// A struct with a reference inside cannot be stored as bytes: the copy has to go
-// through the collector so the destination's cards get marked. A struct without
-// references keeps the plain store.
-TEST_F (TranslatorTest, StoringARefStructCopiesThroughTheBarrier)
+// A value type that holds references moves as one call, which is the copy and
+// the cards together. A fold behind the translator is what takes that call apart
+// where the IR says an open copy is safe. A value type with no references owes
+// no cards and copies alone.
+TEST_F (TranslatorTest, StoringARefStructCopiesThroughTheCollector)
 {
-	const char *barrier = "mono_gc_wbarrier_value_copy_internal";
+	const std::string copy = std::string (mono::gc_value_copy_name);
 
-	EXPECT_EQ (translate ("fields", "Fields:SetMixed").count (barrier), 1u);
-	EXPECT_EQ (translate ("fields", "Fields:SetStaticMixed").count (barrier), 1u);
-	EXPECT_EQ (translate ("arrays", "Arrays:SetMixedElem").count (barrier), 1u);
+	EXPECT_EQ (translate ("fields", "Fields:SetMixed").count (copy), 1u);
+	EXPECT_EQ (translate ("fields", "Fields:SetStaticMixed").count (copy), 1u);
+	EXPECT_EQ (translate ("arrays", "Arrays:SetMixedElem").count (copy), 1u);
 
-	EXPECT_EQ (translate ("fields", "Fields:SetFlat").count (barrier), 0u);
-	EXPECT_EQ (translate ("arrays", "Arrays:SetFlatElem").count (barrier), 0u);
+	// The translator leaves the copy inside that call. A memmove is what the
+	// fold behind it writes for a site whose two addresses can overlap, and no
+	// other site here asks for one.
+	EXPECT_EQ (translate ("fields", "Fields:SetMixed").count ("llvm.memmove"), 0u);
+
+	EXPECT_EQ (translate ("fields", "Fields:SetFlat").count (copy), 0u);
+	EXPECT_EQ (translate ("arrays", "Arrays:SetFlatElem").count (copy), 0u);
+}
+
+// The IL says nothing about the two addresses a stobj names, so the site keeps
+// the fold on a memmove. A box is the site that says otherwise, below.
+TEST_F (TranslatorTest, AStoredRefStructCanOverlap)
+{
+	const Translation &field = translate ("fields", "Fields:SetMixed");
+	const llvm::CallInst *copy = nullptr;
+
+	ASSERT_NE (field.function, nullptr) << field.error;
+
+	for (const llvm::Instruction &in : llvm::instructions (*field.function)) {
+		const auto *call = llvm::dyn_cast<llvm::CallInst> (&in);
+
+		if (call != nullptr && call->getCalledFunction () != nullptr
+		    && call->getCalledFunction ()->getName () == mono::gc_value_copy_name)
+			copy = call;
+	}
+
+	ASSERT_NE (copy, nullptr) << field.text ();
+	EXPECT_FALSE (copy->hasFnAttr (mono::gc_no_overlap_attr)) << field.text ();
+
+	// The class's own alignment rides on the site, because the fold has no
+	// other way to read it back.
+	EXPECT_TRUE (copy->getParamAlign (0).has_value ()) << field.text ();
+	EXPECT_TRUE (copy->getParamAlign (1).has_value ()) << field.text ();
 }
 
 // One relocation per class, not per field: both loads resolve through the same
@@ -1045,17 +1077,31 @@ TEST_F (TranslatorTest, BoxOnAReferenceTypeAllocatesNothing)
 	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 0u);
 }
 
-// A struct with a reference inside cannot be memcpy'd into the box: the copy has to
-// go through the collector so the new object's cards get marked.
-TEST_F (TranslatorTest, BoxingARefStructCopiesThroughTheBarrier)
+// A struct with a reference inside cannot be memcpy'd into the box: the copy
+// owes the new object's cards. The site says the two addresses cannot overlap,
+// because the destination is the object the box allocated above.
+TEST_F (TranslatorTest, BoxingARefStructCopiesThroughTheCollector)
 {
+	const std::string copy = std::string (mono::gc_value_copy_name);
 	const Translation &plain = translate ("boxing", "Boxing:BoxPair");
 	const Translation &with_ref = translate ("boxing", "Boxing:BoxRefPair");
+	const llvm::CallInst *site = nullptr;
 
 	ASSERT_NE (with_ref.function, nullptr) << with_ref.error;
-	EXPECT_EQ (with_ref.count ("mono_gc_wbarrier_value_copy_internal"), 1u);
+	EXPECT_EQ (with_ref.count (copy), 1u);
 	ASSERT_NE (plain.function, nullptr) << plain.error;
-	EXPECT_EQ (plain.count ("mono_gc_wbarrier_value_copy_internal"), 0u);
+	EXPECT_EQ (plain.count (copy), 0u);
+
+	for (const llvm::Instruction &in : llvm::instructions (*with_ref.function)) {
+		const auto *call = llvm::dyn_cast<llvm::CallInst> (&in);
+
+		if (call != nullptr && call->getCalledFunction () != nullptr
+		    && call->getCalledFunction ()->getName () == mono::gc_value_copy_name)
+			site = call;
+	}
+
+	ASSERT_NE (site, nullptr) << with_ref.text ();
+	EXPECT_TRUE (site->hasFnAttr (mono::gc_no_overlap_attr)) << with_ref.text ();
 }
 
 // unbox must reject an array (whose element class would match) by its rank byte, and

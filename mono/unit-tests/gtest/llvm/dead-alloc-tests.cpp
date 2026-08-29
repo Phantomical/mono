@@ -17,6 +17,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -34,6 +35,10 @@ namespace {
 /// The offset the cases write a reference field at. The walk reads no layout,
 /// so the value is arbitrary.
 constexpr unsigned reference_field = 32;
+
+/// The size of the value type the copy cases move. Arbitrary for the same
+/// reason.
+constexpr uint64_t copied_bytes = 24;
 
 /// A module holding one caller and the allocator its allocation sites name.
 struct AllocModule {
@@ -93,6 +98,42 @@ struct AllocModule {
 	void barrier (Value *address, Value *value)
 	{
 		b.CreateCall (gc_barrier_decl (*module, GcBarrierLayout ()), { address, value });
+	}
+
+	/// Copies a value type into the field of \p object at \p offset, as the fold
+	/// leaves such a copy where the destination is a frame slot. A copy in the
+	/// open owes no cards, so no barrier stands beside it.
+	void copy_into (Value *object, unsigned offset, Value *source,
+	                bool is_volatile = false)
+	{
+		b.CreateMemCpy (field (object, offset), Align (8), source, Align (8),
+		                b.getInt64 (copied_bytes), is_volatile);
+	}
+
+	/// The one call a value copy is where the fold leaves it standing, which is
+	/// every destination the IR does not settle to a frame slot.
+	void value_copy (Value *dest, Value *source)
+	{
+		b.CreateCall (gc_value_copy_decl (*module, GcBarrierLayout ()),
+		              { dest, source, b.getInt32 (1), b.getInt64 (copied_bytes),
+		                Constant::getNullValue (b.getPtrTy ()) });
+	}
+
+	unsigned value_copies ()
+	{
+		Function *decl = module->getFunction (gc_value_copy_name);
+
+		return decl == nullptr ? 0 : unsigned (decl->getNumUses ());
+	}
+
+	unsigned copies () const
+	{
+		unsigned seen = 0;
+
+		for (const Instruction &in : instructions (*caller))
+			seen += isa<MemTransferInst> (&in) ? 1 : 0;
+
+		return seen;
 	}
 
 	/// How many sites the declaration of one form still has.
@@ -237,6 +278,133 @@ TEST (DeadAllocTest, AnObjectDiesWithTheObjectThatHeldIt)
 	EXPECT_TRUE (m.erase ());
 	EXPECT_EQ (m.allocations (), 0u) << m.text ();
 	EXPECT_EQ (m.barriers (), 0u) << m.text ();
+}
+
+// A copy the fold opened writes into the object, which is the same user as a
+// store.
+TEST (DeadAllocTest, AnObjectAnOpenCopyFilledGoesWithTheCopy)
+{
+	AllocModule m;
+	CallInst *object = m.allocate ();
+
+	m.b.CreateAlignedStore (ConstantPointerNull::get (m.b.getPtrTy ()), object, Align (8));
+	m.copy_into (object, reference_field, m.elsewhere ());
+
+	EXPECT_TRUE (m.erase ());
+	EXPECT_EQ (m.allocations (), 0u) << m.text ();
+	EXPECT_EQ (m.copies (), 0u) << m.text ();
+}
+
+// The object is the source, so the copy reads it out into memory the walk never
+// reaches.
+TEST (DeadAllocTest, ACopyThatReadsTheObjectKeepsIt)
+{
+	AllocModule m;
+	CallInst *object = m.allocate ();
+
+	m.b.CreateAlignedStore (ConstantPointerNull::get (m.b.getPtrTy ()), object, Align (8));
+	m.b.CreateMemCpy (m.elsewhere (), Align (8), object, Align (8),
+	                  m.b.getInt64 (copied_bytes));
+
+	EXPECT_FALSE (m.erase ());
+	EXPECT_EQ (m.allocations (), 1u) << m.text ();
+	EXPECT_EQ (m.copies (), 1u) << m.text ();
+}
+
+// A value copy that names the object as its source reads it out into memory the
+// walk never reaches. Taking that call for one of our own would erase an object
+// something else now holds a copy of.
+TEST (DeadAllocTest, AValueCopyThatNamesTheObjectAsTheSourceStays)
+{
+	AllocModule m;
+	CallInst *object = m.allocate ();
+
+	m.b.CreateAlignedStore (ConstantPointerNull::get (m.b.getPtrTy ()), object, Align (8));
+	m.value_copy (m.field (m.elsewhere (), reference_field), object);
+
+	EXPECT_FALSE (m.erase ());
+	EXPECT_EQ (m.allocations (), 1u) << m.text ();
+	EXPECT_EQ (m.value_copies (), 1u) << m.text ();
+}
+
+// A volatile copy is an event of its own, the same as a volatile store.
+TEST (DeadAllocTest, AVolatileCopyKeepsTheObject)
+{
+	AllocModule m;
+	CallInst *object = m.allocate ();
+
+	m.b.CreateAlignedStore (ConstantPointerNull::get (m.b.getPtrTy ()), object, Align (8));
+	m.copy_into (object, reference_field, m.elsewhere (), /*is_volatile=*/true);
+
+	EXPECT_FALSE (m.erase ());
+	EXPECT_EQ (m.allocations (), 1u) << m.text ();
+	EXPECT_EQ (m.copies (), 1u) << m.text ();
+}
+
+// A value copy the fold left standing writes into the object, which is the same
+// user as a store with its barrier.
+TEST (DeadAllocTest, AnObjectAValueCopyWroteIntoGoesWithTheCopy)
+{
+	AllocModule m;
+	CallInst *object = m.allocate ();
+
+	m.b.CreateAlignedStore (ConstantPointerNull::get (m.b.getPtrTy ()), object, Align (8));
+	m.value_copy (m.field (object, reference_field), m.elsewhere ());
+
+	EXPECT_TRUE (m.erase ());
+	EXPECT_EQ (m.allocations (), 0u) << m.text ();
+	EXPECT_EQ (m.value_copies (), 0u) << m.text ();
+}
+
+// The copy reads the object out into memory the walk never reaches.
+TEST (DeadAllocTest, AValueCopyThatReadsTheObjectKeepsIt)
+{
+	AllocModule m;
+	CallInst *object = m.allocate ();
+
+	m.b.CreateAlignedStore (ConstantPointerNull::get (m.b.getPtrTy ()), object, Align (8));
+	m.value_copy (m.field (m.elsewhere (), reference_field), object);
+
+	EXPECT_FALSE (m.erase ());
+	EXPECT_EQ (m.allocations (), 1u) << m.text ();
+	EXPECT_EQ (m.value_copies (), 1u) << m.text ();
+}
+
+// Two objects that hold each other and that nothing else reads. Each one is dead
+// only because the other is, which is the shape a walk over one object at a time
+// cannot settle.
+TEST (DeadAllocTest, TwoObjectsThatHoldEachOtherGoTogether)
+{
+	AllocModule m;
+	CallInst *first = m.allocate ();
+	CallInst *second = m.allocate ();
+
+	m.b.CreateAlignedStore (ConstantPointerNull::get (m.b.getPtrTy ()), first, Align (8));
+	m.b.CreateAlignedStore (ConstantPointerNull::get (m.b.getPtrTy ()), second, Align (8));
+	m.store_reference (first, reference_field, second);
+	m.store_reference (second, reference_field, first);
+
+	EXPECT_TRUE (m.erase ());
+	EXPECT_EQ (m.allocations (), 0u) << m.text ();
+	EXPECT_EQ (m.barriers (), 0u) << m.text ();
+	EXPECT_EQ (m.stores (), 0u) << m.text ();
+}
+
+// The same pair with a reader on one arm. A read of either object keeps both,
+// because the one that is read still holds the other.
+TEST (DeadAllocTest, ACycleWithAReaderKeepsBothObjects)
+{
+	AllocModule m;
+	CallInst *first = m.allocate ();
+	CallInst *second = m.allocate ();
+
+	m.store_reference (first, reference_field, second);
+	m.store_reference (second, reference_field, first);
+	m.b.CreateAlignedLoad (m.b.getPtrTy (), m.field (first, reference_field), Align (8));
+
+	EXPECT_FALSE (m.erase ());
+	EXPECT_EQ (m.allocations (), 2u) << m.text ();
+	EXPECT_EQ (m.barriers (), 2u) << m.text ();
 }
 
 // A call reaches the object from outside the function, whatever it does with it.

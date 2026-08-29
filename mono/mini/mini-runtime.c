@@ -4410,10 +4410,6 @@ register_icalls (void)
 	register_icall (mono_gsharedvt_constrained_call, mono_icall_sig_object_ptr_ptr_ptr_ptr_ptr, FALSE);
 	register_icall (mono_gsharedvt_value_copy, mono_icall_sig_void_ptr_ptr_ptr, TRUE);
 
-	//WARNING We do runtime selection here but the string *MUST* be to a fallback function that has same signature and behavior
-	MonoRangeCopyFunction const mono_gc_wbarrier_range_copy = mono_gc_get_range_copy_func ();
-	register_icall_no_wrapper (mono_gc_wbarrier_range_copy, mono_icall_sig_void_ptr_ptr_int);
-
 	/* The stores the LLVM backend emits a direct call to. */
 	register_icall_no_wrapper (mono_gc_wbarrier_generic_store_internal, mono_icall_sig_void_ptr_object);
 	register_icall_no_wrapper (mono_gc_wbarrier_value_copy_internal, mono_icall_sig_void_ptr_ptr_int_ptr);

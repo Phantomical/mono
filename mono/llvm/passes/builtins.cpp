@@ -103,10 +103,14 @@ MonoBuiltinConstProp::run (Function &f, FunctionAnalysisManager &)
 		again |= fold_dispatch_sites (f);
 		again |= fold_array_shapes (f);
 
-		// Placed with the folds, ahead of the first SROA and of the
-		// post_optimization lowering, which turns a barrier into open code no
-		// pass reads back.
+		/*
+		 * Placed with the folds, ahead of the post_optimization lowering,
+		 * which leaves a barrier as open code and a value copy as an icall.
+		 * A pass reads neither one back. This point sits behind SROA, which
+		 * is what settles the two pointers a value copy asks about.
+		 */
 		again |= fold_stack_barriers (f);
+		again |= open_value_copies (f);
 
 		if (!again)
 			break;
@@ -140,6 +144,7 @@ MonoBuiltinLower::run (Module &m, ModuleAnalysisManager &)
 	case LowerStage::post_optimization:
 		changed = lower_allocations (m);
 		changed |= lower_gc_barriers (m);
+		changed |= lower_gc_value_copies (m);
 		break;
 	}
 

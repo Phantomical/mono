@@ -20,7 +20,9 @@
 #include "mono/metadata/remoting.h"
 #include "mono/metadata/threads-types.h"
 #include <llvm/ADT/StringRef.h>
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Type.h>
@@ -78,6 +80,59 @@ write_barrier_layout ()
 
 } // namespace
 
+/// Records the addresses the card path names, so the engine resolves the
+/// globals the lowering makes. A pass cannot ask for them itself.
+void
+MethodLLVMEmitter::record_barrier_symbols (const GcBarrierLayout &gc)
+{
+	if (gc.card_table == nullptr)
+		return;
+
+	record_external (std::string (gc_card_table_symbol), ExternalSymbol::Kind::Address,
+	                 gc.card_table);
+
+	if (gc.concurrent_flag != nullptr)
+		record_external (std::string (gc_concurrent_flag_symbol),
+		                 ExternalSymbol::Kind::Address, gc.concurrent_flag);
+}
+
+/// Copies a value type that holds references, and marks the cards its reference
+/// fields land on.
+///
+/// klass must hold references. A class with none needs no barrier, and the
+/// caller copies it as plain bytes instead. may_overlap says that the two
+/// addresses can name the same bytes, which the fold behind this reads as the
+/// difference between a memcpy and a memmove.
+llvm::Error
+MethodLLVMEmitter::emit_value_copy (MonoIrBuilder &builder, llvm::Value *dest,
+                                    llvm::Value *src, MonoClass *klass, bool may_overlap)
+{
+	llvm::LLVMContext &ctx = context ();
+	const GcBarrierLayout &gc = write_barrier_layout ();
+	guint32 align = 0;
+	llvm::Value *size = builder.getInt64 (mono_class_value_size (klass, &align));
+	llvm::Expected<llvm::Value *> cls = class_operand (builder, klass, "mono_class_");
+
+	if (!cls)
+		return cls.takeError ();
+
+	record_barrier_symbols (gc);
+
+	llvm::CallInst *copy = builder.CreateCall (
+		gc_value_copy_decl (*module, gc),
+		{ dest, src, builder.getInt32 (1), size, *cls });
+
+	// The alignment the class asks for rides on the site, because a fold that
+	// writes the copy in the open has no other way to read it back.
+	copy->addParamAttr (0, llvm::Attribute::getWithAlignment (ctx, llvm::Align (align)));
+	copy->addParamAttr (1, llvm::Attribute::getWithAlignment (ctx, llvm::Align (align)));
+
+	if (!may_overlap)
+		copy->addFnAttr (llvm::Attribute::get (ctx, gc_no_overlap_attr));
+
+	return llvm::Error::success ();
+}
+
 /// Stores a reference and writes the collector's barrier beside that store.
 ///
 /// address can name any location a reference lives in: an object field, a static, an
@@ -95,17 +150,7 @@ MethodLLVMEmitter::emit_reference_store (MonoIrBuilder &builder, llvm::Value *ad
 	if (llvm::MDNode *tag = tbaa_tag (access, /*is_reference=*/true))
 		store->setMetadata (llvm::LLVMContext::MD_tbaa, tag);
 
-	// The lowering makes a global for each of these and the engine resolves it
-	// by name, which is what a pass cannot ask for itself.
-	if (gc.card_table != nullptr) {
-		record_external (std::string (gc_card_table_symbol),
-		                 ExternalSymbol::Kind::Address, gc.card_table);
-
-		if (gc.concurrent_flag != nullptr)
-			record_external (std::string (gc_concurrent_flag_symbol),
-			                 ExternalSymbol::Kind::Address, gc.concurrent_flag);
-	}
-
+	record_barrier_symbols (gc);
 	builder.CreateCall (gc_barrier_decl (*module, gc), { address, value });
 }
 

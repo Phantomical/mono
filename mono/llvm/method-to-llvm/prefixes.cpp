@@ -311,19 +311,14 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
 			mono_class_from_mono_type_internal (mini_get_underlying_type (location));
 
 		/*
-		 * A struct with references inside cannot move as plain bytes. The collector
-		 * must mark the cards its reference fields land on, and only its own
-		 * copy routine knows how to do that.
+		 * A struct with references inside owes the cards its reference fields
+		 * land on. The IL says nothing about the two addresses, so they may
+		 * overlap.
 		 */
 		if (m_class_has_references (klass)) {
-			llvm::Expected<llvm::Value *> cls =
-				class_operand (builder, klass, "mono_class_");
-
-			if (!cls)
-				return cls.takeError ();
-
-			builder.CreateCall (value_copy_decl (),
-			                    {address, value, builder.getInt32 (1), *cls});
+			if (llvm::Error copied = emit_value_copy (builder, address, value, klass,
+			                                          /*may_overlap=*/true))
+				return copied;
 		} else {
 			builder.CreateMemCpyInline (
 				address, align, value, type_alignment (location),

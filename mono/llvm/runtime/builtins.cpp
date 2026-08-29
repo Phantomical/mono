@@ -5,6 +5,7 @@
 #include "domain-method.hpp"
 #include "mini.h"
 #include "mono/metadata/appdomain.h"
+#include "mono/metadata/gc-internals.h"
 #include "mono/metadata/marshal.h"
 #include <llvm/Support/DynamicLibrary.h>
 #include <vector>

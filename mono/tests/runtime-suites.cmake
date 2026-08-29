@@ -281,6 +281,18 @@ mono_runtime_suite(runtime-alloc-kept TESTS alloc-elide.exe
 mono_runtime_suite(runtime-alloc-zeroed TESTS alloc-elide.exe
                    ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=100000")
 
+# The copy a value type with references moves as, and the cards behind it.
+# check-remset-consistency walks the old heap at each minor collection and
+# aborts on an old-to-young reference no remembered set holds, which is what a
+# missing card leaves behind. SGen only -- Boehm parses MONO_GC_DEBUG itself and
+# knows only do-not-finalize and log-finalizers, so it would run this arm with
+# no check at all. The threshold reaches tier 2, where the copy meets SROA and
+# the dead-allocation walk. The arms are short enough that the program ends
+# first at the default.
+mono_runtime_suite(runtime-value-copy TESTS value-copy.exe GC sgen
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=100000"
+                       "MONO_GC_DEBUG=check-remset-consistency")
+
 # Continuations, whose two outcomes want naming rather than accepting either.
 # With everything compiled and a collector that keeps the saved stack out of the
 # heap, they work. Boehm is the collector that does not, and the tier-0 arm

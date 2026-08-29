@@ -8,9 +8,10 @@
 
 #include "alloc-func.hpp"
 #include "builtins.hpp"
+#include "escape.hpp"
 #include "gc-barrier.hpp"
 
-#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
@@ -22,10 +23,15 @@
 #include <llvm/IR/ValueHandle.h>
 #include <llvm/Transforms/Utils/Local.h>
 
+#include <utility>
+
 using namespace llvm;
 
 namespace mono {
 namespace {
+
+/// The allocation sites this run is still willing to take away.
+using Candidates = SmallPtrSet<const CallInst *, 8>;
 
 /// What one allocation reaches.
 struct Cluster {
@@ -48,24 +54,50 @@ is_lifetime_mark (const Instruction &in)
 	       || call->getIntrinsicID () == Intrinsic::lifetime_end;
 }
 
+/// The declarations a barrier site names, or null where the module holds none.
+struct Barriers {
+	const Function *store = nullptr;
+	const Function *range = nullptr;
+	const Function *value_copy = nullptr;
+
+	bool holds (const Function *called) const
+	{
+		return called != nullptr
+		       && (called == store || called == range || called == value_copy);
+	}
+};
+
 /**
  * Walks what \p alloc reaches and fills \p cluster in. Returns false where a
- * user can observe the object.
+ * user reads the object, or where the erase cannot take that user away.
  *
- * Four users are accepted: a store through the object, a barrier for that
- * store, a getelementptr, and a lifetime mark. Everything else is a refusal. A
- * load reads the object back, and a call hands it outside the function.
+ * It accepts a getelementptr and a lifetime mark. It accepts the writes this
+ * backend makes into an object as well: a store with its barrier, a value copy,
+ * and the memcpy or memmove such a copy becomes where the fold opens it.
+ * Everything else is a refusal. A load reads the object back, and a call hands
+ * it outside the function.
  *
- * The object has to be the destination rather than the value. A store of the
- * object into another object writes through a pointer this walk never reaches.
- * The barrier beside it is then all the walk finds. Taking that barrier for one
- * of our own erases an object something else now holds. The walk reads the
- * users of each derived value, so a refusal at either operand catches the pair.
+ * The object has to be the destination rather than what is written, with one
+ * exception. A write of the object into another object goes through a pointer
+ * this walk never reaches, so the barrier beside it is all the walk finds.
+ * Taking that barrier for one of our own erases an object something else now
+ * holds. The exception is a destination \p candidates still holds: that object
+ * dies in this same round, and its own cluster is what takes the write away.
+ * The walk reads the users of each derived value, so a refusal at either operand
+ * catches the pair.
  */
 bool
-collect (CallInst &alloc, const Function *barrier, Cluster &cluster)
+collect (CallInst &alloc, const Barriers &barriers, const Candidates &candidates,
+         Cluster &cluster)
 {
 	SmallVector<Value *, 8> queue;
+
+	// Whether the object a write names as its destination dies in this round.
+	auto destination_dies = [&] (Value *destination) {
+		auto *holder = dyn_cast_or_null<CallInst> (allocation_behind (destination));
+
+		return holder != nullptr && candidates.contains (holder);
+	};
 
 	cluster.derived.insert (&alloc);
 	queue.push_back (&alloc);
@@ -94,10 +126,37 @@ collect (CallInst &alloc, const Function *barrier, Cluster &cluster)
 
 			if (auto *store = dyn_cast<StoreInst> (in)) {
 				// A volatile or an atomic store is an event of its own.
-				if (!store->isSimple () || store->getValueOperand () == value)
+				if (!store->isSimple ())
 					return false;
 
+				if (store->getValueOperand () == value
+				    && store->getPointerOperand () != value) {
+					if (!destination_dies (store->getPointerOperand ()))
+						return false;
+
+					continue;
+				}
+
 				cluster.users.insert (store);
+				continue;
+			}
+
+			if (auto *copy = dyn_cast<MemTransferInst> (in)) {
+				// A volatile copy is an event of its own.
+				if (copy->isVolatile ())
+					return false;
+
+				if (copy->getRawSource () == value && copy->getRawDest () != value) {
+					if (!destination_dies (copy->getRawDest ()))
+						return false;
+
+					continue;
+				}
+
+				if (copy->getRawDest () != value)
+					return false;
+
+				cluster.users.insert (copy);
 				continue;
 			}
 
@@ -108,11 +167,19 @@ collect (CallInst &alloc, const Function *barrier, Cluster &cluster)
 
 			auto *call = dyn_cast<CallInst> (in);
 
-			if (barrier == nullptr || call == nullptr)
+			if (call == nullptr)
 				return false;
-			if (call->getCalledFunction () != barrier)
+			if (!barriers.holds (call->getCalledFunction ()))
 				return false;
-			if (call->getArgOperand (0) != value || call->getArgOperand (1) == value)
+
+			if (call->getArgOperand (1) == value && call->getArgOperand (0) != value) {
+				if (!destination_dies (call->getArgOperand (0)))
+					return false;
+
+				continue;
+			}
+
+			if (call->getArgOperand (0) != value)
 				return false;
 
 			cluster.users.insert (call);
@@ -122,28 +189,66 @@ collect (CallInst &alloc, const Function *barrier, Cluster &cluster)
 	return true;
 }
 
-/// Takes \p alloc and \p cluster away, and adds to \p orphans each value the
-/// cluster stops reading.
-void
-erase (CallInst &alloc, const Cluster &cluster, SmallVectorImpl<WeakTrackingVH> &orphans)
+/**
+ * Whether \p alloc can be taken away, with \p cluster naming what goes with it.
+ *
+ * Two questions answer this, and they are asked apart. Can anything outside the
+ * function reach the object? Does anything inside the function read it back?
+ * The first is what `allocation_escapes ()` answers, and \p candidates is what
+ * vouches for an object this one is stored into. The second is the walk above,
+ * which also names every instruction the erase deletes.
+ */
+bool
+is_dead (CallInst &alloc, const Barriers &barriers, const Candidates &candidates,
+         Cluster &cluster)
 {
-	for (Instruction *in : cluster.users)
+	auto keeps_it_inside = [&] (CallBase &holder) {
+		auto *call = dyn_cast<CallInst> (&holder);
+
+		return call != nullptr && candidates.contains (call);
+	};
+
+	if (allocation_escapes (alloc, keeps_it_inside))
+		return false;
+
+	return collect (alloc, barriers, candidates, cluster);
+}
+
+/// Takes every candidate away with its cluster, and adds to \p orphans each
+/// value the group stops reading.
+void
+erase (const SmallVectorImpl<CallInst *> &sites, const Candidates &candidates,
+       DenseMap<CallInst *, Cluster> &clusters, SmallVectorImpl<WeakTrackingVH> &orphans)
+{
+	SmallSetVector<Instruction *, 32> doomed;
+
+	for (CallInst *site : sites) {
+		if (!candidates.contains (site))
+			continue;
+
+		for (Instruction *in : clusters[site].users)
+			doomed.insert (in);
+
+		doomed.insert (site);
+	}
+
+	for (Instruction *in : doomed)
 		for (Value *operand : in->operands ())
 			if (auto *made = dyn_cast<Instruction> (operand))
-				if (!cluster.derived.contains (made))
+				if (!doomed.contains (made))
 					orphans.push_back (made);
 
-	for (Value *operand : alloc.operands ())
-		if (auto *made = dyn_cast<Instruction> (operand))
-			orphans.push_back (made);
+	/*
+	 * Two passes over the group. A store of one dead object into another reads
+	 * a value the group itself makes, so no single order erases each
+	 * instruction while it has no uses left. With every operand dropped first,
+	 * the order does not matter.
+	 */
+	for (Instruction *in : doomed)
+		in->dropAllReferences ();
 
-	// Each getelementptr was found while the walk read the users of its own
-	// pointer, so a value comes before what reads it. Reverse order therefore
-	// erases each user while it has no uses left.
-	for (Instruction *in : reverse (cluster.users))
+	for (Instruction *in : doomed)
 		in->eraseFromParent ();
-
-	alloc.eraseFromParent ();
 }
 
 } // namespace
@@ -151,31 +256,61 @@ erase (CallInst &alloc, const Cluster &cluster, SmallVectorImpl<WeakTrackingVH> 
 bool
 erase_dead_allocations (Function &f)
 {
-	const Function *barrier = f.getParent ()->getFunction (gc_barrier_name);
+	const Module &m = *f.getParent ();
+	const Barriers barriers = { m.getFunction (gc_barrier_name),
+		                    m.getFunction (gc_value_copy_name) };
 	bool changed = false;
 
 	for (bool again = true; again;) {
 		SmallVector<WeakTrackingVH, 8> orphans;
+		SmallVector<CallInst *, 8> sites;
+		Candidates candidates;
+		DenseMap<CallInst *, Cluster> clusters;
 
 		again = false;
 
-		// A cluster stops reading what it stored, so one object dies with
-		// another. The scan repeats safely: an allocation is never a user of
-		// another one, so no erase reaches a site the scan below still holds.
 		for (StringRef name : { alloc_object_name, alloc_vector_name })
 			for (CallBase *site : builtin_sites (f, name)) {
 				// A site inside a clause is an invoke. Erasing one asks
 				// for a repair of the pads its edges name, so it keeps
 				// its object.
-				auto *call = dyn_cast<CallInst> (site);
+				if (auto *call = dyn_cast<CallInst> (site)) {
+					sites.push_back (call);
+					candidates.insert (call);
+				}
+			}
+
+		/*
+		 * Every site starts as a candidate and drops out at the first user
+		 * that observes it. Two objects that hold each other are dead only as
+		 * a pair, which one pass over the sites cannot decide: each arm reads
+		 * the other's answer. Dropping one candidate can take another's reason
+		 * away, so the loop repeats until a pass drops none.
+		 */
+		for (bool settling = true; settling;) {
+			settling = false;
+			clusters.clear ();
+
+			for (CallInst *site : sites) {
 				Cluster cluster;
 
-				if (call == nullptr || !collect (*call, barrier, cluster))
+				if (!candidates.contains (site))
 					continue;
 
-				erase (*call, cluster, orphans);
-				changed = again = true;
+				if (is_dead (*site, barriers, candidates, cluster)) {
+					clusters[site] = std::move (cluster);
+					continue;
+				}
+
+				candidates.erase (site);
+				settling = true;
 			}
+		}
+
+		if (!candidates.empty ()) {
+			erase (sites, candidates, clusters, orphans);
+			changed = again = true;
+		}
 
 		// Outside the scans above, which hold pointers this can erase.
 		RecursivelyDeleteTriviallyDeadInstructionsPermissive (orphans);

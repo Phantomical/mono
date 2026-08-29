@@ -10,7 +10,9 @@
 
 #include "mono/metadata/abi-details.h"
 
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
+#include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
@@ -42,9 +44,8 @@ constexpr StringRef value_decides_attr = "mono-gc-value-decides";
 constexpr StringRef concurrent_flag_attr = "mono-gc-concurrent-flag";
 constexpr StringRef concurrent_flag_size_attr = "mono-gc-concurrent-flag-size";
 
-/// What the barrier does to memory: it reads what its arguments name, and it
-/// reads and writes the collector's own tables, which the module reaches no
-/// other way.
+/// What a barrier does to memory: it reads what its arguments name, and it reads
+/// and writes the collector's own tables, which the module reaches no other way.
 ///
 /// The write is what keeps the call. With the read alone, DCE erases every
 /// barrier before a lowering sees one, and a compile is left with the store and
@@ -53,6 +54,15 @@ MemoryEffects
 barrier_effects ()
 {
 	return MemoryEffects::argMemOnly (ModRefInfo::Ref)
+	       | MemoryEffects::inaccessibleMemOnly (ModRefInfo::ModRef);
+}
+
+/// The same for the value-copy form, which makes the copy itself and so writes
+/// through its destination.
+MemoryEffects
+value_copy_effects ()
+{
+	return MemoryEffects::argMemOnly (ModRefInfo::ModRef)
 	       | MemoryEffects::inaccessibleMemOnly (ModRefInfo::ModRef);
 }
 
@@ -99,6 +109,86 @@ Constant *
 gc_symbol (Module &m, StringRef name)
 {
 	return m.getOrInsertGlobal (name, Type::getInt8Ty (m.getContext ()));
+}
+
+/// Stamps the claims a barrier declaration makes, and the layout the lowering
+/// reads back. Every form takes its two pointers first. \p writes_dest is for
+/// the value-copy form, which makes the copy and so writes through the first of
+/// them.
+void
+stamp_barrier (Function *decl, const GcBarrierLayout &layout, bool writes_dest = false)
+{
+	LLVMContext &c = decl->getContext ();
+
+	decl->setDoesNotThrow ();
+	decl->setMemoryEffects (writes_dest ? value_copy_effects () : barrier_effects ());
+	decl->addFnAttr (Attribute::WillReturn);
+	decl->addFnAttr (Attribute::NoCallback);
+
+	/*
+	 * A barrier marks a table from the address it is given and keeps neither
+	 * pointer. `lower_card ()` writes the card byte the destination indexes, and
+	 * `lower_helper ()` calls the collector's own
+	 * `mono_gc_wbarrier_generic_nostore_internal ()`, which is
+	 * `sgen_card_table_mark_address ()` under SGen and `GC_dirty ()` under Boehm.
+	 * A remembered set that instead recorded the address would capture it, and
+	 * `sgen-cardtable.c` holds the one assignment to
+	 * `remset.wbarrier_generic_nostore`.
+	 *
+	 * Capture is tracked apart from the memory effects above, so a barrier with
+	 * no such attribute hands the object its destination points into to an
+	 * opaque call. Every call below that then may-writes the object's fields.
+	 * A field a caller stored before a loop is then re-read inside it, and the
+	 * class an allocation stated does not reach the dispatch that wants it.
+	 *
+	 * `readonly` on each parameter states, per argument, what the function-level
+	 * effects above already say for both: the barrier never writes through
+	 * either pointer. A caller that reads only the parameter attribute -
+	 * `CallBase::onlyReadsMemory (OpNo)` does, and does not consult
+	 * `MemoryEffects` - still gets the right answer.
+	 */
+	for (unsigned arg = 0; arg < 2; ++arg) {
+		decl->addParamAttr (arg, Attribute::getWithCaptureInfo (c, CaptureInfo::none ()));
+
+		if (arg == 1 || !writes_dest)
+			decl->addParamAttr (arg, Attribute::ReadOnly);
+	}
+
+	if (layout.card_table == nullptr)
+		return;
+
+	set_number (decl, card_table_attr, reinterpret_cast<uintptr_t> (layout.card_table));
+	set_number (decl, card_mask_attr, layout.card_mask);
+	set_number (decl, card_bits_attr, uint64_t (layout.card_bits));
+	set_number (decl, nursery_attr, reinterpret_cast<uintptr_t> (layout.nursery_start));
+	set_number (decl, nursery_bits_attr, uint64_t (layout.nursery_bits));
+
+	if (layout.value_decides)
+		decl->addFnAttr (value_decides_attr);
+
+	if (layout.concurrent_flag != nullptr) {
+		set_number (decl, concurrent_flag_attr,
+		            reinterpret_cast<uintptr_t> (layout.concurrent_flag));
+		set_number (decl, concurrent_flag_size_attr, layout.concurrent_flag_size);
+	}
+}
+
+/// Writes a 1 into the card byte that \p target indexes. \p target is the
+/// destination as an integer.
+void
+mark_card (IRBuilder<> &b, Module &m, const GcBarrierLayout &gc, Value *target)
+{
+	Value *index = b.CreateLShr (target, gc.card_bits);
+
+	// A zero mask is a table that covers the address space, so the index needs
+	// none.
+	if (gc.card_mask != 0)
+		index = b.CreateAnd (index, ConstantInt::get (target->getType (), gc.card_mask));
+
+	b.CreateAlignedStore (
+		b.getInt8 (1),
+		b.CreateGEP (b.getInt8Ty (), gc_symbol (m, gc_card_table_symbol), index),
+		Align (1));
 }
 
 /// Rewrites one site into the test and the card store it stands for.
@@ -181,18 +271,7 @@ lower_card (CallInst *site, const GcBarrierLayout &gc)
 	}
 
 	b.SetInsertPoint (card);
-
-	Value *index = b.CreateLShr (target, gc.card_bits);
-
-	// A zero mask is a table that covers the address space, so the index needs
-	// none.
-	if (gc.card_mask != 0)
-		index = b.CreateAnd (index, ConstantInt::get (word, gc.card_mask));
-
-	b.CreateAlignedStore (
-		b.getInt8 (1),
-		b.CreateGEP (b.getInt8Ty (), gc_symbol (m, gc_card_table_symbol), index),
-		Align (1));
+	mark_card (b, m, gc, target);
 	b.CreateBr (done);
 }
 
@@ -219,6 +298,60 @@ lower_helper (CallInst *site)
 	site->eraseFromParent ();
 }
 
+/**
+ * Rewrites one value-copy site into the collector's own copy-and-mark icall.
+ *
+ * The icall makes the copy itself, so the references it writes never stand in
+ * the heap without a card. It marks every card the range covers, and it holds
+ * the thread inside a critical region while it does, which stops a collection
+ * reading the destination in between.
+ *
+ * The site carries the class the icall wants, because only the front end can
+ * name it. size rides beside it for the fold, which cannot ask a class its
+ * width.
+ */
+void
+lower_value_copy (CallInst *site)
+{
+	Module &m = *site->getModule ();
+	LLVMContext &c = m.getContext ();
+	Type *ptr = PointerType::get (c, 0);
+	FunctionCallee helper = m.getOrInsertFunction (
+		gc_value_copy_helper_name, Type::getVoidTy (c), ptr, ptr,
+		Type::getInt32Ty (c), ptr);
+
+	if (auto *decl = dyn_cast<Function> (helper.getCallee ())) {
+		decl->setDoesNotThrow ();
+		decl->setMemoryEffects (value_copy_effects ());
+	}
+
+	IRBuilder<> b (site);
+
+	b.SetCurrentDebugLocation (site->getDebugLoc ());
+	b.CreateCall (helper, { site->getArgOperand (0), site->getArgOperand (1),
+	                        site->getArgOperand (2), site->getArgOperand (4) });
+	site->eraseFromParent ();
+}
+
+/// The sites of \p name in \p m, as calls. The declaration is nounwind, so no
+/// site is on an unwind edge and there is no handler to keep.
+SmallVector<CallInst *, 8>
+barrier_sites (Module &m, StringRef name)
+{
+	SmallVector<CallInst *, 8> calls;
+
+	for (CallBase *site : builtin_sites (m, name)) {
+		auto *call = dyn_cast<CallInst> (site);
+
+		if (call == nullptr)
+			report_fatal_error ("a write barrier site is an invoke");
+
+		calls.push_back (call);
+	}
+
+	return calls;
+}
+
 } // namespace
 
 Function *
@@ -230,57 +363,36 @@ gc_barrier_decl (Module &m, const GcBarrierLayout &layout)
 		builtin_decl (m, gc_barrier_name,
 	                      FunctionType::get (Type::getVoidTy (c), { ptr, ptr }, false));
 
-	decl->setDoesNotThrow ();
-	decl->setMemoryEffects (barrier_effects ());
-	decl->addFnAttr (Attribute::WillReturn);
-	decl->addFnAttr (Attribute::NoCallback);
-
-	/*
-	 * A barrier marks a table from the address it is given and keeps neither
-	 * pointer. `lower_card ()` writes the card byte the destination indexes, and
-	 * `lower_helper ()` calls the collector's own
-	 * `mono_gc_wbarrier_generic_nostore_internal ()`, which is
-	 * `sgen_card_table_mark_address ()` under SGen and `GC_dirty ()` under Boehm.
-	 * A remembered set that instead recorded the address would capture it, and
-	 * `sgen-cardtable.c` holds the one assignment to
-	 * `remset.wbarrier_generic_nostore`.
-	 *
-	 * Capture is tracked apart from the memory effects above, so a barrier with
-	 * no such attribute hands the object its destination points into to an
-	 * opaque call. Every call below that then may-writes the object's fields.
-	 * A field a caller stored before a loop is then re-read inside it, and the
-	 * class an allocation stated does not reach the dispatch that wants it.
-	 *
-	 * `readonly` on each parameter states, per argument, what the function-level
-	 * effects above already say for both: the barrier never writes through
-	 * either pointer. A caller that reads only the parameter attribute -
-	 * `CallBase::onlyReadsMemory (OpNo)` does, and does not consult
-	 * `MemoryEffects` - still gets the right answer.
-	 */
-	decl->addParamAttr (0, Attribute::getWithCaptureInfo (c, CaptureInfo::none ()));
-	decl->addParamAttr (1, Attribute::getWithCaptureInfo (c, CaptureInfo::none ()));
-	decl->addParamAttr (0, Attribute::ReadOnly);
-	decl->addParamAttr (1, Attribute::ReadOnly);
-
-	if (layout.card_table == nullptr)
-		return decl;
-
-	set_number (decl, card_table_attr, reinterpret_cast<uintptr_t> (layout.card_table));
-	set_number (decl, card_mask_attr, layout.card_mask);
-	set_number (decl, card_bits_attr, uint64_t (layout.card_bits));
-	set_number (decl, nursery_attr, reinterpret_cast<uintptr_t> (layout.nursery_start));
-	set_number (decl, nursery_bits_attr, uint64_t (layout.nursery_bits));
-
-	if (layout.value_decides)
-		decl->addFnAttr (value_decides_attr);
-
-	if (layout.concurrent_flag != nullptr) {
-		set_number (decl, concurrent_flag_attr,
-		            reinterpret_cast<uintptr_t> (layout.concurrent_flag));
-		set_number (decl, concurrent_flag_size_attr, layout.concurrent_flag_size);
-	}
-
+	stamp_barrier (decl, layout);
 	return decl;
+}
+
+Function *
+gc_value_copy_decl (Module &m, const GcBarrierLayout &layout)
+{
+	LLVMContext &c = m.getContext ();
+	Type *ptr = PointerType::get (c, 0);
+	Function *decl = builtin_decl (
+		m, gc_value_copy_name,
+		FunctionType::get (Type::getVoidTy (c),
+	                           { ptr, ptr, Type::getInt32Ty (c),
+	                             Type::getInt64Ty (c), ptr },
+	                           false));
+
+	stamp_barrier (decl, layout, /*writes_dest=*/true);
+	return decl;
+}
+
+GcBarrierLayout
+gc_barrier_layout (const Function &decl)
+{
+	return layout_of (decl);
+}
+
+bool
+points_to_the_frame (const Value *pointer)
+{
+	return isa<AllocaInst> (getUnderlyingObject (pointer));
 }
 
 bool
@@ -293,21 +405,28 @@ lower_gc_barriers (Module &m)
 
 	GcBarrierLayout layout = layout_of (*decl);
 
-	for (CallBase *site : builtin_sites (m, gc_barrier_name)) {
-		auto *call = dyn_cast<CallInst> (site);
-
-		// The declaration is nounwind, so no site is on an unwind edge and
-		// there is no handler to keep.
-		if (call == nullptr)
-			report_fatal_error ("a write barrier site is an invoke");
-
-		if (layout.card_table != nullptr)
+	for (CallInst *call : barrier_sites (m, gc_barrier_name)) {
+		if (points_to_the_frame (call->getArgOperand (0)))
+			call->eraseFromParent ();
+		else if (layout.card_table != nullptr)
 			lower_card (call, layout);
 		else
 			lower_helper (call);
 	}
 
 	return erase_builtin (m, gc_barrier_name);
+}
+
+bool
+lower_gc_value_copies (Module &m)
+{
+	if (m.getFunction (gc_value_copy_name) == nullptr)
+		return false;
+
+	for (CallInst *call : barrier_sites (m, gc_value_copy_name))
+		lower_value_copy (call);
+
+	return erase_builtin (m, gc_value_copy_name);
 }
 
 } // namespace mono

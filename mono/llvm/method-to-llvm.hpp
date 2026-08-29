@@ -41,6 +41,8 @@
 
 namespace mono {
 
+struct GcBarrierLayout;
+
 /// A method the translator will not share between reference instantiations.
 ///
 /// This is not a compile failure. The method is translated again against the
@@ -985,9 +987,12 @@ private:
 	llvm::Error emit_refanyval (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_refanytype (MonoIrBuilder &builder);
 
+	void record_barrier_symbols (const GcBarrierLayout &gc);
 	void emit_reference_store (MonoIrBuilder &builder, llvm::Value *address,
 	                           llvm::Value *value, llvm::Align align,
 	                           ManagedAccess access = ManagedAccess::untagged ());
+	llvm::Error emit_value_copy (MonoIrBuilder &builder, llvm::Value *dest,
+	                             llvm::Value *src, MonoClass *klass, bool may_overlap);
 	llvm::Expected<MonoClassField *> resolve_field (uint32_t token, bool want_static,
 	                                                bool *out_is_static = nullptr);
 	llvm::Constant *extern_symbol (const std::string &name);
@@ -1157,7 +1162,6 @@ private:
 	                        llvm::Align src_align, llvm::Value *size);
 	llvm::Error emit_ldind (MonoIrBuilder &builder, MonoType *element);
 	llvm::Error emit_stind (MonoIrBuilder &builder, MonoType *element);
-	llvm::FunctionCallee value_copy_decl ();
 	llvm::Expected<llvm::Function *> object_new_decl ();
 	llvm::Expected<llvm::Value *> emit_object_alloc (MonoIrBuilder &builder,
 	                                                 MonoClass *klass, bool for_box);

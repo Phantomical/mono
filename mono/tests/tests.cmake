@@ -11,6 +11,7 @@ set(MONO_TESTS_CS_SRC
   cast-cache.cs
   cast-subtype.cs
   alloc-elide.cs
+  value-copy.cs
   typeof-gettype.cs
   sealed-devirt.cs
   generic-unloading-sub.2.cs

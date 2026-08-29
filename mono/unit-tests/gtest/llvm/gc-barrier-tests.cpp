@@ -1,7 +1,9 @@
 /*
- * Tests for lower_gc_barriers (), which writes a write barrier back as the card
- * the collector reads, and for fold_stack_barriers (), which takes a barrier
- * off a store into the frame.
+ * Tests for the lowerings that write a write barrier back as the card the
+ * collector reads, and for the two folds in front of them:
+ * `fold_stack_barriers ()` takes a barrier off a store into the frame, and
+ * `open_value_copies ()` takes a value copy apart where the IR says an open copy
+ * is safe.
  *
  * Pure LLVM. Each case stamps a layout of its own on the declaration, so the
  * three card shapes and the helper are all reachable whatever collector the
@@ -18,6 +20,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -237,6 +240,21 @@ TEST (GcBarrierTest, TheDeclarationClaimsTheCardTableAndReadsItsArguments)
 	EXPECT_EQ (effects.getModRef (IRMemLocation::Other), ModRefInfo::NoModRef);
 }
 
+TEST (GcBarrierTest, AStoreIntoTheFrameMarksNothing)
+{
+	BarrierModule m (value_decides_layout ());
+	IRBuilder<> b (m.site);
+	AllocaInst *local = b.CreateAlloca (b.getInt8Ty (), b.getInt32 (32));
+
+	m.site->setArgOperand (0, b.CreateConstInBoundsGEP1_32 (b.getInt8Ty (), local, 8));
+	m.lower ();
+
+	EXPECT_FALSE (verifyModule (*m.module, &errs ()));
+	EXPECT_EQ (m.module->getFunction (gc_barrier_name), nullptr);
+	EXPECT_EQ (m.count ("store i8 1"), 0u) << m.text ();
+	EXPECT_EQ (m.count ("@mono_gc_card_table"), 0u) << m.text ();
+}
+
 /// A module holding a caller with a local of its own.
 struct StackModule {
 	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
@@ -344,6 +362,185 @@ TEST (StackBarrierTest, ADestinationOfTwoObjectsKeepsItsBarrier)
 
 	EXPECT_FALSE (m.fold ());
 	EXPECT_EQ (m.barriers (), 1u);
+}
+
+/// A module holding one value copy of a type that holds references.
+///
+/// \p dest_in_frame and \p src_in_frame each replace a parameter with a local,
+/// which is what the fold reads.
+struct ValueCopyModule {
+	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
+	std::unique_ptr<Module> module;
+	Function *caller = nullptr;
+	CallInst *site = nullptr;
+
+	static constexpr uint64_t copied_bytes = 24;
+
+	ValueCopyModule (bool dest_in_frame = false, bool src_in_frame = false,
+	                 bool no_overlap = false)
+	{
+		module = std::make_unique<Module> ("value copies", *context);
+
+		Type *ptr = PointerType::get (*context, 0);
+
+		caller = Function::Create (FunctionType::get (Type::getVoidTy (*context),
+		                                              { ptr, ptr }, false),
+		                           GlobalValue::ExternalLinkage, "caller", module.get ());
+
+		BasicBlock *entry = BasicBlock::Create (*context, "entry", caller);
+		IRBuilder<> b (entry);
+		Type *block = ArrayType::get (b.getInt8Ty (), copied_bytes);
+		Value *dest = dest_in_frame ? cast<Value> (b.CreateAlloca (block))
+		                            : cast<Value> (caller->getArg (0));
+		Value *src = src_in_frame ? cast<Value> (b.CreateAlloca (block))
+		                          : cast<Value> (caller->getArg (1));
+
+		site = b.CreateCall (gc_value_copy_decl (*module, value_decides_layout ()),
+		                     { dest, src, b.getInt32 (1), b.getInt64 (copied_bytes),
+		                       Constant::getNullValue (ptr) });
+		site->addParamAttr (0, Attribute::getWithAlignment (*context, Align (8)));
+		site->addParamAttr (1, Attribute::getWithAlignment (*context, Align (8)));
+
+		if (no_overlap)
+			site->addFnAttr (Attribute::get (*context, gc_no_overlap_attr));
+
+		b.CreateRetVoid ();
+	}
+
+	bool fold ()
+	{
+		bool changed = open_value_copies (*caller);
+
+		EXPECT_FALSE (verifyModule (*module, &errs ()));
+		return changed;
+	}
+
+	void lower () { lower_gc_value_copies (*module); }
+
+	std::string text () const
+	{
+		std::string printed;
+		raw_string_ostream out (printed);
+
+		module->print (out, nullptr);
+		return printed;
+	}
+
+	unsigned count (StringRef needle) const
+	{
+		std::string text = this->text ();
+		unsigned seen = 0;
+		size_t at = 0;
+
+		while ((at = text.find (needle.str (), at)) != std::string::npos) {
+			++seen;
+			at += needle.size ();
+		}
+
+		return seen;
+	}
+
+	unsigned copies () const
+	{
+		unsigned seen = 0;
+
+		for (const Instruction &in : instructions (*caller))
+			seen += isa<MemTransferInst> (&in) ? 1 : 0;
+
+		return seen;
+	}
+
+	unsigned sites (StringRef name) const
+	{
+		Function *decl = module->getFunction (name);
+
+		return decl == nullptr ? 0 : unsigned (decl->getNumUses ());
+	}
+};
+
+// The copy writes through the destination, which is what tells this declaration
+// apart from the two that only mark. The source is read, and neither pointer is
+// kept.
+TEST (GcValueCopyTest, TheDeclarationWritesThroughItsDestination)
+{
+	ValueCopyModule m;
+	Function *decl = m.module->getFunction (gc_value_copy_name);
+
+	ASSERT_NE (decl, nullptr);
+
+	MemoryEffects effects = decl->getMemoryEffects ();
+
+	EXPECT_TRUE (decl->doesNotThrow ());
+	EXPECT_TRUE (isModSet (effects.getModRef (IRMemLocation::ArgMem)));
+	EXPECT_TRUE (isRefSet (effects.getModRef (IRMemLocation::ArgMem)));
+	EXPECT_TRUE (isModSet (effects.getModRef (IRMemLocation::InaccessibleMem)));
+	EXPECT_EQ (effects.getModRef (IRMemLocation::Other), ModRefInfo::NoModRef);
+
+	EXPECT_FALSE (decl->getArg (0)->getAttributes ().hasAttribute (Attribute::ReadOnly));
+	EXPECT_TRUE (decl->getArg (1)->getAttributes ().hasAttribute (Attribute::ReadOnly));
+	EXPECT_TRUE (decl->getArg (0)->getAttributes ().hasAttribute (Attribute::Captures));
+	EXPECT_TRUE (decl->getArg (1)->getAttributes ().hasAttribute (Attribute::Captures));
+}
+
+// A destination in the heap keeps the whole call. The copy and its cards reach
+// the collector together there, which is what an open copy cannot do.
+TEST (GcValueCopyTest, ADestinationInTheHeapStaysOneCall)
+{
+	ValueCopyModule m;
+
+	EXPECT_FALSE (m.fold ());
+	EXPECT_EQ (m.sites (gc_value_copy_name), 1u) << m.text ();
+	EXPECT_EQ (m.copies (), 0u) << m.text ();
+
+	m.lower ();
+
+	EXPECT_FALSE (verifyModule (*m.module, &errs ()));
+	EXPECT_EQ (m.module->getFunction (gc_value_copy_name), nullptr);
+	EXPECT_EQ (m.count ("call void @mono_gc_wbarrier_value_copy_internal(ptr %0, ptr %1, "
+	                    "i32 1, ptr null)"),
+	           1u)
+		<< m.text ();
+}
+
+// A source in the frame decides nothing. The destination is what owes the card,
+// and this one is in the heap.
+TEST (GcValueCopyTest, ASourceInTheFrameKeepsTheCall)
+{
+	ValueCopyModule m (/*dest_in_frame=*/false, /*src_in_frame=*/true);
+
+	EXPECT_FALSE (m.fold ());
+	EXPECT_EQ (m.sites (gc_value_copy_name), 1u) << m.text ();
+	EXPECT_EQ (m.copies (), 0u) << m.text ();
+}
+
+// A site that says the two cannot overlap gets a memcpy. The box is the producer
+// of one: it copies into the object it has just allocated.
+TEST (GcValueCopyTest, ASiteThatCannotOverlapGetsAMemcpy)
+{
+	ValueCopyModule m (/*dest_in_frame=*/true, /*src_in_frame=*/false,
+	                   /*no_overlap=*/true);
+
+	EXPECT_TRUE (m.fold ());
+	EXPECT_EQ (m.count ("call void @llvm.memcpy"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("call void @llvm.memmove"), 0u) << m.text ();
+	EXPECT_EQ (m.count ("align 8 "), 2u) << m.text ();
+}
+
+// A destination in the frame is a root the collector scans at each collection,
+// so the copy owes no card at all and the call becomes the copy it was made of.
+//
+// No managed producer reaches this arm today: the translator writes a local
+// destination as a plain copy already. It is here for a later pass that turns an
+// allocation into an alloca.
+TEST (GcValueCopyTest, ADestinationInTheFrameOwesNoCards)
+{
+	ValueCopyModule m (/*dest_in_frame=*/true);
+
+	EXPECT_TRUE (m.fold ());
+	EXPECT_EQ (m.sites (gc_value_copy_name), 0u) << m.text ();
+	EXPECT_EQ (m.copies (), 1u) << m.text ();
+	EXPECT_EQ (m.count ("call void @llvm.memmove"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("@mono_gc_card_table"), 0u) << m.text ();
 }
 
 } // namespace
