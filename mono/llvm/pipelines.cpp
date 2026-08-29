@@ -11,6 +11,7 @@
 #include "passes/inline-copies.hpp"
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
+#include "passes/promote-alloc.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "passes/rgctx-dedup.hpp"
 #include "passes/rgctx-fetch.hpp"
@@ -270,6 +271,7 @@ MonoPassBuilder::MonoPassBuilder (llvm::TargetMachine *TM, OneFileFS *ProfileFS,
 	 */
 	registerPeepholeEPCallback (
 		[] (llvm::FunctionPassManager &FPM, llvm::OptimizationLevel) {
+			FPM.addPass (mono::PromoteAllocationsPass ());
 			FPM.addPass (mono::MonoBuiltinConstProp ());
 		});
 }
