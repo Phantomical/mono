@@ -9,6 +9,7 @@
 #include "method-symbols.hpp"
 #include "passes/alloc-func.hpp"
 #include "passes/strip-casts.hpp"
+#include "value-walk.hpp"
 
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
@@ -337,39 +338,19 @@ leaf_operand_class (const Value *v, const Function &f)
 }
 
 /*
- * Below is the walk that looks through a merge. operand_class () and
- * exact_class () are both one call into it, with the null rule set the way
- * each of them needs it.
+ * Below is the class rule `value-walk.hpp` runs. `operand_class ()`,
+ * `exact_class ()` and `guessed_class ()` are each one call into that walk,
+ * each under its own `ClassRule`.
  *
- * A phi that carries a value around a loop can name itself, directly or
- * through another phi. `visiting` names the values already on the call stack
- * for this walk. A value found there contributes nothing, and the walk does
- * not visit it again. This is sound by induction: if every incoming outside
- * the cycle names one class, the cycle itself never disagrees with that
- * class.
- *
- * This makes "found nothing" different from "found two classes that
- * disagree." Two disagreeing incomings settle the merge at no class. That
- * answer, unlike "found nothing", carries out to whatever merge called this
- * one, and settles it at no class too.
- *
- * "Found nothing" means the walk skipped every incoming, either by the cycle
- * rule above or by the null rule below. The merge that called this one can
- * still settle on a class from its own other incomings. `std::nullopt`
- * stands for "found nothing". Every other answer, no-class included, is
- * concrete. The two functions below this walk are the only place a
- * `std::nullopt` becomes a concrete answer. Their callers cannot read any
- * other kind of answer.
- *
- * A load reaching a matching store below joins the walk as a third kind of
- * merge node, beside a phi and a select: `matching_field_stores ()` below
- * gives it arms of its own, one value per store plus a trailing null for the
- * field's zero-filled initial value, and the same cycle rule covers a store
- * that names the load back, directly or through another merge.
+ * A load reaching a matching store joins the walk as a third kind of merge
+ * node, beside a phi and a select: `matching_field_stores ()` below gives it
+ * arms of its own, one value per store plus a trailing null for the field's
+ * zero-filled initial value. The walk's cycle rule covers a store that names
+ * the load back, directly or through another merge.
  */
 
-/// How strong an answer the caller needs, which is what decides how each walk
-/// below treats a path it cannot see the end of.
+/// How strong an answer the caller needs, which is what decides how the class
+/// rule below treats a path it cannot see the end of.
 enum class ClassRule {
 	/// The answer has to hold on every path, and a null is one of the values a
 	/// path can carry. `operand_class ()`.
@@ -397,10 +378,6 @@ struct ReachingStores {
 	SmallVector<StoreInst *, 4> stores;
 	bool complete;
 };
-
-/// Bounds how many merge nodes one walk visits, so a large phi web costs a
-/// compile only a small, fixed amount of work.
-constexpr unsigned merge_walk_budget = 24;
 
 /// Bounds how many uses of one allocation `field_stores_reaching ()` below
 /// visits, so a large use graph costs a compile only a small, fixed amount of
@@ -775,123 +752,86 @@ matching_field_stores (const LoadInst &load, ClassRule rule,
 	return matching;
 }
 
-std::optional<std::pair<MonoClass *, bool>>
-walk_operand_class (const Value *v, const Function &f, ClassRule rule,
-                     SmallPtrSetImpl<const Value *> &visiting, unsigned &budget);
+/// Reads a class off one value and merges two class answers. `walk_value ()`
+/// (`value-walk.hpp`) runs this rule over the merges in front of a value.
+class ClassWalk {
+public:
+	using Answer = std::pair<MonoClass *, bool>;
 
-/// The class every value in \p arms agrees on. This answers no class,
-/// concretely, when a contributing value answers no class itself, or when two
-/// contributing values disagree. It answers "found nothing" when the walk
-/// skipped every value in \p arms.
-///
-/// `ClassRule::guessed` reads an arm that answers no class as one more path
-/// its caller's compare will cover, so such an arm is skipped rather than
-/// settling the merge. Two arms that name two different classes still settle
-/// it: one compare picks one class, and picking either would leave the other
-/// arm's whole count on the dispatch.
-std::optional<std::pair<MonoClass *, bool>>
-merged_class (ArrayRef<const Value *> arms, const Function &f, ClassRule rule,
-              SmallPtrSetImpl<const Value *> &visiting, unsigned &budget)
-{
-	MonoClass *klass = nullptr;
-	bool exact = true;
-	bool any = false;
+	ClassWalk (const Function &f, ClassRule rule) : f (f), rule (rule) {}
 
-	for (const Value *arm : arms) {
-		std::optional<std::pair<MonoClass *, bool>> got =
-			walk_operand_class (arm, f, rule, visiting, budget);
+	bool skips_null () const { return mono::skips_null (rule); }
 
-		if (!got)
-			continue;
+	Answer exhausted () const { return no_class (); }
 
-		if (got->first == nullptr) {
-			if (rule == ClassRule::guessed)
-				continue;
-
-			return std::make_pair (static_cast<MonoClass *> (nullptr), false);
-		}
-
-		if (any && got->first != klass)
-			return std::make_pair (static_cast<MonoClass *> (nullptr), false);
-
-		klass = got->first;
-		exact = exact && got->second;
-		any = true;
-	}
-
-	if (!any)
-		return std::nullopt;
-
-	return std::make_pair (klass, exact);
-}
-
-/// The class \p v answers with: \p v itself where it is not a phi or a
-/// select, otherwise the merge of the values it names. The same outer walk
-/// shares \p visiting and \p budget across every call it makes.
-std::optional<std::pair<MonoClass *, bool>>
-walk_operand_class (const Value *v, const Function &f, ClassRule rule,
-                     SmallPtrSetImpl<const Value *> &visiting, unsigned &budget)
-{
-	v = strip_casts (v);
-
-	if (visiting.count (v) || (skips_null (rule) && isa<ConstantPointerNull> (v)))
-		return std::nullopt;
-
-	const auto *phi = dyn_cast<PHINode> (v);
-	const auto *select = phi == nullptr ? dyn_cast<SelectInst> (v) : nullptr;
-	const auto *load = phi == nullptr && select == nullptr ? dyn_cast<LoadInst> (v) : nullptr;
-	SmallVector<const Value *, 4> stores;
-
-	if (load != nullptr) {
-		// Resolving this load's base can lead back to this same load,
-		// through a further load or a phi web that cycles - `%139` in the
-		// LINQ-over-`List<int>` fixture this walk was built for is one.
-		// Marking the load "visiting" for this call keeps that from
-		// recursing forever: `resolve_base_candidates ()` shares `visiting`
-		// and stops at a value already on this walk's call stack, this one
-		// included.
-		visiting.insert (v);
-		stores = matching_field_stores (*load, rule, visiting, budget);
-		visiting.erase (v);
-	}
-
-	if (phi == nullptr && select == nullptr && stores.empty ()) {
-		std::pair<MonoClass *, bool> leaf = leaf_operand_class (v, f);
+	std::optional<Answer> leaf (const Value *v) const
+	{
+		Answer got = leaf_operand_class (v, f);
 
 		// A guess names a class this function saw an object made under. A
-		// parameter's declared class is a bound instead, so a compare against
-		// it misses every subclass the slot admits.
-		if (rule == ClassRule::guessed && !leaf.second)
+		// parameter's declared class is a bound instead, so a compare
+		// against it misses every subclass the slot admits.
+		if (rule == ClassRule::guessed && !got.second)
 			return std::nullopt;
 
-		return leaf;
+		return got;
 	}
 
-	// A merge node this walk cannot afford to enter answers no class, not a
-	// skip. Unlike the back edge of a cycle, nothing bounds what the
-	// unexplored side of this merge can name.
-	if (budget == 0)
-		return std::make_pair (static_cast<MonoClass *> (nullptr), false);
+	/// Gives a load the values that reach the field it reads. Empty for every
+	/// other value.
+	SmallVector<const Value *, 4> arms (const Value *v, WalkState &state) const
+	{
+		const auto *load = dyn_cast<LoadInst> (v);
 
-	--budget;
-	visiting.insert (v);
+		if (load == nullptr)
+			return {};
 
-	std::optional<std::pair<MonoClass *, bool>> result;
-
-	if (phi != nullptr) {
-		SmallVector<const Value *, 4> incoming (
-			phi->incoming_values ().begin (), phi->incoming_values ().end ());
-		result = merged_class (incoming, f, rule, visiting, budget);
-	} else if (select != nullptr) {
-		const Value *arms[] = { select->getTrueValue (), select->getFalseValue () };
-		result = merged_class (arms, f, rule, visiting, budget);
-	} else {
-		result = merged_class (stores, f, rule, visiting, budget);
+		return matching_field_stores (*load, rule, state.visiting, state.budget);
 	}
 
-	visiting.erase (v);
+	/// Folds one arm into \p acc. Returns false, and settles the merge at no
+	/// class, when an arm names no class itself or when two arms disagree.
+	bool fold (std::optional<Answer> &acc, Answer arm) const
+	{
+		if (arm.first == nullptr) {
+			// A guess is one arm of a compare the caller writes, so an arm
+			// with no class is one more path that compare covers. Skip it
+			// rather than settle the merge.
+			if (rule == ClassRule::guessed)
+				return true;
 
-	return result;
+			acc = no_class ();
+			return false;
+		}
+
+		// Two arms that name two classes still settle the merge. One compare
+		// picks one class, and picking either leaves the other arm's whole
+		// count on the dispatch.
+		if (acc && acc->first != arm.first) {
+			acc = no_class ();
+			return false;
+		}
+
+		acc = Answer{ arm.first, (!acc || acc->second) && arm.second };
+		return true;
+	}
+
+private:
+	static Answer no_class () { return { nullptr, false }; }
+
+	const Function &f;
+	ClassRule rule;
+};
+
+/// Reads the class \p v holds under \p rule, and whether that is the class it
+/// is rather than a bound on it. No class where the walk found none.
+std::pair<MonoClass *, bool>
+class_of (const Value *v, const Function &f, ClassRule rule)
+{
+	ClassWalk walk (f, rule);
+	WalkState state;
+
+	return walk_value (v, walk, state).value_or (std::make_pair (nullptr, false));
 }
 
 } // namespace
@@ -925,22 +865,13 @@ mark_parameter_classes (Function &f, ArrayRef<std::pair<unsigned, MonoClass *>> 
 std::pair<MonoClass *, bool>
 operand_class (const Value *v, const Function &f)
 {
-	SmallPtrSet<const Value *, 8> visiting;
-	unsigned budget = merge_walk_budget;
-	std::optional<std::pair<MonoClass *, bool>> found =
-		walk_operand_class (v, f, ClassRule::settled, visiting, budget);
-
-	return found.value_or (std::make_pair (nullptr, false));
+	return class_of (v, f, ClassRule::settled);
 }
 
 MonoClass *
 exact_class (const Value *v, const Function &f)
 {
-	SmallPtrSet<const Value *, 8> visiting;
-	unsigned budget = merge_walk_budget;
-	std::optional<std::pair<MonoClass *, bool>> found =
-		walk_operand_class (v, f, ClassRule::dereferenced, visiting, budget);
-	auto [klass, exact] = found.value_or (std::make_pair (nullptr, false));
+	auto [klass, exact] = class_of (v, f, ClassRule::dereferenced);
 
 	if (klass == nullptr || exact)
 		return klass;
@@ -968,13 +899,8 @@ exact_class (const Value *v, const Function &f)
 MonoClass *
 guessed_class (const Value *v, const Function &f)
 {
-	SmallPtrSet<const Value *, 8> visiting;
-	unsigned budget = merge_walk_budget;
-	std::optional<std::pair<MonoClass *, bool>> found =
-		walk_operand_class (v, f, ClassRule::guessed, visiting, budget);
-
 	// Every leaf this rule reads answers exactly, so a merge of them does too.
-	return found.value_or (std::make_pair (nullptr, false)).first;
+	return class_of (v, f, ClassRule::guessed).first;
 }
 
 FieldValues
