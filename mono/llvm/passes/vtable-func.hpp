@@ -80,17 +80,22 @@ bool lower_vtable_reads (llvm::Module &m);
  * fresh allocation before any pass here runs.
  */
 
-/// Marks \p load as the read of an object's vtable word.
+/// Marks \p load as a read of a word that does not change.
 ///
-/// `!invariant.load` says the word holds one value wherever it can be read.
-/// SGen writes a forwarding pointer over it when it moves an object. The stack
-/// scan is conservative here, so an object a compiled frame holds is pinned
-/// rather than moved.
+/// SGen writes a forwarding pointer over an object's vtable when it moves the
+/// object. The stack scan is conservative here, so an object a compiled frame
+/// holds is pinned rather than moved.
 ///
-/// That metadata grants no dereferenceability, so the read stays under the null
-/// check on the object. `fold_object_vtables ()` needs that check to dominate
-/// the read before it can take a sealed slot's declared class for the class the
-/// object is.
+/// `!invariant.load` claims more than that: MemorySSA gives such a load its
+/// live-on-entry definition, which puts it in front of every store in the
+/// function. The claim holds while the allocator writes the word. It stops
+/// holding for an object a store in this same function writes, which is what
+/// `promote_allocations ()` (`passes/promote-alloc.hpp`) takes the mark back
+/// off for.
+///
+/// The mark grants no dereferenceability, so the read stays under the null check
+/// on the object. `fold_object_vtables ()` needs that check to dominate the read
+/// before it can take a sealed slot's declared class for the class the object is.
 llvm::LoadInst *mark_object_vtable_read (llvm::LoadInst *load);
 
 /// The object whose vtable \p v reads, or null where \p v is not such a read.

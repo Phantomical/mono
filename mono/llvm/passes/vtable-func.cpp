@@ -133,13 +133,14 @@ object_vtable_read (Value *v)
 {
 	auto *load = dyn_cast<LoadInst> (v);
 
-	if (load == nullptr || load->getMetadata (LLVMContext::MD_invariant_load) == nullptr)
+	if (load == nullptr)
 		return nullptr;
 
-	// What says the load is this read is the declaration it feeds, because a
-	// transformation that merges or clones an instruction keeps only the
-	// metadata kinds LLVM knows. A marker of our own does not survive the CSE
-	// that gives two reads off one receiver a single load.
+	// What says the load is this read is the declaration it feeds. Metadata
+	// cannot say it: LLVM may drop a metadata kind at any point without
+	// changing what the IR means, so a test on one goes quiet rather than
+	// wrong. A marker of our own does not survive the CSE that gives two reads
+	// off one receiver a single load either.
 	bool feeds_a_read = false;
 
 	for (const User *user : load->users ())
