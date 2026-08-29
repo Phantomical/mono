@@ -568,6 +568,14 @@ mono_dl_open_runtime_lib (const char* lib_name, int flags, char **error_msg)
 			runtime_lib = try_load (lib_name, name, flags, error_msg);
 			g_free (name);
 		}
+		/* The line above finds a profiler module in a libtool build tree.
+		 * cmake writes the module straight into the profiler directory, so
+		 * an uninstalled build needs this one to find it. */
+		if (!runtime_lib) {
+			name = g_strdup_printf ("%s/profiler", baseparent);
+			runtime_lib = try_load (lib_name, name, flags, error_msg);
+			g_free (name);
+		}
 		g_free (base);
 		g_free (resolvedname);
 		g_free (baseparent);

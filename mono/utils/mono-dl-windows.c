@@ -209,7 +209,32 @@ mono_dl_current_error_string (void)
 int
 mono_dl_get_executable_path (char *buf, int buflen)
 {
-	return -1; //TODO
+	WCHAR wide [1024];
+	DWORD wide_length;
+	char *utf8;
+	glong utf8_length;
+
+	wide_length = GetModuleFileNameW (NULL, wide, G_N_ELEMENTS (wide));
+
+	/* A path that does not fit is reported as the length of the buffer it was
+	 * given, and the call cannot be asked how much more it wants. */
+	if (wide_length == 0 || wide_length >= G_N_ELEMENTS (wide))
+		return -1;
+
+	utf8 = g_utf16_to_utf8 (wide, wide_length, NULL, &utf8_length, NULL);
+	if (utf8 == NULL)
+		return -1;
+
+	/* The caller writes the terminator at the offset we answer with. */
+	if (utf8_length >= buflen) {
+		g_free (utf8);
+		return -1;
+	}
+
+	memcpy (buf, utf8, utf8_length);
+	g_free (utf8);
+
+	return (int) utf8_length;
 }
 
 const char*
