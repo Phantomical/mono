@@ -24,11 +24,15 @@
 #include <cstring>
 #include <vector>
 
+#ifdef HOST_WIN32
+#include <windows.h>
+#else
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
 #ifdef HAVE_SYS_MMAN_H
 #include <sys/mman.h>
+#endif
 #endif
 
 using mono::MonoFinallyGuard;
@@ -114,7 +118,7 @@ const std::uint8_t GOLDEN_MLSD [] = {
 	0x00, 0x00, 0x00, 0x00,
 };
 
-#if defined (HAVE_SYS_MMAN_H) && defined (HAVE_UNISTD_H) && !defined (HOST_WIN32)
+#if defined (HOST_WIN32) || (defined (HAVE_SYS_MMAN_H) && defined (HAVE_UNISTD_H))
 #define MONO_LSDA_HAVE_GUARD_PAGE 1
 #endif
 
@@ -122,22 +126,46 @@ const std::uint8_t GOLDEN_MLSD [] = {
 
 /*
  * A fault inside the guarded decode means the decoder read past the end of the
- * buffer it was given, which is worth saying out loud - the default report is a
- * bare "child killed by signal 11" a long way from the guard page that caused it.
+ * buffer it was given, which is worth saying out loud - the default report names
+ * a fault a long way from the guard page that caused it.
  */
+static const char GUARD_FAULT_MESSAGE [] =
+	"\n*** Fault in a guarded .mono_lsda decode: the decoder read PAST"
+	"\n*** the end of the buffer it was given (its last byte sits against an"
+	"\n*** unreadable guard page).\n";
+
+#ifdef HOST_WIN32
+
+/*
+ * Reports and declines, so the fault still reaches whatever would have taken it.
+ * A vectored handler runs before the frame-based ones, which is what puts the
+ * message in front of the report the test runner writes.
+ */
+LONG CALLBACK
+guard_fault_reporter (EXCEPTION_POINTERS *info)
+{
+	DWORD ignored;
+
+	if (info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION)
+		WriteFile (GetStdHandle (STD_ERROR_HANDLE), GUARD_FAULT_MESSAGE,
+		           sizeof (GUARD_FAULT_MESSAGE) - 1, &ignored, NULL);
+
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+
+#else
+
 void
 crash_handler (int sig)
 {
-	static const char message [] =
-		"\n*** SIGSEGV/SIGBUS in a guarded .mono_lsda decode: the decoder read PAST"
-		"\n*** the end of the buffer it was given (its last byte sits against a"
-		"\n*** PROT_NONE guard page).\n";
-	ssize_t ignored = write (2, message, sizeof (message) - 1);
+	ssize_t ignored = write (2, GUARD_FAULT_MESSAGE, sizeof (GUARD_FAULT_MESSAGE) - 1);
 
 	(void) ignored;
 	signal (sig, SIG_DFL);
 	raise (sig);
 }
+
+#endif
 
 #endif
 
@@ -156,31 +184,56 @@ protected:
 	void
 	SetUp () override
 	{
-#ifdef MONO_LSDA_HAVE_GUARD_PAGE
+#if defined (HOST_WIN32)
+		SYSTEM_INFO info;
+		DWORD old;
+
+		GetSystemInfo (&info);
+		page = info.dwPageSize;
+		region = (std::uint8_t *) VirtualAlloc (NULL, 2 * page, MEM_RESERVE | MEM_COMMIT,
+		                                        PAGE_READWRITE);
+		if (region == NULL)
+			GTEST_SKIP () << "cannot reserve a guard page: error " << GetLastError ();
+		if (!VirtualProtect (region + page, page, PAGE_NOACCESS, &old)) {
+			DWORD failure = GetLastError ();
+
+			VirtualFree (region, 0, MEM_RELEASE);
+			region = NULL;
+			GTEST_SKIP () << "cannot protect a guard page: error " << failure;
+		}
+		reporter = AddVectoredExceptionHandler (1, guard_fault_reporter);
+#elif defined (MONO_LSDA_HAVE_GUARD_PAGE)
 		long pagel = sysconf (_SC_PAGESIZE);
+		void *mapped;
 
 		page = pagel > 0 ? (std::size_t) pagel : 4096;
-		region = (std::uint8_t *) mmap (nullptr, 2 * page, PROT_READ | PROT_WRITE,
-		                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-		if (region == MAP_FAILED)
+		mapped = mmap (nullptr, 2 * page, PROT_READ | PROT_WRITE,
+		               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (mapped == MAP_FAILED)
 			GTEST_SKIP () << "cannot reserve a guard page: " << strerror (errno);
+		region = (std::uint8_t *) mapped;
 		if (mprotect (region + page, page, PROT_NONE) != 0) {
 			munmap (region, 2 * page);
-			region = (std::uint8_t *) MAP_FAILED;
+			region = nullptr;
 			GTEST_SKIP () << "cannot protect a guard page: " << strerror (errno);
 		}
 		signal (SIGSEGV, crash_handler);
 		signal (SIGBUS, crash_handler);
 #else
-		GTEST_SKIP () << "no mmap here, so no guard page to decode against";
+		GTEST_SKIP () << "no page protection here, so no guard page to decode against";
 #endif
 	}
 
 	void
 	TearDown () override
 	{
-#ifdef MONO_LSDA_HAVE_GUARD_PAGE
-		if (region != MAP_FAILED)
+#if defined (HOST_WIN32)
+		if (reporter != NULL)
+			RemoveVectoredExceptionHandler (reporter);
+		if (region != nullptr)
+			VirtualFree (region, 0, MEM_RELEASE);
+#elif defined (MONO_LSDA_HAVE_GUARD_PAGE)
+		if (region != nullptr)
 			munmap (region, 2 * page);
 #endif
 	}
@@ -241,7 +294,10 @@ protected:
 private:
 	std::size_t page = 0;
 #ifdef MONO_LSDA_HAVE_GUARD_PAGE
-	std::uint8_t *region = (std::uint8_t *) MAP_FAILED;
+	std::uint8_t *region = nullptr;
+#endif
+#ifdef HOST_WIN32
+	PVOID reporter = NULL;
 #endif
 };
 
