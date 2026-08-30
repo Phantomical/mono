@@ -727,6 +727,7 @@ set(MONO_TESTS_IL_SRC
   bug-82022.il
   vt-sync-method.il
   enum_types.il
+  enum-invalid-basetype.il
   invalid-token.il
   call_missing_method.il
   call_missing_class.il

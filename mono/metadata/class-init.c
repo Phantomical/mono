@@ -1969,7 +1969,8 @@ mono_class_layout_fields (MonoClass *klass, int base_instance_size, int packing_
 			}
 		}
 
-		if (!mono_class_enum_basetype_internal (klass)) {
+		MonoType *basetype = mono_class_enum_basetype_internal (klass);
+		if (!basetype || !mono_type_is_valid_enum_basetype (basetype)) {
 			mono_class_set_type_load_failure (klass, "The enumeration's base type is invalid.");
 			return;
 		}
