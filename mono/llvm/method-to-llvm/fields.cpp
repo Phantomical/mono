@@ -370,10 +370,9 @@ MethodLLVMEmitter::field_symbol (MonoClassField *field)
 }
 
 /// Whether klass's type initializer has already run in the domain this method
-/// compiles for.
+/// compiles for, or never needed to.
 ///
-/// A true answer is permanent: mono_runtime_class_init_full () raises the flag only
-/// after the initializer returns, and no path lowers it again. A false answer means
+/// A true answer is permanent: no path lowers the flag again. A false answer means
 /// "not known", not "not initialized" - the flag is still 0 on the thread that is
 /// inside the initializer right now. So a caller can drop a check on true, and must
 /// keep one on false.
@@ -386,8 +385,15 @@ MethodLLVMEmitter::cctor_already_ran (MonoClass *klass)
 		return false;
 
 	MonoVTable *vtable = mono_class_try_get_vtable (cfg->domain, klass);
+	if (vtable == nullptr)
+		return false;
 
-	return vtable != nullptr && vtable->initialized != 0;
+	if (vtable->initialized)
+		return true;
+
+	// A class with no cctor has nothing to run, so this answers true before
+	// mono_runtime_class_init_full () (mono/metadata/object.c) ever sets the flag.
+	return mono_class_get_cctor (klass) == nullptr;
 }
 
 /// Whether a read of field answers the same for the rest of the program.
