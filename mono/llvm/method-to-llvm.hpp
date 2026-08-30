@@ -1099,8 +1099,10 @@ private:
 	llvm::Error emit_ldtoken (MonoIrBuilder &builder, uint32_t token);
 	llvm::Expected<bool> fold_type_from_handle (MonoIrBuilder &builder, MonoType *type);
 	bool cctor_already_ran (MonoClass *klass);
-	bool invariant_static_read (MonoClassField *field);
+	bool eligible_for_invariant_static_read (MonoClassField *field);
 	llvm::Error emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
+	llvm::Error push_guarded_static_read (MonoIrBuilder &builder, MonoClassField *field,
+	                                      MonoType *ftype);
 	std::optional<std::pair<uint32_t, uint32_t> > thread_static_slot (MonoClassField *field);
 	llvm::Expected<llvm::Value *> static_field_address (MonoIrBuilder &builder,
 	                                                    MonoClassField *field);

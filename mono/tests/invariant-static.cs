@@ -1,9 +1,11 @@
 using System;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
  * Reads of an initonly static. emit_ldsfld () decides the !invariant.load mark for
- * each one, once the type initializer is complete.
+ * each one, once the type initializer is complete. push_guarded_static_read ()
+ * decides llvm.invariant.start for one still behind a class-init guard.
  *
  * The mark lets LLVM answer one read from an earlier one, so each case puts a call
  * between two reads of one field. A mutable static beside each initonly one is the
@@ -11,8 +13,17 @@ using System.Runtime.CompilerServices;
  * share. A wrong mark is then a wrong value rather than a slower body.
  *
  * Every case runs interpreted and compiled in one process, because the interpreter
- * marks nothing and answers each read from memory.
+ * marks nothing and answers each read from memory. The guarded cases additionally
+ * force a compile, with Mono.Tiering.MonoTier::PromoteNow, before anything touches
+ * the class they read. That is what leaves the guard standing at translate time.
  */
+
+namespace Mono.Tiering {
+	static class MonoTier {
+		[MethodImpl (MethodImplOptions.InternalCall)]
+		public static extern bool PromoteNow (IntPtr method, int tier);
+	}
+}
 
 struct Point {
 	public int X;
@@ -31,6 +42,13 @@ class Shapes {
 	public static readonly int[] Numbers = new int[4];
 	public static readonly Point Vector = new Point (3, 4);
 	public static int Mutable = 7;
+}
+
+// Read only through the guarded cases below, never before those force a compile.
+// Its own class-init guard is still standing when they translate.
+class Guarded {
+	public static readonly int Scalar = 42;
+	public static readonly Point Vector = new Point (3, 4);
 }
 
 /*
@@ -72,6 +90,15 @@ public class InvariantStatic {
 			return;
 
 		Console.WriteLine ("FAIL {0}: got {1}, want {2}", what, got, want);
+		++failures;
+	}
+
+	static void Require (bool ok, string what)
+	{
+		if (ok)
+			return;
+
+		Console.WriteLine ("FAIL {0}", what);
 		++failures;
 	}
 
@@ -146,6 +173,26 @@ public class InvariantStatic {
 		return first + EmptyArray<string>.Value.Length;
 	}
 
+	// Compiled by Main () while Guarded's class-init guard still stands, so this
+	// runs push_guarded_static_read () rather than the plain mark above.
+	static int GuardedScalarAcrossCall ()
+	{
+		int first = Guarded.Scalar;
+
+		Opaque (first);
+
+		return first + Guarded.Scalar;
+	}
+
+	static int GuardedVectorAcrossCall ()
+	{
+		int first = Guarded.Vector.X;
+
+		Opaque (first);
+
+		return first + Guarded.Vector.Y;
+	}
+
 	static void Round ()
 	{
 		Check ("scalar across a call", ScalarAcrossCall (), 84);
@@ -156,11 +203,35 @@ public class InvariantStatic {
 		Check ("empty array across a call", EmptyAcrossCall (), 0);
 	}
 
+	const int tier1 = 2; // MonoTier::tier1, as PromoteNow takes it.
+
+	static void PromoteBeforeFirstTouch (string method)
+	{
+		MethodInfo m = typeof (InvariantStatic).GetMethod (method,
+			BindingFlags.Static | BindingFlags.NonPublic);
+
+		Require (Mono.Tiering.MonoTier.PromoteNow (m.MethodHandle.Value, tier1),
+			method + " would compile");
+	}
+
 	public static int Main ()
 	{
+		MethodInfo probe = typeof (Reentrant).GetMethod ("Probe",
+			BindingFlags.Static | BindingFlags.NonPublic);
+
+		// Neither Reentrant nor Guarded has been touched yet, so each compiles
+		// here with cctor_already_ran () false.
+		Require (Mono.Tiering.MonoTier.PromoteNow (probe.MethodHandle.Value, tier1),
+			"Probe would compile");
+		PromoteBeforeFirstTouch ("GuardedScalarAcrossCall");
+		PromoteBeforeFirstTouch ("GuardedVectorAcrossCall");
+
 		Check ("reentrant read before the assignment", Reentrant.SeenBefore, 0);
 		Check ("reentrant read after the assignment", Reentrant.SeenAfter, 99);
 		Check ("the assignment itself", Reentrant.Value, 99);
+
+		Check ("guarded scalar across a call", GuardedScalarAcrossCall (), 84);
+		Check ("guarded value type across a call", GuardedVectorAcrossCall (), 7);
 
 		// The first rounds run interpreted, and the later ones run whatever the
 		// thresholds promoted. Both answer through this same code.

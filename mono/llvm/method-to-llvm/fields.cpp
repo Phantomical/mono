@@ -396,7 +396,9 @@ MethodLLVMEmitter::cctor_already_ran (MonoClass *klass)
 	return mono_class_get_cctor (klass) == nullptr;
 }
 
-/// Whether a read of field answers the same for the rest of the program.
+/// Whether field is eligible to be marked invariant, apart from whether klass's
+/// initializer has actually finished. cctor_already_ran () and
+/// push_guarded_static_read () decide that part.
 ///
 /// An ordinary program writes such a field only from the type initializer. ECMA-335
 /// III.4.15 says a store through the address has unpredictable behavior, and
@@ -404,7 +406,7 @@ MethodLLVMEmitter::cctor_already_ran (MonoClass *klass)
 /// debugger client goes under that check, so the answer is false while
 /// gen_sdb_seq_points is on.
 bool
-MethodLLVMEmitter::invariant_static_read (MonoClassField *field)
+MethodLLVMEmitter::eligible_for_invariant_static_read (MonoClassField *field)
 {
 	MonoType *ftype = mono_field_get_type_internal (field);
 
@@ -425,16 +427,7 @@ MethodLLVMEmitter::invariant_static_read (MonoClassField *field)
 	if (mono_class_field_is_special_static (field))
 		return false;
 
-	/*
-	 * !invariant.load claims the value at every point the address is
-	 * dereferenceable. LLVM then moves a marked load above a class-init guard that
-	 * still stands, and reads the zeroed statics block. Dominance by the guard is
-	 * not enough. The initializer must be complete at translate time, which also
-	 * keeps the mark away from a method the initializer itself calls:
-	 * mono_runtime_class_init_full () lets that thread back past the guard while
-	 * the fields are still zero.
-	 */
-	return cctor_already_ran (field->parent);
+	return true;
 }
 
 /// Emits the check that runs klass's static constructor, unless it has already run.
@@ -465,6 +458,99 @@ MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 	(*init)->addFnAttr (class_init_attribute);
 	emit_protected_call (builder, *init,
 	                     adapt_to_callee (builder, *init, {*vtable}));
+	return llvm::Error::success ();
+}
+
+/// Pushes field's value, from behind a class-init guard emit_class_init () left
+/// standing because cctor_already_ran () answered false for field->parent.
+llvm::Error
+MethodLLVMEmitter::push_guarded_static_read (MonoIrBuilder &builder, MonoClassField *field,
+                                             MonoType *ftype)
+{
+	MonoClass *klass = field->parent;
+
+	llvm::Expected<llvm::Value *> vtable = class_operand (builder, klass, "mono_vtable_");
+	if (!vtable)
+		return vtable.takeError ();
+
+	llvm::Expected<llvm::Value *> address = static_field_address (builder, field);
+	if (!address)
+		return address.takeError ();
+
+	// mono_runtime_class_init_full () lets a thread already running this
+	// initializer back past the guard before the fields are written
+	// (object.c:527-530). Re-reading the flag here, rather than trusting the
+	// guard above, is what tells that case apart from a genuine finish
+	// (object.c:646).
+	llvm::Value *flag = builder.CreateAlignedLoad (
+		builder.getInt8Ty (),
+		builder.CreateGEP (builder.getInt8Ty (), *vtable,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, initialized))),
+		llvm::Align (1), "cctor_finished");
+	llvm::Value *finished = builder.CreateICmpNE (flag, builder.getInt8 (0));
+
+	llvm::Function *func = builder.GetInsertBlock ()->getParent ();
+
+	// llvm.invariant.start only backs a read it dominates, so each arm below
+	// keeps its own copy rather than sharing one after the two merge.
+	if (held_in_memory (ftype)) {
+		llvm::Expected<llvm::Value *> slot = vtype_slot (ftype);
+		if (!slot)
+			return slot.takeError ();
+
+		llvm::Align dest_align = type_alignment (ftype);
+		llvm::Align src_align = access_alignment (ftype);
+		llvm::ConstantInt *size = builder.getInt64 (vtype_size (ftype, /*native=*/false));
+
+		llvm::BasicBlock *invariant_bb = llvm::BasicBlock::Create (context (), "sfld_invariant", func);
+		llvm::BasicBlock *plain_bb = llvm::BasicBlock::Create (context (), "sfld_plain", func);
+		llvm::BasicBlock *merge_bb = llvm::BasicBlock::Create (context (), "sfld_merge", func);
+
+		builder.CreateCondBr (finished, invariant_bb, plain_bb);
+
+		builder.SetInsertPoint (invariant_bb);
+		builder.CreateInvariantStart (*address, size);
+		builder.CreateMemCpyInline (*slot, dest_align, *address, src_align, size);
+		builder.CreateBr (merge_bb);
+
+		builder.SetInsertPoint (plain_bb);
+		builder.CreateMemCpyInline (*slot, dest_align, *address, src_align, size);
+		builder.CreateBr (merge_bb);
+
+		builder.SetInsertPoint (merge_bb);
+		push_stack (*slot, stack_slot_type (ftype), /*native=*/false);
+		return llvm::Error::success ();
+	}
+
+	llvm::Expected<llvm::Type *> type = convert_type (ftype);
+	if (!type)
+		return type.takeError ();
+
+	ManagedAccess access = ManagedAccess::of_field (field);
+	llvm::ConstantInt *size = builder.getInt64 (
+		module->getDataLayout ().getTypeStoreSize (*type).getFixedValue ());
+
+	llvm::BasicBlock *invariant_bb = llvm::BasicBlock::Create (context (), "sfld_invariant", func);
+	llvm::BasicBlock *plain_bb = llvm::BasicBlock::Create (context (), "sfld_plain", func);
+	llvm::BasicBlock *merge_bb = llvm::BasicBlock::Create (context (), "sfld_merge", func);
+
+	builder.CreateCondBr (finished, invariant_bb, plain_bb);
+
+	builder.SetInsertPoint (invariant_bb);
+	builder.CreateInvariantStart (*address, size);
+	llvm::Value *invariant_value = emit_memory_load (builder, *type, *address, ftype, access);
+	builder.CreateBr (merge_bb);
+
+	builder.SetInsertPoint (plain_bb);
+	llvm::Value *plain_value = emit_memory_load (builder, *type, *address, ftype, access);
+	builder.CreateBr (merge_bb);
+
+	builder.SetInsertPoint (merge_bb);
+	llvm::PHINode *phi = builder.CreatePHI (*type, 2);
+	phi->addIncoming (invariant_value, invariant_bb);
+	phi->addIncoming (plain_value, plain_bb);
+
+	push_stack (widen_to_stack (builder, phi, ftype), stack_slot_type (ftype), /*native=*/false);
 	return llvm::Error::success ();
 }
 
@@ -1036,13 +1122,16 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 	if (llvm::Error error = emit_class_init (builder, (*field)->parent))
 		return error;
 
+	if (eligible_for_invariant_static_read (*field) && !cctor_already_ran ((*field)->parent))
+		return push_guarded_static_read (builder, *field, ftype);
+
 	llvm::Expected<llvm::Value *> address = static_field_address (builder, *field);
 	if (!address)
 		return address.takeError ();
 
 	ManagedAccess access = ManagedAccess::of_field (*field);
 
-	access.invariant = invariant_static_read (*field);
+	access.invariant = eligible_for_invariant_static_read (*field);
 
 	return push_from_location (builder, *address, ftype, /*native=*/false, access);
 }
