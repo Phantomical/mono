@@ -118,7 +118,7 @@ values_for (const Function &f)
 	pb.registerLoopAnalyses (lam);
 	pb.crossRegisterProxies (lam, fam, cgam, mam);
 
-	return MonoConstantValues ().run (const_cast<Function &> (f), fam);
+	return MonoMemoryValues ().run (const_cast<Function &> (f), fam);
 }
 
 TEST (FoldDelegateTest, ReadsAMarkedProducer)

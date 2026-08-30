@@ -521,7 +521,7 @@ FoldDelegateInvokesPass::run (Function &f, FunctionAnalysisManager &fam)
 
 	const CompileState &compile = current_compile ();
 	BlockFrequencyInfo &counts = fam.getResult<BlockFrequencyAnalysis> (f);
-	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
+	const ConstantValues &values = fam.getResult<MonoMemoryValues> (f);
 
 	/// A site to rewrite, with the weights its guard will carry. Null weights
 	/// are a settled target, which is entered without one.

@@ -91,8 +91,6 @@ public:
 	/// Every value \p inst can be reached by.
 	const ValueSources &sources (llvm::Value *inst) const;
 
-	/// Answered off MemorySSA, so a caller that keeps this has to drop it when
-	/// that goes.
 	bool invalidate (llvm::Function &f, const llvm::PreservedAnalyses &pa,
 	                 llvm::FunctionAnalysisManager::Invalidator &inv);
 
@@ -101,6 +99,9 @@ private:
 
 	llvm::DenseMap<llvm::Value *, ValueSources> lookup;
 
+	/// Which analysis below built this, so invalidate () asks about that one.
+	llvm::AnalysisKey *built_by = nullptr;
+
 	/// Whether the walk asked for MemorySSA, which it does only where the
 	/// function has a load to forward. Invalidating a dependency the manager
 	/// never cached asserts inside it.
@@ -108,8 +109,27 @@ private:
 };
 
 /// An analysis that finds all potential sources for each instruction.
+///
+/// A load stands as its own source. What a store left in the field it reads is
+/// `MonoMemoryValues`, below.
 class MonoConstantValues : public llvm::AnalysisInfoMixin<MonoConstantValues> {
 	friend llvm::AnalysisInfoMixin<MonoConstantValues>;
+	static llvm::AnalysisKey Key;
+
+public:
+	using Result = ConstantValues;
+
+	Result run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+};
+
+/// The same walk, with the stores that reach each load folded in.
+///
+/// Reading a field costs MemorySSA and an alias query for every load, which is
+/// most of what the walk spends. Only a guarded fold pays that back, so only
+/// `GuardDispatchPass` and `FoldDelegateInvokesPass` ask for this, and both run
+/// at tier 2 alone. Everything else takes `MonoConstantValues`.
+class MonoMemoryValues : public llvm::AnalysisInfoMixin<MonoMemoryValues> {
+	friend llvm::AnalysisInfoMixin<MonoMemoryValues>;
 	static llvm::AnalysisKey Key;
 
 public:

@@ -64,7 +64,9 @@ struct Settled {
 	Function *caller = nullptr;
 	ConstantValues values;
 
-	explicit Settled (const std::string &ir)
+	/// Runs `MonoMemoryValues` unless \p reads_memory says otherwise, because
+	/// most cases below ask what a store left in a field.
+	explicit Settled (const std::string &ir, bool reads_memory = true)
 	{
 		SMDiagnostic problem;
 
@@ -105,7 +107,10 @@ struct Settled {
 		pb.registerLoopAnalyses (lam);
 		pb.crossRegisterProxies (lam, fam, cgam, mam);
 
-		values = MonoConstantValues ().run (*caller, fam);
+		if (reads_memory)
+			values = MonoMemoryValues ().run (*caller, fam);
+		else
+			values = MonoConstantValues ().run (*caller, fam);
 	}
 
 	/// The instruction the module marked `!ask`.
@@ -620,6 +625,27 @@ entry:
 )");
 
 	EXPECT_EQ (m.answer (), "vtable_Foo");
+}
+
+/// `MonoConstantValues` reads no memory, so a load stands as its own source
+/// whatever store settles the field in front of it. The case above is the same
+/// module under `MonoMemoryValues`, which is what forwards one.
+TEST (ConstantValuesTest, TheWalkWithoutMemoryLeavesALoadItsOwnSource)
+{
+	Settled m (R"(
+define ptr @caller(i1 %c, ptr %p, i64 %n) {
+entry:
+  %o = call ptr @"mono.alloc.object"(ptr @vtable_Foo, i64 128, ptr @allocator)
+  store ptr @vtable_Foo, ptr %o, align 8
+  %held = load ptr, ptr %o, align 8, !ask !0
+  ret ptr %held
+}
+)",
+	           /*reads_memory=*/false);
+
+	EXPECT_EQ (m.answer (), "-");
+	EXPECT_FALSE (m.complete ());
+	EXPECT_TRUE (m.reached ().empty ());
 }
 
 TEST (ConstantValuesTest, AFieldTwoStoresAgreeOnIsReachedByOneValue)

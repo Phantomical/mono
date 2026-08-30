@@ -143,9 +143,14 @@ class ConstantValuesSolver : public InstVisitor<ConstantValuesSolver, bool> {
 
 	llvm::DenseMap<llvm::Value *, ValueSources> sources;
 
+	/// Whether this walk forwards a store to the load that reads it.
+	bool reads_memory;
+
 public:
-	ConstantValuesSolver (llvm::Function &f, llvm::FunctionAnalysisManager &fam)
-		: f (f), dl (f.getParent ()->getDataLayout ()), fam (fam)
+	ConstantValuesSolver (llvm::Function &f, llvm::FunctionAnalysisManager &fam,
+	                      bool reads_memory)
+		: f (f), dl (f.getParent ()->getDataLayout ()), fam (fam),
+		  reads_memory (reads_memory)
 	{
 	}
 
@@ -161,8 +166,9 @@ public:
 		}
 	};
 
-	void solve (ConstantValues &result)
+	void solve (ConstantValues &result, llvm::AnalysisKey *built_by)
 	{
+		result.built_by = built_by;
 		sources = std::move (result.lookup);
 
 		gather_memory_deps ();
@@ -291,6 +297,9 @@ public:
 
 	void gather_memory_deps ()
 	{
+		if (!reads_memory)
+			return;
+
 		SmallVector<LoadInst *, 16> loads;
 
 		for (Instruction &at : instructions (f)) {
@@ -605,23 +614,41 @@ bool
 ConstantValues::invalidate (Function &f, const PreservedAnalyses &pa,
                             FunctionAnalysisManager::Invalidator &inv)
 {
-	if (!pa.getChecker<MonoConstantValues> ().preserved ())
+	if (!pa.getChecker (built_by).preserved ())
 		return true;
 
 	return read_memory && inv.invalidate<MemorySSAAnalysis> (f, pa);
 }
 
 AnalysisKey MonoConstantValues::Key;
+AnalysisKey MonoMemoryValues::Key;
+
+namespace {
+
+ConstantValues
+settle (Function &f, FunctionAnalysisManager &fam, AnalysisKey *built_by,
+        bool reads_memory)
+{
+	ConstantValues values;
+	ConstantValuesSolver solver (f, fam, reads_memory);
+
+	solver.solve (values, built_by);
+
+	return values;
+}
+
+} // namespace
 
 ConstantValues
 MonoConstantValues::run (Function &f, FunctionAnalysisManager &fam)
 {
-	ConstantValues values;
-	ConstantValuesSolver solver (f, fam);
+	return settle (f, fam, ID (), /*reads_memory=*/false);
+}
 
-	solver.solve (values);
-
-	return values;
+ConstantValues
+MonoMemoryValues::run (Function &f, FunctionAnalysisManager &fam)
+{
+	return settle (f, fam, ID (), /*reads_memory=*/true);
 }
 
 } // namespace mono

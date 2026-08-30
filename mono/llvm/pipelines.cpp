@@ -82,6 +82,7 @@ void
 register_mono_analyses (llvm::FunctionAnalysisManager &fam)
 {
 	fam.registerPass ([] { return MonoConstantValues (); });
+	fam.registerPass ([] { return MonoMemoryValues (); });
 }
 
 

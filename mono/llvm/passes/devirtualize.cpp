@@ -778,7 +778,7 @@ GuardDispatchPass::run (Function &f, FunctionAnalysisManager &fam)
 		return PreservedAnalyses::all ();
 
 	BlockFrequencyInfo &counts = fam.getResult<BlockFrequencyAnalysis> (f);
-	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
+	const ConstantValues &values = fam.getResult<MonoMemoryValues> (f);
 	SmallVector<Guardable, 4> pending;
 
 	// Every weight is read before the first split, because a block this pass
