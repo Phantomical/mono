@@ -676,6 +676,38 @@ mono_runtime_suite(runtime-tier2-inline-policy-off TESTS ${_tier2_inline_policy}
                        "MONO_INLINE_POLICY=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=110 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-scalarize-arg-bonus=0 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false")
 
+# The raising arm mono-inline-implicit-null-free leaves out of a callee's
+# cost. The body is past the default cost-translate limit and past the
+# default cold-callsite threshold, so both arms raise both -- the file says
+# why.
+_mono_exe_list(_tier2_inline_nullcheck ${MONO_TESTS_TIER2_INLINE_NULLCHECK_SRC})
+mono_runtime_suite(runtime-tier2-inline-nullcheck TESTS ${_tier2_inline_nullcheck}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=512"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inlinedefault-threshold=1200 --llvm-opt=-mono-inline-cold-callsite-threshold=700")
+mono_runtime_suite(runtime-tier2-inline-nullcheck-off TESTS ${_tier2_inline_nullcheck}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=512"
+                       "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inlinedefault-threshold=1200 --llvm-opt=-mono-inline-cold-callsite-threshold=700 --llvm-opt=-mono-inline-implicit-null-free=false")
+
+# The scalarize-arg-bonus, on a callee that only reads an uncaptured
+# argument's fields. The off arm leaves the other bonuses alone, because what
+# it separates is this one from the fold tier2-inline-policy.cs's Measure ()
+# takes with the argument bonus instead.
+_mono_exe_list(_tier2_inline_scalarize ${MONO_TESTS_TIER2_INLINE_SCALARIZE_SRC})
+mono_runtime_suite(runtime-tier2-inline-scalarize TESTS ${_tier2_inline_scalarize}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=200")
+mono_runtime_suite(runtime-tier2-inline-scalarize-off TESTS ${_tier2_inline_scalarize}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=200 --llvm-opt=-mono-inline-scalarize-arg-bonus=0")
+
 # What the cost model answers about a receiver the call site allocated. The off
 # arm turns those answers off and leaves the bonuses alone, because what it
 # separates is the fold rather than a threshold.

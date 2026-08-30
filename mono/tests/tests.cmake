@@ -1011,6 +1011,21 @@ set(MONO_TESTS_TIER2_INLINE_POLICY_SRC
   tier2-inline-policy.cs
 )
 
+# The raising arm mono-inline-implicit-null-free leaves out of a callee's
+# cost. It runs twice, on the default and with the option off, and reads the
+# variable to know which arm it is in.
+set(MONO_TESTS_TIER2_INLINE_NULLCHECK_SRC
+  tier2-inline-nullcheck.cs
+)
+
+# The scalarize-arg-bonus, on a callee that only reads an uncaptured
+# argument's fields rather than dispatching on it. It runs twice, on the
+# default and with the bonus zeroed, and reads the variable to know which arm
+# it is in.
+set(MONO_TESTS_TIER2_INLINE_SCALARIZE_SRC
+  tier2-inline-scalarize.cs
+)
+
 # Entering a delegate's target instead of reading it off the delegate. It runs
 # twice, on the default and with the fold off, and reads the variable to know
 # which arm it is in. Every value it asserts holds in both; the stack trace that
