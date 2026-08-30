@@ -19,6 +19,7 @@
 #define MONO_LLVM_PASSES_ARRAY_SHAPE_HPP
 
 #include <llvm/ADT/StringRef.h>
+#include <llvm/IR/PassManager.h>
 
 namespace llvm {
 class Function;
@@ -48,7 +49,7 @@ constexpr llvm::StringRef array_shape_lower_bound = "lower_bound";
 /// A dimension the IL settled reads as a constant straight away. One that
 /// arrives through an inlined parameter is a load until SROA has run, which is
 /// why the folds take a function's sites up more than once.
-bool fold_array_shapes (llvm::Function &f, const ConstantValues &values);
+bool fold_array_shapes (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
 /// Rewrites every site left in \p m, erases the declarations, and says whether
 /// it changed anything.

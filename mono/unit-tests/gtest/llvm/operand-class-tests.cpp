@@ -55,7 +55,7 @@ namespace {
  */
 
 ConstantValues
-settled_for (const Function &f)
+values_for (const Function &f)
 {
 	FunctionAnalysisManager fam;
 	ModuleAnalysisManager mam;
@@ -77,13 +77,13 @@ settled_for (const Function &f)
 std::pair<MonoClass *, bool>
 operand_class_of (Value *v, const Function &f)
 {
-	return operand_class (v, f, settled_for (f));
+	return operand_class (v, f, values_for (f));
 }
 
 MonoClass *
 exact_class_of (Value *v, const Function &f)
 {
-	return exact_class (v, f, settled_for (f));
+	return exact_class (v, f, values_for (f));
 }
 
 /// Two classes a mark can name, written `!1` and `!2` in the IR below. The

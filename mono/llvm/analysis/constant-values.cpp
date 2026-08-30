@@ -114,7 +114,11 @@ as_type (Constant *held, Type *want, const DataLayout &dl)
 class ConstantValuesSolver : public InstVisitor<ConstantValuesSolver, bool> {
 	Function &f;
 	const DataLayout &dl;
-	MemorySSA &mssa;
+	FunctionAnalysisManager &fam;
+
+	/// Null until gather_memory_deps () finds a load to forward. Building one
+	/// costs more than every other part of this walk together.
+	MemorySSA *mssa = nullptr;
 
 	/// The loads that read each stored value.
 	DenseMap<Value *, SmallPtrSet<Value *, 2>> dependents;
@@ -140,8 +144,8 @@ class ConstantValuesSolver : public InstVisitor<ConstantValuesSolver, bool> {
 	llvm::DenseMap<llvm::Value *, ValueSources> sources;
 
 public:
-	ConstantValuesSolver (llvm::Function &f, llvm::MemorySSA &mssa)
-		: f (f), dl (f.getParent ()->getDataLayout ()), mssa (mssa)
+	ConstantValuesSolver (llvm::Function &f, llvm::FunctionAnalysisManager &fam)
+		: f (f), dl (f.getParent ()->getDataLayout ()), fam (fam)
 	{
 	}
 
@@ -238,6 +242,7 @@ public:
 		}
 
 		result.lookup = std::move (sources);
+		result.read_memory = mssa != nullptr;
 	}
 
 	bool visitPHINode (llvm::PHINode &phi)
@@ -286,15 +291,23 @@ public:
 
 	void gather_memory_deps ()
 	{
-		aa.emplace (mssa.getAA ());
+		SmallVector<LoadInst *, 16> loads;
 
 		for (Instruction &at : instructions (f)) {
 			auto *load = dyn_cast<LoadInst> (&at);
 
 			// An atomic or volatile load can change outside this function.
-			if (load == nullptr || !load->isSimple ())
-				continue;
+			if (load != nullptr && load->isSimple ())
+				loads.push_back (load);
+		}
 
+		if (loads.empty ())
+			return;
+
+		mssa = &fam.getResult<MemorySSAAnalysis> (f).getMSSA ();
+		aa.emplace (mssa->getAA ());
+
+		for (LoadInst *load : loads) {
 			MemoryDeps deps = walk_memory (*load);
 
 			for (Value *stored : deps.stored)
@@ -330,7 +343,7 @@ public:
 	MemoryDeps walk_memory (LoadInst &load)
 	{
 		MemoryLocation where = MemoryLocation::get (&load);
-		MemorySSAWalker *walker = mssa.getWalker ();
+		MemorySSAWalker *walker = mssa->getWalker ();
 
 		SmallPtrSet<MemoryAccess *, 8> seen;
 		SmallVector<MemoryAccess *, 8> work{walker->getClobberingMemoryAccess (&load, *aa)};
@@ -342,7 +355,7 @@ public:
 			if (!seen.insert (at).second)
 				continue;
 
-			if (mssa.isLiveOnEntryDef (at)) {
+			if (mssa->isLiveOnEntryDef (at)) {
 				reached_unwritten (load, deps);
 				continue;
 			}
@@ -592,8 +605,10 @@ bool
 ConstantValues::invalidate (Function &f, const PreservedAnalyses &pa,
                             FunctionAnalysisManager::Invalidator &inv)
 {
-	return !pa.getChecker<MonoConstantValues> ().preserved ()
-	       || inv.invalidate<MemorySSAAnalysis> (f, pa);
+	if (!pa.getChecker<MonoConstantValues> ().preserved ())
+		return true;
+
+	return read_memory && inv.invalidate<MemorySSAAnalysis> (f, pa);
 }
 
 AnalysisKey MonoConstantValues::Key;
@@ -602,7 +617,7 @@ ConstantValues
 MonoConstantValues::run (Function &f, FunctionAnalysisManager &fam)
 {
 	ConstantValues values;
-	ConstantValuesSolver solver (f, fam.getResult<MemorySSAAnalysis> (f).getMSSA ());
+	ConstantValuesSolver solver (f, fam);
 
 	solver.solve (values);
 

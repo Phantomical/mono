@@ -100,16 +100,14 @@ MonoBuiltinConstProp::run (Function &f, FunctionAnalysisManager &fam)
 		if (changed)
 			fam.invalidate (f, PreservedAnalyses::none ());
 
-		const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
-
 		// Type tests first: folding one is what delivers the allocation a
 		// chain's receiver comes from.
-		bool again = fold_type_tests (f, values);
+		bool again = fold_type_tests (f, fam);
 
-		again |= fold_object_vtables (f, values);
-		again |= fold_vtable_fields (f, values);
-		again |= fold_dispatch_sites (f, values);
-		again |= fold_array_shapes (f, values);
+		again |= fold_object_vtables (f, fam);
+		again |= fold_vtable_fields (f, fam);
+		again |= fold_dispatch_sites (f, fam);
+		again |= fold_array_shapes (f, fam);
 
 		/*
 		 * Placed with the folds, ahead of the post_optimization lowering,

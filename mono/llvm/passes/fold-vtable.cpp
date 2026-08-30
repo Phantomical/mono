@@ -41,13 +41,17 @@ field_of (StringRef name, const VTableInfo &info, Type *held)
 }
 
 bool
-fold_field (Function &f, StringRef name, const ConstantValues &values)
+fold_field (Function &f, StringRef name, FunctionAnalysisManager &fam)
 {
 	bool changed = false;
+	const ConstantValues *values = nullptr;
 
 	for (CallBase *site : builtin_sites (f, name)) {
+		if (values == nullptr)
+			values = &fam.getResult<MonoConstantValues> (f);
+
 		const auto *vtable = dyn_cast_or_null<GlobalObject> (
-			values.global (site->getArgOperand (0)));
+			values->global (site->getArgOperand (0)));
 
 		if (vtable == nullptr)
 			continue;
@@ -68,7 +72,7 @@ fold_field (Function &f, StringRef name, const ConstantValues &values)
 } // namespace
 
 bool
-fold_object_vtables (Function &f, const ConstantValues &values)
+fold_object_vtables (Function &f, FunctionAnalysisManager &fam)
 {
 	const CompileState &compile = current_compile ();
 
@@ -85,8 +89,13 @@ fold_object_vtables (Function &f, const ConstantValues &values)
 
 	bool changed = false;
 
+	const ConstantValues *values = nullptr;
+
 	for (LoadInst *read : reads) {
-		MonoClass *klass = exact_class (object_vtable_read (read), f, values);
+		if (values == nullptr)
+			values = &fam.getResult<MonoConstantValues> (f);
+
+		MonoClass *klass = exact_class (object_vtable_read (read), f, *values);
 
 		if (klass == nullptr)
 			continue;
@@ -105,13 +114,13 @@ fold_object_vtables (Function &f, const ConstantValues &values)
 }
 
 bool
-fold_vtable_fields (Function &f, const ConstantValues &values)
+fold_vtable_fields (Function &f, FunctionAnalysisManager &fam)
 {
-	bool changed = fold_field (f, vtable_klass_name, values);
+	bool changed = fold_field (f, vtable_klass_name, fam);
 
-	changed |= fold_field (f, vtable_type_name, values);
+	changed |= fold_field (f, vtable_type_name, fam);
 
-	return fold_field (f, vtable_rank_name, values) || changed;
+	return fold_field (f, vtable_rank_name, fam) || changed;
 }
 
 } // namespace mono

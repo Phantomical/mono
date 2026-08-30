@@ -236,14 +236,18 @@ shape_decls (Module &m)
 } // namespace
 
 bool
-fold_array_shapes (Function &f, const ConstantValues &values)
+fold_array_shapes (Function &f, FunctionAnalysisManager &fam)
 {
 	bool changed = false;
+	const ConstantValues *values = nullptr;
 
 	for (auto [decl, kind] : shape_decls (*f.getParent ())) {
 		for (CallBase *site : builtin_sites (f, decl->getName ())) {
+			if (values == nullptr)
+				values = &fam.getResult<MonoConstantValues> (f);
+
 			const auto *dimension = dyn_cast_or_null<ConstantInt> (
-				values.value (site->getArgOperand (1)));
+				values->value (site->getArgOperand (1)));
 
 			if (dimension == nullptr || !dimension->isZero ())
 				continue;

@@ -10,6 +10,8 @@
 #ifndef MONO_LLVM_PASSES_FOLD_VTABLE_HPP
 #define MONO_LLVM_PASSES_FOLD_VTABLE_HPP
 
+#include <llvm/IR/PassManager.h>
+
 namespace llvm {
 class Function;
 }
@@ -25,11 +27,11 @@ class ConstantValues;
 /// speculatable, so nothing moves one above that check. That is what lets a
 /// sealed slot's declared class stand for the class the object is. The null
 /// such a slot also admits cannot reach the read.
-bool fold_object_vtables (llvm::Function &f, const ConstantValues &values);
+bool fold_object_vtables (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
 /// Replaces each vtable field read in \p f whose vtable is a marked symbol with
 /// the value that symbol carries. Says whether it changed anything.
-bool fold_vtable_fields (llvm::Function &f, const ConstantValues &values);
+bool fold_vtable_fields (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
 } // namespace mono
 

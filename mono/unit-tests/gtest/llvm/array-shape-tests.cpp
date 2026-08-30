@@ -13,6 +13,7 @@
 #include "passes/array-shape.hpp"
 
 #include "analysis/constant-values.hpp"
+#include "pipelines.hpp"
 
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
@@ -122,26 +123,26 @@ struct ShapeModule {
 
 /// Dimension zero is read out of the array: the bounds pointer, then either
 /// max_length or the first dimension's length.
-/// Settles \p f, which the queries below take.
-ConstantValues
-settled_for (const Function &f)
-{
-	FunctionAnalysisManager fam;
+/// The managers a fold asks its analyses through, held for as long as the call.
+struct Analyses {
 	ModuleAnalysisManager mam;
-	LoopAnalysisManager lam;
 	CGSCCAnalysisManager cgam;
+	FunctionAnalysisManager fam;
+	LoopAnalysisManager lam;
 	PassBuilder pb;
 
-	// All four, because MemorySSA asks alias analysis for GlobalsAA, which is
-	// a module analysis it reaches through the proxy.
-	pb.registerModuleAnalyses (mam);
-	pb.registerCGSCCAnalyses (cgam);
-	pb.registerFunctionAnalyses (fam);
-	pb.registerLoopAnalyses (lam);
-	pb.crossRegisterProxies (lam, fam, cgam, mam);
-
-	return MonoConstantValues ().run (const_cast<Function &> (f), fam);
-}
+	Analyses ()
+	{
+		// All four, because MemorySSA asks alias analysis for GlobalsAA, which
+		// is a module analysis it reaches through the proxy.
+		pb.registerModuleAnalyses (mam);
+		pb.registerCGSCCAnalyses (cgam);
+		pb.registerFunctionAnalyses (fam);
+		pb.registerLoopAnalyses (lam);
+		pb.crossRegisterProxies (lam, fam, cgam, mam);
+		register_mono_analyses (fam);
+	}
+};
 
 TEST (ArrayShape, ZeroReadsTheHeader)
 {
@@ -188,8 +189,9 @@ TEST (ArrayShape, AFoldKeepsASiteItCannotRead)
 {
 	ShapeModule m (array_shape_length, 1);
 
-	fold_array_shapes (*m.module->getFunction ("caller"),
-	                   settled_for (*m.module->getFunction ("caller")));
+	Analyses analyses;
+
+	fold_array_shapes (*m.module->getFunction ("caller"), analyses.fam);
 	ASSERT_FALSE (verifyModule (*m.module, &errs ()));
 	EXPECT_NE (m.module->getFunction (m.decl_name), nullptr);
 	EXPECT_EQ (m.count_calls (), 0u);

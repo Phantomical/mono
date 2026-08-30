@@ -46,7 +46,7 @@ MonoMethod *slot_target (MonoClass *klass, int32_t index);
 /// What it needs of the running compile it reads from current_compile ()
 /// (compile-state.hpp), and it asks mono for the rest. Outside a compile it
 /// leaves every site alone.
-bool fold_dispatch_sites (llvm::Function &f, const ConstantValues &values);
+bool fold_dispatch_sites (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
 /// Sends each dispatch on an array receiver through a compare of that
 /// receiver's vtable against the array class its slot is declared with. The

@@ -100,9 +100,9 @@ struct MergeModule {
 	}
 };
 
-/// Settles \p f, which the queries below take.
+/// The values \p f settles to, which the queries below take.
 ConstantValues
-settled_for (const Function &f)
+values_for (const Function &f)
 {
 	FunctionAnalysisManager fam;
 	ModuleAnalysisManager mam;
@@ -124,8 +124,8 @@ settled_for (const Function &f)
 TEST (FoldDelegateTest, ReadsAMarkedProducer)
 {
 	MergeModule m;
-	DelegateTarget found = delegate_target_at (m.produce (m.left, first),
-	                                                  settled_for (*m.caller));
+	DelegateTarget found =
+		delegate_target_at (m.produce (m.left, first), values_for (*m.caller));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
@@ -134,8 +134,8 @@ TEST (FoldDelegateTest, ReadsAMarkedProducer)
 TEST (FoldDelegateTest, SaysNothingAboutAnUnmarkedValue)
 {
 	MergeModule m;
-	DelegateTarget found = delegate_target_at (m.caller->getArg (1),
-	                                                  settled_for (*m.caller));
+	DelegateTarget found =
+		delegate_target_at (m.caller->getArg (1), values_for (*m.caller));
 
 	EXPECT_EQ (found.method, nullptr);
 	EXPECT_FALSE (found.settled);
@@ -146,7 +146,7 @@ TEST (FoldDelegateTest, SettlesAMergeWhoseArmsAgree)
 	MergeModule m;
 	DelegateTarget found = delegate_target_at (
 		m.joined (m.produce (m.left, first), m.produce (m.right, first)),
-	                                                  settled_for (*m.caller));
+		values_for (*m.caller));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
@@ -157,7 +157,7 @@ TEST (FoldDelegateTest, OffersACandidateWhenOneArmIsOpaque)
 	MergeModule m;
 	DelegateTarget found = delegate_target_at (
 		m.joined (m.produce (m.left, first), m.produce (m.right, nullptr)),
-	                                                  settled_for (*m.caller));
+		values_for (*m.caller));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_FALSE (found.settled);
@@ -168,7 +168,7 @@ TEST (FoldDelegateTest, RefusesAMergeWhoseArmsDisagree)
 	MergeModule m;
 	DelegateTarget found = delegate_target_at (
 		m.joined (m.produce (m.left, first), m.produce (m.right, second)),
-	                                                  settled_for (*m.caller));
+		values_for (*m.caller));
 
 	// Naming one of them would be a guess, and a profile is what would have to
 	// settle it.
@@ -186,8 +186,7 @@ TEST (FoldDelegateTest, ReadsThroughASelect)
 
 	b.CreateRet (pick);
 
-	DelegateTarget found = delegate_target_at (pick,
-	                                                  settled_for (*m.caller));
+	DelegateTarget found = delegate_target_at (pick, values_for (*m.caller));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
@@ -205,7 +204,7 @@ TEST (FoldDelegateTest, ReadsThroughAFreeze)
 
 	b.CreateRet (frozen);
 
-	DelegateTarget found = delegate_target_at (frozen);
+	DelegateTarget found = delegate_target_at (frozen, values_for (*m.caller));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
@@ -223,8 +222,7 @@ TEST (FoldDelegateTest, TerminatesOnAMergeThatReachesItself)
 
 	// The value going round the loop is the phi, so it says nothing the arm
 	// below it has not already said.
-	DelegateTarget found = delegate_target_at (phi,
-	                                                  settled_for (*m.caller));
+	DelegateTarget found = delegate_target_at (phi, values_for (*m.caller));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);

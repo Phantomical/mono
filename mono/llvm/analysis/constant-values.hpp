@@ -100,6 +100,11 @@ private:
 	friend class ConstantValuesSolver;
 
 	llvm::DenseMap<llvm::Value *, ValueSources> lookup;
+
+	/// Whether the walk asked for MemorySSA, which it does only where the
+	/// function has a load to forward. Invalidating a dependency the manager
+	/// never cached asserts inside it.
+	bool read_memory = false;
 };
 
 /// An analysis that finds all potential sources for each instruction.

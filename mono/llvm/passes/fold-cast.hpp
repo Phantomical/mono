@@ -11,6 +11,8 @@
 #ifndef MONO_LLVM_PASSES_FOLD_CAST_HPP
 #define MONO_LLVM_PASSES_FOLD_CAST_HPP
 
+#include <llvm/IR/PassManager.h>
+
 namespace llvm {
 class Function;
 }
@@ -37,7 +39,7 @@ CastAnswer cast_answer (MonoClass *target, MonoClass *held, bool exact);
 
 /// Replaces each type test in \p f that the operand's own class decides with
 /// the value it stands for. Says whether it changed anything.
-bool fold_type_tests (llvm::Function &f, const ConstantValues &values);
+bool fold_type_tests (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
 } // namespace mono
 

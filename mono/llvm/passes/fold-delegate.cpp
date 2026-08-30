@@ -514,6 +514,11 @@ FoldDelegateInvokesPass::run (Function &f, FunctionAnalysisManager &fam)
 	if (!can_name_methods ())
 		return PreservedAnalyses::all ();
 
+	SmallVector<CallBase *, 8> sites = invoke_sites (f);
+
+	if (sites.empty ())
+		return PreservedAnalyses::all ();
+
 	const CompileState &compile = current_compile ();
 	BlockFrequencyInfo &counts = fam.getResult<BlockFrequencyAnalysis> (f);
 	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
@@ -531,7 +536,7 @@ FoldDelegateInvokesPass::run (Function &f, FunctionAnalysisManager &fam)
 	// appears.
 	SmallVector<Pending, 8> pending;
 
-	for (CallBase *site : invoke_sites (f)) {
+	for (CallBase *site : sites) {
 		DelegateTarget found = delegate_target_at (site->getArgOperand (0), values);
 
 		if (found.method == nullptr)

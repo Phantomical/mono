@@ -210,13 +210,18 @@ tested_class (const CallBase *site, const ConstantValues &values)
 /// Folds what it can of the sites in \p f that call the declaration \p name.
 bool
 fold_sites (Function &f, StringRef name, bool throw_on_fail,
-            const ConstantValues &values)
+            FunctionAnalysisManager &fam)
 {
 	bool changed = false;
+	const ConstantValues *values = nullptr;
 
 	for (CallBase *site : builtin_sites (f, name)) {
+		if (values == nullptr)
+			values = &fam.getResult<MonoConstantValues> (f);
+
 		Value *obj = site->getArgOperand (0);
-		CastAnswer answer = answer_for (obj, tested_class (site, values), f, values);
+		CastAnswer answer =
+			answer_for (obj, tested_class (site, *values), f, *values);
 
 		// Both forms answer the operand where the test passes, since both
 		// answer null for null and neither changes what it is handed.
@@ -242,16 +247,16 @@ fold_sites (Function &f, StringRef name, bool throw_on_fail,
 } // namespace
 
 bool
-fold_type_tests (Function &f, const ConstantValues &values)
+fold_type_tests (Function &f, FunctionAnalysisManager &fam)
 {
 	// The classes ride as pointers into this process. An offline run over a
 	// dumped module would read them as addresses of its own.
 	if (current_compile ().domain == nullptr || !fold_casts ())
 		return false;
 
-	bool changed = fold_sites (f, cast_isinst_name, false, values);
+	bool changed = fold_sites (f, cast_isinst_name, false, fam);
 
-	return fold_sites (f, cast_castclass_name, true, values) || changed;
+	return fold_sites (f, cast_castclass_name, true, fam) || changed;
 }
 
 } // namespace mono

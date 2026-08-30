@@ -137,6 +137,9 @@ promote_allocations (Function &f, const LoopInfo &loops, const ConstantValues &v
 PreservedAnalyses
 PromoteAllocationsPass::run (Function &f, FunctionAnalysisManager &fam)
 {
+	if (builtin_sites (f, alloc_object_name).empty ())
+		return PreservedAnalyses::all ();
+
 	if (!promote_allocations (f, fam.getResult<LoopAnalysis> (f),
 	                          fam.getResult<MonoConstantValues> (f)))
 		return PreservedAnalyses::all ();

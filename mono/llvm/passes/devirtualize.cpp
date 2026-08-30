@@ -433,7 +433,7 @@ indirect_calls (Function &f)
 } // namespace
 
 bool
-fold_dispatch_sites (Function &f, const ConstantValues &values)
+fold_dispatch_sites (Function &f, FunctionAnalysisManager &fam)
 {
 	const CompileState &compile = current_compile ();
 
@@ -441,10 +441,14 @@ fold_dispatch_sites (Function &f, const ConstantValues &values)
 		return false;
 
 	bool changed = false;
+	const ConstantValues *values = nullptr;
 
 	for (CallBase *call : indirect_calls (f)) {
+		if (values == nullptr)
+			values = &fam.getResult<MonoConstantValues> (f);
+
 		std::optional<Reached> found =
-			reached_target (call->getCalledOperand (), values);
+			reached_target (call->getCalledOperand (), *values);
 
 		if (!found)
 			continue;
@@ -766,6 +770,11 @@ GuardDispatchPass::run (Function &f, FunctionAnalysisManager &fam)
 	// reads is a symbol resolved against this compile's domain.
 	if (compile.domain == nullptr || !compile.publish || !compile.vtable_of
 	    || !guard_array_dispatch ())
+		return PreservedAnalyses::all ();
+
+	if (builtin_sites (f, vtable_func_name).empty ()
+	    && builtin_sites (f, imt_func_name).empty ()
+	    && builtin_sites (f, vtable_gfunc_name).empty ())
 		return PreservedAnalyses::all ();
 
 	BlockFrequencyInfo &counts = fam.getResult<BlockFrequencyAnalysis> (f);
