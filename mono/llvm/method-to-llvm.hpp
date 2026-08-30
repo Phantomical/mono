@@ -1171,6 +1171,8 @@ private:
 	llvm::Error emit_ldind (MonoIrBuilder &builder, MonoType *element);
 	llvm::Error emit_stind (MonoIrBuilder &builder, MonoType *element);
 	llvm::Expected<llvm::Function *> object_new_decl ();
+	void store_object_vtable (MonoIrBuilder &builder, llvm::Value *object,
+	                          llvm::Value *vtable);
 	llvm::Expected<llvm::Value *> emit_object_alloc (MonoIrBuilder &builder,
 	                                                 MonoClass *klass, bool for_box);
 	llvm::Value *unbox_payload (MonoIrBuilder &builder, llvm::Value *obj,

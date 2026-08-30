@@ -75,7 +75,7 @@ bool lower_vtable_reads (llvm::Module &m);
 /*
  * A read off an object is an ordinary load, where each read off a vtable above
  * is a declaration. The word it reads is one the module itself writes, at the
- * store `emit_object_alloc ()` puts behind an allocation. A load keeps that
+ * store `store_object_vtable ()` puts behind an allocation. A load keeps that
  * store live for the memory passes and lets LLVM forward it, which answers a
  * fresh allocation before any pass here runs.
  */
@@ -89,8 +89,8 @@ bool lower_vtable_reads (llvm::Module &m);
 /// The mark is `!invariant.group`, which equates every tagged load or store of
 /// the same pointer rather than pinning a value at function entry. It has
 /// nothing to equate against unless the write is tagged too, which
-/// `emit_object_alloc ()` (`method-to-llvm/boxing.cpp`) does on the vtable
-/// store it emits for every object.
+/// `store_object_vtable ()` (`method-to-llvm/boxing.cpp`) does on every vtable
+/// store it emits.
 ///
 /// The mark grants no dereferenceability, so the read stays under the null check
 /// on the object. `fold_object_vtables ()` needs that check to dominate the read

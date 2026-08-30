@@ -101,7 +101,7 @@ cl::opt<unsigned> PromotedColdPercent (
 
 /// Whether \p v is an object this compile allocated under a class it names.
 ///
-/// `emit_object_alloc ()` stores the vtable into the object's first word right
+/// `store_object_vtable ()` stores the vtable into the object's first word right
 /// behind the allocation, and that store states the class in the IR. A class
 /// whose allocation can return a transparent proxy gets no such store, because
 /// the object returned then carries the proxy's vtable.
@@ -199,7 +199,7 @@ dispatches_unresolved_on (const Value *object, const Function &f)
 /// The vtable symbol \p object's allocation stored into its first word, or null
 /// where this cannot say what stands there.
 ///
-/// `emit_object_alloc ()` writes that word once, behind an allocation nothing
+/// `store_object_vtable ()` writes that word once, behind an allocation nothing
 /// else holds yet, so a read of it anywhere below gives what the store put
 /// there. That is the same fact `fold_dispatch_sites ()` stands on, and it is
 /// what lets a walk with no memory model follow one store.

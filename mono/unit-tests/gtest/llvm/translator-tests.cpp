@@ -671,6 +671,15 @@ TEST_F (TranslatorTest, NewarrDoesNotFallBackWhereTheCollectorAllocates)
 	EXPECT_GE (t.count ("mono_vtable_"), 1u);
 }
 
+TEST_F (TranslatorTest, NewarrStoresTheVtableItsAllocatorWrote)
+{
+	const Translation &t = translate ("arrays", "Arrays:Make");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("store ptr @\"mono_vtable_int[]"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("!invariant.group"), 1u) << t.text ();
+}
+
 // Multi-dimensional arrays construct through newobj on a bodyless metadata ctor; the
 // runtime icalls implement it, keyed by that ctor's method. Two int32 lengths take
 // the direct mono_array_new_2; bounds pairs and rank five deinterleave into a buffer

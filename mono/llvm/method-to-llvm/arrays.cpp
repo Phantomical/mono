@@ -1125,10 +1125,11 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 	if (auto *site = llvm::dyn_cast<llvm::CallBase> (created))
 		site->addRetAttr (array_extent (allocator == nullptr, array, length));
 
+	store_object_vtable (builder, created, *vtable);
+
 	/*
-	 * The allocator wrote this word already. The store states the length in the
-	 * IR, at the width array_length () loads, so `zeroed` does not fold that
-	 * read to zero.
+	 * The store states the length in the IR, at the width array_length ()
+	 * loads, so `zeroed` does not fold that read to zero.
 	 */
 	constexpr unsigned bytes = sizeof (mono_array_size_t);
 

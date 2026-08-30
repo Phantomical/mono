@@ -70,6 +70,26 @@ MethodLLVMEmitter::allocation_is_observable (MonoClass *klass)
 	       || allocation_can_be_a_proxy (klass);
 }
 
+/// Writes vtable into the header of the fresh object at \p object.
+///
+/// Without this store, `zeroed` folds a read of the word to null.
+void
+MethodLLVMEmitter::store_object_vtable (MonoIrBuilder &builder, llvm::Value *object,
+                                        llvm::Value *vtable)
+{
+	llvm::StoreInst *header = builder.CreateAlignedStore (
+		vtable,
+		builder.CreateGEP (
+			builder.getInt8Ty (), object,
+			builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+		llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	// mark_object_vtable_read () (passes/vtable-func.hpp) reads this store back
+	// through `!invariant.group`.
+	header->setMetadata (llvm::LLVMContext::MD_invariant_group,
+	                     llvm::MDNode::get (header->getContext (), {}));
+}
+
 llvm::Expected<llvm::Value *>
 MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, bool for_box)
 {
@@ -131,31 +151,15 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 			site->addRetAttr (llvm::Attribute::NonNull);
 
 	/*
-	 * The allocator wrote this word already, so this store is redundant. What it
-	 * adds is the class of a fresh object, stated in the IR. Without it the
-	 * optimizer sees an opaque pointer. A dispatch site then keeps its lookup,
-	 * even where the allocation is in the same block. It is also what keeps
-	 * `zeroed` from folding a read of the word to null.
-	 *
 	 * A class whose allocation can answer with a proxy gets no store, because
 	 * what comes back then carries the proxy's vtable rather than this one. Its
 	 * allocation takes the kept declaration, which makes no `zeroed` claim.
 	 */
 	if (!allocation_can_be_a_proxy (klass)) {
-		llvm::StoreInst *header = builder.CreateAlignedStore (
-			*vtable,
-			builder.CreateGEP (
-				builder.getInt8Ty (), object,
-				builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-			llvm::Align (TARGET_SIZEOF_VOID_P));
+		store_object_vtable (builder, object, *vtable);
 
-		// mark_object_vtable_read () (passes/vtable-func.hpp) reads this store
-		// back through `!invariant.group`.
-		header->setMetadata (llvm::LLVMContext::MD_invariant_group,
-		                     llvm::MDNode::get (header->getContext (), {}));
-
-		// The same fact for a reader that has the object rather than its vtable,
-		// which is what a type test on a fresh object has.
+		// For a reader that has the object rather than its vtable, which is
+		// what a type test on a fresh object has.
 		if (auto *made = llvm::dyn_cast<llvm::Instruction> (object))
 			mark_exact_class (*made, klass);
 	}
