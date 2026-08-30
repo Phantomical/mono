@@ -251,6 +251,7 @@ set(MONO_TESTS_CS_SRC
   vtable-fold.cs
   reflection-element-type.cs
   tier2-narrow-arg.cs
+  tier2-loop-unswitch.cs
   managed-thread-id.cs
   thread-static-fast-path.cs
   pinvoke-narrow-arg.cs
