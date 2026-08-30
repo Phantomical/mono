@@ -473,27 +473,6 @@ guessed_class (Value *v, const Function &f, const ConstantValues &values)
 	return class_of (v, f, ClassRule::guessed, values).first;
 }
 
-FieldValues
-field_load_values (LoadInst &load, const ConstantValues &values)
-{
-	const ValueSources &from = values.sources (&load);
-	FieldValues answer { {}, true };
-
-	for (Value *v : from.sources) {
-		// The load is a path the walk did not settle, not a value the
-		// field holds.
-		if (v == &load) {
-			answer.complete = false;
-			continue;
-		}
-
-		if (!isa<ConstantPointerNull> (v))
-			answer.values.push_back (v);
-	}
-
-	return answer;
-}
-
 void
 mark_delegate_target (Instruction &site, MonoMethod *target)
 {

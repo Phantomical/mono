@@ -59,11 +59,8 @@ struct DelegateTarget {
 
 /// What \p receiver says about the delegate it holds.
 ///
-/// Walks merges, so it reads a value the translator marked however many phis,
-/// selects and field copies stand between. A field copy is a load answered by
-/// `field_load_values ()`: the delegate a caller stored into an object of its
-/// own, read back out. The walk is bounded by a node budget and answers nothing
-/// at all once it runs out, rather than answering from the part it reached.
+/// Reads a value the translator marked through whatever phis, selects and field
+/// copies stand between, which \p values is what settles.
 DelegateTarget delegate_target_at (llvm::Value *receiver,
                                   const ConstantValues &values);
 

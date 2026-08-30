@@ -118,24 +118,6 @@ std::pair<MonoClass *, bool> operand_class (llvm::Value *v, const llvm::Function
 /// caller that does not dereference \p v must call `operand_class ()` instead.
 MonoClass *exact_class (llvm::Value *v, const llvm::Function &f, const ConstantValues &values);
 
-/// What a field load can read, and how much of that a caller may trust.
-struct FieldValues {
-	/// Every value a store can leave in the field, minus the allocation's own
-	/// initial zero.
-	llvm::SmallVector<llvm::Value *, 4> values;
-
-	/// Whether `values` is every value the field can hold. A caller may still
-	/// take a value from an incomplete set as a candidate, and must then
-	/// compare against what it reads rather than trust it.
-	bool complete;
-};
-
-/// What the field \p load reads can hold, taken from \p values.
-///
-/// Empty where no store reaches the field, which covers a base \p values could
-/// not resolve to an allocation: there is then no field to read the stores of.
-FieldValues field_load_values (llvm::LoadInst &load, const ConstantValues &values);
-
 /// A class \p v plausibly has, for a caller that compares against it before it
 /// acts on the answer. Null where this walk names none.
 ///
