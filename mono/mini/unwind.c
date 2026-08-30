@@ -38,6 +38,8 @@ static mono_mutex_t unwind_mutex;
 static MonoUnwindInfo **cached_info;
 static int cached_info_next, cached_info_size;
 static GSList *cached_info_list;
+static GHashTable *cached_info_hash;
+
 /* Statistics */
 static int unwind_info_size;
 
@@ -1184,6 +1186,15 @@ mono_unwind_cleanup (void)
 	if (!cached_info)
 		return;
 
+	GHashTableIter iter;
+	gpointer bucket;
+
+	g_hash_table_iter_init (&iter, cached_info_hash);
+	while (g_hash_table_iter_next (&iter, NULL, &bucket))
+		g_slist_free ((GSList *) bucket);
+	g_hash_table_destroy (cached_info_hash);
+	cached_info_hash = NULL;
+
 	for (int i = 0; i < cached_info_next; ++i) {
 		MonoUnwindInfo *cached = cached_info [i];
 
@@ -1195,6 +1206,19 @@ mono_unwind_cleanup (void)
 		g_free (cursor->data);
 
 	g_slist_free (cached_info_list);
+}
+
+static guint
+unwind_info_hash (guint8 *unwind_info, guint32 unwind_info_len)
+{
+	guint hash = 2166136261u;
+
+	for (guint32 i = 0; i < unwind_info_len; ++i) {
+		hash ^= unwind_info [i];
+		hash *= 16777619u;
+	}
+
+	return hash;
 }
 
 /*
@@ -1212,20 +1236,27 @@ mono_cache_unwind_info (guint8 *unwind_info, guint32 unwind_info_len)
 {
 	int i;
 	MonoUnwindInfo *info;
+	guint hash;
+	GSList *bucket;
 
 	unwind_lock ();
 
 	if (cached_info == NULL) {
 		cached_info_size = 16;
 		cached_info = g_new0 (MonoUnwindInfo*, cached_info_size);
+		cached_info_hash = g_hash_table_new (g_direct_hash, g_direct_equal);
 	}
 
-	for (i = 0; i < cached_info_next; ++i) {
-		MonoUnwindInfo *cached = cached_info [i];
+	hash = unwind_info_hash (unwind_info, unwind_info_len);
+	bucket = (GSList *) g_hash_table_lookup (cached_info_hash, GUINT_TO_POINTER (hash));
+
+	for (GSList *cursor = bucket; cursor != NULL; cursor = cursor->next) {
+		int idx = GPOINTER_TO_INT (cursor->data);
+		MonoUnwindInfo *cached = cached_info [idx];
 
 		if (cached->len == unwind_info_len && memcmp (cached->info, unwind_info, unwind_info_len) == 0) {
 			unwind_unlock ();
-			return i;
+			return idx;
 		}
 	}
 
@@ -1257,6 +1288,7 @@ mono_cache_unwind_info (guint8 *unwind_info, guint32 unwind_info_len)
 	}
 
 	cached_info [cached_info_next ++] = info;
+	g_hash_table_insert (cached_info_hash, GUINT_TO_POINTER (hash), g_slist_prepend (bucket, GINT_TO_POINTER (i)));
 
 	unwind_info_size += sizeof (MonoUnwindInfo) + unwind_info_len;
 
