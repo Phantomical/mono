@@ -730,7 +730,16 @@ MonoPassBuilder::buildTier2FunctionSimplificationPipeline ()
 	// speculation off because rotation has not happened yet.
 	LPM1.addPass (llvm::LICMPass (PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
 	                              /* AllowSpeculation = */ true));
-	LPM1.addPass (llvm::SimpleLoopUnswitchPass (/* NonTrivial = */ true));
+
+	/*
+	 * Not NonTrivial. A self-recursive method with many parameters and a loop
+	 * of more than one latch reaches a compile where cloning the loop past a
+	 * branch below its header loses one argument on one of the two copies:
+	 * the clone reads null where the caller passed a real reference. Trivial
+	 * unswitching, which never clones a loop, still runs — the common O1
+	 * pipeline above adds it, and both tiers share that call.
+	 */
+	LPM1.addPass (llvm::SimpleLoopUnswitchPass ());
 
 	LPM2.addPass (llvm::LoopIdiomRecognizePass ());
 	LPM2.addPass (llvm::IndVarSimplifyPass ());
