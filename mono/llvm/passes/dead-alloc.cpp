@@ -57,13 +57,11 @@ is_lifetime_mark (const Instruction &in)
 /// The declarations a barrier site names, or null where the module holds none.
 struct Barriers {
 	const Function *store = nullptr;
-	const Function *range = nullptr;
 	const Function *value_copy = nullptr;
 
 	bool holds (const Function *called) const
 	{
-		return called != nullptr
-		       && (called == store || called == range || called == value_copy);
+		return called != nullptr && (called == store || called == value_copy);
 	}
 };
 
