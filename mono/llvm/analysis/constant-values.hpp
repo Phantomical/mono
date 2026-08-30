@@ -24,7 +24,7 @@ namespace mono {
 
 class ConstantValuesSolver;
 
-/// All original source values that a later instruction could result in.
+/// The values that can reach one value.
 ///
 /// A set holds the value itself where the walk did not settle all of its paths.
 struct ValueSources {
@@ -32,7 +32,6 @@ struct ValueSources {
 
 	ValueSources () = default;
 
-	/// Reached by \p v and by nothing else.
 	explicit ValueSources (llvm::Value *v) { sources.insert (v); }
 
 	bool is_empty () const { return sources.empty (); }

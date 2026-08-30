@@ -49,16 +49,12 @@ namespace mono {
 namespace {
 
 /// Whether \p alloc hands back memory that reads as zero.
-///
-/// Read off the declaration rather than assumed: not every allocation form
-/// carries the kind, and one that does not can hand back anything.
 bool
 is_zeroinit (const CallBase &alloc)
 {
 	const Function *callee = alloc.getCalledFunction ();
 
-	// getAllocKind () reads through an attribute this one may not carry, and
-	// the installed LLVM has the assertion that would have caught it off.
+	// getAllocKind () asserts the attribute is there.
 	if (!callee->hasFnAttribute (Attribute::AllocKind))
 		return false;
 
@@ -67,12 +63,10 @@ is_zeroinit (const CallBase &alloc)
 	return (kind & AllocFnKind::Zeroed) != AllocFnKind::Unknown;
 }
 
-/// The range a value copy writes, or nothing where this compile cannot read
-/// how wide it is.
+/// The range a value copy writes, or nothing where its width is not a constant.
 ///
-/// Alias analysis reads the length of a memory intrinsic off the call, which
-/// is what bounds a memcpy. A value copy is an ordinary call, so its width is
-/// read here or the write is taken as running to the end of the object.
+/// Alias analysis reads a memory intrinsic's length off the call itself. A value
+/// copy is an ordinary call, so its width is read here.
 std::optional<MemoryLocation>
 value_copy_target (const CallBase &call)
 {
@@ -186,7 +180,7 @@ public:
 		for (const SCC &scc : llvm::reverse (sccs)) {
 			const auto &blocks = scc.blocks;
 
-			// special case: if there's no cycle then we can just process in order
+			// One block with no back edge settles in a single pass.
 			if (!scc.has_cycle) {
 				visit (*blocks.begin ());
 				continue;
@@ -380,8 +374,8 @@ public:
 
 			auto *store = dyn_cast<StoreInst> (wrote);
 
-			// Not a store at all, so we don't know what it did. Assume it could
-			// have done anything at all and step past it.
+			// An unknown write. The walk goes on, because a store behind it
+			// can reach the load too.
 			if (store == nullptr) {
 				deps.opaque = true;
 				step_past ();
