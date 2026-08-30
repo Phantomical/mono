@@ -6,7 +6,7 @@
  * states it. What each case writes is the rank, the element size and the bounded
  * flag, which is what the translator puts on the declaration.
  *
- * The cases are about the `!invariant.load` tag on the header reads. A lost
+ * The cases are about the `!invariant.group` tag on the header reads. A lost
  * tag changes no result managed code can see. It costs each bounds check that
  * merges across a store to a managed field, so only a test that reads the IR
  * catches it.
@@ -85,7 +85,7 @@ struct AddressModule {
 	}
 
 	/// Counts the loads the pass left in the caller, and how many of them carry
-	/// `!invariant.load`.
+	/// `!invariant.group`.
 	void count_loads (unsigned *total, unsigned *tagged)
 	{
 		*total = 0;
@@ -96,7 +96,7 @@ struct AddressModule {
 			if (load == nullptr)
 				continue;
 			++*total;
-			if (load->hasMetadata (LLVMContext::MD_invariant_load))
+			if (load->hasMetadata (LLVMContext::MD_invariant_group))
 				++*tagged;
 		}
 	}

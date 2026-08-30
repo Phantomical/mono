@@ -30,7 +30,9 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/MDBuilder.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 
 #include <algorithm>
@@ -435,9 +437,11 @@ guard_entry (CallBase &site, Function *entry, Receiver receiver, MDNode *weights
 
 	guard.SetCurrentDebugLocation (site.getDebugLoc ());
 
-	Value *held = delegate_field (guard, delegate,
-	                              MONO_STRUCT_OFFSET (MonoDelegate, method_ptr),
-	                              "delegate_entry");
+	auto *held = cast<LoadInst> (delegate_field (
+		guard, delegate, MONO_STRUCT_OFFSET (MonoDelegate, method_ptr),
+		"delegate_entry"));
+
+	mark_delegate_method_ptr_read (held);
 
 	guard.CreateCondBr (guard.CreateICmpEQ (held, entry, "delegate_hit"), fast, slow)
 		->setMetadata (LLVMContext::MD_prof, weights);
@@ -455,6 +459,13 @@ can_name_methods ()
 }
 
 } // namespace
+
+void
+mark_delegate_method_ptr_read (LoadInst *load)
+{
+	load->setMetadata (LLVMContext::MD_invariant_group,
+	                   MDNode::get (load->getContext (), {}));
+}
 
 DelegateTarget
 delegate_target_at (const Value *receiver)

@@ -10,7 +10,6 @@
 #include <llvm/IR/PassManager.h>
 
 namespace llvm {
-class AAResults;
 class Function;
 class LoopInfo;
 } // namespace llvm
@@ -43,12 +42,7 @@ constexpr uint64_t promote_alloc_limit = 1024;
 /// would hand every turn the same slot, where the heap gives each one an object
 /// of its own.
 ///
-/// A promoted object also gives up `!invariant.load` on the reads that can reach
-/// it, which \p aa is what decides. The allocator wrote the object's header
-/// before, and a store in this function writes it now, so the mark would put a
-/// reader in front of that store and leave DSE nothing to keep it for.
-bool promote_allocations (llvm::Function &f, const llvm::LoopInfo &loops,
-                          llvm::AAResults &aa);
+bool promote_allocations (llvm::Function &f, const llvm::LoopInfo &loops);
 
 /// Runs promote_allocations () over one function.
 class PromoteAllocationsPass : public llvm::PassInfoMixin<PromoteAllocationsPass> {

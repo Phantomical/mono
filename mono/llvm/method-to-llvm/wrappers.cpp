@@ -16,6 +16,7 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
 #include "runtime-error.hpp"
+#include "../passes/fold-delegate.hpp"
 
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
@@ -455,11 +456,13 @@ MethodLLVMEmitter::emit_mono_ld_delegate_method_ptr (MonoIrBuilder &builder)
 		return unbalanced_stack (1);
 
 	llvm::Value *delegate = get_stack (0).value;
-	llvm::Value *ftn = builder.CreateAlignedLoad (
+	llvm::LoadInst *ftn = builder.CreateAlignedLoad (
 		llvm::PointerType::get (context (), 0),
 		builder.CreateGEP (builder.getInt8Ty (), delegate,
 	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoDelegate, method_ptr))),
 		llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	mark_delegate_method_ptr_read (ftn);
 
 	pop_stack (1);
 	push_stack (ftn, m_class_get_byval_arg (mono_defaults.int_class));

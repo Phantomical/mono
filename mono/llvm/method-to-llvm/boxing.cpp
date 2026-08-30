@@ -19,6 +19,8 @@ extern "C" {
 
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/Metadata.h>
 #include <llvm/IR/Type.h>
 #include <llvm/Support/ErrorHandling.h>
 
@@ -140,12 +142,17 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 	 * allocation takes the kept declaration, which makes no `zeroed` claim.
 	 */
 	if (!allocation_can_be_a_proxy (klass)) {
-		builder.CreateAlignedStore (
+		llvm::StoreInst *header = builder.CreateAlignedStore (
 			*vtable,
 			builder.CreateGEP (
 				builder.getInt8Ty (), object,
 				builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
 			llvm::Align (TARGET_SIZEOF_VOID_P));
+
+		// mark_object_vtable_read () (passes/vtable-func.hpp) reads this store
+		// back through `!invariant.group`.
+		header->setMetadata (llvm::LLVMContext::MD_invariant_group,
+		                     llvm::MDNode::get (header->getContext (), {}));
 
 		// The same fact for a reader that has the object rather than its vtable,
 		// which is what a type test on a fresh object has.

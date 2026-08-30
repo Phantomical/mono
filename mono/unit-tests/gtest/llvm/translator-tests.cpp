@@ -1583,12 +1583,10 @@ TEST_F (TranslatorTest, GetTypeReadsTheVtable)
 	EXPECT_EQ (t.count ("object:GetType"), 0u) << t.text ();
 	EXPECT_EQ (t.count ("%obj_type = call ptr @mono.vtable.type"), 1u) << t.text ();
 
-	// The read off the object is a load, because the store an allocation
-	// carries is what gives that word its value. `!invariant.load` on it is the
-	// claim the vtable declaration carries as attributes. A function that moves
-	// an object into its frame gives the mark back - `promote_allocations ()`
-	// (`passes/promote-alloc.hpp`) says why.
-	EXPECT_EQ (t.count ("!invariant.load"), 1u) << t.text ();
+	// The read off the object is a load, because an allocation's own store
+	// writes that word. `!invariant.group` is `mark_object_vtable_read ()`'s
+	// tag for that load.
+	EXPECT_EQ (t.count ("!invariant.group"), 1u) << t.text ();
 	EXPECT_GT (t.count ("NullReferenceException"), 0u) << t.text ();
 }
 

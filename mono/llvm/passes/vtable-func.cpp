@@ -8,8 +8,8 @@
  * declaration carries is what no header states, which is that its operands
  * settle what the read gives between them.
  *
- * A read off an object is a load from the start, because the store an
- * allocation carries is what gives that word its value.
+ * A read off an object is a load from the start, because an allocation's own
+ * store writes that word.
  */
 
 #include "vtable-func.hpp"
@@ -101,7 +101,7 @@ vtable_gfunc_decl (Module &m)
 LoadInst *
 mark_object_vtable_read (LoadInst *load)
 {
-	load->setMetadata (LLVMContext::MD_invariant_load,
+	load->setMetadata (LLVMContext::MD_invariant_group,
 	                   MDNode::get (load->getContext (), {}));
 	return load;
 }

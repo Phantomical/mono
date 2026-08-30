@@ -14,11 +14,8 @@
 #include "mono/metadata/abi-details.h"
 
 #include <llvm/ADT/SmallVector.h>
-#include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/Analysis/LoopInfo.h>
-#include <llvm/Analysis/MemoryLocation.h>
 #include <llvm/IR/Constants.h>
-#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
@@ -63,47 +60,6 @@ promotable_size (const CallInst &alloc)
 	return bytes;
 }
 
-/// Takes `!invariant.load` off each load in \p f that \p aa cannot tell apart
-/// from one of \p slots.
-///
-/// The mark says the word holds its value wherever the load can run, which
-/// MemorySSA reads as the value memory held on entry to the function. That puts
-/// the load in front of every store, and it holds while the allocator writes the
-/// object's header, because the object escapes and no pass can prove that store
-/// dead. A slot in the frame is written by a store in this function and escapes
-/// nowhere, so the same mark leaves DSE free to take the header away.
-///
-/// A load `aa` says is no-alias with every slot keeps its mark, so a function
-/// that promotes one object pays for that object rather than for all its reads.
-void
-drop_invariant_loads (Function &f, ArrayRef<AllocaInst *> slots, AAResults &aa)
-{
-	const DataLayout &layout = f.getDataLayout ();
-
-	for (BasicBlock &block : f) {
-		for (Instruction &i : block) {
-			auto *load = dyn_cast<LoadInst> (&i);
-
-			if (load == nullptr
-			    || load->getMetadata (LLVMContext::MD_invariant_load) == nullptr)
-				continue;
-
-			for (AllocaInst *slot : slots) {
-				MemoryLocation held (
-					slot, LocationSize::precise (layout.getTypeAllocSize (
-						      slot->getAllocatedType ())));
-
-				if (aa.alias (MemoryLocation::get (load), held)
-				    == AliasResult::NoAlias)
-					continue;
-
-				load->setMetadata (LLVMContext::MD_invariant_load, nullptr);
-				break;
-			}
-		}
-	}
-}
-
 /// Puts \p alloc in the frame and hands its uses the slot.
 AllocaInst *
 promote (CallInst &alloc, uint64_t bytes)
@@ -142,7 +98,7 @@ promote (CallInst &alloc, uint64_t bytes)
 } // namespace
 
 bool
-promote_allocations (Function &f, const LoopInfo &loops, AAResults &aa)
+promote_allocations (Function &f, const LoopInfo &loops)
 {
 	SmallVector<AllocaInst *, 4> slots;
 
@@ -174,18 +130,13 @@ promote_allocations (Function &f, const LoopInfo &loops, AAResults &aa)
 		slots.push_back (promote (*alloc, *bytes));
 	}
 
-	if (slots.empty ())
-		return false;
-
-	drop_invariant_loads (f, slots, aa);
-	return true;
+	return !slots.empty ();
 }
 
 PreservedAnalyses
 PromoteAllocationsPass::run (Function &f, FunctionAnalysisManager &fam)
 {
-	if (!promote_allocations (f, fam.getResult<LoopAnalysis> (f),
-	                          fam.getResult<AAManager> (f)))
+	if (!promote_allocations (f, fam.getResult<LoopAnalysis> (f)))
 		return PreservedAnalyses::all ();
 
 	PreservedAnalyses preserved;

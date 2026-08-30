@@ -85,7 +85,7 @@ struct ShapeModule {
 	}
 
 	/// Counts the loads the pass left in the caller, and how many of them carry
-	/// `!invariant.load`.
+	/// `!invariant.group`.
 	void count_loads (unsigned *total, unsigned *tagged)
 	{
 		*total = 0;
@@ -96,7 +96,7 @@ struct ShapeModule {
 			if (load == nullptr)
 				continue;
 			++*total;
-			if (load->hasMetadata (LLVMContext::MD_invariant_load))
+			if (load->hasMetadata (LLVMContext::MD_invariant_group))
 				++*tagged;
 		}
 	}

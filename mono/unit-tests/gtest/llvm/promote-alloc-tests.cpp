@@ -127,7 +127,7 @@ struct Promoted {
 	{
 		for (const Instruction &in : instructions (*caller))
 			if (isa<LoadInst> (in) && in.getName () == name)
-				return in.getMetadata (LLVMContext::MD_invariant_load) != nullptr;
+				return in.getMetadata (LLVMContext::MD_invariant_group) != nullptr;
 
 		ADD_FAILURE () << "no load named " << name.str ();
 		return false;
@@ -276,78 +276,20 @@ pad:
 	EXPECT_EQ (m.slots (), 0u);
 }
 
-TEST (PromoteAllocTest, TakesTheInvariantMarkOffAReadOfThePromotedObject)
+TEST (PromoteAllocTest, KeepsTheMarkOnAReadOfThePromotedObject)
 {
+	// !invariant.group ties the read to the store the object's own allocation
+	// makes, not to a value pinned at function entry, so the frame slot the
+	// object moves to needs no fixup for it.
 	Promoted m (R"(
 define void @caller(ptr %ref, ptr %other, i64 %size) {
   %obj = call ptr @"mono.alloc.object"(ptr null, i64 48, ptr null)
-  %vtable = load ptr, ptr %obj, align 8, !invariant.load !0
+  %vtable = load ptr, ptr %obj, align 8, !invariant.group !0
   ret void
 }
 )");
 
 	ASSERT_TRUE (m.changed);
-	EXPECT_FALSE (m.marked ("vtable"));
-}
-
-TEST (PromoteAllocTest, TakesTheMarkOffAReadAMergeCanBringToThePromotedObject)
-{
-	/*
-	 * GVN's partial-redundancy elimination leaves this shape: the object reaches
-	 * the read through a merge that also carries an object from somewhere else.
-	 * The read can still be of the frame slot, so it gives the mark up.
-	 */
-	Promoted m (R"(
-define void @caller(ptr %ref, ptr %other, i64 %size) {
-entry:
-  %obj = call ptr @"mono.alloc.object"(ptr null, i64 48, ptr null)
-  %ours = icmp ne ptr %other, null
-  br i1 %ours, label %mine, label %theirs
-
-mine:
-  br label %join
-
-theirs:
-  br label %join
-
-join:
-  %either = phi ptr [ %obj, %mine ], [ %other, %theirs ]
-  %vtable = load ptr, ptr %either, align 8, !invariant.load !0
-  ret void
-}
-)");
-
-	ASSERT_TRUE (m.changed);
-	EXPECT_FALSE (m.marked ("vtable"));
-}
-
-TEST (PromoteAllocTest, LeavesTheMarkOnAReadOfAnotherObject)
-{
-	// The caller was handed this object, so no frame slot can be it.
-	Promoted m (R"(
-define void @caller(ptr %ref, ptr %other, i64 %size) {
-  %obj = call ptr @"mono.alloc.object"(ptr null, i64 48, ptr null)
-  %vtable = load ptr, ptr %other, align 8, !invariant.load !0
-  ret void
-}
-)");
-
-	ASSERT_TRUE (m.changed);
-	EXPECT_TRUE (m.marked ("vtable"));
-}
-
-TEST (PromoteAllocTest, LeavesTheMarkWhereNothingPromotes)
-{
-	Promoted m (R"(
-define void @caller(ptr %ref, ptr %other, i64 %size) {
-  %obj = call ptr @"mono.alloc.object"(ptr null, i64 48, ptr null)
-  call void @opaque(ptr %obj)
-  %vtable = load ptr, ptr %other, align 8, !invariant.load !0
-  ret void
-}
-)");
-
-	ASSERT_FALSE (m.changed);
 	EXPECT_TRUE (m.marked ("vtable"));
 }
 

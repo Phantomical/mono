@@ -86,12 +86,11 @@ bool lower_vtable_reads (llvm::Module &m);
 /// object. The stack scan is conservative here, so an object a compiled frame
 /// holds is pinned rather than moved.
 ///
-/// `!invariant.load` claims more than that: MemorySSA gives such a load its
-/// live-on-entry definition, which puts it in front of every store in the
-/// function. The claim holds while the allocator writes the word. It stops
-/// holding for an object a store in this same function writes, which is what
-/// `promote_allocations ()` (`passes/promote-alloc.hpp`) takes the mark back
-/// off for.
+/// The mark is `!invariant.group`, which equates every tagged load or store of
+/// the same pointer rather than pinning a value at function entry. It has
+/// nothing to equate against unless the write is tagged too, which
+/// `emit_object_alloc ()` (`method-to-llvm/boxing.cpp`) does on the vtable
+/// store it emits for every object.
 ///
 /// The mark grants no dereferenceability, so the read stays under the null check
 /// on the object. `fold_object_vtables ()` needs that check to dominate the read

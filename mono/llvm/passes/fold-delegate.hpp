@@ -21,12 +21,29 @@
 
 namespace llvm {
 class Function;
+class LoadInst;
 class Value;
 } // namespace llvm
 
 typedef struct _MonoMethod MonoMethod;
 
 namespace mono {
+
+/// Marks \p load as a read of `MonoDelegate::method_ptr` that does not change.
+///
+/// `mono_delegate_ctor ()` sets the field once, before anything else can see
+/// the delegate: to the bound method's entry, or to null for one that combines
+/// others. Nothing writes it again - an `ldvirtftn` delegate never writes back
+/// the override it later resolves, and `Combine` builds a new object rather
+/// than mutating one. `invoke_impl` sits next to it in the same struct
+/// and does not take this mark - a trampoline patches that field in place on
+/// the delegate's first dispatch.
+///
+/// The write happens inside `mono_delegate_ctor ()`, opaque to this compile, so
+/// there is no store to carry the matching tag the way
+/// `mark_object_vtable_read ()` needs one. Two tagged reads of the same
+/// pointer still equate to each other across whatever runs between them.
+void mark_delegate_method_ptr_read (llvm::LoadInst *load);
 
 /// What the IR says about the delegate arriving at a site.
 struct DelegateTarget {
