@@ -690,57 +690,43 @@ class Tests
 		return 0;
 	}
 
+	// Native int keeps its own ECMA-335 I.8.7 reduced type on every
+	// architecture. It never compares equal to int32 or int64, whichever
+	// shares its pointer width.
 	public static int test_0_intptr_array_cast () {
 		object[] a = new object[] { new int[1], new uint[1] };
 		object[] b = new object[] { new long[1], new ulong[1] };
 		object[] c = new object[] { new IntPtr[1], new UIntPtr[1] };
 
 		int err = 1;
-		if (IntPtr.Size == 4) {
-			foreach (var v in a) {
-				if (!(v is IntPtr[]))
-					return err;
-				if (!(v is IntPtr[]))
-					return err;
-				err += 2;
-			}
-			foreach (var v in b) {
-				if (v is IntPtr[])
-					return err;
-				if (v is IntPtr[])
-					return err;
-				err += 2;
-			}
-
-			foreach (var v in c) {
-				if (!(v is int[]))
-					return err;
-				if (!(v is uint[]))
-					return err;
-				err += 2;
-			}
-		} else {
-			foreach (var v in a) {
-				if (v is IntPtr[])
-					return err;
-				if (v is IntPtr[])
-					return err;
-				err += 2;
-			}
-			foreach (var v in b) {
-				if (!(v is IntPtr[]))
-					return err;
-				if (!(v is IntPtr[]))
-					return err;
-				err += 2;
-			}
-			foreach (var v in c) {
-				if (!(v is long[]))
-					return err;
-				if (!(v is ulong[]))
-					return err;
-				err += 2;
-			}
+		foreach (var v in a) {
+			if (v is IntPtr[])
+				return err;
+			if (v is UIntPtr[])
+				return err;
+			err += 2;
+		}
+		foreach (var v in b) {
+			if (v is IntPtr[])
+				return err;
+			if (v is UIntPtr[])
+				return err;
+			err += 2;
+		}
+		foreach (var v in c) {
+			if (v is int[])
+				return err;
+			if (v is uint[])
+				return err;
+			if (v is long[])
+				return err;
+			if (v is ulong[])
+				return err;
+			if (!(v is IntPtr[]))
+				return err;
+			if (!(v is UIntPtr[]))
+				return err;
+			err += 2;
 		}
 		return 0;
 	}

@@ -244,6 +244,7 @@ set(MONO_TESTS_CS_SRC
   tier2-inline-override.cs
   cast-fold.cs
   array-devirt.cs
+  array-native-int-cast.cs
   class-devirt.cs
   phi-devirt.cs
   invariant-static.cs
