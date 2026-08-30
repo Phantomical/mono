@@ -13,6 +13,7 @@
 
 #include "arch/arch.hpp"
 #include "backend.hpp"
+#include "dyn-call-plan.hpp"
 #include "jit.hpp"
 #include "options.hpp"
 #include "verification.hpp"
@@ -188,36 +189,38 @@ mono_llvm_jit_verify_method (MonoMethod *method, MonoError *error)
 	return FALSE;
 }
 
-void *
-mono_llvm_jit_dyn_call_prepare (MonoMethodSignature *sig)
+const void *
+mono_llvm_jit_dyn_call_prepare (MonoMethod *method)
 {
 	if (!mono::dyn_calls ())
 		return nullptr;
 
-	llvm::StringRef why;
-	std::unique_ptr<mono::arch::DynCallPlan> plan = mono::arch::plan_dyn_call (sig, &why);
+	llvm::Expected<const mono::arch::DynCallPlan *> plan = mono::dyn_call_plan_for (method);
 
 	if (mono::is_jit_trace_enabled ()) {
 		std::lock_guard<std::mutex> held (mono::jit_trace_mutex ());
 
-		if (plan == nullptr)
-			fprintf (stderr, "[llvm-jit] no dyn-call plan: %s\n", why.str ().c_str ());
+		if (!plan)
+			fprintf (stderr, "[llvm-jit] no dyn-call plan: %s\n",
+			         llvm::toString (plan.takeError ()).c_str ());
 		else
 			fprintf (stderr, "[llvm-jit] dyn-call plan: %d args, %u stack\n",
-			         (int) plan->args.size (), plan->stack_words);
+			         (int) (*plan)->args.size (), (*plan)->stack_words);
+	} else if (!plan) {
+		llvm::consumeError (plan.takeError ());
 	}
 
-	return plan.release ();
+	return plan ? *plan : nullptr;
 }
 
 int
-mono_llvm_jit_dyn_call_frame_size (void *plan)
+mono_llvm_jit_dyn_call_frame_size (const void *plan)
 {
 	return (int) ((const mono::arch::DynCallPlan *) plan)->frame_size;
 }
 
 void
-mono_llvm_jit_dyn_call (void *plan, void *target, void **args, void *ret, void *frame)
+mono_llvm_jit_dyn_call (const void *plan, void *target, void **args, void *ret, void *frame)
 {
 	mono::arch::dyn_call (*(const mono::arch::DynCallPlan *) plan, target, args, ret, frame);
 }

@@ -209,7 +209,10 @@ jit_call_cb (gpointer arg)
 /// plan that needs more than INTERP_DYN_CALL_FRAME_MAX bytes is declined in
 /// favour of a wrapper, so raising MONO_INTERP_JIT_CALL_MAX_ARGS trades plans
 /// for wrappers and cannot break correctness.
-#define INTERP_DYN_CALL_FRAME_MAX 256
+///
+/// DynCallFrame's fixed part alone is 0x120 of that, because a value type
+/// return spread over several registers needs the wider return-register file.
+#define INTERP_DYN_CALL_FRAME_MAX 512
 
 struct JitCallInfo {
 	gpointer addr = nullptr;
@@ -222,7 +225,7 @@ struct JitCallInfo {
 	std::optional<MintType> ret_mt;
 	/// How the backend passes this signature, or NULL when it cannot be
 	/// stated and the wrapper above is what carries the call.
-	gpointer dyn_plan = nullptr;
+	const void *dyn_plan = nullptr;
 	int dyn_frame_size = 0;
 };
 
@@ -257,7 +260,7 @@ init_jit_call_info (InterpMethod *rmethod, MonoError *error)
 	 * A plan costs a descriptor where a wrapper costs a compile on this
 	 * thread, so it is what to ask for first.
 	 */
-	cinfo->dyn_plan = mono_llvm_jit_dyn_call_prepare (sig);
+	cinfo->dyn_plan = mono_llvm_jit_dyn_call_prepare (method);
 	if (cinfo->dyn_plan != nullptr) {
 		cinfo->dyn_frame_size = mono_llvm_jit_dyn_call_frame_size (cinfo->dyn_plan);
 		if (cinfo->dyn_frame_size > INTERP_DYN_CALL_FRAME_MAX)

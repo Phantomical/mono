@@ -3,15 +3,19 @@
  * \brief Making a call whose prototype the caller only knows at run time.
  *
  * The convention restated here is the one interp-entry.cpp reads a call out
- * of, in the other direction. It is LLVM's own lowering of the backend's ccc
- * declarations, not the SysV classification that mini's own dyn-call code is
- * built on. The two agree for scalar arguments and part company over
- * aggregates, so plan_dyn_call () refuses an aggregate rather than pick a
- * side.
+ * of, in the other direction. arch/amd64/leaf-layout.cpp is the one statement
+ * of it both files place a leaf through, and it is LLVM's own lowering of the
+ * backend's ccc declarations, not the SysV classification that mini's own
+ * dyn-call code is built on.
  *
- * That refusal is what keeps this file short. Every leaf is one register wide.
- * So the two register files run down in argument order, the overflow takes one
- * stack word each, and no return is indirect.
+ * plan_dyn_call () walks the callee's declaration rather than its
+ * MonoMethodSignature, for the same reason plan_interp_entry () does: only
+ * the declaration says where a hidden return pointer sits, or that the
+ * method is a shared body needing a context register this cannot carry.
+ *
+ * A value type argument or return flattens into the leaves LLVM lowers it
+ * into, the same convention an aggregate already crossing the seam incoming
+ * uses.
  */
 
 /*
@@ -20,13 +24,23 @@
  */
 #include "runtime-error.hpp"
 
+#include "arch/amd64/leaf-layout.hpp"
 #include "arch/arch.hpp"
+#include "hidden-return.hpp"
 
 #include "mini.h"
 
 #include "mono/metadata/class-internals.h"
 
+#include <llvm/IR/Attributes.h>
+#include <llvm/IR/DataLayout.h>
+#include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/Module.h>
+
 #include <cstring>
+
+using namespace llvm;
 
 extern "C" {
 void mono_llvm_dyn_call_thunk (mono::arch::DynCallFrame *frame, void *target);
@@ -36,209 +50,89 @@ namespace mono::arch {
 
 namespace {
 
-/// What the frame has room for. A leaf past either file goes to the stack.
-constexpr unsigned greg_file = 6;
-constexpr unsigned freg_file = 8;
-
-/// The register files and the stack, run down as the arguments are placed.
-struct Assigner {
-	unsigned greg = 0;
-	unsigned freg = 0;
-	unsigned stack = 0;
-};
-
-/// Names \p t as one scalar leaf, or returns false for a type that is not one.
-///
-/// A byref is a pointer whatever it points at, so it is answered before the
-/// type itself is looked at.
-bool
-scalar_load (MonoType *t, DynCallArg::Load *load, bool *sse)
+Error
+unsupported (const Twine &what)
 {
-	*sse = false;
-
-	if (t->byref) {
-		*load = DynCallArg::Load::I8;
-		return true;
-	}
-
-	/* Enums, bool, char and the native integer types all come back as the
-	 * integer the call actually passes. */
-	t = mini_get_underlying_type (t);
-
-	switch (t->type) {
-	case MONO_TYPE_I1:
-		*load = DynCallArg::Load::I1;
-		return true;
-	case MONO_TYPE_BOOLEAN:
-	case MONO_TYPE_U1:
-		*load = DynCallArg::Load::U1;
-		return true;
-	case MONO_TYPE_I2:
-		*load = DynCallArg::Load::I2;
-		return true;
-	case MONO_TYPE_CHAR:
-	case MONO_TYPE_U2:
-		*load = DynCallArg::Load::U2;
-		return true;
-	case MONO_TYPE_I4:
-		*load = DynCallArg::Load::I4;
-		return true;
-	case MONO_TYPE_U4:
-		*load = DynCallArg::Load::U4;
-		return true;
-	case MONO_TYPE_I8:
-	case MONO_TYPE_U8:
-	case MONO_TYPE_I:
-	case MONO_TYPE_U:
-	case MONO_TYPE_PTR:
-	case MONO_TYPE_FNPTR:
-	case MONO_TYPE_STRING:
-	case MONO_TYPE_CLASS:
-	case MONO_TYPE_OBJECT:
-	case MONO_TYPE_SZARRAY:
-	case MONO_TYPE_ARRAY:
-		*load = DynCallArg::Load::I8;
-		return true;
-	case MONO_TYPE_R4:
-		*load = DynCallArg::Load::R4;
-		*sse = true;
-		return true;
-	case MONO_TYPE_R8:
-		*load = DynCallArg::Load::R8;
-		*sse = true;
-		return true;
-	case MONO_TYPE_GENERICINST:
-		/* An instantiation of a class is a reference like any other. One of
-		 * a value type is the aggregate this refuses. */
-		if (MONO_TYPE_IS_REFERENCE (t)) {
-			*load = DynCallArg::Load::I8;
-			return true;
-		}
-		return false;
-	default:
-		return false;
-	}
-}
-
-/// Gives one leaf the next slot of its file, or the next stack word.
-DynCallArg
-place_scalar (DynCallArg::Load load, bool sse, Assigner &assign)
-{
-	DynCallArg arg;
-
-	arg.load = load;
-
-	if (sse && assign.freg < freg_file) {
-		arg.file = DynCallArg::File::Freg;
-		arg.at = assign.freg++;
-	} else if (!sse && assign.greg < greg_file) {
-		arg.file = DynCallArg::File::Greg;
-		arg.at = assign.greg++;
-	} else {
-		arg.file = DynCallArg::File::Stack;
-		arg.at = assign.stack++;
-	}
-
-	return arg;
-}
-
-/// Gives the width the interpreter is owed through the return pointer.
-uint8_t
-return_width (DynCallArg::Load load)
-{
-	switch (load) {
-	case DynCallArg::Load::I1:
-	case DynCallArg::Load::U1:
-		return 1;
-	case DynCallArg::Load::I2:
-	case DynCallArg::Load::U2:
-		return 2;
-	case DynCallArg::Load::I4:
-	case DynCallArg::Load::U4:
-	case DynCallArg::Load::R4:
-		return 4;
-	default:
-		return 8;
-	}
-}
-
-/// Reads one argument out of the interpreter's storage, widened to the whole
-/// register slot the call passes it in.
-uint64_t
-read_argument (const DynCallArg &arg, const void *from)
-{
-	switch (arg.load) {
-	case DynCallArg::Load::I1:
-		return (uint64_t) (int64_t) *(const int8_t *) from;
-	case DynCallArg::Load::U1:
-		return *(const uint8_t *) from;
-	case DynCallArg::Load::I2:
-		return (uint64_t) (int64_t) *(const int16_t *) from;
-	case DynCallArg::Load::U2:
-		return *(const uint16_t *) from;
-	case DynCallArg::Load::I4:
-		return (uint64_t) (int64_t) *(const int32_t *) from;
-	case DynCallArg::Load::U4:
-		return *(const uint32_t *) from;
-	case DynCallArg::Load::R4: {
-		uint32_t bits;
-
-		memcpy (&bits, from, sizeof (bits));
-		return bits;
-	}
-	default: {
-		uint64_t bits;
-
-		memcpy (&bits, from, sizeof (bits));
-		return bits;
-	}
-	}
+	return createStringError (inconvertibleErrorCode (),
+	                          "the dyn call cannot carry " + what);
 }
 
 } // namespace
 
-std::unique_ptr<DynCallPlan>
-plan_dyn_call (MonoMethodSignature *sig, llvm::StringRef *why)
+Expected<std::unique_ptr<DynCallPlan>>
+plan_dyn_call (Function *shape, MonoMethodSignature *sig)
 {
-	auto plan = std::make_unique<DynCallPlan> ();
-	Assigner assign;
+	const DataLayout &dl = shape->getParent ()->getDataLayout ();
+	FunctionType *type = shape->getFunctionType ();
+	Type *hidden = hidden_return_type (shape);
+	unsigned params = type->getNumParams ();
+	unsigned hidden_at = hidden != nullptr ? hidden_return_index (placed_parameter_count (shape))
+	                                       : params;
+	unsigned natural = hidden != nullptr ? params - 1 : params;
 
 	/*
-	 * A receiver is always the first argument, which is what
-	 * mono_arch_get_this_arg_from_call () and the unbox trampoline rest on.
+	 * A mismatch here means a trailing nest parameter: the method is a shared
+	 * body, and this states no rule for the context register such a call
+	 * needs.
 	 */
-	if (sig->hasthis)
-		plan->args.push_back (place_scalar (DynCallArg::Load::I8, false, assign));
+	if (natural != (unsigned) (sig->hasthis + sig->param_count))
+		return unsupported ("a prototype the signature does not account for");
 
-	for (int i = 0; i < sig->param_count; ++i) {
-		DynCallArg::Load load;
-		bool sse;
+	auto plan = std::make_unique<DynCallPlan> ();
+	LeafAssigner assign;
+	std::vector<DynCallArg> args (natural);
 
-		if (!scalar_load (sig->params[i], &load, &sse)) {
-			*why = "an argument is a value type";
-			return nullptr;
+	for (unsigned p = 0; p < params; ++p) {
+		if (p == hidden_at) {
+			Leaf leaf { 0, type->getParamType (p) };
+			ArgPiece piece = assign.place (leaf, dl);
+
+			/*
+			 * Only ever parameter 0 or 1, so the integer file cannot have run
+			 * out underneath it.
+			 */
+			if (piece.file != ArgPiece::File::Greg)
+				return unsupported ("a hidden return pointer that missed a "
+				                    "register");
+			plan->ret.hidden_greg = piece.at;
+			continue;
 		}
 
-		plan->args.push_back (place_scalar (load, sse, assign));
+		unsigned i = p < hidden_at ? p : p - 1;
+		SmallVector<Leaf, 4> leaves;
+
+		if (Error err = flatten (type->getParamType (p), 0, dl, leaves))
+			return std::move (err);
+
+		DynCallArg &arg = args[i];
+
+		arg.first_piece = (uint32_t) plan->pieces.size ();
+		arg.piece_count = (uint32_t) leaves.size ();
+		for (const Leaf &leaf : leaves)
+			plan->pieces.push_back (assign.place (leaf, dl));
+
+		if (shape->hasParamAttribute (p, Attribute::SExt))
+			arg.extend = DynCallArg::Extend::Sign;
+		else if (shape->hasParamAttribute (p, Attribute::ZExt))
+			arg.extend = DynCallArg::Extend::Zero;
 	}
 
-	if (sig->ret->type != MONO_TYPE_VOID) {
-		DynCallArg::Load load;
-		bool sse;
+	plan->args = std::move (args);
 
-		if (!scalar_load (sig->ret, &load, &sse)) {
-			*why = "the return is a value type";
-			return nullptr;
-		}
+	if (hidden != nullptr) {
+		plan->ret.kind = ReturnPlan::Kind::Hidden;
+	} else {
+		Expected<ReturnPlan> ret = place_return (type->getReturnType (), dl);
 
-		plan->ret.file = sse ? DynCallReturn::File::Freg : DynCallReturn::File::Greg;
-		plan->ret.width = return_width (load);
+		if (!ret)
+			return ret.takeError ();
+		plan->ret = std::move (*ret);
 	}
 
-	plan->wants_fp = assign.freg > 0;
-	plan->stack_words = assign.stack;
+	plan->wants_fp = assign.used_fregs ();
+	plan->stack_words = (uint32_t) (assign.stack_bytes () / 8);
 	plan->frame_size =
-		(uint32_t) (sizeof (DynCallFrame) + (assign.stack * sizeof (uint64_t)));
+		(uint32_t) (sizeof (DynCallFrame) + assign.stack_bytes ());
 
 	return plan;
 }
@@ -258,33 +152,71 @@ dyn_call (const DynCallPlan &plan, void *target, void **args, void *ret, void *f
 
 	for (size_t i = 0; i < plan.args.size (); ++i) {
 		const DynCallArg &arg = plan.args[i];
-		uint64_t bits = read_argument (arg, args[i]);
+		const auto *from = (const uint8_t *) args[i];
 
-		switch (arg.file) {
-		case DynCallArg::File::Greg:
-			f->gregs[arg.at] = bits;
-			break;
-		case DynCallArg::File::Freg:
-			memcpy (&f->fregs[arg.at], &bits, sizeof (bits));
-			break;
-		case DynCallArg::File::Stack:
-			f->stack[arg.at] = bits;
-			break;
+		/*
+		 * signature.cpp's integer_extension () promises the callee its narrow
+		 * argument arrives sign- or zero-extended, and this keeps that
+		 * promise. No aggregate leaf carries it, so this is always the
+		 * argument's one piece.
+		 */
+		if (arg.extend != DynCallArg::Extend::None) {
+			const ArgPiece &piece = plan.pieces[arg.first_piece];
+			const uint8_t *src = from + piece.offset;
+			uint64_t bits;
+
+			if (arg.extend == DynCallArg::Extend::Sign)
+				bits = (uint64_t) (int64_t) (piece.width == 1 ? *(const int8_t *) src
+				                                              : *(const int16_t *) src);
+			else
+				bits = piece.width == 1 ? *(const uint8_t *) src
+				                        : *(const uint16_t *) src;
+
+			switch (piece.file) {
+			case ArgPiece::File::Greg:
+				f->gregs[piece.at] = bits;
+				break;
+			case ArgPiece::File::Freg:
+				memcpy (f->fregs[piece.at], &bits, sizeof (bits));
+				break;
+			case ArgPiece::File::Stack:
+				memcpy ((uint8_t *) f->stack + piece.at, &bits, sizeof (bits));
+				break;
+			}
+			continue;
+		}
+
+		for (uint32_t p = 0; p < arg.piece_count; ++p) {
+			const ArgPiece &piece = plan.pieces[arg.first_piece + p];
+			const uint8_t *src = from + piece.offset;
+
+			switch (piece.file) {
+			case ArgPiece::File::Greg:
+				memcpy (&f->gregs[piece.at], src, piece.width);
+				break;
+			case ArgPiece::File::Freg:
+				memcpy (f->fregs[piece.at], src, piece.width);
+				break;
+			case ArgPiece::File::Stack:
+				memcpy ((uint8_t *) f->stack + piece.at, src, piece.width);
+				break;
+			}
 		}
 	}
 
+	if (plan.ret.kind == ReturnPlan::Kind::Hidden)
+		f->gregs[plan.ret.hidden_greg] = (uint64_t) ret;
+
 	mono_llvm_dyn_call_thunk (f, target);
 
-	switch (plan.ret.file) {
-	case DynCallReturn::File::None:
-		break;
-	case DynCallReturn::File::Greg:
-		memcpy (ret, &f->ret_greg, plan.ret.width);
-		break;
-	case DynCallReturn::File::Freg:
-		memcpy (ret, &f->ret_freg, plan.ret.width);
-		break;
-	}
+	if (plan.ret.kind == ReturnPlan::Kind::Registers)
+		for (const ArgPiece &piece : plan.ret.pieces) {
+			const uint8_t *from = piece.file == ArgPiece::File::Freg
+			                              ? f->ret_fregs[piece.at]
+			                              : (const uint8_t *) &f->ret_gregs[piece.at];
+
+			memcpy ((uint8_t *) ret + piece.offset, from, piece.width);
+		}
 }
 
 } // namespace mono::arch

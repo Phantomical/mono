@@ -10,13 +10,13 @@
 #ifndef MONO_LLVM_ARCH_AMD64_DYN_CALL_OFFSETS_H
 #define MONO_LLVM_ARCH_AMD64_DYN_CALL_OFFSETS_H
 
-#define MONO_DYN_CALL_GREGS    0x00 /* 6 x 8: rdi rsi rdx rcx r8 r9 */
-#define MONO_DYN_CALL_FREGS    0x30 /* 8 x 8: xmm0 - xmm7           */
-#define MONO_DYN_CALL_HAS_FP   0x70
-#define MONO_DYN_CALL_NSTACK   0x78
-#define MONO_DYN_CALL_RET_GREG 0x80
-#define MONO_DYN_CALL_RET_FREG 0x88
-#define MONO_DYN_CALL_STACK    0x90
-#define MONO_DYN_CALL_SIZE     0x90
+#define MONO_DYN_CALL_GREGS     0x00 /* 6 x 8:  rdi rsi rdx rcx r8 r9 */
+#define MONO_DYN_CALL_FREGS     0x30 /* 8 x 16: xmm0 - xmm7           */
+#define MONO_DYN_CALL_HAS_FP    0xb0
+#define MONO_DYN_CALL_NSTACK    0xb8
+#define MONO_DYN_CALL_RET_GREGS 0xc0 /* 3 x 8:  rax rdx rcx           */
+#define MONO_DYN_CALL_RET_FREGS 0xe0 /* 4 x 16: xmm0 - xmm3           */
+#define MONO_DYN_CALL_STACK     0x120
+#define MONO_DYN_CALL_SIZE      0x120
 
 #endif /* MONO_LLVM_ARCH_AMD64_DYN_CALL_OFFSETS_H */

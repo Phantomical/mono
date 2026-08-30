@@ -74,14 +74,15 @@ mono_llvm_dyn_call_thunk:
 	cmp	qword ptr [rbx + MONO_DYN_CALL_HAS_FP], 0
 	je	3f
 
-	movsd	xmm0, qword ptr [rbx + MONO_DYN_CALL_FREGS + 0x00]
-	movsd	xmm1, qword ptr [rbx + MONO_DYN_CALL_FREGS + 0x08]
-	movsd	xmm2, qword ptr [rbx + MONO_DYN_CALL_FREGS + 0x10]
-	movsd	xmm3, qword ptr [rbx + MONO_DYN_CALL_FREGS + 0x18]
-	movsd	xmm4, qword ptr [rbx + MONO_DYN_CALL_FREGS + 0x20]
-	movsd	xmm5, qword ptr [rbx + MONO_DYN_CALL_FREGS + 0x28]
-	movsd	xmm6, qword ptr [rbx + MONO_DYN_CALL_FREGS + 0x30]
-	movsd	xmm7, qword ptr [rbx + MONO_DYN_CALL_FREGS + 0x38]
+	/* Whole registers: a Vector128 argument rides all sixteen bytes of one. */
+	movups	xmm0, [rbx + MONO_DYN_CALL_FREGS + 0x00]
+	movups	xmm1, [rbx + MONO_DYN_CALL_FREGS + 0x10]
+	movups	xmm2, [rbx + MONO_DYN_CALL_FREGS + 0x20]
+	movups	xmm3, [rbx + MONO_DYN_CALL_FREGS + 0x30]
+	movups	xmm4, [rbx + MONO_DYN_CALL_FREGS + 0x40]
+	movups	xmm5, [rbx + MONO_DYN_CALL_FREGS + 0x50]
+	movups	xmm6, [rbx + MONO_DYN_CALL_FREGS + 0x60]
+	movups	xmm7, [rbx + MONO_DYN_CALL_FREGS + 0x70]
 	mov	eax, 8
 	jmp	4f
 3:
@@ -98,10 +99,15 @@ mono_llvm_dyn_call_thunk:
 
 	call	r11
 
-	/* A scalar return uses one of these two and dyn-call.cpp reads the one
-	 * the signature names. */
-	mov	[rbx + MONO_DYN_CALL_RET_GREG], rax
-	movsd	qword ptr [rbx + MONO_DYN_CALL_RET_FREG], xmm0
+	/* Every register a return of this convention can use, and no more. Which
+	 * of these dyn-call.cpp reads back is the plan's, not this thunk's. */
+	mov	[rbx + MONO_DYN_CALL_RET_GREGS + 0x00], rax
+	mov	[rbx + MONO_DYN_CALL_RET_GREGS + 0x08], rdx
+	mov	[rbx + MONO_DYN_CALL_RET_GREGS + 0x10], rcx
+	movups	[rbx + MONO_DYN_CALL_RET_FREGS + 0x00], xmm0
+	movups	[rbx + MONO_DYN_CALL_RET_FREGS + 0x10], xmm1
+	movups	[rbx + MONO_DYN_CALL_RET_FREGS + 0x20], xmm2
+	movups	[rbx + MONO_DYN_CALL_RET_FREGS + 0x30], xmm3
 
 	lea	rsp, [rbp - 8]
 	pop	rbx

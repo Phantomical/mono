@@ -64,15 +64,19 @@ void interp_frame_enter (void *frame, const InterpArgContext *args);
 
 void interp_frame_leave (void *frame);
 
-/// Plans how a call of \p sig is passed to a compiled body.
+/// Plans how a call to a method is passed to its compiled body.
 ///
-/// Returns null for a signature that passes or returns a value type by value,
-/// which this refuses rather than state as a plan. The caller then has to
-/// reach the method another way, and \p why says what was refused.
+/// \p shape is a declaration of the method in this backend's own convention,
+/// and only its type and attributes are read. \p sig is the method's
+/// signature.
+///
+/// An error says this machine's dyn call cannot carry a call like that, and
+/// the caller has to reach the method another way.
 ///
 /// The plan holds no metadata and never changes, so a caller that reaches
-/// several methods of one signature can share one.
-std::unique_ptr<DynCallPlan> plan_dyn_call (MonoMethodSignature *sig, llvm::StringRef *why);
+/// several methods of one prototype can share one.
+llvm::Expected<std::unique_ptr<DynCallPlan>> plan_dyn_call (llvm::Function *shape,
+                                                            MonoMethodSignature *sig);
 
 /// Calls \p target under \p plan, with \p args pointing at each argument's
 /// value and \p ret at room for the return.

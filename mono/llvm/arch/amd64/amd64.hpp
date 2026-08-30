@@ -106,6 +106,10 @@ struct ArgPlan {
 };
 
 /// How a method's return value gets back to its caller.
+///
+/// Shared by both directions of the seam: plan_interp_entry () plans a return
+/// arriving this way, and dyn-call.cpp's plan_dyn_call () plans one leaving
+/// it. hidden_greg names the same register either direction reads or writes.
 struct ReturnPlan {
 	enum class Kind : uint8_t {
 		None,      ///< the method returns nothing
@@ -114,7 +118,7 @@ struct ReturnPlan {
 	};
 
 	Kind kind = Kind::None;
-	uint32_t hidden_greg = 0; ///< which register the caller's pointer came in
+	uint32_t hidden_greg = 0; ///< which register the caller's pointer travels in
 	uint32_t size = 0;        ///< how many bytes the value is, when Registers
 	std::vector<ArgPiece> pieces;
 };
@@ -140,63 +144,53 @@ struct InterpEntryPoint {
 /*
  * The other direction across the same seam: a call the interpreter makes into
  * a compiled body, whose prototype it only knows at run time. dyn-call.cpp
- * states the convention these types describe.
+ * states the convention these types describe - the same one plan_interp_entry
+ * () states above, restated outgoing rather than incoming. ArgPiece is what
+ * both directions place a leaf as, and DynCallFrame's argument files match
+ * InterpArgContext's sizes because both read the same six-greg, eight-freg
+ * convention.
  */
 
 /// The registers and stack a dyn call is made through, as dyn-call-thunk.S
 /// loads them. The stack area is extended to hold DynCallPlan::stack_words.
 struct DynCallFrame {
-	uint64_t gregs[6]; ///< rdi rsi rdx rcx r8 r9
-	double fregs[8];   ///< xmm0 - xmm7; a float rides the low half of its slot
-	uint64_t has_fp;   ///< whether the call reads any of fregs
-	uint64_t nstack;   ///< words of stack the call passes
-	uint64_t ret_greg; ///< rax, as the call left it
-	double ret_freg;   ///< xmm0, as the call left it
-	uint64_t stack[];  ///< an image of the callee's incoming stack arguments
+	uint64_t gregs[6];                  ///< rdi rsi rdx rcx r8 r9
+	alignas (16) uint8_t fregs[8][16];  ///< xmm0 - xmm7
+	uint64_t has_fp;                    ///< whether the call reads any of fregs
+	uint64_t nstack;                    ///< words of stack the call passes
+	uint64_t ret_gregs[3];              ///< rax rdx rcx, as the call left them
+	alignas (16) uint8_t ret_fregs[4][16]; ///< xmm0 - xmm3, as the call left them
+	uint64_t stack[];                   ///< an image of the callee's incoming stack arguments
 };
 
 static_assert (offsetof (DynCallFrame, gregs) == MONO_DYN_CALL_GREGS);
 static_assert (offsetof (DynCallFrame, fregs) == MONO_DYN_CALL_FREGS);
 static_assert (offsetof (DynCallFrame, has_fp) == MONO_DYN_CALL_HAS_FP);
 static_assert (offsetof (DynCallFrame, nstack) == MONO_DYN_CALL_NSTACK);
-static_assert (offsetof (DynCallFrame, ret_greg) == MONO_DYN_CALL_RET_GREG);
-static_assert (offsetof (DynCallFrame, ret_freg) == MONO_DYN_CALL_RET_FREG);
+static_assert (offsetof (DynCallFrame, ret_gregs) == MONO_DYN_CALL_RET_GREGS);
+static_assert (offsetof (DynCallFrame, ret_fregs) == MONO_DYN_CALL_RET_FREGS);
 static_assert (offsetof (DynCallFrame, stack) == MONO_DYN_CALL_STACK);
 static_assert (sizeof (DynCallFrame) == MONO_DYN_CALL_SIZE);
 
-/// Where one argument goes, and what to read where it comes from.
+/// The leaves of one logical argument, into DynCallPlan::pieces.
 struct DynCallArg {
-	enum class File : uint8_t {
-		Greg,  ///< DynCallFrame::gregs, indexed by `at`
-		Freg,  ///< DynCallFrame::fregs, indexed by `at`
-		Stack, ///< DynCallFrame::stack, indexed by `at`
-	};
+	uint32_t first_piece = 0, piece_count = 0;
 
-	/// How wide the value is where the interpreter keeps it, and whether the
-	/// top of the register slot is a sign or a zero extension of it.
-	enum class Load : uint8_t { I1, U1, I2, U2, I4, U4, I8, R4, R8 };
-
-	File file = File::Greg;
-	Load load = Load::I8;
-	uint32_t at = 0;
+	/// How to widen a scalar argument's one leaf when the callee's
+	/// declaration promises the caller extends it - the attribute
+	/// signature.cpp's integer_extension () left on the parameter. None for
+	/// an aggregate's leaves, which carry no such promise.
+	enum class Extend : uint8_t { None, Sign, Zero };
+	Extend extend = Extend::None;
 };
 
-/// How a dyn call's return value gets back to the interpreter.
-struct DynCallReturn {
-	enum class File : uint8_t { None, Greg, Freg };
-
-	File file = File::None;
-	/// Bytes written through the return pointer. The interpreter widens a
-	/// narrow integer itself, so this is the signature's own width.
-	uint8_t width = 0;
-};
-
-/// How a call of one signature is made. It holds no metadata and never
-/// changes, so a caller that reaches several methods of one signature can
+/// How a call of one prototype is made. It holds no metadata and never
+/// changes, so a caller that reaches several methods of one prototype can
 /// share one.
 struct DynCallPlan {
 	std::vector<DynCallArg> args; ///< the receiver first, when there is one
-	DynCallReturn ret;
+	std::vector<ArgPiece> pieces; ///< leaf storage shared by args and, when Kind::Registers, ret
+	ReturnPlan ret;
 	uint32_t stack_words = 0;
 	bool wants_fp = false;
 	uint32_t frame_size = 0; ///< bytes of DynCallFrame a call of this needs

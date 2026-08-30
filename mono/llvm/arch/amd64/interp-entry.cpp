@@ -27,6 +27,7 @@
  */
 #include "runtime-error.hpp"
 
+#include "arch/amd64/leaf-layout.hpp"
 #include "arch/arch.hpp"
 #include "hidden-return.hpp"
 #include "interp-entry.hpp"
@@ -75,107 +76,9 @@ unsupported (const Twine &what)
 	                          "the interpreter entry cannot carry " + what);
 }
 
-/// A scalar the convention places on its own, with where it sits in the value
-/// it was flattened out of.
-struct Leaf {
-	uint64_t offset;
-	Type *type;
-};
-
-/// Flatten a type into the scalars LLVM's argument lowering visits, in order.
-Error
-flatten (Type *t, uint64_t offset, const DataLayout &dl, SmallVectorImpl<Leaf> &out)
-{
-	if (auto *st = dyn_cast<StructType> (t)) {
-		const StructLayout *layout = dl.getStructLayout (st);
-
-		for (unsigned i = 0; i < st->getNumElements (); ++i)
-			if (Error err = flatten (st->getElementType (i),
-			                         offset + layout->getElementOffset (i), dl,
-			                         out))
-				return err;
-		return Error::success ();
-	}
-
-	if (auto *at = dyn_cast<ArrayType> (t)) {
-		Type *element = at->getElementType ();
-		uint64_t stride = dl.getTypeAllocSize (element);
-
-		for (uint64_t i = 0; i < at->getNumElements (); ++i)
-			if (Error err = flatten (element, offset + i * stride, dl, out))
-				return err;
-		return Error::success ();
-	}
-
-	if (t->isIntegerTy ()) {
-		/*
-		 * Wider than a machine word is CC_X86_64_I128's consecutive-register
-		 * rule, which is the one place the convention refuses to split a value
-		 * between registers and the stack, and the interpreter entry does not
-		 * model it.
-		 */
-		if (t->getIntegerBitWidth () > 64)
-			return unsupported ("an integer wider than a machine word");
-	} else if (t->isFloatingPointTy ()) {
-		if (!t->isHalfTy () && !t->isFloatTy () && !t->isDoubleTy ())
-			return unsupported ("an extended-precision float");
-	} else if (t->isVectorTy ()) {
-		// Anything wider rides a YMM or a ZMM, which the thunk does not save.
-		if (dl.getTypeSizeInBits (t).getFixedValue () > 128)
-			return unsupported ("a vector wider than an SSE register");
-	} else if (!t->isPointerTy ()) {
-		return unsupported ("a value of an unclassifiable type");
-	}
-
-	out.push_back ({ offset, t });
-	return Error::success ();
-}
-
-bool
-rides_sse (Type *t)
-{
-	return t->isFloatingPointTy () || t->isVectorTy ();
-}
-
-/// Hands out the places the convention gives each leaf, in the order it visits
-/// arguments.
-class Assigner {
-public:
-	ArgPiece place (const Leaf &leaf, const DataLayout &dl)
-	{
-		ArgPiece piece;
-
-		piece.offset = (uint32_t) leaf.offset;
-		piece.width = (uint8_t) dl.getTypeStoreSize (leaf.type).getFixedValue ();
-
-		if (rides_sse (leaf.type) && fregs_ < param_fregs) {
-			piece.file = ArgPiece::File::Freg;
-			piece.at = fregs_++;
-		} else if (!rides_sse (leaf.type) && gregs_ < param_gregs) {
-			piece.file = ArgPiece::File::Greg;
-			piece.at = gregs_++;
-		} else {
-			uint64_t slot = leaf.type->isVectorTy () ? 16 : 8;
-
-			stack_ = alignTo (stack_, slot);
-			piece.file = ArgPiece::File::Stack;
-			piece.at = (uint32_t) stack_;
-			stack_ += slot;
-		}
-
-		return piece;
-	}
-
-private:
-	static constexpr unsigned param_gregs = 6, param_fregs = 8;
-
-	unsigned gregs_ = 0, fregs_ = 0;
-	uint64_t stack_ = 0;
-};
-
 /// Assign one parameter's leaves and say how to read the value back.
 Expected<ArgPlan>
-place_parameter (Type *param, bool byref, Assigner &assign, const DataLayout &dl,
+place_parameter (Type *param, bool byref, LeafAssigner &assign, const DataLayout &dl,
                  std::vector<ArgPiece> &pieces)
 {
 	SmallVector<Leaf, 8> leaves;
@@ -213,59 +116,6 @@ place_parameter (Type *param, bool byref, Assigner &assign, const DataLayout &dl
 	plan.first_piece = (uint32_t) pieces.size ();
 	plan.piece_count = (uint32_t) placed.size ();
 	pieces.insert (pieces.end (), placed.begin (), placed.end ());
-	return plan;
-}
-
-/// How many registers of each file a return value's leaves can be spread over.
-///
-/// A scalar float comes back in XMM0 or XMM1 and nowhere else, so the two SSE
-/// counts run out at different points even though they share the register file.
-constexpr unsigned ret_gregs = 3, ret_scalar_fregs = 2, ret_vector_fregs = 4;
-
-/// Where each leaf of a return value comes back.
-Expected<ReturnPlan>
-place_return (Type *ret, const DataLayout &dl)
-{
-	ReturnPlan plan;
-
-	if (ret->isVoidTy ())
-		return plan;
-
-	SmallVector<Leaf, 4> leaves;
-
-	if (Error err = flatten (ret, 0, dl, leaves))
-		return std::move (err);
-
-	unsigned gregs = 0, fregs = 0;
-
-	for (const Leaf &leaf : leaves) {
-		ArgPiece piece;
-
-		piece.offset = (uint32_t) leaf.offset;
-		piece.width = (uint8_t) dl.getTypeStoreSize (leaf.type).getFixedValue ();
-
-		if (rides_sse (leaf.type)) {
-			unsigned available =
-				leaf.type->isVectorTy () ? ret_vector_fregs : ret_scalar_fregs;
-
-			if (fregs >= available)
-				return unsupported ("a return with more SSE parts than there "
-				                    "are registers for them");
-			piece.file = ArgPiece::File::Freg;
-			piece.at = fregs++;
-		} else {
-			if (gregs >= ret_gregs)
-				return unsupported ("a return with more integer parts than "
-				                    "there are registers for them");
-			piece.file = ArgPiece::File::Greg;
-			piece.at = gregs++;
-		}
-
-		plan.pieces.push_back (piece);
-	}
-
-	plan.kind = ReturnPlan::Kind::Registers;
-	plan.size = (uint32_t) dl.getTypeStoreSize (ret).getFixedValue ();
 	return plan;
 }
 
@@ -335,7 +185,7 @@ plan_interp_entry (Function *shape, MonoMethodSignature *sig)
 		return unsupported ("a prototype the signature does not account for");
 
 	InterpEntryLayout layout;
-	Assigner assign;
+	LeafAssigner assign;
 	std::vector<ArgPlan> plans (natural);
 	unsigned hidden_greg = 0;
 

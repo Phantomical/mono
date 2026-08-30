@@ -1,14 +1,19 @@
 using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 /*
  * Where an interpreted caller puts each argument of a call into compiled code.
  *
  * plan_dyn_call () (mono/llvm/arch/amd64/dyn-call.cpp) states the convention
- * for one signature, and dyn-call-thunk.S makes the call from that plan. The
+ * for one prototype, and dyn-call-thunk.S makes the call from that plan. The
  * cases below are the places the plan can put an argument: each integer width,
- * each float width, a register file that runs out, and both files at once.
+ * each float width, a register file that runs out, both files at once, and a
+ * value type flattened into several of those places at once - straddling the
+ * register/stack boundary as an argument, and coming back either scattered
+ * across return registers or, when it needs more of those than exist, through
+ * a hidden pointer.
  *
  * MONO_LLVM_JIT_DYN_CALL=0 takes every call here back to a gsharedvt_out_sig
  * wrapper, which is the other arm. Both arms must answer OK.
@@ -142,6 +147,64 @@ public class DynCall {
 		return String.Concat (a.ToString (), b, c.Length.ToString ());
 	}
 
+	/*
+	 * A value type argument or return flattens into the leaves LLVM lowers it
+	 * into, the same convention an aggregate already crossing the seam
+	 * incoming uses. Pair and Mixed have no padding between their fields, so
+	 * each one's leaf count is exactly its field count. Quad's four integer
+	 * leaves are what push a return past ret_gregs and force a hidden return
+	 * pointer instead.
+	 */
+	[StructLayout (LayoutKind.Sequential)]
+	public struct Pair {
+		public int A, B;
+	}
+
+	[StructLayout (LayoutKind.Sequential)]
+	public struct Quad {
+		public int A, B, C, D;
+	}
+
+	[StructLayout (LayoutKind.Sequential)]
+	public struct Mixed {
+		public int A, B;
+		public double C;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static Pair MakePair (int a, int b) { return new Pair { A = a, B = b }; }
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static long TakePair (Pair p, int extra) { return p.A + p.B + extra; }
+
+	/* w, x and y take three of the six integer registers, so Quad's four
+	 * leaves fill the rest of the file and spill its last one to the stack. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static long TakeQuad (int w, int x, int y, Quad q)
+	{
+		return w + x + y + q.A + q.B + q.C + q.D;
+	}
+
+	/* Four integer leaves are more than ret_gregs holds, so this comes back
+	 * through a hidden pointer rather than in registers. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static Quad MakeQuad (int a, int b, int c, int d)
+	{
+		return new Quad { A = a, B = b, C = c, D = d };
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static double TakeMixedStruct (Mixed m) { return m.A + m.B + m.C; }
+
+	/* Two integer leaves and one SSE leaf: within both ret_gregs and
+	 * ret_scalar_fregs, so this comes back in registers, one from each
+	 * file. */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static Mixed MakeMixed (int a, int b, double c)
+	{
+		return new Mixed { A = a, B = b, C = c };
+	}
+
 	public int Field;
 
 	/* A receiver is always the first argument. */
@@ -202,6 +265,24 @@ public class DynCall {
 
 			Check ("TakeObjects", TakeObjects (5, "x", arr) == "5x3" ? 1 : 0, 1);
 			Check ("Instance", self.Instance (1, 2.0, 3), 13);
+
+			Pair pair = MakePair (11, 22);
+			Check ("MakePair.A", pair.A, 11);
+			Check ("MakePair.B", pair.B, 22);
+			Check ("TakePair", TakePair (pair, 7), 11 + 22 + 7);
+
+			Quad quad = MakeQuad (1, 2, 3, 4);
+			Check ("MakeQuad.A", quad.A, 1);
+			Check ("MakeQuad.B", quad.B, 2);
+			Check ("MakeQuad.C", quad.C, 3);
+			Check ("MakeQuad.D", quad.D, 4);
+			Check ("TakeQuad", TakeQuad (100, 200, 300, quad), 100 + 200 + 300 + 1 + 2 + 3 + 4);
+
+			Mixed mixed = MakeMixed (5, 6, 7.5);
+			Check ("MakeMixed.A", mixed.A, 5);
+			Check ("MakeMixed.B", mixed.B, 6);
+			CheckD ("MakeMixed.C", mixed.C, 7.5);
+			CheckD ("TakeMixedStruct", TakeMixedStruct (mixed), 5 + 6 + 7.5);
 		}
 
 		Console.WriteLine (Fail == 0 ? "OK" : "FAILED " + Fail);
