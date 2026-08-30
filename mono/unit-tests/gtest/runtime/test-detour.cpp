@@ -333,6 +333,33 @@ TEST_F (MethodDetour, IsSeenByAnInterpretedCaller)
 }
 
 /*
+ * An interpreted caller that already reached Target once, while it had no
+ * code, still finds a detour installed afterward. resolve_code_type ()
+ * latches this call site onto interpreting Target on the first call.
+ * install_detour ()'s own notification is what overrides that latch (#277).
+ */
+TEST_F (MethodDetour, IsSeenAfterAnInterpretedCallLatchedFirst)
+{
+	MonoMethod *target = method_named ("LateTarget", 1);
+	MonoMethod *caller = method_named ("CallLateTarget", 1);
+
+	ASSERT_NE (nullptr, target);
+	ASSERT_NE (nullptr, caller);
+	ASSERT_GT (mono_llvm_jit_tier0_calls (caller), 0)
+		<< "the caller no longer starts at tier 0, so it is not interpreted";
+	ASSERT_GT (mono_llvm_jit_tier0_calls (target), 0)
+		<< "the callee no longer starts at tier 0, so this checks nothing";
+	ASSERT_EQ (nullptr, mono_llvm_jit_find_body (mono_domain_get (), target))
+		<< "the callee already has code, so this call site never latches onto interpreting it";
+
+	EXPECT_EQ (2, invoke (caller, 1));
+
+	mono_install_method_detour (target, mono_domain_get (), (void *) detoured_body);
+
+	EXPECT_EQ (1001, invoke (caller, 1));
+}
+
+/*
  * So does an interpreted caller of a generic method. An instantiation is
  * entered exactly like any other method - its entry supplies whatever context
  * the body behind it reads - so the interpreter has the same two choices for it

@@ -27,6 +27,22 @@ public class Detour
 		return Target (x);
 	}
 
+	/*
+	 * A second Target/CallTarget pair. CallLateTarget calls it once before
+	 * LateTarget gets a detour. That first call is what settles
+	 * resolve_code_type ()'s answer while LateTarget still has no code.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static int LateTarget (int x)
+	{
+		return x + 1;
+	}
+
+	public static int CallLateTarget (int x)
+	{
+		return LateTarget (x);
+	}
+
 	public static int CallInlined (int x)
 	{
 		return Inlined (x);
