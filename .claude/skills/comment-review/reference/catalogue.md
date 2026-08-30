@@ -34,6 +34,22 @@ the vararg cookie was spelled out in five places, each carrying the part its own
 needed, and **no one of them said what the buffer looks like.** Hoist the mechanism to
 one block above the code that builds it, then cut every restatement.
 
+**A5. Saying what the thing is, where the name says it.** `ValueSources::empty ()`
+returns the state nothing has settled into yet, and `is_empty ()` tests for it. Both got
+a doc explaining what that state is. The name already said it, and both docs were longer
+than the one-expression bodies under them.
+
+**A comment that says what a thing *is* is a claim about the name.** Either the name
+carries it, and the comment goes; or the name does not, and the fix is the name. Only
+what a name cannot carry survives - a hazard, a precondition, a lifetime rule, a reason.
+
+Two things make this one hard to catch. It fires on new code, where there is no stale
+claim and no second copy to find, so passes 1 and 2 come back clean. And the earlier name
+usually did need the comment: this state was called `unreached` first, which a reader
+takes for CFG reachability, so it had to be explained. Renaming it removed the need and
+the comment stayed, because the question at hand had become how to word it. Rerun the
+governing test after a rename.
+
 ## B. Saying something that is not this code's business
 
 **B1. Describing the mechanism where the contract belongs.** Cut back to a summary, then
