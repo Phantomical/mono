@@ -57,8 +57,12 @@ enum class LowerStage {
 	/// tier compiled it.
 	pre_profile,
 
-	/// Behind the inliners. A cost model then weighs a callee with its sites
-	/// still one call each, and a fold reads what a caller brought in.
+	/// Behind `fold_type_tests ()`, so a site that pass could answer outright
+	/// never turns into a probe.
+	casts,
+
+	/// Behind the inliners and `GuardDispatchPass`, both of which read the
+	/// vtable and the slot straight off the call.
 	post_inline,
 
 	/// Behind the optimization pipeline. A site that stands until here keeps the

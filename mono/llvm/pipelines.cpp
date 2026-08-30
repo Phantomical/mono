@@ -468,13 +468,14 @@ MonoPassBuilder::buildTier1Pipeline ()
 		MPM.addPass (buildPgoInstrumentationPipeline ());
 
 	/*
-	 * Behind the instrumentation, so that both tiers hash a CFG with the type
-	 * tests still one call each. Tier 2 lowers behind its inliner instead, and
-	 * neither tier has lowered by the time it takes the hash.
+	 * Behind the instrumentation, so that both tiers hash a CFG with these
+	 * calls still opaque. Tier 2 moves LowerStage::casts earlier; see
+	 * buildTier2SimplificationPipeline ().
 	 *
 	 * In front of TierCounterPass, which turns the calls that can unwind into
 	 * invokes on to the counter's own pad. The type test wrapper is one of them.
 	 */
+	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::casts));
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
 
 	// Beside the stage above rather than behind an optimization pipeline, which
@@ -540,6 +541,17 @@ MonoPassBuilder::buildTier2SimplificationPipeline ()
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
 		buildTier2FunctionSimplificationPipeline (), PTO.EagerlyInvalidateAnalyses));
 
+	/*
+	 * Behind `fold_type_tests ()`, so a cast that pass could still answer
+	 * never becomes a probe.
+	 *
+	 * This function is also buildTier2MaterializePipeline (), so a candidate
+	 * the cost model materializes arrives with its casts already lowered. A
+	 * dispatch right after one can then devirtualize on the operand the
+	 * lowered cast leaves, where an opaque call left it nothing to read.
+	 */
+	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::casts));
+
 	return MPM;
 }
 
@@ -595,11 +607,10 @@ MonoPassBuilder::buildTier2Pipeline ()
 		MPM.addPass (mono::DumpIRPass (DumpPoint::tier2_inlined_ir));
 
 	/*
-	 * Behind the inliner, so the cost model weighs a callee with its sites still
-	 * one call each, and so a site the inliner settled has been folded. In front
-	 * of the optimization pipeline, which then reads what this writes as
-	 * ordinary IR. A vtable read becomes the load a loop hoists, and a type test
-	 * the cache probe repeated tests share.
+	 * Behind the inliner and GuardDispatchPass, both of which read the vtable
+	 * and the slot straight off the call. In front of the optimization
+	 * pipeline, which then reads what this writes as ordinary IR: a vtable
+	 * read becomes the load a loop hoists.
 	 */
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
 
