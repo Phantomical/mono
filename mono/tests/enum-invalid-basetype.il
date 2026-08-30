@@ -1,9 +1,8 @@
 //
-// enum-invalid-basetype.il: task 295 -- ECMA-335 II.14.3 names the underlying
-// types an enum may have, and II.22.37 row 33.h makes a basetype outside that
-// list an [ERROR]-level condition. Three of those out-of-list basetypes
-// -- a struct, System.Object, and float32 -- must raise TypeLoadException
-// once the class is laid out. A conforming basetype (int32) must still load.
+// ECMA-335 II.14.3 lists the underlying types an enum may have, and II.22.37
+// row 33.h marks a basetype outside that list [ERROR]. A struct,
+// System.Object, and float32 must raise TypeLoadException once the class is
+// laid out. A conforming basetype (int32) must still load.
 //
 
 .assembly extern mscorlib
@@ -93,7 +92,6 @@
 			ret
 		}
 
-		// expects TypeLoadException: 0 if caught, 1 if not
 		.method public static hidebysig default int32 test_0_enum_over_struct_rejected () cil managed
 		{
 			.maxstack 2
@@ -113,7 +111,6 @@
 			ret
 		}
 
-		// expects TypeLoadException: 0 if caught, 1 if not
 		.method public static hidebysig default int32 test_0_enum_over_object_rejected () cil managed
 		{
 			.maxstack 2
@@ -133,7 +130,6 @@
 			ret
 		}
 
-		// expects TypeLoadException: 0 if caught, 1 if not
 		.method public static hidebysig default int32 test_0_enum_over_float_rejected () cil managed
 		{
 			.maxstack 2
@@ -153,7 +149,6 @@
 			ret
 		}
 
-		// negative control: int32 is a conforming basetype and must not throw
 		.method public static hidebysig default int32 test_0_enum_over_int32_still_loads () cil managed
 		{
 			.maxstack 2
