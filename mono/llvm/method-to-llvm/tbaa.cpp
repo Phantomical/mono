@@ -23,14 +23,6 @@ namespace mono {
 
 namespace {
 
-/// One member of a type descriptor: its type, where it starts, how many bytes it
-/// covers, and whether the descriptor names it.
-///
-/// A reference field and a nested value type take space without being named. A
-/// reference is on its own leaf, and a field inside a nested value type is
-/// tagged against that type's own descriptor, so no tag reaches either offset.
-/// Their bytes are still counted, or a scalar overlapping one reads as
-/// disjoint.
 struct Member {
 	int32_t offset;
 	int32_t size;
@@ -135,8 +127,14 @@ MethodLLVMEmitter::type_descriptor (MonoClass *klass, bool statics)
 		if (offset < 0 || size <= 0)
 			return nullptr;
 
-		bool named = !mini_type_is_reference (ftype) && !MONO_TYPE_ISSTRUCT (ftype);
+		// named must select the members whose accesses carry a fine tag, not
+		// the members that are not structs. A magic nint is a value type
+		// convert_type () loads as a scalar, and tbaa_tag () tags it with one.
+		bool named = !mini_type_is_reference (ftype)
+		             && !MONO_TYPE_ISSTRUCT (mini_get_underlying_type (ftype));
 
+		// An unnamed member is kept for the overlap check below. Left out, a
+		// scalar sharing its bytes would read as disjoint.
 		members.push_back ({ offset, size, named, ftype });
 	}
 
@@ -204,9 +202,7 @@ MethodLLVMEmitter::type_descriptor (MonoClass *klass, bool statics)
  * one for its static block, naming the "mono scalar" nodes.
  *
  * A field access names its declaring type rather than the receiver's, so an
- * inherited field is one leaf however it is reached. A nested value type never
- * appears in the outer descriptor: only a struct copy names the outer type at
- * those bytes, and a struct copy carries no tag.
+ * inherited field is one leaf however it is reached.
  *
  * Every fine node hangs below "mono managed scalar", so an access this declines
  * to place still aliases all of them. That is what lets one opcode carry a fine
