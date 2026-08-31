@@ -71,13 +71,30 @@ static OutOfProcessMono g_oop = { NULL, NULL };
 
 #define OFFSET_MEMBER(type, base, member) ((gpointer)((gchar*)(base) + offsetof(type, member)))
 
-void read_exception(const void* address, gsize size)
+MONO_API void
+mono_unity_oop_init (ReadMemoryCallback rmcb, ReadExceptionCallback recb, void* userdata);
+MONO_API void
+mono_unity_oop_shutdown (void);
+MONO_API GList*
+mono_unity_lock_dynamic_function_access_tables64 (unsigned int spinWait);
+MONO_API void
+mono_unity_unlock_dynamic_function_access_tables64 (void);
+MONO_API GList*
+mono_unity_oop_iterate_dynamic_function_access_tables64 (GList* current);
+MONO_API gboolean
+mono_unity_oop_get_dynamic_function_access_table64 (GList* tableEntry, gsize* moduleStart,
+    gsize* moduleEnd, void** functionTable, gsize* functionTableSize);
+MONO_API int
+mono_unity_oop_get_stack_frame_details (const MonoDomain* domain, const void* frameAddress,
+    MonoStackFrameDetails* frameDetails);
+
+static void read_exception(const void* address, gsize size)
 {
     g_assert(g_oop.readException);
     g_oop.readException(address, size, g_oop.userData);
 }
 
-gsize read_memory(void* buffer, const void* address, gsize size)
+static gsize read_memory(void* buffer, const void* address, gsize size)
 {
     if (!buffer || !size)
         return 0;
@@ -91,7 +108,7 @@ gsize read_memory(void* buffer, const void* address, gsize size)
 }
 
 // Read a null-terminated string out-of-process
-gsize read_nt_string(char* buffer, gsize max_size, const void* address)
+static gsize read_nt_string(char* buffer, gsize max_size, const void* address)
 {
     if (!buffer || !max_size)
         return 0;
@@ -115,36 +132,40 @@ gsize read_nt_string(char* buffer, gsize max_size, const void* address)
     return read;
 }
 
-gpointer read_pointer(const void* address)
+static gpointer read_pointer(const void* address)
 {
     gpointer ptr = NULL;
     read_memory(&ptr, address, sizeof(ptr));
     return ptr;
 }
 
-gint64 read_qword(const void* address)
+#ifdef _WIN64
+static gint64 read_qword(const void* address)
 {
     gint64 v = 0;
     read_memory(&v, address, sizeof(v));
     return v;
 }
+#endif
 
-guint32 read_dword(const void* address)
+static guint32 read_dword(const void* address)
 {
     guint32 v = 0;
     read_memory(&v, address, sizeof(v));
     return v;
 }
 
-gint8 read_byte(const void* address)
+static gint8 read_byte(const void* address)
 {
 	gint8 v = 0;
 	read_memory(&v, address, sizeof(v));
 	return v;
 }
 
-GList* read_glist_next(GList* list) { return (GList*) read_pointer(OFFSET_MEMBER(GList, list, next)); }
-gpointer read_glist_data(GList* list) { return read_pointer(OFFSET_MEMBER(GList, list, data)); }
+#ifdef _WIN64
+static GList* read_glist_next(GList* list) { return (GList*) read_pointer(OFFSET_MEMBER(GList, list, next)); }
+static gpointer read_glist_data(GList* list) { return read_pointer(OFFSET_MEMBER(GList, list, data)); }
+#endif
 
 MONO_API void
 mono_unity_oop_init(

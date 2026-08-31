@@ -2623,8 +2623,8 @@ mono_gc_collect (int generation)
 	MONO_EXIT_GC_UNSAFE;
 }
 
-void 
-mono_gc_start_incremental_collection()
+void
+mono_gc_start_incremental_collection (void)
 {
 
 }
@@ -2664,7 +2664,7 @@ mono_gc_get_gcmemoryinfo (gint64* high_memory_load_threshold_bytes,
 }	
 
 int64_t
-mono_gc_get_max_time_slice_ns()
+mono_gc_get_max_time_slice_ns (void)
 {
 	return 0;
 }

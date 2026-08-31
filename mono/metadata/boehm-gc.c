@@ -214,7 +214,6 @@ static mse * GC_gcj_vector_proc (word * addr, mse * mark_stack_ptr,
 void
 mono_gc_base_init (void)
 {
-	char *env;
 	char *params_opts = NULL;
 	char *debug_opts = NULL;
 
@@ -329,13 +328,13 @@ mono_gc_base_init (void)
 	gc_initialized = TRUE;
 }
 
-void 
+static void
 mono_gc_dirty(void **ptr)
 {
 	GC_dirty (ptr);
 }
 
-void 
+static void
 mono_gc_dirty_range(void **ptr, size_t size)
 {
 	if (G_UNLIKELY(gc_strict_wbarriers))
@@ -381,12 +380,12 @@ mono_gc_collect (int generation)
 
 
 int
-mono_gc_collect_a_little()
+mono_gc_collect_a_little (void)
 {
 	return GC_collect_a_little();
 }
 
-void mono_gc_start_incremental_collection()
+void mono_gc_start_incremental_collection (void)
 {
 	GC_start_incremental_collection();
 }
@@ -497,7 +496,7 @@ mono_gc_get_heap_size (void)
 }
 
 int64_t
-mono_gc_get_max_time_slice_ns()
+mono_gc_get_max_time_slice_ns (void)
 {
 	return GC_get_time_limit_ns();
 }
@@ -1608,12 +1607,12 @@ mono_gc_set_stack_end (void *stack_end)
 {
 }
 
-void GC_start_blocking ()
+static void GC_start_blocking (void)
 {
 
 }
 
-void GC_end_blocking ()
+static void GC_end_blocking (void)
 {
 
 }
@@ -2445,8 +2444,6 @@ null_ephemerons_for_domain (void* user_data)
 	/* iterate all registered Ephemeron[] */
 	for (current_node = ephemeron_list; current_node; current_node = current_node->next)
 	{
-		Ephemeron* current_ephemeron, * array_end;
-		MonoObject* tombstone = NULL;
 		/* reveal weak link value*/
 		MonoObject* array = REVEAL_POINTER (current_node->ephemeron_array_weak_link);
 

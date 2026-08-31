@@ -6,7 +6,6 @@
 #include <mono/metadata/object.h>
 #include <mono/metadata/marshal.h>
 
-typedef int (*vprintf_func)(const char* msg, va_list args);
 typedef struct {
 	void* (*malloc_func)(size_t size);
 	void(*free_func)(void *ptr);
@@ -66,7 +65,7 @@ MONO_API void mono_unity_set_vprintf_func(vprintf_func func);
 
 void unity_mono_install_memory_callbacks(MonoMemoryCallbacks* callbacks);
 
-MONO_API void burst_mono_simulate_burst_debug_domain_reload();
+MONO_API void burst_mono_simulate_burst_debug_domain_reload (void);
 MONO_API void burst_mono_install_hooks(BurstMonoDebuggerCallbacks* callbacks, void* extra);
 MONO_API void burst_mono_update_tracking_pointers(MonoDomain* domain,MonoClass* klass);
 
@@ -79,7 +78,7 @@ MONO_API void
 mono_set_find_plugin_callback(UnityFindPluginCallback find);
 
 MONO_API UnityFindPluginCallback
-mono_get_find_plugin_callback();
+mono_get_find_plugin_callback (void);
 
 //object
 void mono_unity_object_init(void* obj, MonoClass* klass);
@@ -175,16 +174,16 @@ MonoException* mono_unity_exception_get_marshal_directive(const char* msg);
 MONO_API MonoException* mono_unity_error_convert_to_exception(MonoError *error);
 
 //defaults
-MonoClass* mono_unity_defaults_get_int_class();
-MonoClass* mono_unity_defaults_get_stack_frame_class();
-MonoClass* mono_unity_defaults_get_int32_class();
-MonoClass* mono_unity_defaults_get_char_class();
-MonoClass* mono_unity_defaults_get_delegate_class();
-MonoClass* mono_unity_defaults_get_byte_class();
+MonoClass* mono_unity_defaults_get_int_class (void);
+MonoClass* mono_unity_defaults_get_stack_frame_class (void);
+MonoClass* mono_unity_defaults_get_int32_class (void);
+MonoClass* mono_unity_defaults_get_char_class (void);
+MonoClass* mono_unity_defaults_get_delegate_class (void);
+MonoClass* mono_unity_defaults_get_byte_class (void);
 
 //unitytls
 typedef struct unitytls_interface_struct unitytls_interface_struct;
-MONO_API unitytls_interface_struct* mono_unity_get_unitytls_interface();
+MONO_API unitytls_interface_struct* mono_unity_get_unitytls_interface (void);
 MONO_API void mono_unity_install_unitytls_interface(unitytls_interface_struct* callbacks);
 
 // gc
@@ -200,11 +199,11 @@ MONO_API void mono_unity_gc_set_mode(MonoGCMode mode);
 MONO_API gboolean mono_unity_gc_is_heap_ptr(const void*);
 
 // Deprecated. Remove when Unity has switched to mono_unity_gc_set_mode
-MONO_API void mono_unity_gc_enable();
+MONO_API void mono_unity_gc_enable (void);
 // Deprecated. Remove when Unity has switched to mono_unity_gc_set_mode
-MONO_API void mono_unity_gc_disable();
+MONO_API void mono_unity_gc_disable (void);
 // Deprecated. Remove when Unity has switched to mono_unity_gc_set_mode
-MONO_API int mono_unity_gc_is_disabled();
+MONO_API int mono_unity_gc_is_disabled (void);
 
 // logging
 typedef void (*UnityLogErrorCallback) (const char *message);
@@ -212,11 +211,11 @@ MONO_API void mono_unity_set_editor_logging_callback(UnityLogErrorCallback callb
 gboolean mono_unity_log_error_to_editor(const char *message);
 
 //misc
-MonoAssembly* mono_unity_assembly_get_mscorlib();
-MonoImage* mono_unity_image_get_mscorlib();
+MonoAssembly* mono_unity_assembly_get_mscorlib (void);
+MonoImage* mono_unity_image_get_mscorlib (void);
 MonoClass* mono_unity_generic_container_get_parameter_class(MonoGenericContainer* generic_container, gint index);
 MonoString* mono_unity_string_append_assembly_name_if_necessary(MonoString* typeName, const char* assemblyName);
-void mono_unity_memory_barrier();
+void mono_unity_memory_barrier (void);
 MonoException* mono_unity_thread_check_exception();
 MonoObject* mono_unity_delegate_get_target(MonoDelegate *delegate);
 gchar* mono_unity_get_runtime_build_info(const char *date, const char *time);
@@ -231,7 +230,7 @@ gboolean mono_unity_thread_state_init_from_handle(MonoThreadUnwindState *tctx, M
 void mono_unity_stackframe_set_method(MonoStackFrame *sf, MonoMethod *method);
 MonoType* mono_unity_reflection_type_get_type(MonoReflectionType *type);
 MONO_API void mono_unity_set_data_dir(const char* dir);
-MONO_API char* mono_unity_get_data_dir();
+MONO_API char* mono_unity_get_data_dir (void);
 MONO_API MonoClass* mono_unity_class_get(MonoImage* image, guint32 type_token);
 MONO_API gpointer mono_unity_alloc(gsize size);
 MONO_API void mono_unity_g_free (void *ptr);
@@ -296,5 +295,53 @@ MONO_API void* mono_unity_get_attr_type_arg(MonoAttrArgsInfo *ainfo, int index);
 MONO_API uint64_t mono_unity_get_attr_type_arg_as_uint64(MonoAttrArgsInfo *ainfo, int index);
 MONO_API const char* mono_unity_class_get_assembly_name_cstring(MonoClass *klass);
 MONO_API gboolean mono_unity_type_is_unmanaged(MonoType *type);
+
+unsigned mono_unity_get_all_classes_with_name_case (MonoImage *image, const char *name, MonoClass **classes_ref, unsigned *length_ref);
+MONO_API void mono_unity_runtime_set_main_args (int argc, const char* argv[]);
+MONO_API MonoString* mono_unity_string_empty_wrapper (void);
+MONO_API MonoArray* mono_unity_array_new_2d (MonoDomain *domain, MonoClass *eklass, size_t size0, size_t size1);
+MONO_API MonoArray* mono_unity_array_new_3d (MonoDomain *domain, MonoClass *eklass, size_t size0, size_t size1, size_t size2);
+MONO_API void mono_unity_domain_set_config (MonoDomain *domain, const char *base_dir, const char *config_file_name);
+MONO_API MonoException* mono_unity_loader_get_last_error_and_error_prepare_exception (void);
+MONO_API void mono_unity_install_memory_callbacks (MonoAllocatorVTable* callbacks);
+MONO_API MonoClass* mono_unity_class_get_generic_type_definition (MonoClass* klass);
+MONO_API MonoClass* mono_unity_class_get_generic_parameter_at (MonoClass* klass, guint32 index);
+MONO_API guint32 mono_unity_class_get_generic_parameter_count (MonoClass* klass);
+MONO_API MonoClass* mono_unity_class_get_generic_argument_at (MonoClass* klass, guint32 index);
+MONO_API guint32 mono_unity_class_get_generic_argument_count (MonoClass* klass);
+MONO_API void mono_unity_thread_fast_attach (MonoDomain *domain);
+MONO_API void mono_unity_thread_fast_detach (void);
+MONO_API MonoMethod* unity_mono_reflection_method_get_method (MonoReflectionMethod* mrf);
+MONO_API void mono_unity_image_set_mempool_chunk_foreach (GFunc callback, gpointer user_data);
+MONO_API void mono_unity_domain_mempool_chunk_foreach (MonoDomain *domain, GFunc callback, gpointer user_data);
+MONO_API void mono_unity_root_domain_mempool_chunk_foreach (GFunc callback, gpointer user_data);
+MONO_API void mono_unity_assembly_mempool_chunk_foreach (MonoAssembly *assembly, GFunc callback, gpointer user_data);
+MONO_API void mono_unity_type_get_name_full_chunked (MonoType *type, GFunc chunkReportFunc, gpointer userData);
+MONO_API void mono_thread_pool_cleanup (void);
+MONO_API gboolean mono_unity_type_is_pointer_type (MonoType *type);
+MONO_API gboolean mono_unity_type_is_static (MonoType *type);
+MONO_API MonoVTable * mono_unity_class_try_get_vtable (MonoDomain *domain, MonoClass *klass);
+MONO_API uint32_t mono_unity_class_get_data_size (MonoClass *klass);
+MONO_API void * mono_unity_vtable_get_static_field_data (MonoVTable *vTable);
+MONO_API gboolean mono_unity_class_field_is_literal (MonoClassField *field);
+MONO_API void mono_unity_stop_gc_world (void);
+MONO_API void mono_unity_start_gc_world (void);
+MONO_API void* mono_class_get_userdata (MonoClass* klass);
+MONO_API void mono_class_set_userdata (MonoClass* klass, void* userdata);
+MONO_API int mono_class_get_userdata_offset (void);
+MONO_API void mono_unity_gc_heap_foreach (GFunc callback, gpointer user_data);
+MONO_API void mono_unity_gc_handles_foreach_get_target (GFunc callback, gpointer user_data);
+MONO_API uint32_t mono_unity_object_header_size (void);
+MONO_API uint32_t mono_unity_array_object_header_size (void);
+MONO_API uint32_t mono_unity_offset_of_array_length_in_array_object_header (void);
+MONO_API uint32_t mono_unity_offset_of_array_bounds_in_array_object_header (void);
+MONO_API uint32_t mono_unity_allocation_granularity (void);
+gboolean mono_unity_type_is_blittable_primitive (MonoType *type);
+MONO_API void mono_unity_set_embeddinghostname (const char* name);
+MONO_API gboolean mono_unity_class_is_interface (MonoClass* klass);
+MONO_API gboolean mono_unity_class_is_abstract (MonoClass* klass);
+
+MONO_API int mono_unity_backtrace_from_context (void* context, void* array[], int count);
+MONO_API void mono_unity_jit_cleanup (MonoDomain *domain);
 
 #endif

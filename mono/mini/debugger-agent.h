@@ -49,4 +49,18 @@ mono_debugger_agent_stub_init (void);
 MONO_API gboolean
 mono_debugger_agent_transport_handshake (void);
 
+typedef void (*MonoDebuggerAttachFunc) (gboolean attached);
+
+MONO_API void
+mono_debugger_set_generate_debug_info (gboolean enable);
+
+MONO_API gboolean
+mono_debugger_get_generate_debug_info (void);
+
+MONO_API void
+mono_debugger_disconnect (void);
+
+MONO_API void
+mono_debugger_install_attach_detach_callback (MonoDebuggerAttachFunc func);
+
 #endif

@@ -79,6 +79,7 @@
 #include "llvm-runtime.h"
 #include "aot-runtime.h"
 #include "mini-runtime.h"
+#include "mono/metadata/unity-utils.h"
 #include "mono/interp/interp.h"
 
 #ifndef MONO_ARCH_CONTEXT_DEF

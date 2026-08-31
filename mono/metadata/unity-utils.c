@@ -107,8 +107,7 @@ unsigned mono_unity_get_all_classes_with_name_case (MonoImage *image, const char
 {
 	MonoClass *klass;
 	MonoTableInfo *tdef = &image->tables [MONO_TABLE_TYPEDEF];
-	int i, count;
-	guint32 attrs, visibility;
+	int i;
 	unsigned length = 0;
 
 	/* (yoinked from icall.c) we start the count from 1 because we skip the special type <Module> */
@@ -1976,12 +1975,14 @@ mono_unity_gc_heap_foreach(GFunc callback, gpointer user_data)
 }
 
 //GC handles
+#if HAVE_BOEHM_GC
 static void
 handle_gc_handle(gpointer handle_target, gpointer handle_report_callback)
 {
 	execution_ctx *ctx = (execution_ctx *)handle_report_callback;
 	ctx->callback(handle_target, ctx->user_data);
 }
+#endif
 
 MONO_API void
 mono_unity_gc_handles_foreach_get_target(GFunc callback, gpointer user_data)

@@ -81,8 +81,6 @@ static void
 ReportClassesFromAssembly(MonoAssembly *assembly, void *user_data)
 {
 	MonoImage *image = mono_assembly_get_image_internal(assembly);
-	int i;
-	MonoTableInfo *tdef = &image->tables[MONO_TABLE_TYPEDEF];
 	GSList *list;
 	ClassReportContext *context = (ClassReportContext*)user_data;
 

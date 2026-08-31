@@ -177,8 +177,8 @@ typedef struct
 	MonoDwarfLocListEntry *locations;
 	gint32 this_offset;
 	guint8 this_reg;
-	gboolean has_this:1;
-	gboolean this_in_reg:1;
+	guint has_this:1;
+	guint this_in_reg:1;
 } MonoGenericJitInfo;
 
 /*

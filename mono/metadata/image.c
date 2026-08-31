@@ -1784,7 +1784,7 @@ do_mono_image_open (MonoAssemblyLoadContext *alc, const char *fname, MonoImageOp
 	MonoCLIImageInfo *iinfo;
 	MonoImage *image;
 	char *fname_remap;
-	if (fname_remap = mono_unity_remap_path (fname))
+	if ((fname_remap = mono_unity_remap_path (fname)))
 		fname = fname_remap;
 
 	MonoImageStorage *storage = mono_image_storage_open (fname);

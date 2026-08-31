@@ -15,8 +15,18 @@
 #include "mini.h"
 #include "ee.h"
 
+#if defined(ENABLE_LLVM) && defined(HAVE_UNWIND_H)
+#include <unwind.h>
+#endif
+
 /* Included from C++ (mono/llvm/); see the note in mini.h. No-op for C. */
 G_BEGIN_DECLS
+
+#if defined(ENABLE_LLVM) && defined(HAVE_UNWIND_H)
+/* Registered as a JIT icall; defined in mini-exceptions.c. */
+G_EXTERN_C _Unwind_Reason_Code mono_debug_personality (int a, _Unwind_Action b,
+	uint64_t c, struct _Unwind_Exception *d, struct _Unwind_Context *e);
+#endif
 
 /* Per-domain information maintained by the JIT */
 typedef struct

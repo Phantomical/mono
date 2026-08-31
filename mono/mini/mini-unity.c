@@ -1,5 +1,6 @@
 #include <config.h>
 #include <mono/mini/mini.h>
+#include <mono/metadata/unity-utils.h>
 
 #ifdef WIN32
 

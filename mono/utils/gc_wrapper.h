@@ -35,7 +35,9 @@
 		/* libgc specifies this on the command line,
 		 * so we must define it ourselfs
 		*/
-#		define GC_GCJ_SUPPORT
+#		ifndef GC_GCJ_SUPPORT
+#			define GC_GCJ_SUPPORT
+#		endif
 #	endif
 
 	/*

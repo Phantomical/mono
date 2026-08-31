@@ -138,6 +138,16 @@ interp_method_compiled (MonoDomain *domain, MonoMethod *method)
 		imethod->code_type = IMETHOD_CODE_COMPILED;
 }
 
+void
+interp_metadata_update_init (MonoError *error)
+{
+	if ((mono_interp_opt & INTERP_OPT_INLINE) != 0)
+		mono_error_set_execution_engine (
+			error, "Interpreter inlining must be turned off for metadata updates");
+}
+
+#ifdef ENABLE_METADATA_UPDATE
+
 static void
 copy_imethod_for_frame (MonoDomain *domain, InterpFrame *frame)
 {
@@ -149,14 +159,6 @@ copy_imethod_for_frame (MonoDomain *domain, InterpFrame *frame)
 	 * no free. It is never reclaimed, even after the InterpFrame that made it
 	 * pops.
 	 */
-}
-
-void
-interp_metadata_update_init (MonoError *error)
-{
-	if ((mono_interp_opt & INTERP_OPT_INLINE) != 0)
-		mono_error_set_execution_engine (
-			error, "Interpreter inlining must be turned off for metadata updates");
 }
 
 static void
@@ -210,6 +212,8 @@ metadata_update_prepare_to_invalidate (MonoDomain *domain)
 
 	/* (2) invalidate all the registered imethods */
 }
+
+#endif /* ENABLE_METADATA_UPDATE */
 
 void
 interp_invalidate_transformed (MonoDomain *domain)

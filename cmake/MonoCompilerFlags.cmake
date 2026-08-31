@@ -48,7 +48,10 @@ target_compile_definitions(mono_common INTERFACE
   GC_LINUX_THREADS USE_MMAP USE_MUNMAP USE_COMPILER_TLS)
 
 target_compile_options(mono_common INTERFACE
-  $<$<COMPILE_LANGUAGE:C>:-std=gnu99>
+  # gnu11 rather than configure.ac's gnu99. The C-facing headers repeat a
+  # forward typedef instead of including the whole of metadata, and C99
+  # forbids the repeat.
+  $<$<COMPILE_LANGUAGE:C>:-std=gnu11>
   $<$<COMPILE_LANGUAGE:C>:-fno-strict-aliasing>
   $<$<COMPILE_LANGUAGE:C>:-fwrapv>
   # The runtime takes the address of TLS variables across shared-library

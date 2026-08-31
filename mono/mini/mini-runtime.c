@@ -101,12 +101,6 @@
 #include "mono/interp/interp.h"
 #include "mixed_callstack_plugin.h"
 
-#if defined(ENABLE_LLVM) && defined(HAVE_UNWIND_H)
-#include <unwind.h>
-/* Registered as a JIT icall below; defined in mini-exceptions.c. */
-G_EXTERN_C _Unwind_Reason_Code mono_debug_personality (int a, _Unwind_Action b,
-	uint64_t c, struct _Unwind_Exception *d, struct _Unwind_Context *e);
-#endif
 #include "../llvm/runtime.h"
 #include "domain-method.h"
 #include "method-override.h"

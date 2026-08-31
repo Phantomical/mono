@@ -1352,6 +1352,7 @@ start_wrapper (gpointer data)
 	g_assert_not_reached ();
 }
 
+#ifdef ENABLE_NETCORE
 static void
 throw_thread_start_exception (guint32 error_code, MonoError *error)
 {
@@ -1374,6 +1375,7 @@ throw_thread_start_exception (guint32 error_code, MonoError *error)
 
 	mono_runtime_invoke_checked (throw_method, NULL, args, error);
 }
+#endif /* ENABLE_NETCORE */
 
 /*
  * create_thread:

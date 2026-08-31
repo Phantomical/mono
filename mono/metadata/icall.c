@@ -272,6 +272,7 @@ ves_icall_System_Array_SetValueImpl (MonoArrayHandle arr, MonoObjectHandle value
 	array_set_value_impl (arr, value, pos, FALSE, TRUE, error);
 }
 
+#if ENABLE_NETCORE
 static inline void
 set_invalid_cast (MonoError *error, MonoClass *src_class, MonoClass *dst_class)
 {
@@ -279,7 +280,6 @@ set_invalid_cast (MonoError *error, MonoClass *src_class, MonoClass *dst_class)
 	mono_error_set_invalid_cast (error);
 }
 
-#if ENABLE_NETCORE
 void
 ves_icall_System_Array_SetValueRelaxedImpl (MonoArrayHandle arr, MonoObjectHandle value, guint32 pos, MonoError *error)
 {
@@ -9966,7 +9966,7 @@ ves_icall_System_Net_NetworkInformation_LinuxNetworkChange_CloseNLSocket (gpoint
 #undef MONO_HANDLE_REGISTER_ICALL
 
 MonoObjectHandle
-ves_icall_System_Threading_OSSpecificSynchronizationContext_GetOSContext ()
+ves_icall_System_Threading_OSSpecificSynchronizationContext_GetOSContext (void)
 {
 	return NULL_HANDLE;
 }

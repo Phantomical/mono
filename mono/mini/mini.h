@@ -567,6 +567,7 @@ void      mono_arch_cpu_init                    (void);
 guint32   mono_arch_cpu_optimizations           (guint32 *exclude_mask);
 const char *mono_arch_regname                   (int reg);
 const char *mono_arch_fregname                  (int reg);
+const char *mono_arch_xregname                  (int reg);
 void      mono_arch_exceptions_init             (void);
 guchar*   mono_arch_create_generic_trampoline   (MonoTrampolineType tramp_type, MonoTrampInfo **info, gboolean aot);
 gpointer  mono_arch_create_rgctx_lazy_fetch_trampoline (guint32 slot, MonoTrampInfo **info, gboolean aot);
@@ -975,6 +976,8 @@ typedef enum {
 } MonoCPUFeatures;
 
 G_ENUM_FUNCTIONS (MonoCPUFeatures)
+
+MonoCPUFeatures mono_arch_get_cpu_features (void);
 
 gboolean    mono_class_is_magic_int (MonoClass *klass);
 gboolean    mono_class_is_magic_float (MonoClass *klass);

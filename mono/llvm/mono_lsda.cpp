@@ -48,7 +48,6 @@ namespace {
 
 constexpr std::uint32_t MONO_LSDA_MAGIC = 0x4d4c5344u; /* 'MLSD' */
 constexpr std::uint16_t MONO_LSDA_VERSION = 3;
-constexpr std::size_t   MONO_LSDA_HEADER_SIZE = 16;
 constexpr std::size_t   MONO_LSDA_ENTRY_SIZE = 20;
 
 // A bounds-checked little-endian cursor over [start, end). A failed read

@@ -871,7 +871,7 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 		}
 
 		bool holding = claim == SharedClaim::held;
-		auto unclaim = llvm::make_scope_exit ([&] {
+		llvm::scope_exit unclaim ([&] {
 			if (holding)
 				release_shared_body (*owner);
 		});
@@ -1147,7 +1147,7 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 
 		member->dm = dm;
 		member->folds_epoch = dm->folds_epoch ();
-		member->publish_callee = [this, &domain] (MonoMethod *callee) {
+		member->publish_callee = [&domain] (MonoMethod *callee) {
 			return publish (domain, callee);
 		};
 		/*
@@ -1173,7 +1173,7 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 
 		Member *held = member.get ();
 
-		member->recover = [this, &domain, held, for_sharing] (llvm::Error failure)
+		member->recover = [&domain, held, for_sharing] (llvm::Error failure)
 			-> llvm::Expected<Compiled> {
 			/*
 			 * A stand-in that raises is the answer for a method the program

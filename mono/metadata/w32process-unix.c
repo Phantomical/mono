@@ -1488,7 +1488,7 @@ fallback:
 }
 #endif
 
-#if defined (HAVE_FORK) 
+#if defined (HAVE_FORK) && defined (HOST_DARWIN)
 static void* fork_helper(void* data)
 {
 	pid_t* pid = (pid_t*)data;

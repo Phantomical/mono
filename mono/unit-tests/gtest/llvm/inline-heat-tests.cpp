@@ -26,6 +26,7 @@
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/SourceMgr.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -108,8 +109,8 @@ struct HeatModule {
 			if (auto *call = dyn_cast<CallBase> (&i))
 				return *call;
 
-		ADD_FAILURE () << bb.getName ().str () << " holds no call";
-		return *static_cast<CallBase *> (nullptr);
+		// No stand-in call exists to return by reference.
+		report_fatal_error (Twine (bb.getName ()) + " holds no call");
 	}
 
 	/// How often the profile counted that block.

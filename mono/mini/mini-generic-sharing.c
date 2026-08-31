@@ -722,7 +722,6 @@ inflate_info (MonoRuntimeGenericContextInfoTemplate *oti, MonoGenericContext *co
 	case MONO_RGCTX_INFO_DELEGATE_TRAMP_INFO: {
 		ERROR_DECL (error);
 		MonoDelegateClassMethodPair *dele_info = (MonoDelegateClassMethodPair*)data;
-		MonoDomain *domain = mono_domain_get ();
 
 		MonoType *t = mono_class_inflate_generic_type_checked (m_class_get_byval_arg (dele_info->klass), context, error);
 		mono_error_assert_msg_ok (error, "Could not inflate generic type"); /* FIXME proper error handling */

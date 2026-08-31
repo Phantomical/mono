@@ -435,7 +435,7 @@ g_set_printerr_handler (GPrintFunc func)
 	return old;
 }
 
-void wrap_our_vprintf(const gchar *format, ...)
+static void wrap_our_vprintf(const gchar *format, ...)
 {
 	va_list args;
 	va_start (args, format);

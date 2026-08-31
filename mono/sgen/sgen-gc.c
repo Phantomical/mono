@@ -309,8 +309,6 @@ static SGEN_TV_DECLARE (time_major_conc_collection_end);
 
 int sgen_gc_debug_level = 0;
 FILE* sgen_gc_debug_file;
-static char* gc_params_options;
-static char* gc_debug_options;
 
 /*
 void
@@ -3418,7 +3416,6 @@ init_sgen_mode (SgenMode mode)
 void
 sgen_gc_init (void)
 {
-	char *env;
 	char **opts, **ptr;
 	SgenMajor sgen_major = SGEN_MAJOR_DEFAULT;
 	SgenMinor sgen_minor = SGEN_MINOR_DEFAULT;

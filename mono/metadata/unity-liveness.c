@@ -68,7 +68,7 @@ struct _LivenessState {
 	WorldStateChanged on_world_started;
 };
 
-custom_growable_block_array * block_array_create(LivenessState *state)
+static custom_growable_block_array * block_array_create(LivenessState *state)
 {
 	custom_growable_block_array *array = g_new0(custom_growable_block_array, 1);
 	array->current_block = state->reallocateArray(NULL, k_block_size, state->callback_userdata);
@@ -84,12 +84,12 @@ custom_growable_block_array * block_array_create(LivenessState *state)
 	return array;
 }
 
-gboolean block_array_is_empty(custom_growable_block_array *block_array)
+static gboolean block_array_is_empty(custom_growable_block_array *block_array)
 {
 	return block_array->first_block->next_item == block_array->first_block->p_data;
 }
 
-void block_array_push_back(custom_growable_block_array *block_array, gpointer value, LivenessState *state)
+static void block_array_push_back(custom_growable_block_array *block_array, gpointer value, LivenessState *state)
 {
 	if (block_array->current_block->next_item == block_array->current_block->p_data + k_array_elements_per_block) {
 		custom_array_block* new_block = block_array->current_block->next_block;
@@ -106,7 +106,7 @@ void block_array_push_back(custom_growable_block_array *block_array, gpointer va
 	*block_array->current_block->next_item++ = value;
 }
 
-gpointer block_array_pop_back(custom_growable_block_array *block_array)
+static gpointer block_array_pop_back(custom_growable_block_array *block_array)
 {
 	if (block_array->current_block->next_item == block_array->current_block->p_data) {
 		if (block_array->current_block->prev_block == NULL)
@@ -117,13 +117,13 @@ gpointer block_array_pop_back(custom_growable_block_array *block_array)
 	return *--block_array->current_block->next_item;
 }
 
-void block_array_reset_iterator(custom_growable_block_array *array)
+static void block_array_reset_iterator(custom_growable_block_array *array)
 {
 	array->iterator->current_block = array->first_block;
 	array->iterator->current_position = array->first_block->p_data;
 }
 
-gpointer block_array_next(custom_growable_block_array *block_array)
+static gpointer block_array_next(custom_growable_block_array *block_array)
 {
 	custom_block_array_iterator *iterator = block_array->iterator;
 	if (iterator->current_position != iterator->current_block->next_item)
@@ -137,7 +137,7 @@ gpointer block_array_next(custom_growable_block_array *block_array)
 	return *iterator->current_position++;
 }
 
-void block_array_clear(custom_growable_block_array *block_array)
+static void block_array_clear(custom_growable_block_array *block_array)
 {
 	custom_array_block *block = block_array->first_block;
 	while (block != NULL) {
@@ -146,7 +146,7 @@ void block_array_clear(custom_growable_block_array *block_array)
 	}
 }
 
-void block_array_destroy(custom_growable_block_array *block_array, LivenessState *state)
+static void block_array_destroy(custom_growable_block_array *block_array, LivenessState *state)
 {
 	custom_array_block *block = block_array->first_block;
 	while (block != NULL) {
@@ -169,9 +169,11 @@ const int kMaxTraverseRecursionDepth = 128;
 
 /* Liveness calculation */
 MONO_API LivenessState * mono_unity_liveness_allocate_struct(MonoClass *filter, guint max_count, register_object_callback callback, void *callback_userdata, ReallocateArray reallocateArray);
-MONO_API void mono_unity_liveness_stop_gc_world();
+MONO_API void mono_unity_liveness_stop_gc_world (void);
+MONO_API void mono_validate_object_pointer (MonoObject *object);
+MONO_API void mono_validate_string_pointer (MonoString *string);
 MONO_API void mono_unity_liveness_finalize(LivenessState *state);
-MONO_API void mono_unity_liveness_start_gc_world();
+MONO_API void mono_unity_liveness_start_gc_world (void);
 MONO_API void mono_unity_liveness_free_struct(LivenessState *state);
 
 MONO_API LivenessState * mono_unity_liveness_calculation_begin(MonoClass *filter, guint max_count, register_object_callback callback, void *callback_userdata, WorldStateChanged onWorldStarted, WorldStateChanged onWorldStopped);
@@ -199,7 +201,7 @@ MONO_API void mono_unity_heap_validation_from_statics(LivenessState* state);
 
 void mono_filter_objects(LivenessState *state);
 
-void mono_reset_state(LivenessState *state)
+static void mono_reset_state(LivenessState *state)
 {
 	block_array_clear(state->process_array);
 }
@@ -239,12 +241,6 @@ static void mono_traverse_generic_object(MonoObject *object, LivenessState *stat
 
 static void mono_traverse_and_validate_generic_object(MonoObject *object, LivenessState *state)
 {
-#ifdef HAVE_SGEN_GC
-	gsize gc_desc = 0;
-#else
-	gsize gc_desc = (gsize)(GET_VTABLE(object)->gc_descr);
-#endif
-
 	if (GET_VTABLE(object)->klass->rank)
 		mono_validate_array((MonoArray*)object, state);
 	else
@@ -398,7 +394,6 @@ static gboolean mono_traverse_object_internal(MonoObject *object, gboolean isStr
 			}
 			else {
 				MonoObject *val = NULL;
-				MonoVTable *vtable = NULL;
 				mono_field_get_value_internal(object, field, &val);
 				added_objects |= mono_add_process_object(val, state);
 			}
@@ -452,7 +447,6 @@ static gboolean mono_validate_object_internal(MonoObject *object, gboolean isStr
 			}
 			else {
 				MonoObject* val = NULL;
-				MonoVTable* vtable = NULL;
 				mono_field_get_value_internal(object, field, &val);
 				added_objects |= mono_add_and_validate_object(val, state);
 				validate_object_value(val, field->type);
@@ -492,7 +486,6 @@ static void mono_traverse_gc_desc(MonoObject *object, LivenessState *state)
 
 static void mono_traverse_objects(LivenessState *state)
 {
-	int i = 0;
 	MonoObject *object = NULL;
 
 	state->traverse_depth++;
@@ -505,7 +498,6 @@ static void mono_traverse_objects(LivenessState *state)
 
 static void mono_traverse_and_validate_objects(LivenessState *state)
 {
-	int i = 0;
 	MonoObject* object = NULL;
 
 	state->traverse_depth++;
@@ -703,7 +695,7 @@ void mono_unity_liveness_calculation_from_statics(LivenessState *liveness_state)
 	mono_filter_objects(liveness_state);
 }
 
-void gchandle_process(void *data, void *user_data)
+static void gchandle_process(void *data, void *user_data)
 {
 	MonoObject *target = data;
 	LivenessState *liveness_state = user_data;
@@ -873,7 +865,7 @@ void mono_unity_liveness_free_struct(LivenessState *state)
 	g_free(state);
 }
 
-void mono_unity_liveness_stop_gc_world()
+void mono_unity_liveness_stop_gc_world (void)
 {
 #if defined(HAVE_SGEN_GC)
 	sgen_stop_world (0, FALSE);
@@ -884,7 +876,7 @@ void mono_unity_liveness_stop_gc_world()
 #endif
 }
 
-void mono_unity_liveness_start_gc_world()
+void mono_unity_liveness_start_gc_world (void)
 {
 #if defined(HAVE_SGEN_GC)
 	sgen_restart_world (0, FALSE);

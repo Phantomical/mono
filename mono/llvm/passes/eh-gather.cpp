@@ -323,8 +323,10 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 		 */
 		if (const BasicBlock *bb =
 		        lp.LandingPadBlock ? lp.LandingPadBlock->getBasicBlock () : nullptr) {
-			if (const auto *lpi =
-			        dyn_cast_or_null<LandingPadInst> (bb->getFirstNonPHI ()))
+			BasicBlock::const_iterator first = bb->getFirstNonPHIIt ();
+			if (const auto *lpi = first == bb->end ()
+			                          ? nullptr
+			                          : dyn_cast<LandingPadInst> (&*first))
 				if (lpi->isCleanup ())
 					report_fatal_error ("mono: landing pad unexpectedly cleanup-flagged - mono never sets LLVMSetCleanup");
 		}

@@ -929,13 +929,13 @@ mono_debugger_set_generate_debug_info (gboolean enable)
 }
 
 MONO_API gboolean
-mono_debugger_get_generate_debug_info ()
+mono_debugger_get_generate_debug_info (void)
 {
 	return disable_optimizations;
 }
 
 MONO_API void
-mono_debugger_disconnect ()
+mono_debugger_disconnect (void)
 {
 	stop_debugger_thread ();
 
@@ -944,7 +944,6 @@ mono_debugger_disconnect ()
 	finish_agent_init(FALSE);
 }
 
-typedef void (*MonoDebuggerAttachFunc)(gboolean attached);
 static MonoDebuggerAttachFunc attach_func;
 MONO_API void
 mono_debugger_install_attach_detach_callback (MonoDebuggerAttachFunc func)
@@ -10835,7 +10834,7 @@ void burst_mono_update_tracking_pointers(MonoDomain* domain, MonoClass* klass)
 //the various pointers we hold statically are now fixed (after one time init)
 // The method will only be called, if the burst debugger is initialised, which means we don't need
 //to hold the burst locks here.
-void burst_mono_simulate_burst_debug_domain_reload()
+void burst_mono_simulate_burst_debug_domain_reload (void)
 {
 #ifndef DISABLE_SDB
 	appdomain_start_unload(NULL, g_BurstDebugDomain);

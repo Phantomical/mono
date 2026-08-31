@@ -2394,10 +2394,10 @@ GCHandleType mono_gchandle_get_type_internal (MonoGCHandle gchandle);
 
 #if HAVE_BOEHM_GC
 void
-mono_gc_handle_lock ();
+mono_gc_handle_lock (void);
 
 void
-mono_gc_handle_unlock ();
+mono_gc_handle_unlock (void);
 #endif
 
 /* make sure the gchandle was allocated for an object in domain */

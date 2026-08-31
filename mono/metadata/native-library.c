@@ -970,7 +970,7 @@ cached_module_load (const char *name, int flags, char **err)
 
 	if (err)
 		*err = NULL;
-	if (name_remap = mono_unity_remap_path (name))
+	if ((name_remap = mono_unity_remap_path (name)))
 		name = name_remap;
 
 	/* Helpers like libmono-native bind runtime symbols as they load, so make

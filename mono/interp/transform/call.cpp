@@ -119,7 +119,6 @@ TransformData::interp_inline_method (MonoMethod *target_method, MonoMethodHeader
 	gboolean ret;
 	unsigned int prev_max_stack_height, prev_locals_size;
 	size_t prev_n_data_items;
-	int i;
 	int prev_sp_offset;
 	MonoGenericContext *generic_context = NULL;
 	StackInfo *prev_param_area;

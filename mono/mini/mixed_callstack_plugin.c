@@ -235,11 +235,6 @@ mixed_callstack_plugin_init (const guint options, MonoDomain *domain)
 }
 
 void
-mixed_callstack_plugin_on_domain_unload_end(MonoProfiler *prof, MonoDomain *domain)
-{
-}
-
-void
 mixed_callstack_plugin_save_method_info (MonoCompile *cfg)
 {
 }

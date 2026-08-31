@@ -124,6 +124,9 @@ void mono_threads_suspend_override_policy (MonoThreadsSuspendPolicy new_policy);
  * as a paramater as the thread info TLS key is being destructed, meaning that
  * mono_thread_info_current_unchecked will return NULL, which would lead to a
  * runtime assertion error when trying to switch the state of the current thread.
+ *
+ * The two enter macros cast their cookie to void because the matching exit
+ * macro reads it only under cooperative or hybrid suspend.
  */
 
 MONO_PROFILER_API
@@ -133,7 +136,8 @@ mono_threads_enter_gc_safe_region_with_info (THREAD_INFO_TYPE *info, MonoStackDa
 #define MONO_ENTER_GC_SAFE_WITH_INFO(info)	\
 	do {	\
 		MONO_STACKDATA (__gc_safe_dummy); \
-		gpointer __gc_safe_cookie = mono_threads_enter_gc_safe_region_with_info ((info), &__gc_safe_dummy)
+		gpointer __gc_safe_cookie = mono_threads_enter_gc_safe_region_with_info ((info), &__gc_safe_dummy); \
+		(void) __gc_safe_cookie
 
 #define MONO_EXIT_GC_SAFE_WITH_INFO	MONO_EXIT_GC_SAFE
 
@@ -144,7 +148,8 @@ mono_threads_enter_gc_unsafe_region_with_info (THREAD_INFO_TYPE *, MonoStackData
 #define MONO_ENTER_GC_UNSAFE_WITH_INFO(info)	\
 	do {	\
 		MONO_STACKDATA (__gc_unsafe_dummy); \
-		gpointer __gc_unsafe_cookie = mono_threads_enter_gc_unsafe_region_with_info ((info), &__gc_unsafe_dummy)
+		gpointer __gc_unsafe_cookie = mono_threads_enter_gc_unsafe_region_with_info ((info), &__gc_unsafe_dummy); \
+		(void) __gc_unsafe_cookie
 
 #define MONO_EXIT_GC_UNSAFE_WITH_INFO	MONO_EXIT_GC_UNSAFE
 
