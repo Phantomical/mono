@@ -1033,6 +1033,44 @@ TEST_F (JitProfile, ALoopChargesItsTurnsWhenACalleeUnwindsThroughTheFrame)
 	EXPECT_TRUE (invokes) << "the call never became an invoke, so nothing routes "
 	                         "an unwind to the pad";
 }
+
+/*
+ * The shape a filter clause leaves. The translator escapes the arguments and the
+ * locals so that llvm.localrecover reaches them, and LLVM takes
+ * llvm.localescape in the entry block alone. The entry check splits that block,
+ * so the escape has to stay in front of the split.
+ */
+TEST_F (JitProfile, TheEntryCheckKeepsLocalescapeInTheEntryBlock)
+{
+	OwnedModule m;
+	m.context = std::make_unique<LLVMContext> ();
+	m.module = std::make_unique<Module> ("jit.tier-localescape", *m.context);
+
+	LLVMContext &ctx = *m.context;
+	Type *i32 = Type::getInt32Ty (ctx);
+	Function *fn = Function::Create (FunctionType::get (i32, { i32 }, false),
+	                                 Function::ExternalLinkage, "escapes_a_local",
+	                                 m.module.get ());
+
+	ask_for_a_counter (*m.module, fn, "1000");
+
+	IRBuilder<> b (BasicBlock::Create (ctx, "entry", fn));
+	AllocaInst *slot = b.CreateAlloca (i32, nullptr, "slot");
+
+	Value *escaped[] = { slot };
+
+	b.CreateStore (fn->getArg (0), slot, /*isVolatile=*/true);
+	b.CreateIntrinsic (Intrinsic::localescape, {}, escaped);
+	b.CreateRet (b.CreateLoad (i32, slot, /*isVolatile=*/true));
+
+	ASSERT_FALSE (verifyFunction (*fn, &errs ()));
+
+	MonoJit::optimize (*m.module, JitTier::tier1);
+
+	EXPECT_FALSE (verifyFunction (*fn, &errs ()))
+		<< "the entry check split the entry block in front of the escape, so "
+		   "every method with a filter clause is rejected here";
+}
 } // namespace
 } // namespace test
 } // namespace mono

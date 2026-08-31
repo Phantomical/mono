@@ -390,11 +390,26 @@ emit_unwind_pad (Function &f, AllocaInst *slot, GlobalVariable *counter,
 	return pad;
 }
 
+/// Whether the entry block has to keep \p i.
+///
+/// A static alloca is a stack slot only in the entry block, and LLVM's verifier
+/// rejects an llvm.localescape anywhere else.
+bool
+pinned_to_entry (const Instruction &i)
+{
+	if (isa<AllocaInst> (&i))
+		return true;
+
+	const auto *intrinsic = dyn_cast<IntrinsicInst> (&i);
+
+	return intrinsic != nullptr
+	       && intrinsic->getIntrinsicID () == Intrinsic::localescape;
+}
+
 /// Takes the cost that does not depend on a loop off the counter, after the frame.
 ///
-/// A static alloca has to stay in the entry block to be a stack slot, so the
-/// check goes behind the last of them. Everything else carries on in the block
-/// split off here.
+/// The check goes behind the last instruction the entry block has to keep.
+/// Everything else carries on in the block split off here.
 ///
 /// The rest has to move even though it costs a block. Simplification runs ahead
 /// of this pass, so by now the entry block can hold the whole body. Leaving that
@@ -409,7 +424,7 @@ emit_entry_check (Function &f, uint64_t constant, GlobalVariable *counter,
 	BasicBlock::iterator split = entry.getFirstNonPHIIt ();
 
 	for (Instruction &i : entry)
-		if (isa<AllocaInst> (&i))
+		if (pinned_to_entry (i))
 			split = std::next (i.getIterator ());
 
 	emit_check (&*split,
