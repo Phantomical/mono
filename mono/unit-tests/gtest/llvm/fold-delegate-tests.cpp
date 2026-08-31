@@ -38,6 +38,27 @@ namespace {
 MonoMethod *const first = reinterpret_cast<MonoMethod *> (0x1000);
 MonoMethod *const second = reinterpret_cast<MonoMethod *> (0x2000);
 
+/// The values \p f settles to, which the queries below take.
+ConstantValues
+values_for (const Function &f)
+{
+	FunctionAnalysisManager fam;
+	ModuleAnalysisManager mam;
+	LoopAnalysisManager lam;
+	CGSCCAnalysisManager cgam;
+	PassBuilder pb;
+
+	// All four, because MemorySSA asks alias analysis for GlobalsAA, which is
+	// a module analysis it reaches through the proxy.
+	pb.registerModuleAnalyses (mam);
+	pb.registerCGSCCAnalyses (cgam);
+	pb.registerFunctionAnalyses (fam);
+	pb.registerLoopAnalyses (lam);
+	pb.crossRegisterProxies (lam, fam, cgam, mam);
+
+	return MonoMemoryValues ().run (const_cast<Function &> (f), fam);
+}
+
 /// A function whose entry branches to a merge, so a test can hand each arm a
 /// value of its own.
 struct MergeModule {
@@ -98,34 +119,22 @@ struct MergeModule {
 
 		return phi;
 	}
+
+	/// What \p receiver says about the delegate it holds.
+	///
+	/// A member rather than a `values_for ()` call beside the receiver, because
+	/// the order of two calls in one argument list is unspecified. gcc runs the
+	/// walk first, over a function that does not hold the receiver yet.
+	DelegateTarget target_at (Value *receiver)
+	{
+		return delegate_target_at (receiver, values_for (*caller));
+	}
 };
-
-/// The values \p f settles to, which the queries below take.
-ConstantValues
-values_for (const Function &f)
-{
-	FunctionAnalysisManager fam;
-	ModuleAnalysisManager mam;
-	LoopAnalysisManager lam;
-	CGSCCAnalysisManager cgam;
-	PassBuilder pb;
-
-	// All four, because MemorySSA asks alias analysis for GlobalsAA, which is
-	// a module analysis it reaches through the proxy.
-	pb.registerModuleAnalyses (mam);
-	pb.registerCGSCCAnalyses (cgam);
-	pb.registerFunctionAnalyses (fam);
-	pb.registerLoopAnalyses (lam);
-	pb.crossRegisterProxies (lam, fam, cgam, mam);
-
-	return MonoMemoryValues ().run (const_cast<Function &> (f), fam);
-}
 
 TEST (FoldDelegateTest, ReadsAMarkedProducer)
 {
 	MergeModule m;
-	DelegateTarget found =
-		delegate_target_at (m.produce (m.left, first), values_for (*m.caller));
+	DelegateTarget found = m.target_at (m.produce (m.left, first));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
@@ -134,8 +143,7 @@ TEST (FoldDelegateTest, ReadsAMarkedProducer)
 TEST (FoldDelegateTest, SaysNothingAboutAnUnmarkedValue)
 {
 	MergeModule m;
-	DelegateTarget found =
-		delegate_target_at (m.caller->getArg (1), values_for (*m.caller));
+	DelegateTarget found = m.target_at (m.caller->getArg (1));
 
 	EXPECT_EQ (found.method, nullptr);
 	EXPECT_FALSE (found.settled);
@@ -144,9 +152,8 @@ TEST (FoldDelegateTest, SaysNothingAboutAnUnmarkedValue)
 TEST (FoldDelegateTest, SettlesAMergeWhoseArmsAgree)
 {
 	MergeModule m;
-	DelegateTarget found = delegate_target_at (
-		m.joined (m.produce (m.left, first), m.produce (m.right, first)),
-		values_for (*m.caller));
+	DelegateTarget found = m.target_at (
+		m.joined (m.produce (m.left, first), m.produce (m.right, first)));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
@@ -155,9 +162,8 @@ TEST (FoldDelegateTest, SettlesAMergeWhoseArmsAgree)
 TEST (FoldDelegateTest, OffersACandidateWhenOneArmIsOpaque)
 {
 	MergeModule m;
-	DelegateTarget found = delegate_target_at (
-		m.joined (m.produce (m.left, first), m.produce (m.right, nullptr)),
-		values_for (*m.caller));
+	DelegateTarget found = m.target_at (
+		m.joined (m.produce (m.left, first), m.produce (m.right, nullptr)));
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_FALSE (found.settled);
@@ -166,9 +172,8 @@ TEST (FoldDelegateTest, OffersACandidateWhenOneArmIsOpaque)
 TEST (FoldDelegateTest, RefusesAMergeWhoseArmsDisagree)
 {
 	MergeModule m;
-	DelegateTarget found = delegate_target_at (
-		m.joined (m.produce (m.left, first), m.produce (m.right, second)),
-		values_for (*m.caller));
+	DelegateTarget found = m.target_at (
+		m.joined (m.produce (m.left, first), m.produce (m.right, second)));
 
 	// Naming one of them would be a guess, and a profile is what would have to
 	// settle it.
@@ -186,7 +191,7 @@ TEST (FoldDelegateTest, ReadsThroughASelect)
 
 	b.CreateRet (pick);
 
-	DelegateTarget found = delegate_target_at (pick, values_for (*m.caller));
+	DelegateTarget found = m.target_at (pick);
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
@@ -204,7 +209,7 @@ TEST (FoldDelegateTest, ReadsThroughAFreeze)
 
 	b.CreateRet (frozen);
 
-	DelegateTarget found = delegate_target_at (frozen, values_for (*m.caller));
+	DelegateTarget found = m.target_at (frozen);
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
@@ -222,7 +227,7 @@ TEST (FoldDelegateTest, TerminatesOnAMergeThatReachesItself)
 
 	// The value going round the loop is the phi, so it says nothing the arm
 	// below it has not already said.
-	DelegateTarget found = delegate_target_at (phi, values_for (*m.caller));
+	DelegateTarget found = m.target_at (phi);
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
