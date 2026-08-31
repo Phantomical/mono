@@ -262,6 +262,10 @@ struct ModuleTypes {
 	/// The same classes in the layout marshalling gives them, which is a
 	/// different struct whenever it moves a field or changes its width.
 	llvm::DenseMap<MonoClass *, llvm::Type *> native_vtypes;
+	/// The named struct each layout gets, keyed on the literal struct over the
+	/// same elements. Two classes that lay out alike share one, for the reason
+	/// struct_for_layout () gives.
+	llvm::DenseMap<llvm::StructType *, llvm::StructType *> by_layout;
 };
 
 /// What a call to a System.Math or System.MathF method compiles to in place of

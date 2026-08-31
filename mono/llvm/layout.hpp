@@ -4,7 +4,7 @@
  *
  * A value type converts to a packed struct spelling out its real layout, with
  * every byte no field claims filled in by padding_type (). The translator
- * writes that shape (set_packed_body (), method-to-llvm/signature.cpp), and
+ * writes that shape (packed_body (), method-to-llvm/signature.cpp), and
  * the C calling convention reads it back when it classifies (collect_leaves (),
  * arch/<target>/mono-abi.cpp). The two agree on which bytes carry data without
  * the calling convention ever seeing the metadata the translator read.

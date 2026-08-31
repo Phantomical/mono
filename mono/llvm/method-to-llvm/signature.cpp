@@ -219,8 +219,8 @@ fill_tail (llvm::LLVMContext &ctx, std::vector<llvm::Type *> &body,
 }
 
 /**
- * Lays fields into type's body as a packed struct that spells out the real
- * layout. Each field sits at the offset it was laid out at, and
+ * Returns the elements of a packed struct that spells out the real layout of
+ * \p fields. Each field sits at the offset it was laid out at, and
  * padding_type () fills the gaps between them.
  *
  * The layout is real, so LLVM can reason about the fields. The struct is
@@ -230,9 +230,8 @@ fill_tail (llvm::LLVMContext &ctx, std::vector<llvm::Type *> &body,
  * a value. A float that shares an eightbyte with padding is still a float
  * to the C ABI.
  */
-void
-set_packed_body (llvm::LLVMContext &ctx, llvm::StructType *type, unsigned size,
-                 std::vector<LayoutField> &fields)
+std::vector<llvm::Type *>
+packed_body (llvm::LLVMContext &ctx, unsigned size, std::vector<LayoutField> &fields)
 {
 	std::sort (fields.begin (), fields.end (),
 	           [] (const LayoutField &a, const LayoutField &b) {
@@ -267,13 +266,40 @@ set_packed_body (llvm::LLVMContext &ctx, llvm::StructType *type, unsigned size,
 	if (expressible) {
 		if (at < static_cast<int> (size))
 			fill_tail (ctx, body, last, at, size);
-		type->setBody (body, /*isPacked=*/true);
-		return;
+		return body;
 	}
 
 	// A layout the walk cannot restate keeps the right size, opaquely.
-	type->setBody (llvm::ArrayType::get (llvm::Type::getInt8Ty (ctx), size),
-	               /*isPacked=*/true);
+	return { llvm::ArrayType::get (llvm::Type::getInt8Ty (ctx), size) };
+}
+
+/**
+ * Returns the named struct this context gives \p body, created under \p name if
+ * it has none yet.
+ *
+ * One struct per layout, not one per class. The tier-2 inliner links a
+ * candidate's module into the root's, and both name the same types, which
+ * LLVM's IR linker does not expect. It unifies two identified structs of one
+ * layout. Given a struct each for `Span<char>` and `ReadOnlySpan<char>`, it maps
+ * one onto the other. It then meets that one again as a source type, which is
+ * what its "mapping to a source type" assertion catches.
+ *
+ * The key is the literal struct over the same elements, which LLVM already
+ * uniques by layout.
+ */
+llvm::StructType *
+struct_for_layout (ModuleTypes &types, llvm::LLVMContext &ctx, llvm::StringRef name,
+                   llvm::ArrayRef<llvm::Type *> body)
+{
+	llvm::StructType *&kept =
+		types.by_layout[llvm::StructType::get (ctx, body, /*isPacked=*/true)];
+
+	if (kept == nullptr) {
+		kept = llvm::StructType::create (ctx, name);
+		kept->setBody (body, /*isPacked=*/true);
+	}
+
+	return kept;
 }
 
 } // namespace
@@ -519,7 +545,7 @@ MethodLLVMEmitter::vtype_size (MonoType *t, bool native)
 
 /**
  * A value type converts to a packed struct that spells out its real layout
- * - see set_packed_body (), which describes that shape.
+ * - see packed_body (), which describes that shape.
  *
  * native asks for the layout marshalling gives the class instead. That
  * layout is a different struct whenever marshalling moves a field or
@@ -570,11 +596,6 @@ MethodLLVMEmitter::convert_vtype (MonoType *t, bool native)
 	if (it != types.vtypes.end ())
 		return it->second;
 
-	char *printed = mono_type_full_name (m_class_get_byval_arg (klass));
-	llvm::StructType *type = llvm::StructType::create (context (), printed);
-
-	g_free (printed);
-
 	unsigned size = mono_class_value_size (klass, NULL);
 	std::vector<LayoutField> fields;
 
@@ -598,7 +619,12 @@ MethodLLVMEmitter::convert_vtype (MonoType *t, bool native)
 		});
 	}
 
-	set_packed_body (context (), type, size, fields);
+	char *printed = mono_type_full_name (m_class_get_byval_arg (klass));
+	llvm::StructType *type = struct_for_layout (types, context (), printed,
+	                                            packed_body (context (), size, fields));
+
+	g_free (printed);
+
 	types.vtypes[klass] = type;
 	return type;
 }
@@ -657,12 +683,6 @@ MethodLLVMEmitter::convert_native_vtype (MonoClass *klass)
 		return conversion_error (llvm::Twine ("no native layout for ")
 		                         + m_class_get_name (klass));
 
-	char *printed = mono_type_full_name (m_class_get_byval_arg (klass));
-	std::string name = std::string (printed) + "$native";
-	llvm::StructType *type = llvm::StructType::create (context (), name);
-
-	g_free (printed);
-
 	unsigned size = mono_class_native_size (klass, NULL);
 	bool unicode = m_class_is_unicode (klass);
 	std::vector<LayoutField> fields;
@@ -685,7 +705,13 @@ MethodLLVMEmitter::convert_native_vtype (MonoClass *klass)
 		fields.push_back ({ static_cast<int> (field.offset), width, *converted });
 	}
 
-	set_packed_body (context (), type, size, fields);
+	char *printed = mono_type_full_name (m_class_get_byval_arg (klass));
+	llvm::StructType *type = struct_for_layout (types, context (),
+	                                            std::string (printed) + "$native",
+	                                            packed_body (context (), size, fields));
+
+	g_free (printed);
+
 	types.native_vtypes[klass] = type;
 	return type;
 }
