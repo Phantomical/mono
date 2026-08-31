@@ -6,6 +6,8 @@
 #include "inline-cost.hpp"
 #include "tier-counter.hpp"
 
+#include "../mono_lsda_format.hpp"
+
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/AssumptionCache.h>
 #include <llvm/Analysis/BlockFrequencyInfo.h>
@@ -16,6 +18,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/ValueHandle.h>
 #include <llvm/Linker/Linker.h>
@@ -182,29 +185,55 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 	return body;
 }
 
+/// Whether i is one of the front end's finally-body markers: an
+/// `llvm.experimental.stackmap` call whose id names a finally clause
+/// (method-to-llvm/exceptions.cpp, mono_lsda_format.hpp).
+bool
+is_finally_marker (const Instruction &i)
+{
+	const auto *call = dyn_cast<IntrinsicInst> (&i);
+
+	if (call == nullptr || call->getIntrinsicID () != Intrinsic::experimental_stackmap)
+		return false;
+
+	const auto *id = dyn_cast<ConstantInt> (call->getArgOperand (0));
+
+	if (id == nullptr)
+		return false;
+
+	uint64_t base = id->getZExtValue () & ~MONO_LLVM_FINALLY_STACKMAP_ID_MASK;
+
+	return base == MONO_LLVM_FINALLY_STACKMAP_ID_BASE
+	       || base == MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE;
+}
+
 /// Whether callee's own translation wrote a clause of its own, rather than
 /// merely calling into code the caller's clauses already cover.
 bool
 has_own_clause (const Function &callee)
 {
 	for (const Instruction &i : instructions (callee))
-		if (isa<LandingPadInst> (i))
+		if (isa<LandingPadInst> (i) || is_finally_marker (i))
 			return true;
 
 	return false;
 }
 
-/// The kind clause_survives_fold () tags callee's own landing pads with, to
-/// tell them apart once they are cloned into another function.
+/// The kind clause_survives_fold () tags callee's own landing pads and
+/// finally markers with, to tell them apart once they are cloned into
+/// another function.
 constexpr StringRef clause_trial_tag = "mono.clause-trial";
 
-/// Whether folding call leaves one of callee's own landing pads live.
+/// Whether folding call leaves one of callee's own landing pads or finally
+/// markers live.
 ///
 /// eh-gather.cpp reads a folded body's geometry off the root's own
 /// !mono.clauses, so a clause the fold leaves live has nothing left to
-/// describe it. This clones the site's function and folds call into the
-/// clone. It then runs the same simplification the round applies for real,
-/// and reads back whether a tagged landing pad is still standing.
+/// describe it. MonoFinallyRangePass reads a folded finally's markers
+/// against that same table. This clones the site's function and folds call
+/// into the clone. It then runs the same simplification the round applies
+/// for real, and reads back whether a tagged landing pad or marker is still
+/// standing.
 ///
 /// The argument that answers callee's own type test is fixed at this call
 /// site, so nothing the clone misses can change the verdict.
@@ -216,7 +245,7 @@ clause_survives_fold (CallBase &call, Function &callee, FunctionPassManager &sim
 	MDNode *tag = MDNode::get (callee.getContext (), {});
 
 	for (Instruction &i : instructions (callee))
-		if (isa<LandingPadInst> (i))
+		if (isa<LandingPadInst> (i) || is_finally_marker (i))
 			i.setMetadata (clause_trial_tag, tag);
 
 	ValueToValueMapTy vmap;
