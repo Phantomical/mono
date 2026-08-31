@@ -267,19 +267,34 @@ emit_lmf_address (llvm::IRBuilderBase &b)
  * rsp has to be the frame's settled value - the one live at the transition
  * call - which stacksave reads after the prologue has reserved everything,
  * since codegen never moves rsp again inside a frame without dynamic allocas.
- * frameaddress pins rbp the same way.
+ *
+ * rbp has to be the register itself, because mono_arch_find_jit_info () puts
+ * what it finds here straight into the context's rbp
+ * (`mono/mini/exceptions-amd64.c`) and then unwinds the wrapper's own frame
+ * with it. Where that frame's rule states the CFA against rbp, a value that is
+ * merely somewhere in the frame gives a caller frame that is nowhere.
+ *
+ * read_register is what reads the register. frameaddress does not: on a target
+ * that describes a frame in Windows unwind codes it answers with the address of
+ * a frame object instead, because rbp there is set with a `lea` to a fixed
+ * distance above the settled rsp and so points into the middle of the frame.
+ *
+ * Codegen refuses the read in a function that asked for no frame pointer.
+ * MonoAbiPass is what asks for one, because an inliner can move this into a
+ * root long after it is written.
  */
 void
 emit_lmf_capture_registers (llvm::IRBuilderBase &b, llvm::Value *slot)
 {
-	llvm::Type *ptr = llvm::PointerType::get (b.getContext (), 0);
+	llvm::LLVMContext &ctx = b.getContext ();
 	llvm::Type *i8 = b.getInt8Ty ();
 	llvm::Align align (TARGET_SIZEOF_VOID_P);
+	llvm::Value *name = llvm::MetadataAsValue::get (
+		ctx, llvm::MDNode::get (ctx, llvm::MDString::get (ctx, "rbp")));
 
 	b.CreateAlignedStore (
-		b.CreatePtrToInt (b.CreateIntrinsic (llvm::Intrinsic::frameaddress,
-	                                             { ptr }, { b.getInt32 (0) }),
-	                          b.getInt64Ty ()),
+		b.CreateIntrinsic (llvm::Intrinsic::read_register, { b.getInt64Ty () },
+	                           { name }),
 		b.CreateConstInBoundsGEP1_32 (i8, slot,
 	                                      MONO_STRUCT_OFFSET (MonoLMF, rbp)),
 		align);

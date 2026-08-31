@@ -692,14 +692,39 @@ rewrite_call (CallBase *call)
 	call->eraseFromParent ();
 }
 
+/// Whether \p call reads the frame register out of the machine.
+bool
+names_frame_register (const CallBase *call)
+{
+	const Function *callee = call->getCalledFunction ();
+
+	if (callee == nullptr
+	    || callee->getIntrinsicID () != Intrinsic::read_register)
+		return false;
+
+	auto *wrapper = dyn_cast<MetadataAsValue> (call->getArgOperand (0));
+	auto *node = wrapper != nullptr ? dyn_cast<MDNode> (wrapper->getMetadata ())
+	                                : nullptr;
+
+	if (node == nullptr || node->getNumOperands () == 0)
+		return false;
+
+	auto *name = dyn_cast<MDString> (node->getOperand (0));
+
+	return name != nullptr && name->getString () == "rbp";
+}
+
 } // namespace
 
 PreservedAnalyses
 MonoAbiPass::run (Module &m, ModuleAnalysisManager &)
 {
 	SmallVector<CallBase *, 8> marked;
+	bool changed = false;
 
-	for (Function &f : m)
+	for (Function &f : m) {
+		bool reads_frame_register = false;
+
 		for (BasicBlock &bb : f)
 			for (Instruction &i : bb) {
 				auto *call = dyn_cast<CallBase> (&i);
@@ -710,15 +735,30 @@ MonoAbiPass::run (Module &m, ModuleAnalysisManager &)
 				/* Reads the call site, then the callee's declaration. */
 				if (call->getFnAttr (mono_cc_attribute).isValid ())
 					marked.push_back (call);
+				if (names_frame_register (call))
+					reads_frame_register = true;
 			}
 
-	if (marked.empty ())
-		return PreservedAnalyses::all ();
+		/*
+		 * Codegen refuses to read rbp out of a function that rbp is not the
+		 * frame register of, because there it holds whatever the allocator
+		 * put in it. The read arrives with an LMF, and an inliner is free to
+		 * move one into a root that asked for no frame pointer of its own, so
+		 * the demand is settled here rather than where the read is written.
+		 */
+		if (reads_frame_register
+		    && f.getFnAttribute ("frame-pointer").getValueAsString ()
+		               != "all") {
+			f.addFnAttr ("frame-pointer", "all");
+			changed = true;
+		}
+	}
 
 	for (CallBase *call : marked)
 		rewrite_call (call);
 
-	return PreservedAnalyses::none ();
+	return marked.empty () && !changed ? PreservedAnalyses::all ()
+	                                   : PreservedAnalyses::none ();
 }
 
 Function *
