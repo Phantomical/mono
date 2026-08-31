@@ -1,3 +1,5 @@
+#include "config.h"
+
 #include "jitlink-memory.hpp"
 
 #include "debugging/perf/jitdump.hpp"
@@ -18,6 +20,10 @@
 #include <glib.h>
 
 #include "mono/utils/mono-codeman.h"
+
+#ifdef HOST_WIN32
+#include "mono/mini/mini-windows.h"
+#endif
 
 using namespace llvm;
 
@@ -58,6 +64,46 @@ CodeArena::CodeArena () : code_ (mono_code_manager_new ()) {}
 CodeArena::~CodeArena ()
 {
 	mono_code_manager_destroy (code_);
+}
+
+void
+CodeArena::publish_function_table (void *table, size_t size)
+{
+#ifdef HOST_WIN32
+	/* A RUNTIME_FUNCTION is a begin, an end and the unwind info, each an
+	 * image-relative word. */
+	constexpr size_t record_size = 12;
+
+	for (size_t at = 0; at + record_size <= size; at += record_size) {
+		uint32_t *record = reinterpret_cast<uint32_t *> ((char *) table + at);
+
+		/*
+		 * JITLink resolves an image-relative relocation against an image base
+		 * of zero, so each field arrives holding an absolute address.
+		 * mono_arch_unwindinfo_insert_rt_func_in_table () takes them that way
+		 * and states them against the chunk it finds the code in.
+		 */
+		char *begin = (char *) (uintptr_t) record [0];
+		char *end = (char *) (uintptr_t) record [1];
+		uint8_t *info = (uint8_t *) (uintptr_t) record [2];
+
+		/*
+		 * The record claims a language-specific handler, and it must not.
+		 * mono_personality () answers 8, which is _URC_CONTINUE_UNWIND and no
+		 * EXCEPTION_DISPOSITION at all, so a Windows dispatch that reached it
+		 * would raise STATUS_INVALID_DISPOSITION. Mono dispatches its own
+		 * exceptions through its own unwinder, and what the OS is owed here is
+		 * the frame description alone. The low three bits are the version, and
+		 * the flags above them are what names the handler.
+		 */
+		info [0] &= 0x07;
+
+		mono_arch_unwindinfo_insert_rt_func_in_table (begin, end - begin, info);
+	}
+#else
+	(void) table;
+	(void) size;
+#endif
 }
 
 Expected<char *>

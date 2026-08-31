@@ -43,6 +43,18 @@ public:
 	/// added, leaves them where they are.
 	void unreserve (char *base, size_t size);
 
+	/// Hands the OS the records of a linked object's function table, so an
+	/// unwinder outside this runtime can cross the frames they describe.
+	///
+	/// \p table is the object's own table and \p size its length in bytes.
+	/// It must be writable, and it and the code it describes must be
+	/// reservations out of this arena.
+	///
+	/// Silent where the host publishes no such table. What that costs is
+	/// unwinding through this code from outside the runtime, and mono's own
+	/// unwinder reads `.mono_unwind` either way.
+	void publish_function_table (void *table, size_t size);
+
 private:
 	std::mutex mutex_;
 	MonoCodeManager *code_;

@@ -510,6 +510,8 @@ is_linker_stub_section (jitlink::Section &section)
  */
 class MonoJit::ObjectCapturePlugin : public ObjectLinkingLayer::Plugin {
 public:
+	explicit ObjectCapturePlugin (CodeArena *arena) : arena_ (arena) {}
+
 	struct Extents {
 		std::vector<std::pair<std::string, std::pair<const uint8_t *, size_t>>> functions;
 		const uint8_t *clause_table = nullptr;
@@ -625,7 +627,8 @@ public:
 				// counters they are, so the pruner drops the records.
 				if (name != ".mono_lsda" && name != ".mono_guards"
 				    && name != ".mono_unwind" && name != ".mono_lines"
-				    && name != ".mono_inlines" && name != "__llvm_prf_data")
+				    && name != ".mono_inlines" && name != "__llvm_prf_data"
+				    && name != ".pdata" && name != ".xdata")
 					continue;
 				for (jitlink::Block *block : section.blocks ())
 					graph.addAnonymousSymbol (*block, 0, block->getSize (),
@@ -642,9 +645,17 @@ public:
 			size_t line_table_size = 0;
 			const uint8_t *inline_table = nullptr;
 			size_t inline_table_size = 0;
+			uint8_t *function_table = nullptr;
+			size_t function_table_size = 0;
 
 			for (jitlink::Section &section : graph.sections ()) {
 				jitlink::SectionRange range (section);
+
+				if (section.getName () == ".pdata") {
+					function_table =
+						range.getStart ().toPtr<uint8_t *> ();
+					function_table_size = range.getSize ();
+				}
 
 				if (section.getName () == ".mono_lsda") {
 					extents.clause_table =
@@ -680,6 +691,16 @@ public:
 						range.getSize ());
 				}
 			}
+
+			/*
+			 * Published here rather than when the methods are, because the
+			 * table describes the whole object. Nothing can reach this code
+			 * yet, so an unwinder that consults the table before then finds
+			 * no frame in it.
+			 */
+			if (function_table != nullptr && function_table_size != 0)
+				arena_->publish_function_table (function_table,
+				                                function_table_size);
 
 			/*
 			 * An instrumented body carries a second callable symbol at
@@ -801,6 +822,9 @@ private:
 			});
 	}
 
+	/// Where the objects are linked, which is what keeps a function table
+	/// registered for as long as the code it describes.
+	CodeArena *arena_;
 	std::mutex mutex_;
 	std::map<std::string, Extents> captured_;
 	/// The frame slots read off each object before it was linked, by dylib:
@@ -1580,7 +1604,7 @@ MonoJit::create (CodeArena *arena)
 				g_object_handed = timing::span_begin (timing::Phase::lgraph);
 			});
 
-	self->capture_ = std::make_shared<ObjectCapturePlugin> ();
+	self->capture_ = std::make_shared<ObjectCapturePlugin> (arena);
 	static_cast<ObjectLinkingLayer &> (self->jit_->getObjLinkingLayer ())
 		.addPlugin (self->capture_);
 

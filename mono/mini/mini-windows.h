@@ -13,6 +13,10 @@
 #include "mini.h"
 #include "mono/utils/mono-context.h"
 
+/* The LLVM backend is C++, and it publishes the unwind tables it emits
+ * through the declarations below. */
+MONO_BEGIN_DECLS
+
 gboolean
 mono_setup_thread_context(DWORD thread_id, MonoContext *mono_context);
 
@@ -49,22 +53,15 @@ typedef struct {
 PRUNTIME_FUNCTION
 mono_arch_unwindinfo_insert_rt_func_in_table(const gpointer code, gsize code_size, const gpointer unwinddata);
 
-void
-mono_arch_code_chunk_new(void* chunk, int size);
-
-void
-mono_arch_code_chunk_destroy(void* chunk);
-
 guint
 mono_arch_unwindinfo_init_method_unwind_info(gpointer cfg);
-
-void
-mono_arch_unwindinfo_install_tramp_unwind_info(GSList* unwind_ops, gpointer code, guint code_size);
 
 RUNTIME_FUNCTION
 mono_arch_unwindinfo_init(gpointer code, gsize code_offset, gsize code_size, gsize begin_range, gsize end_range, const gpointer unwinddata);
 
-#endif 
+#endif
+
+MONO_END_DECLS
 
 #endif /* HOST_WIN32 */
 #endif /* __MONO_MINI_WINDOWS_H__ */

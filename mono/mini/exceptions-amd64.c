@@ -1121,6 +1121,14 @@ mono_arch_unwindinfo_install_tramp_unwind_info (GSList *unwind_ops, gpointer cod
 	}
 }
 
+/*
+ * Builds the record naming the code at code_offset and the unwind info behind
+ * it, both against begin_range.
+ *
+ * unwinddata is free to sit anywhere in the range. It follows the code for a
+ * body mono emitted the unwind info for itself, and sits in a section of its
+ * own for one the LLVM backend published.
+ */
 RUNTIME_FUNCTION
 mono_arch_unwindinfo_init(gpointer code, gsize code_offset, gsize code_size, gsize begin_range, gsize end_range, const gpointer unwinddata) {
 
@@ -1128,8 +1136,6 @@ mono_arch_unwindinfo_init(gpointer code, gsize code_offset, gsize code_size, gsi
 	new_rt_func_data.BeginAddress = code_offset;
 	new_rt_func_data.EndAddress = code_offset + code_size;
 	new_rt_func_data.UnwindData = (gsize)unwinddata - begin_range;
-
-	g_assert_checked(new_rt_func_data.UnwindData == ALIGN_TO(new_rt_func_data.EndAddress, sizeof(host_mgreg_t)));
 
 	return new_rt_func_data;
 }
