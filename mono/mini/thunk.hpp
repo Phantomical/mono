@@ -77,8 +77,12 @@ public:
 /// Returns the record for a dynamic method's stub, and null otherwise. A
 /// returned record goes to mono_jit_info_table_remove () before the code is
 /// freed, or a walk can still resolve against a stub that has gone.
+///
+/// perf_dump_deferred skips this stub's own perf-dump record, for a caller
+/// that publishes it batched with others instead.
 MonoJitInfo *register_code_stub (void *code, size_t size, std::string_view name,
-                                 MonoDomain *domain, MonoMethod *method);
+                                 MonoDomain *domain, MonoMethod *method,
+                                 bool perf_dump_deferred = false);
 
 } // namespace mono
 

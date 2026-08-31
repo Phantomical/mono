@@ -72,6 +72,10 @@ mono_add_object_library(mini
   INCLUDES
     "${CMAKE_CURRENT_SOURCE_DIR}"
     "${CMAKE_CURRENT_BINARY_DIR}"
+    # thunk.cpp reaches into mono/llvm/debugging/perf/, whose headers
+    # include each other relative to this directory - the mirror of
+    # mono/llvm/CMakeLists.txt including ../mini for the same reason.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../llvm"
     "${CMAKE_SOURCE_DIR}/external/bdwgc/include"
     "${CMAKE_SOURCE_DIR}/external/bdwgc/libatomic_ops/src"
   DEPENDS mono::hidden mono::eglib_headers mono::llvm)

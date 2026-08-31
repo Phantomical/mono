@@ -625,6 +625,7 @@ mono_tramp_info_register_internal (MonoTrampInfo *info, MonoDomain *domain, gboo
 	copy->code_size = info->code_size;
 	copy->name = g_strdup (info->name);
 	copy->method = info->method;
+	copy->perf_dump_deferred = info->perf_dump_deferred;
 
 	if (info->unwind_ops) {
 		copy->uw_info = mono_unwind_ops_encode (info->unwind_ops, &copy->uw_info_len);
@@ -646,10 +647,12 @@ mono_tramp_info_register_internal (MonoTrampInfo *info, MonoDomain *domain, gboo
 	 * Every stub and thunk the runtime plants comes through here, and each sits
 	 * on the call path of the code around it. So a profile that cannot name them
 	 * has unattributed gaps in exactly the hot places, and one that cannot unwind
-	 * out of them loses every managed frame above. Code in an AOT image is
-	 * already named by the image's own symbol table.
+	 * out of them loses every managed frame above - except a redirect thunk,
+	 * whose group already published its own record (perf_dump_deferred,
+	 * mono/mini/thunk.cpp). Code in an AOT image is already named by the
+	 * image's own symbol table.
 	 */
-	if (!aot && copy->code && copy->code_size)
+	if (!aot && copy->code && copy->code_size && !copy->perf_dump_deferred)
 		mono_llvm_perf_dump_stub (copy->name ? copy->name : "trampoline",
 					  copy->code, copy->code_size, copy->uw_info,
 					  copy->uw_info_len);

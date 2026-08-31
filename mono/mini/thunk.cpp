@@ -2,10 +2,9 @@
  * \file
  * \brief Carving redirectable thunks directly out of a domain's CodeArena.
  *
- * A thunk costs thunk_group_size bytes, and publishing one is a single
- * CodeArena::reserve () plus a few stores; a redirect is a single atomic store
- * to the slot. There is no pool of retired thunks to reuse - see
- * allocate_thunk ()'s doc comment for what that costs.
+ * A thunk costs arch::thunk_size bytes, reserved from the domain's
+ * CodeArena. A redirect is a single atomic store to the slot. There is no
+ * pool of retired thunks to reuse.
  */
 
 #include "thunk.hpp"
@@ -15,11 +14,15 @@
 
 #include <mono/arch/amd64/amd64-thunk.hpp>
 #include "mini.h"
+#include "mono/llvm/debugging/perf/jitdump.hpp"
 #include "mono/llvm/runtime/naming.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/object.h"
 
 #include <llvm/Support/Memory.h>
+
+#include <mutex>
+#include <unordered_map>
 
 namespace mono {
 
@@ -58,6 +61,56 @@ stub_unwind_info ()
 	return encoded;
 }
 
+/// How many thunks share one CodeArena reservation - and its perf-dump
+/// record.
+///
+/// Each reservation holds code_slack () past its last thunk, so its record
+/// is never trimmed. Paying that once per group instead of once per thunk is
+/// what a bigger group amortizes further.
+constexpr size_t thunk_batch_size = 32;
+
+/// One CodeArena reservation shared by up to thunk_batch_size thunks, and the
+/// state of filling it.
+///
+/// Every thunk here runs the same stub_unwind_info () program: a jump keeps
+/// the caller's frame. One FrameFunction spanning the whole reservation
+/// describes them all, including thunks not yet allocated, because the
+/// description names no thunk's own bytes. That is why publish_thunk_pool ()
+/// writes only once, at the reservation itself.
+struct ThunkPool {
+	std::mutex mutex;
+	char *base = nullptr;
+	size_t filled = 0;
+};
+
+/// Publishes pool's whole reservation as one perf-dump record, covering
+/// thunks not yet allocated along with the ones already there.
+///
+/// perf never reads a record's code bytes to unwind. It reads the address
+/// range and the eh_frame this call hands it, both already known at the
+/// reservation. Describing the range this early keeps every record here
+/// disjoint - one write, one range, no later record for the same bytes.
+/// That is the partition check_jitdump.py holds every jitdump record to.
+void
+publish_thunk_pool (const ThunkPool &pool)
+{
+	size_t extent = thunk_batch_size * arch::thunk_size;
+	size_t room = extent + perf::code_slack ();
+
+	perf::publish ("redirect thunks", {(const uint8_t *) pool.base, extent, room},
+	              {perf::FrameFunction{0, extent, {}}});
+}
+
+/// The pool each arena is filling, and the map's lock, separate from each
+/// pool's own - so filling one arena never blocks another.
+///
+/// A domain unload frees its DomainState and the CodeArena inside it
+/// (MonoBackend::release_domain_impl (), runtime/backend.cpp) without
+/// erasing this entry. A later domain whose CodeArena reuses that address
+/// would look up the freed domain's stale pool.
+std::mutex g_thunk_pools_mutex;
+std::unordered_map<CodeArena *, ThunkPool> g_thunk_pools;
+
 } // namespace
 
 Thunk::Thunk (void *data) : data_ (data) {}
@@ -92,7 +145,7 @@ Thunk::quarantine ()
 
 MonoJitInfo *
 register_code_stub (void *code, size_t size, std::string_view name, MonoDomain *domain,
-                    MonoMethod *method)
+                    MonoMethod *method, bool perf_dump_deferred)
 {
 	auto unwind = stub_unwind_info ();
 	guint8 *uw_info = const_cast<guint8 *> (unwind.data ());
@@ -111,6 +164,7 @@ register_code_stub (void *code, size_t size, std::string_view name, MonoDomain *
 	tramp->method = method;
 	tramp->uw_info = uw_info;
 	tramp->uw_info_len = uw_info_len;
+	tramp->perf_dump_deferred = perf_dump_deferred;
 	mono_tramp_info_register (tramp, domain);
 	return nullptr;
 }
@@ -118,21 +172,58 @@ register_code_stub (void *code, size_t size, std::string_view name, MonoDomain *
 MonoJitInfo *
 Thunk::register_jinfo (std::string_view name, MonoDomain *domain, MonoMethod *method)
 {
+	// The pool this thunk lands in already published a perf-dump record for
+	// the whole group - see publish_thunk_pool ().
 	return register_code_stub (unbox (), arch::thunk_size - arch::thunk_unbox_offset,
-	                           name, domain, method);
+	                           name, domain, method, perf::enabled ());
 }
 
 llvm::Expected<Thunk>
 Thunk::allocate (CodeArena *arena, void *key)
 {
-	llvm::Expected<char *> data = arena->reserve (arch::thunk_size, arch::thunk_alignment);
-	if (!data)
-		return data.takeError ();
+	if (!perf::enabled ()) {
+		llvm::Expected<char *> data = arena->reserve (arch::thunk_size, arch::thunk_alignment);
+		if (!data)
+			return data.takeError ();
 
-	arch::write_thunk (*data, key);
-	Thunk thunk (*data);
+		arch::write_thunk (*data, key);
+		Thunk thunk (*data);
 
-	llvm::sys::Memory::InvalidateInstructionCache (*data, arch::thunk_size);
+		llvm::sys::Memory::InvalidateInstructionCache (*data, arch::thunk_size);
+
+		return thunk;
+	}
+
+	ThunkPool *pool;
+	{
+		std::lock_guard<std::mutex> lock (g_thunk_pools_mutex);
+		pool = &g_thunk_pools[arena];
+	}
+
+	std::lock_guard<std::mutex> lock (pool->mutex);
+
+	if (pool->base == nullptr) {
+		llvm::Expected<char *> reservation = arena->reserve (
+			thunk_batch_size * arch::thunk_size + perf::code_slack (),
+			arch::thunk_alignment);
+		if (!reservation)
+			return reservation.takeError ();
+		pool->base = *reservation;
+		pool->filled = 0;
+		publish_thunk_pool (*pool);
+	}
+
+	char *data = pool->base + pool->filled * arch::thunk_size;
+	arch::write_thunk (data, key);
+	Thunk thunk (data);
+
+	llvm::sys::Memory::InvalidateInstructionCache (data, arch::thunk_size);
+
+	++pool->filled;
+	if (pool->filled == thunk_batch_size) {
+		pool->base = nullptr;
+		pool->filled = 0;
+	}
 
 	return thunk;
 }

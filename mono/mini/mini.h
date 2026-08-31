@@ -484,6 +484,10 @@ struct MonoTrampInfo
 	 guint32 uw_info_len;
 	 /* Whenever uw_info is owned by this structure */
 	 gboolean owns_uw_info;
+	 /* Set when the caller already published this code's perf-dump record
+	  * itself, batched with others. mono_tramp_info_register_internal ()
+	  * then skips its own (mini-runtime.c). */
+	 gboolean perf_dump_deferred;
 };
 
 /* profiler support */
