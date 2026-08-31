@@ -22,7 +22,7 @@ set(MONO_LLVM_TEST_SOURCES
     cast-func-tests.cpp fold-delegate-tests.cpp inline-heat-tests.cpp
     gc-barrier-tests.cpp operand-class-tests.cpp dead-alloc-tests.cpp
     escape-tests.cpp promote-alloc-tests.cpp constant-values-tests.cpp
-    one-file-vfs-tests.cpp)
+    one-file-vfs-tests.cpp hidden-return-tests.cpp)
 
 if(MONO_CORPUS_ENABLED)
   # RELATIVE, because mono_corpus_il resolves its source against the current

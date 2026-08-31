@@ -42,6 +42,8 @@
 #ifndef MONO_LLVM_HIDDEN_RETURN_HPP
 #define MONO_LLVM_HIDDEN_RETURN_HPP
 
+#include "arch/arch.hpp"
+
 #include <llvm/IR/Argument.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -55,30 +57,36 @@ namespace mono {
 namespace detail {
 
 struct ReturnRegisters {
-	static constexpr unsigned integer_count = 3; ///< RAX, RDX, RCX
-	static constexpr unsigned sse_count = 4;     ///< XMM0 - XMM3
-
 	unsigned integer = 0;
 	unsigned sse = 0;
-	bool unclassifiable = false;
+	bool exhausted = false;
 
-	bool exhausted () const
+	void claim_integer (unsigned n)
 	{
-		return unclassifiable || integer > integer_count || sse > sse_count;
+		integer += n;
+		exhausted |= integer > arch::ret_gregs;
+	}
+
+	/// Claims one SSE register for a leaf that can reach \p available of them.
+	void claim_sse (unsigned available)
+	{
+		exhausted |= sse >= available;
+		sse++;
 	}
 };
 
-/// Adds the return registers t's leaves claim to use.
+/// Adds the return registers t's leaves claim to use, and stops at the first
+/// leaf with none left.
 ///
 /// LLVM flattens an aggregate return into its scalar leaves and gives each leaf
 /// a register of its own, so what decides the demotion is how many leaves there
-/// are and which register file each rides in - not the aggregate's size.
+/// are and which registers each one can reach - not the aggregate's size.
 /// Padding counts: the flattening is over the IR type, and that is where the
 /// translator spelled the padding out.
 inline void
 count_return_registers (llvm::Type *t, ReturnRegisters &use)
 {
-	if (use.exhausted ())
+	if (use.exhausted)
 		return;
 
 	if (auto *st = llvm::dyn_cast<llvm::StructType> (t)) {
@@ -88,24 +96,24 @@ count_return_registers (llvm::Type *t, ReturnRegisters &use)
 	}
 
 	if (auto *at = llvm::dyn_cast<llvm::ArrayType> (t)) {
-		ReturnRegisters one;
-
-		count_return_registers (at->getElementType (), one);
-		use.unclassifiable |= one.unclassifiable;
-		use.integer += one.integer * at->getNumElements ();
-		use.sse += one.sse * at->getNumElements ();
+		// An element's limit depends on the leaves in front of it, so the
+		// elements are counted one at a time rather than multiplied out.
+		for (uint64_t i = 0; i < at->getNumElements () && !use.exhausted; ++i)
+			count_return_registers (at->getElementType (), use);
 		return;
 	}
 
 	if (t->isPointerTy ()) {
-		use.integer++;
+		use.claim_integer (1);
 	} else if (t->isIntegerTy ()) {
-		/* A wider integer legalizes into as many machine words. */
-		use.integer += (t->getIntegerBitWidth () + 63) / 64;
-	} else if (t->isFloatTy () || t->isDoubleTy () || t->isVectorTy ()) {
-		use.sse++;
+		// A wider integer legalizes into as many machine words.
+		use.claim_integer ((t->getIntegerBitWidth () + 63) / 64);
+	} else if (t->isFloatTy () || t->isDoubleTy ()) {
+		use.claim_sse (arch::ret_scalar_fregs);
+	} else if (t->isVectorTy ()) {
+		use.claim_sse (arch::ret_vector_fregs);
 	} else {
-		use.unclassifiable = true;
+		use.exhausted = true;
 	}
 }
 
@@ -116,14 +124,14 @@ count_return_registers (llvm::Type *t, ReturnRegisters &use)
 inline bool
 returns_by_hidden_pointer (llvm::Type *type)
 {
-	/* Only an aggregate is ever flattened. Everything else has its own register. */
+	// Only an aggregate is ever flattened. Everything else has its own register.
 	if (!type->isStructTy () && !type->isArrayTy ())
 		return false;
 
 	detail::ReturnRegisters use;
 
 	detail::count_return_registers (type, use);
-	return use.exhausted ();
+	return use.exhausted;
 }
 
 /// Which parameter of a prototype of count parameters is the hidden return

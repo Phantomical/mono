@@ -51,6 +51,17 @@ constexpr unsigned managed_frame_size = 32;
  */
 constexpr unsigned interp_frame_size = 512;
 
+/// How many registers of each file a return value's leaves can be spread over.
+///
+/// The two SSE counts index one register file and run out at different points,
+/// so one running count serves both. RetCC_X86_64_C gives f32 and f64 only XMM0
+/// and XMM1, and the four-register rule beside it in RetCC_X86Common is for
+/// vectors.
+///
+/// A scalar leaf past the second is not demoted to memory. It comes back on the
+/// x87 stack, which neither thunk across the interpreter seam saves.
+constexpr unsigned ret_gregs = 3, ret_scalar_fregs = 2, ret_vector_fregs = 4;
+
 /// The registers a call arrived in, as interp-entry-thunk.S spilled them.
 struct InterpArgContext {
 	uint64_t gregs[6];                     ///< rdi rsi rdx rcx r8 r9

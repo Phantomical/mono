@@ -57,12 +57,6 @@ private:
 	uint64_t stack_ = 0;
 };
 
-/// How many registers of each file a return value's leaves can be spread over.
-///
-/// A scalar float comes back in XMM0 or XMM1 and nowhere else, so the two SSE
-/// counts run out at different points even though they share the register file.
-constexpr unsigned ret_gregs = 3, ret_scalar_fregs = 2, ret_vector_fregs = 4;
-
 /// Where each leaf of a return value of type \p ret comes back.
 llvm::Expected<ReturnPlan> place_return (llvm::Type *ret, const llvm::DataLayout &dl);
 
