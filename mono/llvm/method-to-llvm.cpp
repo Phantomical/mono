@@ -1197,8 +1197,9 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 /// The filter body of `parent`'s clause `clause_index`, as a function of its own.
 ///
 /// The runtime's search pass calls it through call_filter with the parent frame's
-/// registers restored. The exception arrives in RAX, and the chained frame pointer is
-/// the parent's frame. The answer, match or keep searching, is returned like any int.
+/// registers restored. The exception arrives in RAX and the parent's frame pointer
+/// arrives as the argument. The answer, match or keep searching, is returned like any
+/// int.
 ///
 /// The parent escaped its arguments and locals through llvm.localescape, in the same
 /// order as here. So llvm.localrecover turns the parent frame pointer back into their
@@ -1217,14 +1218,14 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	size_t begin = clauses[clause_index].data.filter_offset;
 	size_t end = clauses[clause_index].handler_offset;
 
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+
 	function = llvm::Function::Create (
-		llvm::FunctionType::get (llvm::Type::getInt32Ty (context ()), false),
+		llvm::FunctionType::get (llvm::Type::getInt32Ty (context ()), { ptr }, false),
 		llvm::GlobalValue::ExternalLinkage,
 		parent->getName () + llvm::StringRef (filter_body_suffix)
 			+ llvm::Twine (clause_index),
 		module);
-	// The chained frame pointer is how the parent frame is found.
-	function->addFnAttr ("frame-pointer", "all");
 	// call_filter enters with the stack 16-aligned, the opposite parity from a SysV
 	// call. So the frame must realign itself, or every callee inherits the wrong
 	// parity.
@@ -1244,10 +1245,14 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	entry_block = llvm::BasicBlock::Create (context (), "entry", function);
 	builder.SetInsertPoint (entry_block);
 
-	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 	llvm::Value *exc = arch::emit_entered_exception (builder);
-	llvm::Value *frame = builder.CreateIntrinsic (
-		ptr, llvm::Intrinsic::frameaddress, { builder.getInt32 (1) });
+	/*
+	 * llvm.frameaddress (1) reads the chain a prologue makes, and it answers for
+	 * this frame instead on a target that describes a frame in Windows unwind
+	 * codes: LowerFRAMEADDR () returns an object of the current frame whatever
+	 * depth it is asked for. So call_filter hands the pointer over.
+	 */
+	llvm::Value *frame = function->getArg (0);
 
 	auto recover = [&] (unsigned index) {
 		return builder.CreateIntrinsic (

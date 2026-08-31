@@ -157,6 +157,17 @@ mono_arch_get_call_filter (MonoTrampInfo **info, gboolean aot)
 	/* load exc register */
 	amd64_mov_reg_membase (code, AMD64_RAX, AMD64_ARG_REG1,  gregs_offset + (AMD64_RAX * 8), 8);
 
+	/*
+	 * A filter body is a function of its own, and it states each of the parent
+	 * frame's objects against the frame pointer. Pass that pointer as the first
+	 * argument. This goes last, because the loads above read the context through
+	 * the same register.
+	 *
+	 * A finally handler runs at an address inside the frame and reads rbp itself,
+	 * so it ignores the argument.
+	 */
+	amd64_mov_reg_reg (code, AMD64_ARG_REG1, AMD64_RBP, 8);
+
 	/* call the handler */
 	amd64_call_reg (code, AMD64_ARG_REG2);
 
