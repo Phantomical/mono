@@ -133,8 +133,16 @@ TEST_F (AsmDump, PrintsTheCodeAndTheClauseTableOfASelectedMethod)
 	 * by a pass no stock codegen run has.
 	 */
 	EXPECT_NE (dump.find (".section\t.mono_lsda"), std::string::npos) << dump;
-	/* The frame description, which textual assembly carries as directives. */
+	/*
+	 * The frame description, which textual assembly carries as directives. The
+	 * host decides which ones: a target that describes a frame in Windows
+	 * unwind codes emits no CFI program at all.
+	 */
+#ifdef HOST_WIN32
+	EXPECT_NE (dump.find (".seh_proc"), std::string::npos) << dump;
+#else
 	EXPECT_NE (dump.find (".cfi_startproc"), std::string::npos) << dump;
+#endif
 }
 
 /*

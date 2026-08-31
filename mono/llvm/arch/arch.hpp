@@ -99,6 +99,13 @@ void **rethrow_trampoline_slot ();
 /// the walk reaches the frame that set it.
 bool reg_is_recoverable (int hw_reg);
 
+/// Returns the DWARF number of the register a Windows unwind code names, or
+/// -1 for a number this machine has no register at.
+///
+/// \p is_vector picks the bank, which the code's operation says and its
+/// register field does not: the two banks each number from zero.
+int dwarf_reg_for_win_unwind (unsigned unwind_reg, bool is_vector);
+
 llvm::Value *emit_entered_exception (llvm::IRBuilderBase &b);
 
 /// Clobbers the callee-saved registers so the prologue saves all of them.

@@ -953,18 +953,6 @@ host_target_machine_builder ()
 		// through into whatever bytes come next.
 		b.getOptions ().TrapUnreachable = true;
 
-		/*
-		 * mono's own unwinder reads the frame descriptions this backend
-		 * writes into `.mono_unwind`, and compiler.cpp writes them from the
-		 * CFI program the MC layer records. A Windows target would otherwise
-		 * describe a frame in SEH instead, which records no such program and
-		 * leaves the section empty; it would also emit an .xdata naming the
-		 * personality through an image-relative relocation, which is
-		 * meaningless for code no image holds.
-		 */
-		if (b.getTargetTriple ().isOSWindows ())
-			b.getOptions ().ExceptionModel = ExceptionHandling::DwarfCFI;
-
 		StringMap<bool> features = sys::getHostCPUFeatures ();
 		std::vector<std::string> feature_vec;
 		for (auto &kv : features)

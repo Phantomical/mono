@@ -33,6 +33,7 @@
 #include "sidetables.hpp"
 #include "timing.hpp"
 
+#include "arch/arch.hpp"
 #include "debugging/perf/jitdump.hpp"
 #include "eh-side-channel.hpp"
 #include "passes/eh-gather.hpp"
@@ -70,6 +71,8 @@
 #include <llvm/MC/MCSectionELF.h>
 #include <llvm/MC/MCStreamer.h>
 #include <llvm/MC/MCSubtargetInfo.h>
+#include <llvm/MC/MCWin64EH.h>
+#include <llvm/MC/MCWinEH.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/FormattedStream.h>
@@ -400,6 +403,165 @@ transcribe_cfi (const MCCFIInstruction &i)
 }
 
 /**
+ * Rewrites the Windows unwind codes describing \p frame into the same records
+ * a CFI program transcribes to.
+ *
+ * A Windows target emits these in place of a CFI program, so this is the other
+ * reader of the one table `.mono_unwind` holds.
+ */
+std::vector<UnwindRecord>
+transcribe_win_frame (const WinEH::FrameInfo &frame)
+{
+	std::vector<UnwindRecord> out;
+
+	/*
+	 * An unwind code says what one prologue instruction did to the frame,
+	 * where a record says where the CFA and the saved registers are. The
+	 * distance from the CFA down to rsp is what bridges the two, and the entry
+	 * state puts it at 8 for the return address the call pushed.
+	 */
+	int64_t depth = 8;
+
+	/*
+	 * Moving rsp moves the CFA with it until UOP_SetFPReg restates the CFA
+	 * against the frame register. After that the CFA stands still, so a later
+	 * code adjusts the depth alone - a register it saves resolves against the
+	 * same fixed CFA.
+	 */
+	bool cfa_follows_stack = true;
+
+	auto record = [&out] (const MCSymbol *at, uint8_t op, int32_t reg,
+	                      int64_t value) {
+		out.push_back ({ at, op, reg, value });
+	};
+
+	/* \p from_rsp is where the code put the register, measured from rsp as it
+	 * stands once the code has run. */
+	auto saved_at = [&] (const WinEH::Instruction &i, bool is_vector,
+	                     int64_t from_rsp) {
+		int reg = arch::dwarf_reg_for_win_unwind (i.Register, is_vector);
+
+		if (reg < 0)
+			record (i.Label, MONO_UNWIND_OP_UNSUPPORTED, 0, i.Operation);
+		else
+			record (i.Label, MONO_UNWIND_OP_OFFSET, reg, from_rsp - depth);
+	};
+
+	for (const WinEH::Instruction &i : frame.Instructions) {
+		switch (static_cast<Win64EH::UnwindOpcodes> (i.Operation)) {
+		case Win64EH::UOP_PushNonVol:
+			depth += 8;
+			if (cfa_follows_stack)
+				record (i.Label, MONO_UNWIND_OP_ADJUST_CFA_OFFSET, 0, 8);
+			saved_at (i, /*is_vector=*/false, 0);
+			break;
+		case Win64EH::UOP_AllocSmall:
+		case Win64EH::UOP_AllocLarge:
+			depth += i.Offset;
+			if (cfa_follows_stack)
+				record (i.Label, MONO_UNWIND_OP_ADJUST_CFA_OFFSET, 0,
+				        i.Offset);
+			break;
+		case Win64EH::UOP_SetFPReg: {
+			int reg = arch::dwarf_reg_for_win_unwind (i.Register,
+			                                          /*is_vector=*/false);
+
+			if (reg < 0) {
+				record (i.Label, MONO_UNWIND_OP_UNSUPPORTED, 0,
+				        i.Operation);
+				break;
+			}
+
+			/* The code points the frame register at rsp plus its offset, so
+			 * the CFA sits that much further above the register. */
+			record (i.Label, MONO_UNWIND_OP_DEF_CFA, reg, depth - i.Offset);
+			cfa_follows_stack = false;
+			break;
+		}
+		case Win64EH::UOP_SaveNonVol:
+		case Win64EH::UOP_SaveNonVolBig:
+			saved_at (i, /*is_vector=*/false, i.Offset);
+			break;
+		case Win64EH::UOP_SaveXMM128:
+		case Win64EH::UOP_SaveXMM128Big:
+			saved_at (i, /*is_vector=*/true, i.Offset);
+			break;
+		default:
+			record (i.Label, MONO_UNWIND_OP_UNSUPPORTED, 0, i.Operation);
+			break;
+		}
+	}
+
+	return out;
+}
+
+/**
+ * Keeps each function's Windows unwind codes, transcribed into the records
+ * `.mono_unwind` holds.
+ *
+ * The streamer writes `.xdata` at `.seh_endproc` and empties the code list as
+ * it goes, so the codes are gone by the time the side tables are written.
+ * WinException is what emits that directive, from an EH handler, and the
+ * printer runs the plain handlers first. So this reads the codes while they are
+ * still standing.
+ */
+class WinUnwindHandler : public AsmPrinterHandler {
+public:
+	struct Function {
+		std::string name;
+		std::vector<UnwindRecord> records;
+	};
+
+	explicit WinUnwindHandler (MCStreamer *streamer) : streamer_ (streamer) {}
+
+	const std::vector<Function> &functions () const { return functions_; }
+
+	// A reused printer keeps its user handlers across runs, so the functions of
+	// the last module are still here when the next one opens.
+	void beginModule (Module *) override
+	{
+		functions_.clear ();
+		taken_ = 0;
+	}
+
+	void endModule () override {}
+	void beginFunction (const MachineFunction *) override {}
+
+	void endFunction (const MachineFunction *mf) override
+	{
+		ArrayRef<std::unique_ptr<WinEH::FrameInfo>> frames =
+			streamer_->getWinFrameInfos ();
+
+		/*
+		 * A function whose prologue moves nothing gets no unwind codes and no
+		 * frame of its own, because the OS reads a pc no RUNTIME_FUNCTION
+		 * covers as a leaf. Mono's unwinder instead wants a block for every
+		 * function it walks, and the entry state alone describes such a frame:
+		 * the return address is at rsp and no register moved. Codegen decides
+		 * this off the same unwind-table attribute, so a function that asks
+		 * for one and carries no codes is the empty prologue rather than a
+		 * description we lost.
+		 */
+		if (taken_ == frames.size ()
+		    && mf->getFunction ().needsUnwindTableEntry ()) {
+			functions_.push_back ({ mf->getName ().str (), {} });
+			return;
+		}
+
+		/* A funclet opens a frame of its own, so this takes every frame that
+		 * arrived since the last function rather than one. */
+		for (; taken_ < frames.size (); ++taken_)
+			functions_.push_back ({ mf->getName ().str (),
+			                        transcribe_win_frame (*frames [taken_]) });
+	}
+
+private:
+	MCStreamer *streamer_;
+	std::vector<Function> functions_;
+	size_t taken_ = 0;
+};
+
+/**
  * An AsmPrinter handler that spaces an object's functions apart for the perf
  * jit dump.
  *
@@ -446,9 +608,9 @@ public:
 	static char ID;
 
 	SideTableEmitPass (MCStreamer *streamer, const MonoEHSideChannel *sc,
-	                   const IlLineHandler *lines)
+	                   const IlLineHandler *lines, const WinUnwindHandler *win)
 		: MachineFunctionPass (ID), streamer_ (streamer), sc_ (sc),
-		  lines_ (lines)
+		  lines_ (lines), win_ (win)
 	{
 	}
 
@@ -606,26 +768,21 @@ private:
 	{
 		MCStreamer &streamer = *streamer_;
 		MCContext &ctx = streamer.getContext ();
-		ArrayRef<MCDwarfFrameInfo> frames = streamer.getDwarfFrameInfos ();
-
-		if (frames.empty ())
-			return;
-
-		/*
-		 * Only an object streamer plants the frame and rule labels. Textual
-		 * assembly stands the `.cfi_*` directives in for them and fills the
-		 * label fields with a dummy pointer. There is nothing to take a
-		 * difference against, and the directives say the same thing.
-		 */
-		if (frames.front ().Begin == nullptr)
-			return;
-
 		const std::vector<MCCFIInstruction> &initial =
 			ctx.getAsmInfo ()->getInitialFrameState ();
+		bool switched = false;
 
-		streamer.switchSection (side_table_section (ctx, ".mono_unwind"));
+		/*
+		 * Only an object streamer plants the labels a record is placed by.
+		 * Textual assembly stands the directives in for them and fills the
+		 * label fields with a placeholder, which there is nothing to take a
+		 * difference against. The directives say the same thing.
+		 */
+		if (streamer.hasRawTextSupport ())
+			return;
 
-		for (const MCDwarfFrameInfo &frame : frames) {
+		auto emit_block = [&] (const MCSymbol *begin,
+		                       const std::vector<UnwindRecord> &records) {
 			auto emit_record = [&] (const UnwindRecord &r, bool at_entry) {
 				if (at_entry || r.at == nullptr) {
 					streamer.emitIntValue (0, 4);
@@ -633,8 +790,7 @@ private:
 					streamer.emitValue (
 						MCBinaryExpr::createSub (
 							MCSymbolRefExpr::create (r.at, ctx),
-							MCSymbolRefExpr::create (frame.Begin,
-							                         ctx),
+							MCSymbolRefExpr::create (begin, ctx),
 							ctx),
 						4);
 				}
@@ -643,18 +799,46 @@ private:
 				streamer.emitIntValue (static_cast<uint64_t> (r.value), 8);
 			};
 
+			if (!switched) {
+				streamer.switchSection (
+					side_table_section (ctx, ".mono_unwind"));
+				switched = true;
+			}
+
 			streamer.emitIntValue (unwind_section_magic, 4);
 			streamer.emitIntValue (unwind_section_version, 2);
 			streamer.emitIntValue (0, 2);
-			streamer.emitIntValue (initial.size ()
-			                               + frame.Instructions.size (),
-			                       4);
-			streamer.emitValue (MCSymbolRefExpr::create (frame.Begin, ctx), 8);
+			streamer.emitIntValue (initial.size () + records.size (), 4);
+			streamer.emitValue (MCSymbolRefExpr::create (begin, ctx), 8);
 
 			for (const MCCFIInstruction &i : initial)
 				emit_record (transcribe_cfi (i), /*at_entry=*/true);
+			for (const UnwindRecord &r : records)
+				emit_record (r, /*at_entry=*/false);
+		};
+
+		/*
+		 * A Windows target describes a frame in unwind codes and emits no CFI
+		 * program, so the two sources are exclusive. The entry state is a CFI
+		 * program either way: it says where the return address the call pushed
+		 * sits, which no unwind code states.
+		 */
+		if (ctx.getAsmInfo ()->usesWindowsCFI ()) {
+			for (const WinUnwindHandler::Function &fn : win_->functions ())
+				emit_block (ctx.getOrCreateSymbol (fn.name), fn.records);
+			return;
+		}
+
+		ArrayRef<MCDwarfFrameInfo> frames = streamer.getDwarfFrameInfos ();
+
+		for (const MCDwarfFrameInfo &frame : frames) {
+			std::vector<UnwindRecord> records;
+
+			records.reserve (frame.Instructions.size ());
 			for (const MCCFIInstruction &i : frame.Instructions)
-				emit_record (transcribe_cfi (i), /*at_entry=*/false);
+				records.push_back (transcribe_cfi (i));
+
+			emit_block (frame.Begin, records);
 		}
 	}
 
@@ -744,6 +928,7 @@ private:
 	MCStreamer *streamer_;
 	const MonoEHSideChannel *sc_;
 	const IlLineHandler *lines_;
+	const WinUnwindHandler *win_;
 };
 
 char SideTableEmitPass::ID;
@@ -954,6 +1139,11 @@ build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &
 
 	printer->addAsmPrinterHandler (std::move (lines));
 
+	auto win = std::make_unique<WinUnwindHandler> (streamer_ptr);
+	WinUnwindHandler *win_ptr = win.get ();
+
+	printer->addAsmPrinterHandler (std::move (win));
+
 	printer->addAsmPrinterHandler (std::make_unique<CodeSlackHandler> (streamer_ptr));
 
 	/*
@@ -970,7 +1160,8 @@ build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &
 	 * so the side tables are written while the streamer is still open, before
 	 * the AsmPrinter's own finalization ends the object.
 	 */
-	pm->add (new SideTableEmitPass (streamer_ptr, &side_channel, lines_ptr));
+	pm->add (new SideTableEmitPass (streamer_ptr, &side_channel, lines_ptr,
+	                                win_ptr));
 
 	/*
 	 * Last, as the stock recipe has it. It hands each MachineFunction back to

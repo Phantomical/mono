@@ -33,6 +33,27 @@ reg_is_recoverable (int hw_reg)
 	}
 }
 
+int
+dwarf_reg_for_win_unwind (unsigned unwind_reg, bool is_vector)
+{
+	if (is_vector) {
+		/*
+		 * The amd64 DWARF numbering puts xmm0 at 17. mono_hw_reg_to_dwarf_reg
+		 * () cannot answer for these: mono's own map stops at RIP, because
+		 * mono_unwind_frame () restores the general registers alone. jinfo.cpp
+		 * drops the rule it builds from this, and says there why.
+		 */
+		return unwind_reg < 16 ? (int) (17 + unwind_reg) : -1;
+	}
+
+	/* A Win64 unwind code names a general register by its hardware encoding,
+	 * which is what AMD64_Reg_No counts in. */
+	if (unwind_reg >= AMD64_NREG)
+		return -1;
+
+	return mono_hw_reg_to_dwarf_reg ((int) unwind_reg);
+}
+
 llvm::Value *
 emit_entered_exception (llvm::IRBuilderBase &b)
 {
