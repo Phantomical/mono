@@ -369,35 +369,23 @@ MethodLLVMEmitter::field_symbol (MonoClassField *field)
 	return extern_symbol (symbol);
 }
 
-/// Whether klass's type initializer has already run in the domain this method
-/// compiles for, or never needed to.
+/// Whether klass has no static constructor to run, so a read of its statics
+/// never needs a class-init check at all.
 ///
-/// A true answer is permanent: no path lowers the flag again. A false answer means
-/// "not known", not "not initialized" - the flag is still 0 on the thread that is
-/// inside the initializer right now. So a caller can drop a check on true, and must
-/// keep one on false.
+/// Unlike whether the constructor has already run, this never varies between
+/// two translations of the same method: a class either declares a .cctor or
+/// it does not, which metadata settles once and for all. `ClassInitWarmPass`
+/// (`passes/class-init-warm.cpp`) is where the *has* run question is asked -
+/// after the point both tiers hash a CFG, so that a class the compile finds
+/// already warm does not lower differently from one it does not.
 bool
-MethodLLVMEmitter::cctor_already_ran (MonoClass *klass)
+MethodLLVMEmitter::class_has_no_cctor (MonoClass *klass)
 {
-	// An open class has no vtable of its own. Which vtable the code gets is settled
-	// by the context a shared body is entered with, so the check has to stand.
-	if (depends_on_context (klass))
-		return false;
-
-	MonoVTable *vtable = mono_class_try_get_vtable (cfg->domain, klass);
-	if (vtable == nullptr)
-		return false;
-
-	if (vtable->initialized)
-		return true;
-
-	// A class with no cctor has nothing to run, so this answers true before
-	// mono_runtime_class_init_full () (mono/metadata/object.c) ever sets the flag.
 	return mono_class_get_cctor (klass) == nullptr;
 }
 
 /// Whether field is eligible to be marked invariant, apart from whether klass's
-/// initializer has actually finished. cctor_already_ran () and
+/// initializer has actually finished. `ClassInitWarmPass` and
 /// push_guarded_static_read () decide that part.
 ///
 /// An ordinary program writes such a field only from the type initializer. ECMA-335
@@ -430,16 +418,19 @@ MethodLLVMEmitter::eligible_for_invariant_static_read (MonoClassField *field)
 	return true;
 }
 
-/// Emits the check that runs klass's static constructor, unless it has already run.
+/// Emits the check that runs klass's static constructor, unless it has none.
 ///
 /// The constructor itself never runs here. It is arbitrary managed code, and a
-/// compilation thread must not execute it. A site that still needs the check gets a
-/// call, and ClassInitPass deletes the ones a dominating check already covers.
+/// compilation thread must not execute it. Whether klass's has already run is
+/// not asked here - a translation is the same whether or not it has, and
+/// ClassInitWarmPass is what asks, once both tiers have hashed the same call.
+/// A site that still needs the check gets a call, and ClassInitPass deletes
+/// the ones a dominating check already covers.
 llvm::Error
 MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 {
-	// The call would find the work done and return at once.
-	if (cctor_already_ran (klass))
+	// The call would find nothing to run and return at once.
+	if (class_has_no_cctor (klass))
 		return llvm::Error::success ();
 
 	// Goes through the wrapper because a cctor can throw. The failure stays pending
@@ -462,7 +453,7 @@ MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 }
 
 /// Pushes field's value, from behind a class-init guard emit_class_init () left
-/// standing because cctor_already_ran () answered false for field->parent.
+/// standing because field->parent has a static constructor.
 llvm::Error
 MethodLLVMEmitter::push_guarded_static_read (MonoIrBuilder &builder, MonoClassField *field,
                                              MonoType *ftype)
@@ -1122,7 +1113,7 @@ MethodLLVMEmitter::emit_ldsfld (MonoIrBuilder &builder, uint32_t token)
 	if (llvm::Error error = emit_class_init (builder, (*field)->parent))
 		return error;
 
-	if (eligible_for_invariant_static_read (*field) && !cctor_already_ran ((*field)->parent))
+	if (eligible_for_invariant_static_read (*field) && !class_has_no_cctor ((*field)->parent))
 		return push_guarded_static_read (builder, *field, ftype);
 
 	llvm::Expected<llvm::Value *> address = static_field_address (builder, *field);

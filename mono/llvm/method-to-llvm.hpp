@@ -1104,7 +1104,7 @@ private:
 	llvm::Error emit_ldstr (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldtoken (MonoIrBuilder &builder, uint32_t token);
 	llvm::Expected<bool> fold_type_from_handle (MonoIrBuilder &builder, MonoType *type);
-	bool cctor_already_ran (MonoClass *klass);
+	bool class_has_no_cctor (MonoClass *klass);
 	bool eligible_for_invariant_static_read (MonoClassField *field);
 	llvm::Error emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
 	llvm::Error push_guarded_static_read (MonoIrBuilder &builder, MonoClassField *field,

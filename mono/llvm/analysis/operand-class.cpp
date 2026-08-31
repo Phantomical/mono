@@ -172,15 +172,7 @@ static_field_at (MonoClass *klass, int offset)
 MonoObject *
 initonly_static_value (MonoDomain *domain, MonoClassField *field)
 {
-	MonoType *type = mono_field_get_type_internal (field);
-
-	if ((mono_field_get_flags (field) & FIELD_ATTRIBUTE_INIT_ONLY) == 0
-	    || !MONO_TYPE_IS_REFERENCE (type))
-		return nullptr;
-
-	// A special static lives per thread or per context, so what stands there
-	// now says nothing about what a compiled body will read.
-	if (field->offset < 0)
+	if (!MONO_TYPE_IS_REFERENCE (mono_field_get_type_internal (field)))
 		return nullptr;
 
 	ERROR_DECL (vtable_error);
@@ -205,34 +197,10 @@ initonly_static_value (MonoDomain *domain, MonoClassField *field)
 
 /// The object \p v reads out of an initonly static, or null where \p v is not
 /// such a read or this compile cannot answer for it.
-///
-/// A shared body fetches its statics off the run-time context instead of naming
-/// a block, so the marked global a match needs is the same thing that says the
-/// class is closed.
 MonoObject *
 initonly_static_read (const Value *v)
 {
-	const auto *load = dyn_cast<LoadInst> (v);
-
-	if (load == nullptr || current_compile ().domain == nullptr)
-		return nullptr;
-
-	const DataLayout &layout = load->getModule ()->getDataLayout ();
-	const Value *address = load->getPointerOperand ();
-	APInt offset (layout.getIndexTypeSizeInBits (address->getType ()), 0);
-	const auto *block = dyn_cast<GlobalValue> (address->stripAndAccumulateConstantOffsets (
-		layout, offset, /*AllowNonInbounds=*/true));
-
-	if (block == nullptr || offset.isNegative () || !offset.isSignedIntN (32))
-		return nullptr;
-
-	MonoClass *klass = marked_statics_class (*block);
-
-	if (klass == nullptr)
-		return nullptr;
-
-	MonoClassField *field =
-		static_field_at (klass, static_cast<int> (offset.getSExtValue ()));
+	MonoClassField *field = initonly_static_field (v);
 
 	return field != nullptr ? initonly_static_value (current_compile ().domain, field)
 	                        : nullptr;
@@ -399,6 +367,39 @@ class_of (Value *v, const Function &f, ClassRule rule, const ConstantValues &val
 }
 
 } // namespace
+
+MonoClassField *
+initonly_static_field (const Value *v)
+{
+	const auto *load = dyn_cast<LoadInst> (v);
+
+	if (load == nullptr || current_compile ().domain == nullptr)
+		return nullptr;
+
+	const DataLayout &layout = load->getModule ()->getDataLayout ();
+	const Value *address = load->getPointerOperand ();
+	APInt offset (layout.getIndexTypeSizeInBits (address->getType ()), 0);
+	const auto *block = dyn_cast<GlobalValue> (address->stripAndAccumulateConstantOffsets (
+		layout, offset, /*AllowNonInbounds=*/true));
+
+	if (block == nullptr || offset.isNegative () || !offset.isSignedIntN (32))
+		return nullptr;
+
+	MonoClass *klass = marked_statics_class (*block);
+
+	if (klass == nullptr)
+		return nullptr;
+
+	MonoClassField *field =
+		static_field_at (klass, static_cast<int> (offset.getSExtValue ()));
+
+	if (field == nullptr || (mono_field_get_flags (field) & FIELD_ATTRIBUTE_INIT_ONLY) == 0)
+		return nullptr;
+
+	// A special static lives per thread or per context, so what stands there
+	// now says nothing about what a compiled body will read.
+	return field->offset >= 0 ? field : nullptr;
+}
 
 void
 mark_exact_class (Instruction &site, MonoClass *klass)

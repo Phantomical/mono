@@ -51,6 +51,7 @@ class Value;
 } // namespace llvm
 
 typedef struct _MonoClass MonoClass;
+typedef struct _MonoClassField MonoClassField;
 typedef struct _MonoMethod MonoMethod;
 
 namespace mono {
@@ -139,6 +140,20 @@ bool bound_is_exact (MonoClass *klass);
 /// written on one pays for itself nowhere. Every class this answers is one an
 /// allocation or an initonly static states.
 MonoClass *guessed_class (llvm::Value *v, const llvm::Function &f, const ConstantValues &values);
+
+/// The initonly static field \p v reads, or null where \p v is not that shape
+/// - a load off a marked statics block at a constant offset - the field is a
+/// special static, or this compile has no domain to answer for.
+///
+/// The shape is what a translator's own mark on the load cannot survive:
+/// InstCombine folds the address GEP into the load's pointer operand and
+/// builds a new one from it, which carries no metadata across. The block and
+/// the offset outlive every pass instead, because no instruction-level
+/// transform rebuilds a global.
+///
+/// What a caller reads through the field - a reference, or a primitive this
+/// compile finds the class already warm for - is its own question.
+MonoClassField *initonly_static_field (const llvm::Value *v);
 
 /// Says that \p site produces a delegate whose target method is \p target.
 ///

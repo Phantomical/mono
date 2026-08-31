@@ -6,6 +6,8 @@
 #include "passes/builtins.hpp"
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init.hpp"
+#include "passes/class-init-warm.hpp"
+#include "passes/static-const-fold.hpp"
 #include "passes/dead-alloc.hpp"
 #include "passes/devirtualize.hpp"
 #include "passes/dump-ir.hpp"
@@ -487,6 +489,22 @@ MonoPassBuilder::buildTier1Pipeline ()
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_optimization));
 
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
+
+	/*
+	 * Behind ClassInitPass, so it has already dropped what a dominating check
+	 * covers and this only has to ask the domain about what is left standing.
+	 * Behind the PGO instrumentation for the same reason as ClassInitPass: a
+	 * call this drops on a warm class is one tier 2's own compile of the same
+	 * method also finds warm - it promotes long after this one - so nothing
+	 * here can make the two tiers hash a different CFG.
+	 */
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitWarmPass ()));
+
+	// Beside ClassInitWarmPass rather than behind it: the two ask the domain
+	// about the same warm class for different reasons, and neither result
+	// depends on the other having run.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::StaticConstFoldPass ()));
+
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RgctxDedupPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RestoreTailPositionPass ()));
 
@@ -531,8 +549,17 @@ MonoPassBuilder::buildTier2SimplificationPipeline ()
 	// hash is over.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
 
+	// Behind the counts for the reason ClassInitPass is: this asks the domain
+	// rather than the CFG, and both tiers' compiles of one method ask it long
+	// enough apart that only a check behind the hash can act on the answer.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitWarmPass ()));
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::StaticConstFoldPass ()));
+
 	// Behind the counts for the same reason, and in front of the pipeline
-	// below, which then optimizes one fetch rather than several.
+	// below, which then optimizes one fetch rather than several. It also
+	// folds away what the two passes above just made constant, which is why
+	// tier 1 needs no pass of its own for that: this pipeline runs it for
+	// tier 2 regardless.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RgctxDedupPass ()));
 
 	/*
