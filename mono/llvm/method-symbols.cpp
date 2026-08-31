@@ -1,5 +1,6 @@
 #include "method-symbols.hpp"
 
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringMap.h>
 #include <llvm/IR/Attributes.h>
@@ -179,7 +180,15 @@ bind_method_symbols (Module &m,
 
 	StringMap<std::string> renames;
 
+	// Functions are pushed into marked before globals, so a Function's
+	// collision below always erases a GlobalVariable this loop has not
+	// reached yet. Skip it here instead of dereferencing freed memory.
+	SmallPtrSet<GlobalValue *, 16> erased;
+
 	for (GlobalValue *value : marked) {
+		if (erased.contains (value))
+			continue;
+
 		/*
 		 * Only a declaration stands for something the engine publishes. A
 		 * definition is the thing itself and keeps whatever it was called.
@@ -225,12 +234,14 @@ bind_method_symbols (Module &m,
 			 */
 			if (isa<Function> (value) && !isa<Function> (existing)) {
 				existing->replaceAllUsesWith (value);
+				erased.insert (existing);
 				existing->eraseFromParent ();
 				value->setName (*name);
 				continue;
 			}
 
 			value->replaceAllUsesWith (existing);
+			erased.insert (value);
 			value->eraseFromParent ();
 			continue;
 		}
