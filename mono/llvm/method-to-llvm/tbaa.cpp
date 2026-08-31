@@ -127,11 +127,9 @@ MethodLLVMEmitter::type_descriptor (MonoClass *klass, bool statics)
 		if (offset < 0 || size <= 0)
 			return nullptr;
 
-		// named must select the members whose accesses carry a fine tag, not
-		// the members that are not structs. A magic nint is a value type
-		// convert_type () loads as a scalar, and tbaa_tag () tags it with one.
-		bool named = !mini_type_is_reference (ftype)
-		             && !MONO_TYPE_ISSTRUCT (mini_get_underlying_type (ftype));
+		// named must select the members whose accesses carry a fine tag,
+		// which is what held_in_memory () decides.
+		bool named = !mini_type_is_reference (ftype) && !held_in_memory (ftype);
 
 		// An unnamed member is kept for the overlap check below. Left out, a
 		// scalar sharing its bytes would read as disjoint.
@@ -256,9 +254,9 @@ MethodLLVMEmitter::tbaa_tag (const ManagedAccess &access, bool is_reference)
 
 	// A whole element carries a leaf only where it is one scalar. A value type
 	// covers the fields inside it, which are tagged against their own
-	// descriptor, and struct-path TBAA cannot name an access that wide. Such an
-	// element arrives as a struct copy, and neither emit_memory_store () nor
-	// push_from_location () tags one, so this guard is a second line.
+	// descriptor, and struct-path TBAA cannot name an access that wide. A SIMD
+	// element is loaded rather than copied, so this guard is what puts it on
+	// the coarse leaf.
 	if (access.kind == ManagedAccess::Kind::element
 	    && access.element->type != MONO_TYPE_VAR
 	    && access.element->type != MONO_TYPE_MVAR

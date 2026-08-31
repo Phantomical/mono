@@ -1420,4 +1420,43 @@ public class VectorTests {
 		}
 		return 0;
 	}
+
+	// The scalars put V at a nonzero offset in the TBAA type descriptor.
+	// class-init.c marks Vector4 a SIMD class where it leaves Vector2 and
+	// Vector3 alone. Take either away and the two tests below cover nothing.
+	class SimdHolder {
+		public int A;
+		public Vector4 V;
+		public long B;
+
+		public static int SA;
+		public static Vector4 SV;
+		public static long SB;
+	}
+
+	public static int test_0_vector4_instance_field_beside_scalars () {
+		var h = new SimdHolder ();
+
+		h.A = 1;
+		h.V = new Vector4 (2, 3, 4, 5);
+		h.B = 6;
+
+		if (h.A != 1 || h.B != 6)
+			return 1;
+		if (h.V.X != 2 || h.V.W != 5)
+			return 2;
+		return 0;
+	}
+
+	public static int test_0_vector4_static_field_beside_scalars () {
+		SimdHolder.SA = 1;
+		SimdHolder.SV = new Vector4 (2, 3, 4, 5);
+		SimdHolder.SB = 6;
+
+		if (SimdHolder.SA != 1 || SimdHolder.SB != 6)
+			return 1;
+		if (SimdHolder.SV.X != 2 || SimdHolder.SV.W != 5)
+			return 2;
+		return 0;
+	}
 }
