@@ -11,8 +11,8 @@ using System.Runtime.CompilerServices;
  *
  * This checks that tier 2 answers correctly here, not that it once did not.
  * A prior fix (task #299) found real corruption from non-trivial unswitching
- * on a much larger, self-recursive method, but no reduction of that case down
- * to something this small has reproduced it — isolating just
+ * on a much larger, self-recursive method, but no reduction of that case
+ * down to something this small has reproduced it. Isolating
  * SimpleLoopUnswitchPass on the captured IR converges to identical output
  * whether or not non-trivial unswitching runs, so whatever the real defect
  * needed is not present here. Reverting the fix does not fail this test.

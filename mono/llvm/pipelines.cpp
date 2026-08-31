@@ -732,12 +732,13 @@ MonoPassBuilder::buildTier2FunctionSimplificationPipeline ()
 	                              /* AllowSpeculation = */ true));
 
 	/*
-	 * Not NonTrivial. A self-recursive method with many parameters and a loop
-	 * of more than one latch reaches a compile where cloning the loop past a
-	 * branch below its header loses one argument on one of the two copies:
-	 * the clone reads null where the caller passed a real reference. Trivial
-	 * unswitching, which never clones a loop, still runs — the common O1
-	 * pipeline above adds it, and both tiers share that call.
+	 * Not NonTrivial. Turning it off cleared a real crash, isolated
+	 * empirically rather than traced in SimpleLoopUnswitchPass's own source:
+	 * a self-recursive method with many parameters and a loop of more than
+	 * one latch compiled to a body that read null in an argument the caller
+	 * had passed a real reference for. Trivial unswitching, which never
+	 * clones a loop, still runs — the common O1 pipeline above adds it, and
+	 * both tiers share that call.
 	 */
 	LPM1.addPass (llvm::SimpleLoopUnswitchPass ());
 
