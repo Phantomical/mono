@@ -28,8 +28,6 @@
 
 #include "mini-runtime.h"
 
-#include <llvm/IR/Intrinsics.h>
-
 namespace mono {
 
 bool
@@ -66,17 +64,14 @@ MethodLLVMEmitter::emit_debug_var_marker (MonoIrBuilder &builder)
 	if (!debug_var_slots_wanted () || (args.empty () && locals.empty ()))
 		return false;
 
-	std::vector<llvm::Value *> operands = {
-		builder.getInt64 (vars_stackmap_id),
-		builder.getInt32 (0),
-	};
+	std::vector<llvm::Value *> vars;
 
 	for (const Entry &arg : args)
-		operands.push_back (arg.alloca);
+		vars.push_back (arg.alloca);
 	for (const Entry &local : locals)
-		operands.push_back (local.alloca);
+		vars.push_back (local.alloca);
 
-	builder.CreateIntrinsic (llvm::Intrinsic::experimental_stackmap, {}, operands);
+	emit_stackmap_marker (builder, vars_stackmap_id, vars);
 	return true;
 }
 

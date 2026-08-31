@@ -1328,6 +1328,27 @@ MethodLLVMEmitter::create_cold_block (const llvm::Twine &name)
 	return block;
 }
 
+/// Plants a bookkeeping `llvm.experimental.stackmap` under \p id, naming \p vars.
+///
+/// Marked nounwind: the intrinsic is declared able to throw, so an inliner
+/// folding its function into a body already unwinding through a landing pad
+/// turns an unmarked call into an invoke, and the verifier refuses one on any
+/// intrinsic but the few it names as invokable.
+llvm::CallInst *
+MethodLLVMEmitter::emit_stackmap_marker (MonoIrBuilder &builder, uint64_t id,
+                                         llvm::ArrayRef<llvm::Value *> vars)
+{
+	std::vector<llvm::Value *> args = { builder.getInt64 (id), builder.getInt32 (0) };
+
+	args.insert (args.end (), vars.begin (), vars.end ());
+
+	llvm::CallInst *marker =
+		builder.CreateIntrinsic (llvm::Intrinsic::experimental_stackmap, {}, args);
+
+	marker->setDoesNotThrow ();
+	return marker;
+}
+
 /// Translate the instruction at `ip`, leaving `ip` on the one after it.
 llvm::Error
 MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)

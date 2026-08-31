@@ -438,12 +438,10 @@ MethodLLVMEmitter::emit_finally_body_marker (MonoIrBuilder &builder, uint32_t cl
 	uint64_t id = (opening ? MONO_LLVM_FINALLY_STACKMAP_ID_BASE
 	                       : MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE)
 	              | clause;
-	std::vector<llvm::Value *> args = { builder.getInt64 (id), builder.getInt32 (0) };
+	llvm::Value *guard = clause_state[clause].abort_guard;
 
-	if (opening)
-		args.push_back (clause_state[clause].abort_guard);
-
-	builder.CreateIntrinsic (llvm::Intrinsic::experimental_stackmap, {}, args);
+	emit_stackmap_marker (builder, id, opening ? llvm::ArrayRef (guard)
+	                                            : llvm::ArrayRef<llvm::Value *> ());
 }
 
 /// Deliver an abort that arrived while the clause's handler was running, now that

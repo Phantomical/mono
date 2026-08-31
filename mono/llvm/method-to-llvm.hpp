@@ -828,6 +828,8 @@ private:
 	void mark_for_tier2_instrumentation ();
 	llvm::Error seed_handler_entry_stacks (MonoIrBuilder &builder);
 	llvm::BasicBlock *create_cold_block (const llvm::Twine &name);
+	llvm::CallInst *emit_stackmap_marker (MonoIrBuilder &builder, uint64_t id,
+	                                      llvm::ArrayRef<llvm::Value *> vars);
 	static std::string il_label (size_t offset);
 	unsigned next_check_index ();
 	llvm::AllocaInst *entry_alloca (llvm::Type *type, const llvm::Twine &name);
