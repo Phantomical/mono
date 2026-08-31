@@ -197,20 +197,29 @@ mono_llvm_jit_dyn_call_prepare (MonoMethod *method)
 
 	llvm::Expected<const mono::arch::DynCallPlan *> plan = mono::dyn_call_plan_for (method);
 
+	if (!plan) {
+		llvm::Error refused = plan.takeError ();
+
+		if (mono::is_jit_trace_enabled ()) {
+			std::lock_guard<std::mutex> held (mono::jit_trace_mutex ());
+
+			fprintf (stderr, "[llvm-jit] no dyn-call plan: %s\n",
+			         llvm::toString (std::move (refused)).c_str ());
+		} else {
+			llvm::consumeError (std::move (refused));
+		}
+
+		return nullptr;
+	}
+
 	if (mono::is_jit_trace_enabled ()) {
 		std::lock_guard<std::mutex> held (mono::jit_trace_mutex ());
 
-		if (!plan)
-			fprintf (stderr, "[llvm-jit] no dyn-call plan: %s\n",
-			         llvm::toString (plan.takeError ()).c_str ());
-		else
-			fprintf (stderr, "[llvm-jit] dyn-call plan: %d args, %u stack\n",
-			         (int) (*plan)->args.size (), (*plan)->stack_words);
-	} else if (!plan) {
-		llvm::consumeError (plan.takeError ());
+		fprintf (stderr, "[llvm-jit] dyn-call plan: %d args, %u stack\n",
+		         (int) (*plan)->args.size (), (*plan)->stack_words);
 	}
 
-	return plan ? *plan : nullptr;
+	return *plan;
 }
 
 int
