@@ -38,6 +38,13 @@
 # those compile -nostdlib against an explicit -r:.../mscorlib.dll.  Treat the
 # option as an iteration aid.  Validate on a default configuration.
 
+# What a build step that runs runtime/mono-wrapper has to wait for, rather than
+# ${MONO_TOOLS_RUNTIME}.  The wrapper is a script around mono/mini/mono-<gc>, and
+# some callers reach for the mono-<gc> symlink by name, so both have to exist
+# first.  MONO_TOOLS_RUNTIME_DEPENDS does not cover such a step: it is empty when
+# the tools run on the system mono.
+set(MONO_INBUILD_RUNTIME_DEPENDS mono-${MONO_DEFAULT_GC_SUFFIX} mono-symlink)
+
 if(MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS)
   if(MONO_SYSTEM_RUNTIME)
     if(NOT EXISTS "${MONO_SYSTEM_RUNTIME}")
@@ -93,10 +100,7 @@ else()
   set(MONO_TOOLS_RUNTIME "${MONO_RUNTIME_WRAPPER}")
   set(MONO_TOOLS_RUNTIME_IS_SYSTEM FALSE)
   set(MONO_TOOLS_RUNTIME_VERSION "this build")
-  # The wrapper is a script around mono/mini/mono-<gc>, and some callers reach
-  # for the mono-<gc> symlink by name, so both have to exist before anything is
-  # compiled.
-  set(MONO_TOOLS_RUNTIME_DEPENDS mono-${MONO_DEFAULT_GC_SUFFIX} mono-symlink)
+  set(MONO_TOOLS_RUNTIME_DEPENDS ${MONO_INBUILD_RUNTIME_DEPENDS})
   set(MONO_TOOLS_RUNTIME_HOST "")
   # Turning the option back off in an existing tree otherwise leaves the shim
   # on disk, pointing at a runtime nothing runs on any more.

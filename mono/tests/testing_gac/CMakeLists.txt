@@ -27,6 +27,7 @@ function(_gac_library out source)
       COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_buildcls}" "${_wrapper}"
               "${_sn}" -R "${_gac_bin}/${out}" "${_gac_key}"
       DEPENDS "${_gac_src}/${source}" "${_gac_key}" mono-test-toolchain
+              ${MONO_INBUILD_RUNTIME_DEPENDS}
       COMMENT "CSC testing_gac/${out} (signed)"
       VERBATIM)
   else()

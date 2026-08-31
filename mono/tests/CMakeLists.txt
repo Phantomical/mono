@@ -234,6 +234,7 @@ foreach(_pair "gen-runtime-invoke:runtime-invoke.gen" "make-imt-test:imt_big_ifa
             -P "${CMAKE_SOURCE_DIR}/cmake/MonoRunRedirected.cmake"
     DEPENDS "${_bin}/${_gen}.exe"
             "${CMAKE_SOURCE_DIR}/cmake/MonoRunRedirected.cmake"
+            ${MONO_INBUILD_RUNTIME_DEPENDS}
     WORKING_DIRECTORY "${_bin}"
     COMMENT "GEN ${_out}.cs"
     VERBATIM)
