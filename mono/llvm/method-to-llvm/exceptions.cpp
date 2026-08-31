@@ -443,7 +443,7 @@ MethodLLVMEmitter::emit_finally_body_marker (MonoIrBuilder &builder, uint32_t cl
 	if (opening)
 		args.push_back (clause_state[clause].abort_guard);
 
-	builder.CreateIntrinsic (llvm::Intrinsic::experimental_stackmap, {}, args);
+	emit_stackmap_marker (builder, args);
 }
 
 /// Deliver an abort that arrived while the clause's handler was running, now that

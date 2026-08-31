@@ -2054,6 +2054,22 @@ MethodLLVMEmitter::emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer
 	                     llvm::MDNode::get (context (), {}));
 }
 
+/// Emits one `llvm.experimental.stackmap` marker for \p args.
+///
+/// Marks it nounwind. Left able to throw, folding this body behind an invoke
+/// would turn the marker into one too, and SelectionDAG cannot lower an
+/// invoked stackmap.
+llvm::CallInst *
+MethodLLVMEmitter::emit_stackmap_marker (MonoIrBuilder &builder,
+                                         llvm::ArrayRef<llvm::Value *> args)
+{
+	llvm::CallInst *marker = builder.CreateIntrinsic (llvm::Intrinsic::experimental_stackmap,
+	                                                  {}, args);
+
+	marker->setDoesNotThrow ();
+	return marker;
+}
+
 /// The class an argument declared \p type is bounded by, or null where the
 /// declared type bounds nothing a pass can read.
 ///

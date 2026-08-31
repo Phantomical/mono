@@ -76,7 +76,7 @@ MethodLLVMEmitter::emit_debug_var_marker (MonoIrBuilder &builder)
 	for (const Entry &local : locals)
 		operands.push_back (local.alloca);
 
-	builder.CreateIntrinsic (llvm::Intrinsic::experimental_stackmap, {}, operands);
+	emit_stackmap_marker (builder, operands);
 	return true;
 }
 

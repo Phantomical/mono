@@ -875,6 +875,8 @@ private:
 	llvm::BranchInst *emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
 	                                       const char *name);
 	void emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer);
+	llvm::CallInst *emit_stackmap_marker (MonoIrBuilder &builder,
+	                                      llvm::ArrayRef<llvm::Value *> args);
 
 	void emit_division_guards (MonoIrBuilder &builder, llvm::Value *lhs, llvm::Value *rhs,
 	                           bool is_signed);

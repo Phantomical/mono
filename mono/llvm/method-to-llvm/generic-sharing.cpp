@@ -165,9 +165,8 @@ MethodLLVMEmitter::open_sharing (MonoIrBuilder &builder)
 void
 MethodLLVMEmitter::pin_context_slot (MonoIrBuilder &builder, llvm::Value *slot)
 {
-	builder.CreateIntrinsic (llvm::Intrinsic::experimental_stackmap, {},
-	                         { builder.getInt64 (rgctx_stackmap_id),
-	                           builder.getInt32 (0), slot });
+	emit_stackmap_marker (builder, { builder.getInt64 (rgctx_stackmap_id),
+	                                builder.getInt32 (0), slot });
 	pinned_receiver = true;
 }
 
