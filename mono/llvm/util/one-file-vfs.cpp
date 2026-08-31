@@ -34,8 +34,16 @@ public:
 	                                                              bool RequiresNullTerminator,
 	                                                              bool IsVolatile) override
 	{
+		// buffer's bytes are never null-terminated (pushProfile (),
+		// makeProfileFileSystem ()). getMemBuffer () only wraps existing
+		// bytes, so a copy is the only way to add the terminator a true
+		// request asks for.
+		if (RequiresNullTerminator)
+			return llvm::MemoryBuffer::getMemBufferCopy (buffer->getBuffer (),
+			                                             buffer->getBufferIdentifier ());
+
 		return llvm::MemoryBuffer::getMemBuffer (
-			buffer->getBuffer (), buffer->getBufferIdentifier (), RequiresNullTerminator);
+			buffer->getBuffer (), buffer->getBufferIdentifier (), /*RequiresNullTerminator=*/false);
 	}
 
 	std::error_code close () override { return {}; }
