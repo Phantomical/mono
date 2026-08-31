@@ -38,12 +38,20 @@
 # those compile -nostdlib against an explicit -r:.../mscorlib.dll.  Treat the
 # option as an iteration aid.  Validate on a default configuration.
 
-# What a build step that runs runtime/mono-wrapper has to wait for, rather than
-# ${MONO_TOOLS_RUNTIME}.  The wrapper is a script around mono/mini/mono-<gc>, and
-# some callers reach for the mono-<gc> symlink by name, so both have to exist
-# first.  MONO_TOOLS_RUNTIME_DEPENDS does not cover such a step: it is empty when
-# the tools run on the system mono.
-set(MONO_INBUILD_RUNTIME_DEPENDS mono-${MONO_DEFAULT_GC_SUFFIX} mono-symlink)
+# What a build step that runs on the runtime this build produces has to wait
+# for, rather than ${MONO_TOOLS_RUNTIME}.  MONO_TOOLS_RUNTIME_DEPENDS does not
+# cover such a step: it is empty when the tools run on the system mono.
+#
+# runtime/mono-wrapper is a script around mono/mini/mono-<gc>, and some callers
+# reach for the mono-<gc> symlink by name.  The wrapper also points MONO_CFG_DIR
+# at the build tree's etc/, and without the dllmap mono-build-config writes there
+# -- and the mono-native that dllmap names by path -- everything that touches
+# the filesystem dies with "DllNotFoundException: System.Native".
+set(MONO_INBUILD_RUNTIME_DEPENDS
+    mono-${MONO_DEFAULT_GC_SUFFIX} mono-symlink mono-build-config)
+if(MONO_ENABLE_MONO_NATIVE)
+  list(APPEND MONO_INBUILD_RUNTIME_DEPENDS mono-native)
+endif()
 
 if(MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS)
   if(MONO_SYSTEM_RUNTIME)
