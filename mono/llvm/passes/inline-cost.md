@@ -133,6 +133,12 @@ behind `simplifyCallSite ()`, which is where a call that is really a value
 belongs. The tests are cheap and the arms they rule out are not: a cascade
 picking one implementation out of five measured 850 unanswered and 100 answered.
 
+**`InlineCostCallAnalyzer::onAnalysisStart ()` adds `save_lmf_cost ()` beside the
+coldcc penalty.** A `save_lmf` callee's frame — the LMF slot, the callee-saved
+clobber, the frameaddress/stacksave pair — arrives with the translated body, and
+the walk that follows prices each of those instructions like any other. Nothing
+in the walk otherwise charges for the caller-side registers the clobber forces.
+
 `inline-policy.hpp` documents what each answer means. Each answer asks an option
 of its own first, so a run can be put back on LLVM's own answers without a
 rebuild.
@@ -150,15 +156,17 @@ needs the `mono-` prefix, and a new definition in `namespace llvm` needs the
 same decision the ones above got: drop it when a header declares it, keep it when
 no header does. Watch the block walk in `analyze ()`, the head and the tail of
 `updateThreshold ()`, the head of `isLoweredToCall ()`, the head of
-`visitLoad ()`, the head of `visitCallBase ()`, and the heads of
-`isColdCallSite ()` and `getHotCallSiteThreshold ()`, because that is where the
-mono calls sit. `isLoweredToCall ()` and `visitLoad ()` churn upstream more than
-the rest do, so budget for them at each bump.
+`visitLoad ()`, the head of `visitCallBase ()`, the heads of
+`isColdCallSite ()` and `getHotCallSiteThreshold ()`, and the coldcc check in
+`onAnalysisStart ()`, because that is where the mono calls sit.
+`isLoweredToCall ()` and `visitLoad ()` churn upstream more than the rest do,
+so budget for them at each bump.
 
 A cost and a budget that `MONO_LLVM_JIT_TRACE` prints are not what an upstream
 build gives for the same pair, so a comparison against clang or against LLVM's
-own pipeline needs the options off first. Set each `mono-inline-*-bonus` to zero,
-turn off `-mono-inline-implicit-null-free`, `-mono-inline-dispatch-is-a-load`,
+own pipeline needs the options off first. Set each `mono-inline-*-bonus` to
+zero, along with `-mono-inline-save-lmf-penalty`, turn off
+`-mono-inline-implicit-null-free`, `-mono-inline-dispatch-is-a-load`,
 `-mono-inline-fold-vtable-fields`, `-mono-inline-answer-casts` and
 `-mono-inline-tier2-site-heat`, and turn **on**
 `-mono-inline-boost-indirect-calls`. The last-call-to-static bonus is what a run

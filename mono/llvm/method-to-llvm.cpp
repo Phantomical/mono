@@ -2,6 +2,7 @@
 #include "hidden-return.hpp"
 #include "domain-method.hpp"
 #include "analysis/operand-class.hpp"
+#include "passes/inline-policy.hpp"
 #include "passes/tier-counter.hpp"
 #include "runtime/options.hpp"
 #include "runtime-error.hpp"
@@ -948,9 +949,13 @@ MethodLLVMEmitter::emit ()
 
 	// This runs before anything that can call out. A stack walk entered below this
 	// frame must find the chain already linked.
-	if (method->save_lmf)
+	if (method->save_lmf) {
+		// What save_lmf_cost () (passes/inline-policy.cpp) reads to price folding
+		// this body's frame into a caller.
+		function->addFnAttr (save_lmf_attribute);
 		if (auto error = emit_push_lmf (builder))
 			return std::move (error);
+	}
 
 	if (auto error = emit_arg_allocas (builder))
 		return std::move (error);

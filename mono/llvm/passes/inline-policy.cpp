@@ -84,6 +84,10 @@ cl::opt<int> ScalarizeArgumentBonus (
 	cl::desc ("Threshold bonus for a callee that does not capture a parameter "
 	          "the site fills with a fresh allocation"));
 
+cl::opt<int> SaveLmfPenalty (
+	"mono-inline-save-lmf-penalty", cl::Hidden, cl::init (100),
+	cl::desc ("Cost added for a callee whose front end pushes an LMF entry"));
+
 cl::opt<bool> RankSitesInPromotedBody (
 	"mono-inline-tier2-site-heat", cl::Hidden, cl::init (true),
 	cl::desc ("Rank a call site against the entry count of the promoted body it "
@@ -500,6 +504,12 @@ call_site_bonus (const CallBase &call, const Function &callee)
 	}
 
 	return bonus;
+}
+
+int
+save_lmf_cost (const Function &callee)
+{
+	return callee.hasFnAttribute (save_lmf_attribute) ? SaveLmfPenalty : 0;
 }
 
 std::optional<SiteHeat>

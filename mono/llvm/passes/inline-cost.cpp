@@ -1215,6 +1215,9 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
     if (F.getCallingConv() == CallingConv::Cold)
       addCost(InlineConstants::ColdccPenalty);
 
+    // The callee's own IL says nothing about the frame its front end pushes.
+    addCost(mono::save_lmf_cost(F));
+
     LLVM_DEBUG(dbgs() << "      Initial cost: " << Cost << "\n");
 
     // Check if we're done. This can happen due to bonuses and penalties.

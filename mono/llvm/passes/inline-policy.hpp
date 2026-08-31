@@ -11,6 +11,7 @@
 #define MONO_LLVM_PASSES_INLINE_POLICY_HPP
 
 #include <llvm/ADT/STLFunctionalExtras.h>
+#include <llvm/ADT/StringRef.h>
 
 #include <optional>
 
@@ -58,6 +59,10 @@ using SettledValue = llvm::function_ref<llvm::Value *(llvm::Value *)>;
 /// argument setup for work that is one instruction.
 bool lowers_to_a_load (const llvm::Function &f);
 
+/// Marks a function whose front end links its frame onto the thread's LMF
+/// chain (`method->save_lmf`). No value. Presence is the fact.
+constexpr llvm::StringRef save_lmf_attribute = "mono-save-lmf";
+
 /// The vtable \p load reads, where the call site settles which object it reads
 /// off, or null.
 ///
@@ -95,6 +100,15 @@ llvm::BasicBlock *implicit_null_check_successor (const llvm::BranchInst &branch)
 ///
 /// Zero for a site no bonus recognizes.
 int call_site_bonus (const llvm::CallBase &call, const llvm::Function &callee);
+
+/// What to add to \p callee's cost for the frame `emit_push_lmf ()` pushes, or
+/// zero.
+///
+/// The push and the pop are ordinary instructions once translated.
+/// `getInlineCost ()` prices each one at the going per-instruction rate.
+/// Nothing prices the callee-saved registers the clobber forces the caller to
+/// spill.
+int save_lmf_cost (const llvm::Function &callee);
 
 } // namespace mono
 
