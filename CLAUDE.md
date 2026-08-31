@@ -483,6 +483,14 @@ fold is visible from outside:
   is often what settles. On `tier2-inline-policy.cs` one round folds 15 bodies and
   never reaches `Box:Area`; four fold 22 and reach it at all three of its sites.
   The budget above is what bounds the work, and this count is what stops a cycle.
+- `MONO_LLVM_JIT_FOLD_CLAUSES=<0|false|empty>` — turn off the tier-2 cost model's
+  ability to translate a clause-bearing callee at all, so it is refused the way the
+  shape-test pre-pass always refuses one. On by default. `clause_survives_fold ()`
+  (`passes/top-down-inline.cpp`) is what keeps the fold safe when this is on: it
+  clones the call site, folds the callee there and runs the same simplification the
+  round applies for real, and the cost model folds the callee only when none of its
+  own landing pads are left standing. `mono/tests/tier2-inline-clause.cs` gates both
+  arms.
 
 ## Architecture of the backend (`mono/llvm/`)
 
@@ -903,8 +911,12 @@ A compile that spans the replacement is refused rather than published: the recor
 the replacements (`folds_epoch ()`) and a body stamped with an older count never takes the
 entry. `entry_point ()` then compiles the method again.
 
-`may_fold ()` refuses a clause-bearing callee outright. Lifting that needs the clause
-indices rebased into a combined array and each landing pad's dispatch rebuilt.
+`is_small_and_clause_free ()` still refuses a clause-bearing callee at the pre-pass. The
+tier-2 cost model does not: it folds one once `clause_survives_fold ()`
+(`passes/top-down-inline.cpp`) has shown, on a clone of the call site folded and simplified
+the way the round does for real, that none of the callee's own landing pads are left
+standing — eh-gather.cpp reads a folded body's clauses off the root's own `!mono.clauses`
+alone, so nothing describes one that survives.
 
 ### Detours
 

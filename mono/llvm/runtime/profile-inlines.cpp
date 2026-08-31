@@ -163,7 +163,10 @@ ProfileInliner::materialize (Function &decl, Module &into)
 		return nullptr;
 	}
 
-	if (!is_small_and_clause_free (header, limit))
+	bool fits = fold_clause_bearing_callees () ? is_small_enough (header, limit)
+	                                           : is_small_and_clause_free (header, limit);
+
+	if (!fits)
 		return nullptr;
 
 	size_t resolved = externals_.size ();

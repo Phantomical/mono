@@ -297,6 +297,18 @@ guard_class_dispatch ()
 }
 
 bool
+fold_clause_bearing_callees ()
+{
+	static bool on = [] {
+		const char *value = g_getenv ("MONO_LLVM_JIT_FOLD_CLAUSES");
+
+		return value == nullptr || is_truthy_env_var (value);
+	}();
+
+	return on;
+}
+
+bool
 thread_static_fast_path ()
 {
 	static bool on = [] {

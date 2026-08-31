@@ -1019,6 +1019,13 @@ set(MONO_TESTS_TIER2_INLINE_NULLCHECK_SRC
   tier2-inline-nullcheck.cs
 )
 
+# Whether the cost model folds a clause-bearing callee. It runs twice, on the
+# default and with MONO_LLVM_JIT_FOLD_CLAUSES=0, and reads the variable to know
+# which arm it is in.
+set(MONO_TESTS_TIER2_INLINE_CLAUSE_SRC
+  tier2-inline-clause.cs
+)
+
 # The scalarize-arg-bonus, on a callee that only reads an uncaptured
 # argument's fields rather than dispatching on it. It runs twice, on the
 # default and with the bonus zeroed, and reads the variable to know which arm

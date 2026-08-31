@@ -114,6 +114,11 @@ bool may_fold (MonoDomain *domain, MonoMethod *callee);
 /// answer is about the caller that asked rather than about the callee alone.
 bool is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_limit);
 
+/// Whether a body of this shape is small enough for the cost model to
+/// translate and weigh it, clauses included. clause_survives_fold ()
+/// (passes/top-down-inline.cpp) is what keeps a clause-bearing fold safe.
+bool is_small_enough (MonoMethodHeader *header, uint32_t il_limit);
+
 /// Whether this root has taken callee in already. It answers yes for root
 /// itself, which the list holds so that a candidate calling back into root does
 /// not copy root into its own callee.

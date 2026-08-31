@@ -676,6 +676,18 @@ mono_runtime_suite(runtime-tier2-inline-policy-off TESTS ${_tier2_inline_policy}
                        "MONO_INLINE_POLICY=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=110 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-scalarize-arg-bonus=0 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false")
 
+# Whether the cost model folds a clause-bearing callee once its clause is dead.
+# PromoteNow drives the compiles, so self-promotion is off, and the trivial
+# pre-pass is off so a fold the test reads is never that one's instead.
+_mono_exe_list(_tier2_inline_clause ${MONO_TESTS_TIER2_INLINE_CLAUSE_SRC})
+mono_runtime_suite(runtime-tier2-inline-clause TESTS ${_tier2_inline_clause}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0")
+mono_runtime_suite(runtime-tier2-inline-clause-off TESTS ${_tier2_inline_clause}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_LLVM_JIT_FOLD_CLAUSES=0")
+
 # The raising arm mono-inline-implicit-null-free leaves out of a callee's
 # cost. The body is past the default cost-translate limit and past the
 # default cold-callsite threshold, so both arms raise both -- the file says

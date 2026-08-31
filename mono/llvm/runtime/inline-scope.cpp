@@ -174,6 +174,12 @@ is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_limit)
 }
 
 bool
+is_small_enough (MonoMethodHeader *header, uint32_t il_limit)
+{
+	return header->code_size <= il_limit;
+}
+
+bool
 already_folded (const InlineScope &scope, MonoMethod *callee)
 {
 	return any_of (scope.folded, [&] (const InlineScope::Folded &entry) {

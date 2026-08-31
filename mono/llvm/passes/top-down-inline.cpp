@@ -182,6 +182,72 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 	return body;
 }
 
+/// Whether callee's own translation wrote a clause of its own, rather than
+/// merely calling into code the caller's clauses already cover.
+bool
+has_own_clause (const Function &callee)
+{
+	for (const Instruction &i : instructions (callee))
+		if (isa<LandingPadInst> (i))
+			return true;
+
+	return false;
+}
+
+/// The kind clause_survives_fold () tags callee's own landing pads with, to
+/// tell them apart once they are cloned into another function.
+constexpr StringRef clause_trial_tag = "mono.clause-trial";
+
+/// Whether folding call leaves one of callee's own landing pads live.
+///
+/// eh-gather.cpp reads a folded body's geometry off the root's own
+/// !mono.clauses, so a clause the fold leaves live has nothing left to
+/// describe it. This clones the site's function and folds call into the
+/// clone. It then runs the same simplification the round applies for real,
+/// and reads back whether a tagged landing pad is still standing.
+///
+/// The argument that answers callee's own type test is fixed at this call
+/// site, so nothing the clone misses can change the verdict.
+bool
+clause_survives_fold (CallBase &call, Function &callee, FunctionPassManager &simplify,
+                      FunctionAnalysisManager &fam,
+                      function_ref<AssumptionCache & (Function &)> get_ac)
+{
+	MDNode *tag = MDNode::get (callee.getContext (), {});
+
+	for (Instruction &i : instructions (callee))
+		if (isa<LandingPadInst> (i))
+			i.setMetadata (clause_trial_tag, tag);
+
+	ValueToValueMapTy vmap;
+	Function *trial = CloneFunction (call.getFunction (), vmap);
+	auto *site = cast<CallBase> (static_cast<Value *> (vmap[&call]));
+
+	trial->removeFnAttr (tier_counter_attribute);
+
+	InlineFunctionInfo ifi (get_ac);
+	bool survives = true;
+
+	if (InlineFunction (*site, ifi, /*MergeAttributes=*/true).isSuccess ()) {
+		simplify.run (*trial, fam);
+
+		survives = false;
+		for (Instruction &i : instructions (*trial))
+			if (i.getMetadata (clause_trial_tag) != nullptr) {
+				survives = true;
+				break;
+			}
+	}
+
+	fam.clear (*trial, trial->getName ());
+	trial->eraseFromParent ();
+
+	for (Instruction &i : instructions (callee))
+		i.setMetadata (clause_trial_tag, nullptr);
+
+	return survives;
+}
+
 } // namespace
 
 PreservedAnalyses
@@ -335,6 +401,15 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 			if (!cost) {
 				candidates->declined (*root, *callee, cost, site.count);
+				continue;
+			}
+
+			if (has_own_clause (*callee)
+			    && clause_survives_fold (*call, *callee, simplify_, fam, get_ac)) {
+				candidates->declined (
+					*root, *callee,
+					InlineCost::getNever ("its clause has nowhere to sit once folded"),
+					site.count);
 				continue;
 			}
 

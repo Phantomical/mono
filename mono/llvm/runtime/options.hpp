@@ -132,6 +132,14 @@ bool guard_array_dispatch ();
 /// pass.
 bool guard_class_dispatch ();
 
+/// Whether MONO_LLVM_JIT_FOLD_CLAUSES left the tier-2 cost model able to
+/// translate a clause-bearing callee at all.
+///
+/// A false value refuses one the way the shape-test pre-pass always does.
+/// clause_survives_fold ()'s trial has to give the same answer when it
+/// declines a callee for real.
+bool fold_clause_bearing_callees ();
+
 /// Whether MONO_LLVM_JIT_THREAD_STATIC left the thread-static fast path on.
 ///
 /// A false value sends every thread static back through mono_domain_get () and
