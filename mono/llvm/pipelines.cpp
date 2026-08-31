@@ -12,6 +12,7 @@
 #include "passes/devirtualize.hpp"
 #include "passes/dump-ir.hpp"
 #include "passes/fold-delegate.hpp"
+#include "passes/fold-empty-finally.hpp"
 #include "passes/inline-copies.hpp"
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
@@ -74,6 +75,7 @@
 #include <llvm/Transforms/Vectorize/VectorCombine.h>
 #include <llvm/Analysis/ProfileSummaryInfo.h>
 #include <llvm/ProfileData/InstrProfWriter.h>
+#include <llvm/Support/CommandLine.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/VirtualFileSystem.h>
 #include <string>
@@ -89,6 +91,17 @@ register_mono_analyses (llvm::FunctionAnalysisManager &fam)
 
 
 namespace {
+
+/*
+ * The runtime links every dylib that registers an LLVM command-line option
+ * into one process, and a second registration under a name the first took is
+ * an error at startup. The mono- prefix is what keeps this one off whatever
+ * name LLVM itself might otherwise have taken.
+ */
+llvm::cl::opt<bool> FoldEmptyFinally (
+	"mono-fold-empty-finally", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Erase a finally's body markers and thread-abort check "
+	                "once nothing survives between them"));
 
 /// Where buildPgoUsePipeline () mounts the counts for the reader to open.
 constexpr const char *profile_file = "/mono.profdata";
@@ -581,6 +594,24 @@ MonoPassBuilder::buildTier2SimplificationPipeline ()
 	 * lowered cast leaves, where an opaque call left it nothing to read.
 	 */
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::casts));
+
+	/*
+	 * Behind the O3 pass above, which finds more of these than the common
+	 * pipeline's own O1 pass does, and behind buildPgoUsePipeline (), so the
+	 * CFG that reader matches against is still the one tier 1 instrumented -
+	 * tier 1 never runs this pass, so its own compile leaves the shell
+	 * standing. FastISel and no CGSCC layer are what make tier 1 a worse bet
+	 * for it anyway: a callee's own body stays an opaque call there, so a
+	 * plain translation rarely has a finally to find dead in the first
+	 * place.
+	 *
+	 * This function is also buildTier2MaterializePipeline (), so a candidate
+	 * the cost model materializes gets the same fold: one it leaves with no
+	 * markers of its own no longer trips has_own_clause ()
+	 * (top-down-inline.cpp) on that account.
+	 */
+	if (FoldEmptyFinally)
+		MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::FoldEmptyFinallyPass ()));
 
 	return MPM;
 }

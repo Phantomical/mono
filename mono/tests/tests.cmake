@@ -558,6 +558,7 @@ set(MONO_TESTS_CS_SRC
   finally-throwing-handler.cs
   finally-gc-move.cs
   finally-nested-resume.cs
+  finally-fold-empty.cs
   bug-60862.cs
   bug-unity-1.cs
 )

@@ -2,11 +2,10 @@
 
 #include "pipelines.hpp"
 
+#include "finally-marker.hpp"
 #include "inline-copies.hpp"
 #include "inline-cost.hpp"
 #include "tier-counter.hpp"
-
-#include "../mono_lsda_format.hpp"
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/AssumptionCache.h>
@@ -18,7 +17,6 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
-#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/ValueHandle.h>
 #include <llvm/Linker/Linker.h>
@@ -185,35 +183,13 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 	return body;
 }
 
-/// Whether i is one of the front end's finally-body markers: an
-/// `llvm.experimental.stackmap` call whose id names a finally clause
-/// (method-to-llvm/exceptions.cpp, mono_lsda_format.hpp).
-bool
-is_finally_marker (const Instruction &i)
-{
-	const auto *call = dyn_cast<IntrinsicInst> (&i);
-
-	if (call == nullptr || call->getIntrinsicID () != Intrinsic::experimental_stackmap)
-		return false;
-
-	const auto *id = dyn_cast<ConstantInt> (call->getArgOperand (0));
-
-	if (id == nullptr)
-		return false;
-
-	uint64_t base = id->getZExtValue () & ~MONO_LLVM_FINALLY_STACKMAP_ID_MASK;
-
-	return base == MONO_LLVM_FINALLY_STACKMAP_ID_BASE
-	       || base == MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE;
-}
-
 /// Whether callee's own translation wrote a clause of its own, rather than
 /// merely calling into code the caller's clauses already cover.
 bool
 has_own_clause (const Function &callee)
 {
 	for (const Instruction &i : instructions (callee))
-		if (isa<LandingPadInst> (i) || is_finally_marker (i))
+		if (isa<LandingPadInst> (i) || finally_body_marker (i))
 			return true;
 
 	return false;
@@ -245,7 +221,7 @@ clause_survives_fold (CallBase &call, Function &callee, FunctionPassManager &sim
 	MDNode *tag = MDNode::get (callee.getContext (), {});
 
 	for (Instruction &i : instructions (callee))
-		if (isa<LandingPadInst> (i) || is_finally_marker (i))
+		if (isa<LandingPadInst> (i) || finally_body_marker (i))
 			i.setMetadata (clause_trial_tag, tag);
 
 	ValueToValueMapTy vmap;
