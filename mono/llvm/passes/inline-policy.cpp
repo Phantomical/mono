@@ -138,15 +138,21 @@ erasable_allocation (const Value *v)
 	return allocator != nullptr && allocator->hasFnAttribute (Attribute::AllocKind);
 }
 
-/// Whether \p f returns an object it allocated under a class it names.
+/// Whether \p f returns a value whose class the IR states outright: an
+/// allocation under a named class, an initonly static read, or a further
+/// call whose own declared return type is sealed.
 bool
-returns_a_named_allocation (const Function &f)
+returns_a_named_class (const Function &f)
 {
 	for (const BasicBlock &block : f) {
 		const auto *ret = dyn_cast<ReturnInst> (block.getTerminator ());
 
-		if (ret != nullptr && ret->getReturnValue () != nullptr
-		    && allocated_under_a_named_class (ret->getReturnValue ()))
+		if (ret == nullptr || ret->getReturnValue () == nullptr)
+			continue;
+
+		auto [klass, exact] = stated_class (ret->getReturnValue (), f);
+
+		if (klass != nullptr && exact)
 			return true;
 	}
 
@@ -457,10 +463,10 @@ call_site_bonus (const CallBase &call, const Function &callee)
 	int bonus = 0;
 
 	// The caller dispatches on what this call returns and cannot name the
-	// target. The callee returns an object it allocated, so the fold puts a
-	// class where the dispatch reads a pointer.
+	// target. The callee's own return states a class, so the fold puts one
+	// where the dispatch reads a pointer.
 	if (dispatches_unresolved_on (&call, *caller)
-	    && returns_a_named_allocation (callee))
+	    && returns_a_named_class (callee))
 		bonus += DevirtualizeReturnBonus;
 
 	unsigned shared =

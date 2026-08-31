@@ -446,6 +446,12 @@ exact_class (Value *v, const Function &f, const ConstantValues &values)
 	if (klass == nullptr || exact)
 		return klass;
 
+	return bound_is_exact (klass) ? klass : nullptr;
+}
+
+bool
+bound_is_exact (MonoClass *klass)
+{
 	/*
 	 * An array is marked sealed and is still not exact. A slot admits every
 	 * array of that rank with the same cast class, and each of those carries a
@@ -459,11 +465,8 @@ exact_class (Value *v, const Function &f, const ConstantValues &values)
 	 * declare an enum over any type at all and put its array in the set.
 	 * `mono/tests/array-devirt.cs` gates the answer.
 	 */
-	if (!m_class_is_sealed (klass) || m_class_get_rank (klass) != 0
-	    || mono_class_is_marshalbyref (klass))
-		return nullptr;
-
-	return klass;
+	return m_class_is_sealed (klass) && m_class_get_rank (klass) == 0
+	       && !mono_class_is_marshalbyref (klass);
 }
 
 MonoClass *

@@ -103,20 +103,26 @@ std::pair<MonoClass *, bool> stated_class (const llvm::Value *v, const llvm::Fun
 std::pair<MonoClass *, bool> operand_class (llvm::Value *v, const llvm::Function &f,
                                             const ConstantValues &values);
 
-/// Returns the class \p v is, or null where the IR gives only a bound this
-/// cannot sharpen. \p f and \p values carry the same rule as above.
-///
-/// A sealed class admits itself alone, so a bound on one is the class the value
-/// is. Two shapes are marked sealed and are not exact all the same. An array
-/// is, because covariance puts `Derived[]` under a `Base[]` slot. So is a
-/// marshal-by-ref class, because such a slot can hold a transparent proxy,
-/// whose vtable is not the class's.
+/// Returns the class \p v is, or null where the IR gives only a bound
+/// `bound_is_exact ()` cannot sharpen. \p f and \p values carry the same rule
+/// as above.
 ///
 /// Unlike `operand_class ()`, a null reaching \p v does not make the answer no
 /// class. This assumes the caller dereferences \p v right after, so the path
 /// carrying null faults before the use and the answer never has to cover it. A
 /// caller that does not dereference \p v must call `operand_class ()` instead.
 MonoClass *exact_class (llvm::Value *v, const llvm::Function &f, const ConstantValues &values);
+
+/// Whether a value merely bounded by \p klass is thereby the class it is.
+///
+/// A sealed class admits itself alone, so a bound on one is the class the
+/// value is. Two shapes are marked sealed and are not exact all the same. An
+/// array is, because covariance puts `Derived[]` under a `Base[]` slot. So is
+/// a marshal-by-ref class, because such a slot can hold a transparent proxy,
+/// whose vtable is not the class's.
+///
+/// \p klass must not be null.
+bool bound_is_exact (MonoClass *klass);
 
 /// A class \p v plausibly has, for a caller that compares against it before it
 /// acts on the answer. Null where this walk names none.

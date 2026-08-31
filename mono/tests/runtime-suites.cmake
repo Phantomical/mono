@@ -676,6 +676,20 @@ mono_runtime_suite(runtime-tier2-inline-policy-off TESTS ${_tier2_inline_policy}
                        "MONO_INLINE_POLICY=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=110 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-scalarize-arg-bonus=0 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false")
 
+# The return bonus on a callee that forwards a sealed-return call's answer
+# rather than allocating its own. Two arms the same way, and the file says
+# why it names a threshold of its own.
+_mono_exe_list(_tier2_inline_return_forward ${MONO_TESTS_TIER2_INLINE_RETURN_FORWARD_SRC})
+mono_runtime_suite(runtime-tier2-inline-return-forward TESTS ${_tier2_inline_return_forward}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=80")
+mono_runtime_suite(runtime-tier2-inline-return-forward-off TESTS ${_tier2_inline_return_forward}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=80 --llvm-opt=-mono-inline-devirt-return-bonus=0")
+
 # Whether the cost model folds a clause-bearing callee once its clause is dead.
 # PromoteNow drives the compiles, so self-promotion is off, and the trivial
 # pre-pass is off so a fold the test reads is never that one's instead.

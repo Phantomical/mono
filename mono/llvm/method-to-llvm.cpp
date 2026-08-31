@@ -2054,15 +2054,15 @@ MethodLLVMEmitter::emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer
 	                     llvm::MDNode::get (context (), {}));
 }
 
-/// The class an argument declared \p type is bounded by, or null where the
-/// declared type bounds nothing a pass can read.
+/// The class a slot or a call declared \p type is bounded by, or null where
+/// the declared type bounds nothing a pass can read.
 ///
 /// Only a type that is always an object reference bounds anything. A byref
 /// does not, and neither does a value type, a pointer or a generic parameter.
 /// A class the context settles is not this body's to name, because a shared
 /// body serves every instantiation and each of them has a different one.
 MonoClass *
-MethodLLVMEmitter::parameter_class (MonoType *type)
+MethodLLVMEmitter::declared_class (MonoType *type)
 {
 	if (type->byref || !MONO_TYPE_IS_REFERENCE (type))
 		return nullptr;
@@ -2107,7 +2107,7 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 		alloca->setAlignment (type_alignment (mtype, native));
 		builder.CreateAlignedStore (function->getArg (at), alloca, alloca->getAlign ());
 
-		if (MonoClass *declared = parameter_class (mtype))
+		if (MonoClass *declared = declared_class (mtype))
 			classes.push_back ({ at, declared });
 
 		args.push_back ({

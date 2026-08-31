@@ -1034,6 +1034,14 @@ set(MONO_TESTS_TIER2_INLINE_SCALARIZE_SRC
   tier2-inline-scalarize.cs
 )
 
+# The return-devirtualization bonus, on a callee that forwards a further
+# call's answer instead of allocating its own. It runs twice, on the default
+# and with the bonus zeroed, and reads the variable to know which arm it is
+# in.
+set(MONO_TESTS_TIER2_INLINE_RETURN_FORWARD_SRC
+  tier2-inline-return-forward.cs
+)
+
 # Entering a delegate's target instead of reading it off the delegate. It runs
 # twice, on the default and with the fold off, and reads the variable to know
 # which arm it is in. Every value it asserts holds in both; the stack trace that

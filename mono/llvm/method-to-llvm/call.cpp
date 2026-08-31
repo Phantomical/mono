@@ -1862,6 +1862,13 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (sig->ret->type == MONO_TYPE_VOID && !sig->ret->byref)
 		return llvm::Error::success ();
 
+	// Lets a later pass devirtualize a dispatch on this answer, or fold a
+	// type test on it, without inlining the call.
+	if (MonoClass *declared = declared_class (sig->ret))
+		if (bound_is_exact (declared))
+			if (auto *made = llvm::dyn_cast<llvm::Instruction> (result))
+				mark_exact_class (*made, declared);
+
 	return push_produced (builder, result, sig->ret);
 }
 
