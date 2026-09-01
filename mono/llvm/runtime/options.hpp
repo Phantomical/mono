@@ -3,11 +3,11 @@
  * \brief The compile-policy knobs the engine reads, most of them `--llvm-opt`
  * flags, the rest environment variables, and the lock the trace prints under.
  *
- * Every value here is read once and cached, so setting one of these after the
- * first method has compiled does nothing. That is deliberate: caching keeps a
- * variable changed partway through a run from splitting a method's state
- * across two policies. This means a test that wants one has to set it before
- * starting the runtime, not around the call it is interested in.
+ * Every value here is settled before the first method compiles and held for
+ * the rest of the run, so setting one afterward does nothing. That is
+ * deliberate: a value changed partway through a run would split a method's
+ * state across two policies. This means a test that wants one has to set it
+ * before starting the runtime, not around the call it is interested in.
  */
 
 #ifndef MONO_LLVM_RUNTIME_OPTIONS_HPP
