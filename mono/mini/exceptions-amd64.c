@@ -575,11 +575,11 @@ mono_arch_unwind_frame (MonoDomain *domain, MonoJitTlsData *jit_tls,
 		if (!ji) {
 			if (via_tramp) {
 				/*
-				 * No ji here means rip is inside mono_llvm_dyn_call_thunk. It
-				 * carries no jit info and pushes no MonoLMF of its own. Per
-				 * dyn-call-thunk.S, such a walk belongs at the LMF its caller
-				 * pushed before the call, so hand back what is now underneath
-				 * rather than trying a native unwind here.
+				 * No ji here means rip is inside mono_llvm_dyn_call_thunk,
+				 * which pushes no MonoLMF of its own. Per dyn-call-thunk.S,
+				 * such a walk belongs at the LMF its caller pushed before
+				 * the call. Hand that back rather than trying a native
+				 * unwind here.
 				 */
 				*lmf = (MonoLMF *)(((guint64)(*lmf)->previous_lmf) & ~7);
 				frame->type = FRAME_TYPE_TRAMPOLINE;

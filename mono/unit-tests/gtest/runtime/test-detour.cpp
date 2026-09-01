@@ -60,8 +60,8 @@ detoured_instance_body (void *self, int x)
 void (*g_call_through_compiled) () = nullptr;
 
 /*
- * A plain function rather than a lambda: mono_install_method_detour () takes
- * a bare function pointer, with nothing to close over the target with.
+ * A plain function, not a lambda: mono_install_method_detour () takes a
+ * bare function pointer, which cannot capture the target.
  */
 extern "C" void
 detoured_body_calls_managed ()
@@ -596,11 +596,11 @@ TEST_F (MethodDetour, DetourCallsBackIntoManagedAndThrows)
 	mono_install_method_detour (detoured, domain, (void *) detoured_body_calls_managed);
 
 	/*
-	 * mono_runtime_try_invoke (), not mono_runtime_invoke_checked (): a null
-	 * exc there only gets a substitute under a coop suspend policy
-	 * (mono_jit_runtime_invoke ()'s catchExcInMonoError), and this backend's
-	 * default is preemptive. A real exc is what puts the runtime-invoke
-	 * wrapper on its own protected path instead of the bare, uncaught one.
+	 * mono_runtime_try_invoke (), not mono_runtime_invoke_checked (): a
+	 * null exc there only gets a substitute under a coop suspend policy
+	 * (mono_jit_runtime_invoke ()'s catchExcInMonoError). This backend's
+	 * default is preemptive, and a real exc puts the runtime-invoke
+	 * wrapper on its protected path instead of the bare, uncaught one.
 	 */
 	MonoObject *exc_obj = nullptr;
 	mono_runtime_try_invoke (caller, nullptr, nullptr, &exc_obj, error);
