@@ -14,8 +14,8 @@ using System.Runtime.CompilerServices;
  * for the same callee rather than in what it is willing to spend. The suite
  * runs twice, once on the default and once with the option off, and reads
  * MONO_INLINE_POLICY to know which arm it is in. The trivial pre-pass is off
- * in both (MONO_LLVM_JIT_INLINE_IL_LIMIT=0), so a fold this reads is the cost
- * model's.
+ * in both (--llvm-opt=-mono-inline-il-limit=0), so a fold this reads is the
+ * cost model's.
  *
  * What says a fold happened is the stack trace, the way tier2-inline-cost.cs
  * reads it: a folded body owns no code, so its frame reports the offset into
@@ -23,7 +23,7 @@ using System.Runtime.CompilerServices;
  * offset into itself.
  *
  * Walk () holds eighteen dereferences, at code size past the 128-byte default
- * MONO_LLVM_JIT_INLINE_COST_IL_LIMIT, so both arms raise it. With
+ * -mono-inline-cost-il-limit, so both arms raise it. With
  * -mono-inline-cost-full, the option costs the body 380 and leaving it off
  * costs 1010 -- the 630 gap is the eighteen raising arms, each an
  * InvalidOperationException-shaped throw once counted. Both figures are past
@@ -34,9 +34,10 @@ using System.Runtime.CompilerServices;
  * 320 either side of both costs. Re-measure all of it when this starts
  * failing on one arm:
  *
- *   MONO_LLVM_JIT_TRACE=1 MONO_LLVM_JIT_TIER2_THRESHOLD=0 \
- *   MONO_LLVM_JIT_INLINE_IL_LIMIT=0 MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=512 \
- *   mono-sgen --llvm-opt=-mono-inline-cost-full \
+ *   MONO_LLVM_JIT_TRACE=1 mono-sgen --llvm-opt=-mono-tier2-threshold=0 \
+ *     --llvm-opt=-mono-inline-il-limit=0 \
+ *     --llvm-opt=-mono-inline-cost-il-limit=512 \
+ *     --llvm-opt=-mono-inline-cost-full \
  *     --llvm-opt=-mono-inline-cold-callsite-threshold=1 \
  *     tier2-inline-nullcheck.exe
  *

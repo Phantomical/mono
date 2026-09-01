@@ -66,7 +66,7 @@ mono_gtest_tests(test-llvm
   SKIP_REGEX "\\[  SKIPPED \\]"
   PROPERTIES
     LABELS llvm
-    ENVIRONMENT "MONO_LLVM_JIT_TIER2=0")
+    ENVIRONMENT "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2=0")
 
 # The JitProfile cases read the counters a tier-1 body carries. A body
 # promoted while a case reads it answers for code that no longer counts. So
@@ -79,4 +79,4 @@ mono_gtest_tests(test-llvm
   SKIP_REGEX "\\[  SKIPPED \\]"
   PROPERTIES
     LABELS llvm
-    ENVIRONMENT "MONO_LLVM_JIT_TIER2_THRESHOLD=1000000000")
+    ENVIRONMENT "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=1000000000")

@@ -15,8 +15,8 @@ using System.Runtime.InteropServices;
  * across return registers or, when it needs more of those than exist, through
  * a hidden pointer.
  *
- * MONO_LLVM_JIT_DYN_CALL=0 takes every call here back to a gsharedvt_out_sig
- * wrapper, which is the other arm. Both arms must answer OK.
+ * --llvm-opt=-mono-dyn-calls=0 takes every call here back to a
+ * gsharedvt_out_sig wrapper, which is the other arm. Both arms must answer OK.
  *
  * Two things are needed to reach the crossing at all, and without either one
  * this file passes while testing nothing:

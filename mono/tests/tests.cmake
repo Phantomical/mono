@@ -980,7 +980,8 @@ set(MONO_TESTS_FORCED_UNWIND_SRC
 
 # An exception caught above two interpreted frames rather than one. Which
 # methods are interpreted has to be pinned rather than left to promotion, so
-# this runs in a suite of its own with MONO_LLVM_JIT_TIER0 naming them.
+# this runs in a suite of its own with --llvm-opt=-mono-tier0-filter naming
+# them.
 set(MONO_TESTS_TIER_PINNED_SRC
   handle-stack-tiers.cs
   typedbyref-tier-entry.cs
@@ -1021,8 +1022,8 @@ set(MONO_TESTS_TIER2_INLINE_NULLCHECK_SRC
 )
 
 # Whether the cost model folds a clause-bearing callee. It runs twice, on the
-# default and with MONO_LLVM_JIT_FOLD_CLAUSES=0, and reads the variable to know
-# which arm it is in.
+# default and with the fold off, and reads MONO_FOLD_CLAUSES to know which arm
+# it is in.
 set(MONO_TESTS_TIER2_INLINE_CLAUSE_SRC
   tier2-inline-clause.cs
 )

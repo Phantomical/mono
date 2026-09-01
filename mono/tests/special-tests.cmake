@@ -405,7 +405,8 @@ _mono_special(tasklets.exe SOURCES tasklets.cs REFS "${_class}/Mono.Tasklets.dll
 
 # Deliberately invalid IL, so it is kept out of the corpus every suite runs:
 # the runtime-verification tests in runtime-suites.cmake drive it under specific
-# --security= and MONO_LLVM_JIT_TIER0 combinations and read what it prints.
+# --security= and --llvm-opt=-mono-tier0-filter combinations and read what it
+# prints.
 _mono_special(verification-invalid-il.exe IL SOURCES verification-invalid-il.il)
 _mono_special(verification-inlined-il.exe IL SOURCES verification-inlined-il.il)
 

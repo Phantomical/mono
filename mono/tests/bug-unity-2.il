@@ -4,9 +4,9 @@
 // from a trampoline record rather than refusing one.
 //
 // Which frame runs where is pinned rather than left to promotion: the consumer
-// is the only method MONO_LLVM_JIT_TIER0 names, so it interprets while the
-// producer around it compiles. No threshold produces that pair, because a
-// producer is called at least as often as the method that calls it.
+// is the only method --llvm-opt=-mono-tier0-filter names, so it interprets
+// while the producer around it compiles. No threshold produces that pair,
+// because a producer is called at least as often as the method that calls it.
 
 .assembly extern mscorlib { }
 .assembly 'bug-unity-2' { }

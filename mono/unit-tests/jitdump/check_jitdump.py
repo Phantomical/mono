@@ -3,9 +3,9 @@
 
 perf resolves a sample against the range of the record holding the address, and
 the error a wrong range makes is invisible from the report: the names are real
-methods and the totals are plausible.  A tier-1 promotion links up to
-MONO_LLVM_JIT_BATCH methods into one object, which is where the neighbours are
-other methods.
+methods and the totals are plausible.  A tier-1 promotion links up to a batch's
+worth of methods into one object, which is where the neighbours are other
+methods.
 
 The rule is a partition: the ranges do not overlap, and none of them sits inside
 another.  A record's code_size is then the method's own code size, and no
@@ -29,7 +29,7 @@ RECORD_HEADER = 16
 LOAD_FIELDS = struct.Struct("<IIQQQQ")
 
 # How many of the fixture's own bodies have to reach tier 1 before the run says
-# anything.  MONO_LLVM_JIT_BATCH defaults to 32, so this is one full batch.
+# anything.  The batch size defaults to 32, so this is one full batch.
 WANT_COMPILED = 32
 
 

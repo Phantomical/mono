@@ -265,7 +265,7 @@ list(REMOVE_ITEM _tailcall
 # tier they would test the interpreter instead of the backend -- the tier-0 arm
 # below is where that configuration is covered.
 mono_runtime_suite(runtime TESTS ${_regular}
-                   ENV "MONO_LLVM_JIT_TIER0=0"
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0"
                    SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
                    LONG dynamic-method-churn.exe
                         appdomain-unload.exe
@@ -276,7 +276,7 @@ mono_runtime_suite(runtime TESTS ${_regular}
 # recurse deeply enough that a missed tail call is a stack overflow rather than
 # a subtle difference, so running them is the check.
 mono_runtime_suite(runtime-tailcall TESTS ${_tailcall}
-                   ENV "MONO_LLVM_JIT_TIER0=0")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0")
 
 mono_runtime_suite(gshared LABEL gshared TESTS ${_gshared})
 
@@ -286,12 +286,12 @@ mono_runtime_suite(gshared LABEL gshared TESTS ${_gshared})
 # the one that reaches mono.alloc.object.kept for a class nothing else marks, and
 # the only one that reaches mono.alloc.vector.kept at all.
 mono_runtime_suite(runtime-alloc-kept TESTS alloc-elide.exe
-                   ENV "MONO_LLVM_JIT_TIER0=0" "MONO_DEBUG=gen-seq-points")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0" "MONO_DEBUG=gen-seq-points")
 
 # GVN and DSE read allockind(zeroed), and tier 1 runs neither. The threshold is
 # low enough that each arm promotes inside the loop in Main.
 mono_runtime_suite(runtime-alloc-zeroed TESTS alloc-elide.exe
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=100000")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=100000")
 
 # The copy a value type with references moves as, and the cards behind it.
 # check-remset-consistency walks the old heap at each minor collection and
@@ -302,7 +302,7 @@ mono_runtime_suite(runtime-alloc-zeroed TESTS alloc-elide.exe
 # the dead-allocation walk. The arms are short enough that the program ends
 # first at the default.
 mono_runtime_suite(runtime-value-copy TESTS value-copy.exe GC sgen
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=100000"
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=100000"
                        "MONO_GC_DEBUG=check-remset-consistency")
 
 # Continuations, whose two outcomes want naming rather than accepting either.
@@ -310,9 +310,9 @@ mono_runtime_suite(runtime-value-copy TESTS value-copy.exe GC sgen
 # heap, they work. Boehm is the collector that does not, and the tier-0 arm
 # further down is the engine that does not.
 mono_runtime_suite(runtime-tasklets TESTS tasklets.exe GC sgen
-                   ENV "MONO_LLVM_JIT_TIER0=0" "MONO_TEST_TASKLETS=run")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0" "MONO_TEST_TASKLETS=run")
 mono_runtime_suite(runtime-tasklets-boehm TESTS tasklets.exe GC boehm
-                   ENV "MONO_LLVM_JIT_TIER0=0" "MONO_TEST_TASKLETS=refuse")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0" "MONO_TEST_TASKLETS=refuse")
 
 if(MONO_ENABLE_INTERPRETER)
   set(_interp ${_regular})
@@ -361,7 +361,7 @@ if(MONO_ENABLE_INTERPRETER)
   # values rather than crashing - so it wants a test that reads them back.
   mono_runtime_suite(runtime-interp-entries LABEL interp
                      TESTS interp-entries.exe
-                     ENV "MONO_LLVM_JIT_TIER0=Callee")
+                     ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=Callee")
 
   # The other direction: Interpreted's methods run in the interpreter while
   # their callees compile, so every call in Run () leaves the interpreter for
@@ -370,7 +370,7 @@ if(MONO_ENABLE_INTERPRETER)
   # interpreted too.
   mono_runtime_suite(runtime-interp-calls-compiled LABEL interp
                      TESTS interp-calls-compiled.exe
-                     ENV "MONO_LLVM_JIT_TIER0=Interpreted")
+                     ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=Interpreted")
 
   # The same crossing into a wrapper. A dynamic method is the shape it is
   # written for: tier 0 accepts that kind, so a compiled one used to be entered
@@ -379,7 +379,7 @@ if(MONO_ENABLE_INTERPRETER)
   # its callees compile.
   mono_runtime_suite(runtime-interp-jit-call-wrappers LABEL interp
                      TESTS interp-jit-call-wrappers.exe
-                     ENV "MONO_LLVM_JIT_TIER0=Interpreted")
+                     ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=Interpreted")
 
   # And at the default tier, where the wrappers the test calls start in the
   # interpreter instead of compiling on the thread that needed them.
@@ -618,13 +618,13 @@ endif()
 # with two interpreted frames under it, and a compiled one between them. The
 # other is an interpreted frame calling through an address a compiled frame took.
 # Promotion would eventually compile every method in either, so the ones that are
-# to stay interpreted are named instead -- MONO_LLVM_JIT_TIER0 takes a substring
+# to stay interpreted are named instead -- mono-tier0-filter takes a substring
 # of the printed name.
 if(MONO_ENABLE_INTERPRETER)
   _mono_exe_list(_tier_pinned ${MONO_TESTS_TIER_PINNED_SRC}
                               ${MONO_TESTS_TIER_PINNED_IL_SRC})
   mono_runtime_suite(runtime-tier-pinned LABEL interp TESTS ${_tier_pinned}
-                     ENV "MONO_LLVM_JIT_TIER0=InterpMe")
+                     ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=InterpMe")
 endif()
 
 # The tier-2 cost model. Its root has to gather counts at tier 1 and then be
@@ -632,7 +632,7 @@ endif()
 # off and the test drives the compile itself.
 _mono_exe_list(_tier2_costed ${MONO_TESTS_TIER2_COSTED_SRC})
 mono_runtime_suite(runtime-tier2-costed TESTS ${_tier2_costed}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0")
 
 # The work half of the tier-2 counter, which promotes a body the calls alone
 # never reach. The threshold is named here rather than left at its default, so
@@ -642,29 +642,30 @@ mono_runtime_suite(runtime-tier2-costed TESTS ${_tier2_costed}
 # arm turns automatic promotion off and asserts that neither kernel moves.
 _mono_exe_list(_tier2_cost_trigger ${MONO_TESTS_TIER2_COST_TRIGGER_SRC})
 mono_runtime_suite(runtime-tier2-cost-trigger TESTS ${_tier2_cost_trigger}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=10000000")
+                   ENV "MONO_WANT_TIER2=on"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000000")
 mono_runtime_suite(runtime-tier2-cost-trigger-off TESTS ${_tier2_cost_trigger}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0")
+                   ENV "MONO_WANT_TIER2=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0")
 
 # Entering a delegate's target directly. Two arms, on and off, the way
 # runtime-tier2-cost-trigger has it. The root drives its own compiles, so
 # self-promotion is off: what the test reads is the tier it asked for.
 _mono_exe_list(_delegate_fold ${MONO_TESTS_DELEGATE_FOLD_SRC})
 mono_runtime_suite(runtime-delegate-fold TESTS ${_delegate_fold}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0")
 mono_runtime_suite(runtime-delegate-fold-off TESTS ${_delegate_fold}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_FOLD_DELEGATES=0")
+                   ENV "MONO_FOLD_DELEGATES=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-fold-delegates=0")
 
 # The guard a dispatch on an array receiver goes through. It is tier 2's, and
 # the default threshold is far past what this program runs, so the arm that
 # reaches it names one of its own. The off arm leaves every such site
 # dispatching, which is the answer the guard has to agree with.
 mono_runtime_suite(runtime-array-guard TESTS array-devirt.exe
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=10000")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000")
 mono_runtime_suite(runtime-array-guard-off TESTS array-devirt.exe
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=10000"
-                       "MONO_LLVM_JIT_GUARD_ARRAYS=0")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-arrays=0")
 
 # The guess GuardDispatchPass takes on a receiver it cannot prove a class
 # for, behind the same array rule's guard. Tier 2 only, same as the array
@@ -672,10 +673,9 @@ mono_runtime_suite(runtime-array-guard-off TESTS array-devirt.exe
 # calls array-devirt.cs does to reach it. The off arm leaves every such site
 # dispatching, which is the answer the guess has to agree with.
 mono_runtime_suite(runtime-class-guard TESTS class-devirt.exe
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=10000")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000")
 mono_runtime_suite(runtime-class-guard-off TESTS class-devirt.exe
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=10000"
-                       "MONO_LLVM_JIT_GUARD_CLASSES=0")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-classes=0")
 
 # The bonuses mono adds to the cost model. Two arms, on and off, the way
 # runtime-tier2-cost-trigger has it. The root drives its own compiles, so
@@ -684,40 +684,30 @@ mono_runtime_suite(runtime-class-guard-off TESTS class-devirt.exe
 # The threshold and the calibration behind it are the test file's subject.
 _mono_exe_list(_tier2_inline_policy ${MONO_TESTS_TIER2_INLINE_POLICY_SRC})
 mono_runtime_suite(runtime-tier2-inline-policy TESTS ${_tier2_inline_policy}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=110")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=110")
 mono_runtime_suite(runtime-tier2-inline-policy-off TESTS ${_tier2_inline_policy}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=110 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-scalarize-arg-bonus=0 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false")
+                   ENV "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=110 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-scalarize-arg-bonus=0 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false")
 
 # The return bonus on a callee that forwards a sealed-return call's answer
 # rather than allocating its own. Two arms the same way, and the file says
 # why it names a threshold of its own.
 _mono_exe_list(_tier2_inline_return_forward ${MONO_TESTS_TIER2_INLINE_RETURN_FORWARD_SRC})
 mono_runtime_suite(runtime-tier2-inline-return-forward TESTS ${_tier2_inline_return_forward}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=80")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=80")
 mono_runtime_suite(runtime-tier2-inline-return-forward-off TESTS ${_tier2_inline_return_forward}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=80 --llvm-opt=-mono-inline-devirt-return-bonus=0")
+                   ENV "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=80 --llvm-opt=-mono-inline-devirt-return-bonus=0")
 
 # Whether the cost model folds a clause-bearing callee once its clause is dead.
 # PromoteNow drives the compiles, so self-promotion is off, and the trivial
 # pre-pass is off so a fold the test reads is never that one's instead.
 _mono_exe_list(_tier2_inline_clause ${MONO_TESTS_TIER2_INLINE_CLAUSE_SRC})
 mono_runtime_suite(runtime-tier2-inline-clause TESTS ${_tier2_inline_clause}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
 mono_runtime_suite(runtime-tier2-inline-clause-off TESTS ${_tier2_inline_clause}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_LLVM_JIT_FOLD_CLAUSES=0")
+                   ENV "MONO_FOLD_CLAUSES=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-fold-clauses=0")
 
 # The raising arm mono-inline-implicit-null-free leaves out of a callee's
 # cost. The body is past the default cost-translate limit and past the
@@ -725,16 +715,10 @@ mono_runtime_suite(runtime-tier2-inline-clause-off TESTS ${_tier2_inline_clause}
 # why.
 _mono_exe_list(_tier2_inline_nullcheck ${MONO_TESTS_TIER2_INLINE_NULLCHECK_SRC})
 mono_runtime_suite(runtime-tier2-inline-nullcheck TESTS ${_tier2_inline_nullcheck}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=512"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inlinedefault-threshold=1200 --llvm-opt=-mono-inline-cold-callsite-threshold=700")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inlinedefault-threshold=1200 --llvm-opt=-mono-inline-cold-callsite-threshold=700")
 mono_runtime_suite(runtime-tier2-inline-nullcheck-off TESTS ${_tier2_inline_nullcheck}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=512"
-                       "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inlinedefault-threshold=1200 --llvm-opt=-mono-inline-cold-callsite-threshold=700 --llvm-opt=-mono-inline-implicit-null-free=false")
+                   ENV "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inlinedefault-threshold=1200 --llvm-opt=-mono-inline-cold-callsite-threshold=700 --llvm-opt=-mono-inline-implicit-null-free=false")
 
 # The scalarize-arg-bonus, on a callee that only reads an uncaptured
 # argument's fields. The off arm leaves the other bonuses alone, because what
@@ -742,45 +726,29 @@ mono_runtime_suite(runtime-tier2-inline-nullcheck-off TESTS ${_tier2_inline_null
 # takes with the argument bonus instead.
 _mono_exe_list(_tier2_inline_scalarize ${MONO_TESTS_TIER2_INLINE_SCALARIZE_SRC})
 mono_runtime_suite(runtime-tier2-inline-scalarize TESTS ${_tier2_inline_scalarize}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=200")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=200")
 mono_runtime_suite(runtime-tier2-inline-scalarize-off TESTS ${_tier2_inline_scalarize}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=200 --llvm-opt=-mono-inline-scalarize-arg-bonus=0")
+                   ENV "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=200 --llvm-opt=-mono-inline-scalarize-arg-bonus=0")
 
 # What the cost model answers about a receiver the call site allocated. The off
 # arm turns those answers off and leaves the bonuses alone, because what it
 # separates is the fold rather than a threshold.
 _mono_exe_list(_tier2_inline_dispatch ${MONO_TESTS_TIER2_INLINE_DISPATCH_SRC})
 mono_runtime_suite(runtime-tier2-inline-dispatch TESTS ${_tier2_inline_dispatch}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=256"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=190")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=256 --llvm-opt=-mono-inline-cold-callsite-threshold=190")
 mono_runtime_suite(runtime-tier2-inline-dispatch-off TESTS ${_tier2_inline_dispatch}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=256"
-                       "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=190 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false")
+                   ENV "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=256 --llvm-opt=-mono-inline-cold-callsite-threshold=190 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false")
 
 # What the cost model answers about a type test over a parameter. The off arm
 # turns that answer off alone, so what it separates is the answered cascade.
 _mono_exe_list(_tier2_inline_casts ${MONO_TESTS_TIER2_INLINE_CASTS_SRC})
 mono_runtime_suite(runtime-tier2-inline-casts TESTS ${_tier2_inline_casts}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=512"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=400")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
 mono_runtime_suite(runtime-tier2-inline-casts-off TESTS ${_tier2_inline_casts}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=512"
-                       "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=400 --llvm-opt=-mono-inline-answer-casts=false")
+                   ENV "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inline-cold-callsite-threshold=400 --llvm-opt=-mono-inline-answer-casts=false")
 
 # A wrapper folded into its caller. The off arm leaves the cost model nothing to
 # translate, which is what separates the fold from the frame: both arms assert
@@ -788,15 +756,10 @@ mono_runtime_suite(runtime-tier2-inline-casts-off TESTS ${_tier2_inline_casts}
 # caller's. The site is cold, so both name a threshold that reaches it.
 _mono_exe_list(_tier2_inline_wrapper ${MONO_TESTS_TIER2_INLINE_WRAPPER_SRC})
 mono_runtime_suite(runtime-tier2-inline-wrapper TESTS ${_tier2_inline_wrapper}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=400")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
 mono_runtime_suite(runtime-tier2-inline-wrapper-off TESTS ${_tier2_inline_wrapper}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=0"
-                       "MONO_WRAPPER_FOLD=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cold-callsite-threshold=400")
+                   ENV "MONO_WRAPPER_FOLD=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
 
 # MONO_ENV_OPTIONS has to reach the runtime before it parses its own argv.
 foreach(_gc IN LISTS _mono_gcs)
@@ -874,21 +837,21 @@ function(_mono_verification_check name expect)
 endfunction()
 
 _mono_verification_check(runtime-verification-off "ran 42"
-                         ENV "MONO_LLVM_JIT_TIER0=0" REJECT "rejected")
+                         ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0" REJECT "rejected")
 _mono_verification_check(runtime-verification-validil
                          "rejected System.InvalidProgramException"
                          ARGS --security=validil
-                         ENV "MONO_LLVM_JIT_TIER0=0" REJECT "ran 42")
+                         ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0" REJECT "ran 42")
 _mono_verification_check(runtime-verification-tier0
                          "interpreting Probe:Unverifiable"
-                         ENV "MONO_LLVM_JIT_TIER0=Probe:Unverifiable"
+                         ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=Probe:Unverifiable"
                          REJECT "rejected")
 # Rejecting without ever printing the routing line is the placement itself: the
 # verdict is reached before the tier is chosen.
 _mono_verification_check(runtime-verification-validil-tier0
                          "rejected System.InvalidProgramException"
                          ARGS --security=validil
-                         ENV "MONO_LLVM_JIT_TIER0=Probe:Unverifiable"
+                         ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=Probe:Unverifiable"
                          REJECT "ran 42|interpreting Probe:Unverifiable")
 
 # Tier 0 unrestricted, so the caller is interpreted as well and reaches the

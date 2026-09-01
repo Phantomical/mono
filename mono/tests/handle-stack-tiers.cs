@@ -12,8 +12,8 @@ using System.Runtime.CompilerServices;
 //
 // Restoring only the innermost frame's handles leaves the outer one's behind,
 // and that half-fix passes the single-frame case. So the shape is pinned rather
-// than left to promotion: MONO_LLVM_JIT_TIER0 names the two methods that are to
-// stay interpreted, and everything else is compiled.
+// than left to promotion: --llvm-opt=-mono-tier0-filter names the two methods
+// that are to stay interpreted, and everything else is compiled.
 //
 // Run from a finalizer because that is where a leaked handle is visible - the
 // finalizer thread asserts its handle stack is empty each time round its loop.

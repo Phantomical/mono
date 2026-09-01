@@ -9,9 +9,9 @@ using System.Runtime.CompilerServices;
  *
  * Root () is called until it has run at tier 1 long enough to have counts, and
  * Mono.Tiering.MonoTier::PromoteNow then compiles it at tier 2 on this thread
- * against them. The suite runs with MONO_LLVM_JIT_TIER2_THRESHOLD=0, so the
- * body stays instrumented and counting and never promotes on its own - which is
- * what keeps the compile this test is about the only one there is.
+ * against them. The suite runs with --llvm-opt=-mono-tier2-threshold=0, so
+ * the body stays instrumented and counting and never promotes on its own -
+ * which is what keeps the compile this test is about the only one there is.
  *
  * What says a fold really happened is the stack trace. Every helper that threw
  * has a frame in it either way, but a folded body owns no code: its frame
@@ -94,7 +94,7 @@ static class Costed {
 		}
 	}
 
-	// Past MONO_LLVM_JIT_INLINE_COST_IL_LIMIT, which bounds how much IL one
+	// Past --llvm-opt=-mono-inline-cost-il-limit, which bounds how much IL one
 	// compile will translate in order to ask what it is worth.
 	public static void FailLong (string what, int n, bool yes)
 	{

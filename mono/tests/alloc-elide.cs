@@ -36,8 +36,8 @@ using System.Runtime.CompilerServices;
  * Each arm is one call of a small method, driven from a loop in Main. A method
  * holding its own loop is entered once, and both counters count entries, so the
  * arm would stay in the interpreter. The loop count gets the arms to tier 1.
- * Reaching tier 2 as well wants MONO_LLVM_JIT_TIER2_THRESHOLD lowered, because
- * these bodies are short enough that the program ends first. The
+ * Reaching tier 2 as well wants the tier-2 threshold lowered, because these
+ * bodies are short enough that the program ends first. The
  * `runtime-alloc-zeroed` arm lowers it, which is what reaches GVN and DSE.
  */
 

@@ -62,6 +62,15 @@ finish (llvm::Expected<void *> code, MonoError *error)
 void
 mono_llvm_jit_init (void)
 {
+	/*
+	 * mini_init () reads mono_llvm_jit_tier0_enabled () right after this
+	 * call, before any method has asked to compile - before MonoJit::create ()
+	 * would otherwise have settled these options.
+	 */
+	if (llvm::Error err = mono::apply_options ())
+		llvm::logAllUnhandledErrors (std::move (err), llvm::errs (),
+		                             "mono: could not start the LLVM backend: ");
+
 	llvm::Expected<mono::MonoBackend *> backend = mono::MonoBackend::get ();
 
 	/* The first compile asks again and reports this through its MonoError. */

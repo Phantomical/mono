@@ -1350,8 +1350,8 @@
 
 	// These need an interpreted caller calling a compiled callee, and no arm
 	// produces that pair. A callee the interpreter resolved for itself never
-	// reaches runs_at_tier0 (), so MONO_LLVM_JIT_TIER0 leaves it interpreted
-	// whatever it selects. PromoteNow () compiles it outright.
+	// reaches runs_at_tier0 (), so --llvm-opt=-mono-tier0-filter leaves it
+	// interpreted whatever it selects. PromoteNow () compiles it outright.
 	//
 	// A magic type's own body reads a parameter of that type with ldfld, and
 	// the two engines have to agree on what that reads.

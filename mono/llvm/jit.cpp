@@ -865,7 +865,7 @@ MonoJit::add_option (StringRef opt)
  * Passing an error stream is what keeps a bad option from calling exit () out
  * from under the runtime.
  */
-static Error
+Error
 apply_options ()
 {
 	static bool applied = false;
@@ -885,66 +885,48 @@ apply_options ()
 	return Error::success ();
 }
 
-// Read here rather than through runtime/options.hpp, which would put mono's
-// headers in this file. It has to answer as that copy does: a tier-1 body the
-// translator marked for a counter, in a pipeline that instruments nothing, keeps
-// a mark no pass ever reads.
-static bool
-tier2_enabled ()
-{
-	static const bool on = [] {
-		const char *value = ::getenv ("MONO_LLVM_JIT_TIER2");
+namespace {
 
-		if (value == nullptr)
-			return true;
-
-		StringRef set (value);
-
-		return !set.empty () && set != "0" && !set.equals_insensitive ("false");
-	}();
-
-	return on;
-}
+cl::opt<bool> Tier2Enabled (
+	"mono-tier2", cl::Hidden, cl::init (true),
+	cl::desc ("Compile a tier-1 body again at O3 once its profile crosses the "
+	          "promotion threshold"));
 
 /// Whether a tier-1 body gathers counts for tier 2 to read.
 ///
 /// Off, a body still counts its entries and still asks for tier 2, and the
 /// tier-2 compile then reads a profile with no records in it and lays the
 /// method out on static frequencies. That prices the counters on their own,
-/// which MONO_LLVM_JIT_TIER2 cannot: it takes the counters and the tier away
+/// which turning tier 2 off cannot: it takes the counters and the tier away
 /// together.
+cl::opt<bool> Tier1ProfilingEnabled (
+	"mono-tier1-pgo", cl::Hidden, cl::init (true),
+	cl::desc ("Instrument a tier-1 body with the counters tier 2's profile "
+	          "reads"));
+
+cl::opt<uint64_t> ProfileEntryCountOpt (
+	"mono-profile-entry", cl::Hidden, cl::init (0),
+	cl::desc ("The entry count every tier-2 body's profile is normalized to; "
+	          "0 leaves the counts as they were counted"));
+
+} // namespace
+
+bool
+tier2_pipeline_enabled ()
+{
+	return Tier2Enabled;
+}
+
 static bool
 tier1_profiling_enabled ()
 {
-	static const bool on = [] {
-		const char *value = ::getenv ("MONO_LLVM_JIT_TIER1_PGO");
-
-		if (value == nullptr)
-			return true;
-
-		StringRef set (value);
-
-		return !set.empty () && set != "0" && !set.equals_insensitive ("false");
-	}();
-
-	return on;
+	return Tier1ProfilingEnabled;
 }
 
 uint64_t
 profile_entry_count ()
 {
-	static const uint64_t entry = [] () -> uint64_t {
-		const char *value = ::getenv ("MONO_LLVM_JIT_PROFILE_ENTRY");
-
-		if (value == nullptr)
-			return 0;
-
-		uint64_t set = 0;
-
-		return StringRef (value).getAsInteger (10, set) ? 0 : set;
-	}();
-
-	return entry;
+	return ProfileEntryCountOpt;
 }
 
 /*
@@ -1236,7 +1218,7 @@ ThreadPipelines::tier1 ()
 	 * it did. The mark the translator put on a body for its counter is then one
 	 * no pass looks at.
 	 */
-	options.EnablePromotion = tier2_enabled ();
+	options.EnablePromotion = tier2_pipeline_enabled ();
 	options.EnablePGO = tier1_profiling_enabled ();
 
 	MonoPassBuilder pb (&host_target_machine (), profile_fs.get (), &tier.pic, options);

@@ -300,7 +300,7 @@ those bodies name. So `opt` reads the file as it stands, and an offline run of a
 pipeline stands in for the one inside the process. The other bodies in the module are
 dropped, and each dump costs a copy of that module.
 
-A tier-1 promotion compiles up to `MONO_LLVM_JIT_BATCH` methods in one module, and the
+A tier-1 promotion compiles up to `--llvm-opt=-mono-batch` methods in one module, and the
 IR and assembly points still print one method for each dump: the IR point keeps that
 method's body and drops the others, and the assembly point drops the other bodies from
 the clone it codegens. So a method that promoted in the middle of a batch has a dump of
@@ -343,52 +343,63 @@ Measurement:
   because it aborts under concurrent compiles.
 
 Tiering and compilation policy. Every one of these exists to split one suspect in two,
-and the note says which split:
-- `MONO_LLVM_JIT_TIER0=<substr|0>` — narrow tier 0, which is otherwise every method the
-  interpreter accepts. A false value compiles everything, which separates a tier-0 bug
-  from a backend one. A substring gets a compiled caller and an interpreted callee into
-  one process, which no threshold produces, because a callee is called at least as often
-  as its caller.
-- `MONO_LLVM_JIT_TIER1_THRESHOLD=<n>` — calls at tier 0 before a method is asked for as
-  tier 1, default 10. Zero never promotes, which separates a tier-0 entry bug from a
-  promotion bug. One promotes on the first call, which puts the switch inside a loop.
-- `MONO_LLVM_JIT_TIER2_THRESHOLD=<n>` — what a tier-1 body spends before it asks for tier
-  2, default 100000000. One unit is one instruction that emits code, and a call costs
-  `MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT` on top, so one counter reaches a body that is hot and
-  a body that is heavy. Every body takes a constant off at its entry: the blocks no loop
-  holds, plus the entry weight. A body with a loop adds the turns up in a register on top,
-  one add per loop header, and takes that total off at each exit. The exits are three: a
-  ret, a throw of the body's own, and the pad the body's own fault clause names as its
-  handler, which is what charges a callee's exception that unwinds through the frame. A
-  body that takes none of the three — one entered once that runs forever — keeps the
-  constant and no more: the rest needs OSR, which does not exist here. Zero leaves a body
-  instrumented and counting while it never promotes on its own, which is what a test
-  driving the tiers
-  through `Mono.Tiering.MonoTier::PromoteNow` wants.
-- `MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT=<n>` — what one call adds to that count, default 5000.
-  It is the exchange rate between how hot a method is and how much it does, in the same
-  units: a body that does no work promotes after threshold over weight calls, which the
-  defaults put at twenty thousand. The two halves find different methods, and neither one
-  alone finds both — the calls find a three-instruction getter called millions of times,
-  and the work finds a kernel called eleven times that never leaves its loop. Zero counts
-  work alone, which separates a promotion the work asked for from one the calls asked for.
-  `passes/tier-counter.hpp` has the emission and `runtime/options.cpp` the workloads the
-  defaults are set against.
-- `MONO_LLVM_JIT_TIER2=<0|false|empty>` (and its own copy in `jit.cpp`) — turn tier 2
-  off. It is on by default, which is what puts profiling instrumentation in every tier-1
-  body, so this switch separates a tier-2 bug from a tier-1 one.
-- `MONO_LLVM_JIT_BATCH=<n>` — promoted methods per compile, default 32. A batch shares
-  one module, one IR pipeline, one codegen and one link, so LLVM's per-compile floor is
-  paid once. The whole batch compiles before any of its methods is published, so a
-  bigger batch makes each method wait for the slowest in it, and that is what bounds the
-  setting rather than the amortising running out. Measure occupancy by methods rather
-  than by batches: the distribution is bimodal, so the average batch and the batch the
-  average method arrives in are different numbers, and only the second says what the
-  amortising acts on. One compiles every method on its own, which separates a batching
-  bug from a backend one. Only tier-1 promotions batch. A tier-2 promotion, a dynamic
-  method and any compile the runtime asks for by name each go alone.
-- `MONO_LLVM_JIT_WORKERS=<n>` — the most threads the compile queue runs promotions on at
-  once, default `mono_cpu_count () - 2` capped at eight, and one while LLVM prints. The
+and the note says which split. Each is an LLVM command-line option, reachable through
+`--llvm-opt=-mono-x=value` or, repeated, `--llvm-opt=-mono-x=v1 --llvm-opt=-mono-y=v2`,
+and each is registered `cl::Hidden`, so `--llvm-opt=-help-hidden` is what lists them from
+a built binary. A test drives one through `MONO_ENV_OPTIONS`, which `mono-sgen` and
+`mono-boehm` read before they parse their own argv — a bare gtest binary has no such
+argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same variable's
+`--llvm-opt=` tokens into the same registration by hand:
+- `--llvm-opt=-mono-tier0-filter=<substr|0>` (`runtime/options.cpp`) — narrow tier 0,
+  which is otherwise every method the interpreter accepts. A false value compiles
+  everything, which separates a tier-0 bug from a backend one. A substring gets a
+  compiled caller and an interpreted callee into one process, which no threshold
+  produces, because a callee is called at least as often as its caller.
+- `--llvm-opt=-mono-tier1-threshold=<n>` (`runtime/options.cpp`) — calls at tier 0
+  before a method is asked for as tier 1, default 10. Zero never promotes, which
+  separates a tier-0 entry bug from a promotion bug. One promotes on the first call,
+  which puts the switch inside a loop.
+- `--llvm-opt=-mono-tier2-threshold=<n>` (`runtime/options.cpp`) — what a tier-1 body
+  spends before it asks for tier 2, default 100000000. One unit is one instruction that
+  emits code, and a call costs `-mono-tier2-entry-weight` on top, so one counter reaches
+  a body that is hot and a body that is heavy. Every body takes a constant off at its
+  entry: the blocks no loop holds, plus the entry weight. A body with a loop adds the
+  turns up in a register on top, one add per loop header, and takes that total off at
+  each exit. The exits are three: a ret, a throw of the body's own, and the pad the
+  body's own fault clause names as its handler, which is what charges a callee's
+  exception that unwinds through the frame. A body that takes none of the three — one
+  entered once that runs forever — keeps the constant and no more: the rest needs OSR,
+  which does not exist here. Zero leaves a body instrumented and counting while it never
+  promotes on its own, which is what a test driving the tiers through
+  `Mono.Tiering.MonoTier::PromoteNow` wants.
+- `--llvm-opt=-mono-tier2-entry-weight=<n>` (`runtime/options.cpp`) — what one call adds
+  to that count, default 5000. It is the exchange rate between how hot a method is and
+  how much it does, in the same units: a body that does no work promotes after threshold
+  over weight calls, which the defaults put at twenty thousand. The two halves find
+  different methods, and neither one alone finds both — the calls find a
+  three-instruction getter called millions of times, and the work finds a kernel called
+  eleven times that never leaves its loop. Zero counts work alone, which separates a
+  promotion the work asked for from one the calls asked for. `passes/tier-counter.hpp`
+  has the emission and `runtime/options.cpp` the workloads the defaults are set against.
+- `--llvm-opt=-mono-tier2=<0|false|empty>` (`jit.cpp`) — turn tier 2 off. It is on by
+  default, which is what puts profiling instrumentation in every tier-1 body, so this
+  switch separates a tier-2 bug from a tier-1 one. `runtime/options.hpp`'s own
+  `tier2_enabled ()` answers the same question by calling into `jit.cpp` rather than
+  registering a second option under a second name.
+- `--llvm-opt=-mono-batch=<n>` (`runtime/options.cpp`) — promoted methods per compile,
+  default 32. A batch shares one module, one IR pipeline, one codegen and one link, so
+  LLVM's per-compile floor is paid once. The whole batch compiles before any of its
+  methods is published, so a bigger batch makes each method wait for the slowest in it,
+  and that is what bounds the setting rather than the amortising running out. Measure
+  occupancy by methods rather than by batches: the distribution is bimodal, so the
+  average batch and the batch the average method arrives in are different numbers, and
+  only the second says what the amortising acts on. One compiles every method on its
+  own, which separates a batching bug from a backend one. Only tier-1 promotions batch.
+  A tier-2 promotion, a dynamic method and any compile the runtime asks for by name each
+  go alone.
+- `--llvm-opt=-mono-workers=<n>` (`runtime/options.cpp`) — the most threads the compile
+  queue runs promotions on at once, default `mono_cpu_count () - 2` capped at eight, and
+  one while LLVM prints. Zero, which is also unset, leaves that default in force. The
   queue starts a thread only when work outruns the ones it has. One puts every
   background compile back on a single thread, which separates a bug in a compile from
   a bug in two overlapping. Do not
@@ -399,98 +410,116 @@ and the note says which split:
   process pays for the shorter wait in compile CPU and wins anyway, because a method
   waiting for a body runs interpreted.
   `.claude/plans/tier1-promotion-latency.md` has the sweeps and what is still open.
-- `MONO_LLVM_JIT_WORKER_IDLE_MS=<n>` — how long a worker waits for work before the queue
-  retires it, default 1000. A retired thread detaches and exits, and the next enqueue
-  that wants a thread starts a fresh one on the entry it gave back. So this decides how
-  long a program past its warm-up keeps compile threads, where `MONO_LLVM_JIT_WORKERS`
-  decides how many it can have. Zero keeps every thread that started, which separates
-  the cost of retiring threads from the cost of holding them. Holding one is not free:
-  the default suspend policy is preemptive, so the collector signals an attached thread
-  and waits for it at every collection, wherever that thread parked. A restart costs
-  around 0.7 ms, most of it rebuilding the pipelines and the TargetMachine, which are
-  per-thread.
+- `--llvm-opt=-mono-worker-idle-ms=<n>` (`runtime/options.cpp`) — how long a worker
+  waits for work before the queue retires it, default 1000. A retired thread detaches
+  and exits, and the next enqueue that wants a thread starts a fresh one on the entry it
+  gave back. So this decides how long a program past its warm-up keeps compile threads,
+  where `-mono-workers` decides how many it can have. Zero keeps every thread that
+  started, which separates the cost of retiring threads from the cost of holding them.
+  Holding one is not free: the default suspend policy is preemptive, so the collector
+  signals an attached thread and waits for it at every collection, wherever that thread
+  parked. A restart costs around 0.7 ms, most of it rebuilding the pipelines and the
+  TargetMachine, which are per-thread.
 - `MONO_LLVM_JIT_RECOMPILE=<substr>` — translate matching methods afresh on every
   request instead of answering from the cache, so they end up with several live bodies.
   No other setting produces one, and the code that has to cope has no other exerciser.
-- `MONO_LLVM_JIT_FOLD_CASTS=<0|false|empty>` — turn the type-test fold off, so every
-  `isinst` and `castclass` is lowered to the probe and the icall whatever the IR says
-  about the operand. On by default. The translator writes the same call either way, so
-  the two arms differ in one pass, which is what separates a wrong answer from a wrong
-  probe. It is also the negative control for what the fold is worth: on `linq-devirt`'s
-  `LinqOne` at the wide inline gates, off gives 9 icalls in 932 lines and on gives 3 in
-  483.
-- `MONO_LLVM_JIT_FOLD_DELEGATES=<0|false|empty>` — turn the delegate-Invoke fold off, so
-  every Invoke reads its entry off the delegate whatever the IR says the delegate is. On
-  by default, and tier 2 only. The translator writes the same site either way, which is
-  what separates a wrong target from a wrong dispatch. Two producers name a target: a
-  read of an initonly static names the object, so the call becomes a direct one; the
-  cache a C# compiler writes for a lambda or a method group names a candidate, so the
-  call becomes a compare against `MonoDelegate::method_ptr` with the direct call on the
-  arm that matches and today's dispatch on the arm that does not. `method_ptr` rather
-  than `method`, because an `ldvirtftn` delegate never writes back the override it
-  resolves and a combined delegate leaves `method_ptr` null, so a match proves both.
-  `mono/tests/delegate-fold.cs` gates it and carries the off arm.
-- `MONO_LLVM_JIT_GUARD_ARRAYS=<0|false|empty>` — turn the array dispatch guard off, so a
-  dispatch on an array receiver reads its callee out of the receiver's vtable whatever
-  the IR says the slot is declared with. On by default, and tier 2 only. The translator
-  writes the same site either way, so the two arms differ in one pass, which separates a
-  wrong target from a wrong compare. `mono/tests/array-devirt.cs` is the program that
-  tells the arms apart, because the enumerator an array answers with names the element
-  class the dispatch reached.
-- `MONO_LLVM_JIT_GUARD_CLASSES=<0|false|empty>` — turn the guessed-class dispatch guard
-  off, so a dispatch this compile can only guess a class for reads its callee out of the
-  receiver's vtable whatever the IR says the guess is. On by default, and tier 2 only.
-  The translator writes the same site either way, so the two arms differ in one pass,
-  which separates a wrong target from a wrong compare. `mono/tests/class-devirt.cs` is
-  the program that tells the arms apart, because its negative control changes what the
-  guessed field holds after the compile has already guessed it.
+  Left an environment variable rather than an `--llvm-opt`: a test names the method it
+  wants recompiled, and the recompiled method's own name is what the substring matches,
+  so there is nothing here a caller would reach for `--llvm-opt`'s registry to find.
+- `--llvm-opt=-mono-fold-casts=<0|false|empty>` (`runtime/options.cpp`) — turn the
+  type-test fold off, so every `isinst` and `castclass` is lowered to the probe and the
+  icall whatever the IR says about the operand. On by default. The translator writes the
+  same call either way, so the two arms differ in one pass, which is what separates a
+  wrong answer from a wrong probe. It is also the negative control for what the fold is
+  worth: on `linq-devirt`'s `LinqOne` at the wide inline gates, off gives 9 icalls in 932
+  lines and on gives 3 in 483.
+- `--llvm-opt=-mono-fold-delegates=<0|false|empty>` (`runtime/options.cpp`) — turn the
+  delegate-Invoke fold off, so every Invoke reads its entry off the delegate whatever the
+  IR says the delegate is. On by default, and tier 2 only. The translator writes the same
+  site either way, which is what separates a wrong target from a wrong dispatch. Two
+  producers name a target: a read of an initonly static names the object, so the call
+  becomes a direct one; the cache a C# compiler writes for a lambda or a method group
+  names a candidate, so the call becomes a compare against `MonoDelegate::method_ptr`
+  with the direct call on the arm that matches and today's dispatch on the arm that does
+  not. `method_ptr` rather than `method`, because an `ldvirtftn` delegate never writes
+  back the override it resolves and a combined delegate leaves `method_ptr` null, so a
+  match proves both. `mono/tests/delegate-fold.cs` gates it and carries the off arm,
+  reading the `MONO_FOLD_DELEGATES` environment variable the suite sets alongside the
+  flag to know which arm it is in.
+- `--llvm-opt=-mono-guard-arrays=<0|false|empty>` (`runtime/options.cpp`) — turn the
+  array dispatch guard off, so a dispatch on an array receiver reads its callee out of
+  the receiver's vtable whatever the IR says the slot is declared with. On by default,
+  and tier 2 only. The translator writes the same site either way, so the two arms
+  differ in one pass, which separates a wrong target from a wrong compare.
+  `mono/tests/array-devirt.cs` is the program that tells the arms apart, because the
+  enumerator an array answers with names the element class the dispatch reached.
+- `--llvm-opt=-mono-guard-classes=<0|false|empty>` (`runtime/options.cpp`) — turn the
+  guessed-class dispatch guard off, so a dispatch this compile can only guess a class
+  for reads its callee out of the receiver's vtable whatever the IR says the guess is.
+  On by default, and tier 2 only. The translator writes the same site either way, so the
+  two arms differ in one pass, which separates a wrong target from a wrong compare.
+  `mono/tests/class-devirt.cs` is the program that tells the arms apart, because its
+  negative control changes what the guessed field holds after the compile has already
+  guessed it.
+- `--llvm-opt=-mono-thread-static-fast-path=<0|false|empty>` (`runtime/options.cpp`) —
+  turn the thread-static fast path off, so every thread static reads back through
+  `mono_domain_get ()` and the `mono_class_static_field_address` icall. On by default.
+  `mono/tests/thread-static-fast-path.cs` compares the two arms at tier 2.
+- `--llvm-opt=-mono-dyn-calls=<0|false|empty>` (`runtime/options.cpp`) — turn off the
+  interpreter's dyn-call plan, so every jit call back into compiled code goes through a
+  `gsharedvt_out_sig` wrapper instead. On by default. `mono/tests/dyn-call.cs` gates both
+  arms.
 
 Inlining. `MONO_LLVM_JIT_TRACE=1` prints a line for each fold, which is the only place a
-fold is visible from outside:
-- `MONO_LLVM_JIT_INLINE_IL_LIMIT=<n>` — largest callee in IL bytes the shape-test
-  pre-pass folds in, default 32. Both compiled tiers run that pre-pass. Zero turns it
-  off, which separates a bug in a folded body from one in the method that folded it. The
-  limit is the policy: the shape test in front of it refuses control flow and the opcodes
-  that describe a frame, and lets everything else through, so this is what decides how
-  large a body folds. 32 is the knee rather than a round number — `GoParse` folds 851
-  distinct callees at 16, 878 at 32 and 887 at 128, so below it loses bodies and above it
-  buys almost none. Raising `MONO_LLVM_JIT_INLINE_BUDGET` with it moves that 878 to 889,
-  so neither knob is a large lever past the defaults.
-- `MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=<n>` — largest callee the tier-2 cost model
-  translates so it can weigh it, default 128. It bounds translation rather than code
-  size, because LLVM's own threshold decides what is worth folding. Zero leaves tier 2
-  with the pre-pass alone, which separates a cost-model defect from a pre-pass one.
-- `MONO_LLVM_JIT_INLINE_DEPTH=<n>` — folds deep past a method the cost model may go,
-  default 4. A call graph with a cycle never runs out of sites, so the loop needs this
-  whatever the budget says.
-- `MONO_LLVM_JIT_INLINE_PREPASS_DEPTH=<n>` — the same reach for the pre-pass, default 8.
-  It drains its worklist least deep first, so this decides what the leftover count goes
-  on rather than what the first folds are. The count below is what bounds the
-  translation, which is why the reach can be generous.
-- `MONO_LLVM_JIT_INLINE_BUDGET=<n>` — bodies the pre-pass may fold into one method,
-  default 16. A chain of forwarders is what spends it. Each batch member gets its own
-  count, so `MONO_LLVM_JIT_BATCH` changes how many compiles run, not what any one of
-  them folds in.
-- `MONO_LLVM_JIT_INLINE_COST_BUDGET=<n>` — bodies the tier-2 cost model may fold into
-  one method, default 16. A count of its own, so what one inliner takes in does not
-  decide what the other is left to fold. Zero refuses every method this root has not
-  folded already, which separates a cost-model fold from a pre-pass one.
-- `MONO_LLVM_JIT_INLINE_ROUNDS=<n>` — times the tier-2 inliner takes up a method's
-  sites again, default 4. One reads them once, which is what separates a fold a
-  round exposed from one the method arrived with. A dispatch is not a site — its
-  callee is a load — so a virtual or interface call becomes foldable only after
-  `DevirtualizePass` answers it, and that needs the receiver's class, which a fold
-  is often what settles. On `tier2-inline-policy.cs` one round folds 15 bodies and
-  never reaches `Box:Area`; four fold 22 and reach it at all three of its sites.
-  The budget above is what bounds the work, and this count is what stops a cycle.
-- `MONO_LLVM_JIT_FOLD_CLAUSES=<0|false|empty>` — turn off the tier-2 cost model's
-  ability to translate a clause-bearing callee at all, so it is refused the way the
-  shape-test pre-pass always refuses one. On by default. `clause_survives_fold ()`
-  (`passes/top-down-inline.cpp`) is what keeps the fold safe when this is on: it
-  clones the call site, folds the callee there and runs the same simplification the
-  round applies for real, and the cost model folds the callee only when none of its
-  own landing pads are left standing. `mono/tests/tier2-inline-clause.cs` gates both
-  arms.
+fold is visible from outside. Every knob below is an LLVM command-line option, reached
+the same way as the tiering ones above:
+- `--llvm-opt=-mono-inline-il-limit=<n>` (`runtime/options.cpp`) — largest callee in IL
+  bytes the shape-test pre-pass folds in, default 32. Both compiled tiers run that
+  pre-pass. Zero turns it off, which separates a bug in a folded body from one in the
+  method that folded it. The limit is the policy: the shape test in front of it refuses
+  control flow and the opcodes that describe a frame, and lets everything else through,
+  so this is what decides how large a body folds. 32 is the knee rather than a round
+  number — `GoParse` folds 851 distinct callees at 16, 878 at 32 and 887 at 128, so below
+  it loses bodies and above it buys almost none. Raising `-mono-inline-budget` with it
+  moves that 878 to 889, so neither knob is a large lever past the defaults.
+- `--llvm-opt=-mono-inline-cost-il-limit=<n>` (`runtime/options.cpp`) — largest callee
+  the tier-2 cost model translates so it can weigh it, default 128. It bounds translation
+  rather than code size, because LLVM's own threshold decides what is worth folding.
+  Zero leaves tier 2 with the pre-pass alone, which separates a cost-model defect from a
+  pre-pass one.
+- `--llvm-opt=-mono-inline-depth=<n>` (`runtime/options.cpp`) — folds deep past a method
+  the cost model may go, default 4. A call graph with a cycle never runs out of sites, so
+  the loop needs this whatever the budget says.
+- `--llvm-opt=-mono-inline-prepass-depth=<n>` (`runtime/options.cpp`) — the same reach
+  for the pre-pass, default 8. It drains its worklist least deep first, so this decides
+  what the leftover count goes on rather than what the first folds are. The count below
+  is what bounds the translation, which is why the reach can be generous.
+- `--llvm-opt=-mono-inline-budget=<n>` (`runtime/options.cpp`) — bodies the pre-pass may
+  fold into one method, default 16. A chain of forwarders is what spends it. Each batch
+  member gets its own count, so `-mono-batch` changes how many compiles run, not what
+  any one of them folds in.
+- `--llvm-opt=-mono-inline-cost-budget=<n>` (`runtime/options.cpp`) — bodies the tier-2
+  cost model may fold into one method, default 16. A count of its own, so what one
+  inliner takes in does not decide what the other is left to fold. Zero refuses every
+  method this root has not folded already, which separates a cost-model fold from a
+  pre-pass one.
+- `--llvm-opt=-mono-inline-rounds=<n>` (`runtime/options.cpp`) — times the tier-2
+  inliner takes up a method's sites again, default 4. One reads them once, which is what
+  separates a fold a round exposed from one the method arrived with. A dispatch is not a
+  site — its callee is a load — so a virtual or interface call becomes foldable only
+  after `DevirtualizePass` answers it, and that needs the receiver's class, which a fold
+  is often what settles. On `tier2-inline-policy.cs` one round folds 15 bodies and never
+  reaches `Box:Area`; four fold 22 and reach it at all three of its sites. The budget
+  above is what bounds the work, and this count is what stops a cycle.
+- `--llvm-opt=-mono-fold-clauses=<0|false|empty>` (`runtime/options.cpp`) — turn off the
+  tier-2 cost model's ability to translate a clause-bearing callee at all, so it is
+  refused the way the shape-test pre-pass always refuses one. On by default.
+  `clause_survives_fold ()` (`passes/top-down-inline.cpp`) is what keeps the fold safe
+  when this is on: it clones the call site, folds the callee there and runs the same
+  simplification the round applies for real, and the cost model folds the callee only
+  when none of its own landing pads are left standing. `mono/tests/tier2-inline-clause.cs`
+  gates both arms, reading the `MONO_FOLD_CLAUSES` environment variable the suite sets
+  alongside the flag to know which arm it is in.
 
 ## Architecture of the backend (`mono/llvm/`)
 
@@ -759,7 +788,7 @@ that are not proofs: a field whose object escapes
 still answers from the stores the walk can see, a merge answers where only some arms
 name a class, and the zero a fresh allocation reads is skipped. A parameter's declared
 class is refused, because a compare against a bound misses every subclass it admits.
-`MONO_LLVM_JIT_GUARD_CLASSES` turns the guess off on its own, which leaves a wrong
+`--llvm-opt=-mono-guard-classes` turns the guess off on its own, which leaves a wrong
 target and a wrong compare one pass apart. `mono/tests/class-devirt.cs` gates it:
 `runtime-class-guard` is the arm whose threshold reaches the guard, and
 `runtime-class-guard-off` runs the same file with the guess off, which is the answer the
@@ -784,7 +813,7 @@ other method, a throw, or an object made and returned. `declines_a_fold ()` name
 the line may not hold, and it is a denylist rather than an allowlist: control flow, and
 the opcodes that describe the frame the body runs in. A body that reaches itself through
 the forwarder chain is refused too, because no inliner takes that call away. The rest is
-the size limit's question, and `MONO_LLVM_JIT_INLINE_IL_LIMIT` bounds it. A candidate
+the size limit's question, and `--llvm-opt=-mono-inline-il-limit` bounds it. A candidate
 must also pass gates that are about correctness rather than cost (`may_fold ()`,
 `runtime/inline-scope.cpp`): no wrapper, no dynamic method, no clauses, no `NoInlining`
 on the callee, no shared body, no call instrumentation, and nothing at all while
@@ -837,7 +866,7 @@ translated on demand. `ProfileInliner` (`runtime/profile-inlines.cpp`) is what t
 asks, because the pass itself names no metadata, so a site the gates or `getInlineCost`
 refuse costs nothing but the questions. A candidate arrives with its own trivial callees
 already folded in. Everything past `may_fold ()` is a correctness gate of its own: no
-clauses, and inside `MONO_LLVM_JIT_INLINE_COST_IL_LIMIT` bytes of IL.
+clauses, and inside `--llvm-opt=-mono-inline-cost-il-limit` bytes of IL.
 `NoInlining` on a call target is not one of the gates: the mark says
 do not fold that target, which `may_fold ()` already enforces. A caller with no profile still
 inlines, off the static frequencies BFI falls back to.

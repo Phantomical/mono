@@ -10,8 +10,9 @@ using System.Runtime.CompilerServices;
  * defaults and once with every bonus set to zero, and reads MONO_INLINE_POLICY
  * to know which arm it is in.
  *
- * The trivial pre-pass is off in both arms (MONO_LLVM_JIT_INLINE_IL_LIMIT=0).
- * Make () is one allocation that is returned, which is a shape that pre-pass
+ * The trivial pre-pass is off in both arms
+ * (--llvm-opt=-mono-inline-il-limit=0). Make () is one allocation that is
+ * returned, which is a shape that pre-pass
  * folds on sight, and a fold it takes says nothing about the cost model.
  *
  * What says a fold happened is the stack trace, the way tier2-inline-cost.cs
@@ -31,8 +32,9 @@ using System.Runtime.CompilerServices;
  * and folds with the return bonus of 100. Re-measure all of it when this starts
  * failing on one arm:
  *
- *   MONO_LLVM_JIT_TRACE=1 MONO_LLVM_JIT_TIER2_THRESHOLD=0 \
- *   MONO_LLVM_JIT_INLINE_IL_LIMIT=0 MONO_INLINE_POLICY=off mono-sgen \
+ *   MONO_LLVM_JIT_TRACE=1 MONO_INLINE_POLICY=off mono-sgen \
+ *     --llvm-opt=-mono-tier2-threshold=0 \
+ *     --llvm-opt=-mono-inline-il-limit=0 \
  *     --llvm-opt=-mono-inline-cost-full \
  *     --llvm-opt=-mono-inline-devirt-return-bonus=0 \
  *     --llvm-opt=-mono-inline-devirt-arg-bonus=0 tier2-inline-policy.exe

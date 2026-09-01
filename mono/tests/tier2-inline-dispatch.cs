@@ -15,8 +15,8 @@ using System.Runtime.CompilerServices;
  *
  * The suite runs twice, once on the defaults and once with every one of those
  * answers off, and reads MONO_INLINE_POLICY to know which arm it is in. The
- * trivial pre-pass is off in both (MONO_LLVM_JIT_INLINE_IL_LIMIT=0), so a fold
- * this reads is the cost model's.
+ * trivial pre-pass is off in both (--llvm-opt=-mono-inline-il-limit=0), so a
+ * fold this reads is the cost model's.
  *
  * What says a fold happened is the stack trace, the way tier2-inline-cost.cs
  * reads it: a folded body owns no code, so its frame reports the offset into
@@ -28,14 +28,15 @@ using System.Runtime.CompilerServices;
  * cold-callsite threshold of 190, which the argument bonus takes to 240 in both
  * arms, so each verdict has around ninety either way.
  *
- * Both arms raise MONO_LLVM_JIT_INLINE_COST_IL_LIMIT, because the limit counts
- * the IL a body arrives with and this one is past the default. A body the model
- * never weighed prints no verdict at all, which reads as one it accepted.
- * Re-measure when this starts failing on one arm:
+ * Both arms raise --llvm-opt=-mono-inline-cost-il-limit, because the limit
+ * counts the IL a body arrives with and this one is past the default. A body
+ * the model never weighed prints no verdict at all, which reads as one it
+ * accepted. Re-measure when this starts failing on one arm:
  *
- *   MONO_LLVM_JIT_TRACE=1 MONO_LLVM_JIT_TIER2_THRESHOLD=0 \
- *   MONO_LLVM_JIT_INLINE_IL_LIMIT=0 MONO_LLVM_JIT_INLINE_COST_IL_LIMIT=256 \
- *   mono-sgen --llvm-opt=-mono-inline-cost-full \
+ *   MONO_LLVM_JIT_TRACE=1 mono-sgen --llvm-opt=-mono-tier2-threshold=0 \
+ *     --llvm-opt=-mono-inline-il-limit=0 \
+ *     --llvm-opt=-mono-inline-cost-il-limit=256 \
+ *     --llvm-opt=-mono-inline-cost-full \
  *     --llvm-opt=-mono-inline-cold-callsite-threshold=1 \
  *     tier2-inline-dispatch.exe
  *

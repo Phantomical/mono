@@ -62,7 +62,7 @@ foreach(_t IN LISTS _regtests)
   string(REGEX REPLACE "\\.exe$" "" _stem "${_t}")
   add_test(NAME "mini-regression/${_stem}"
            COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
-                   "MONO_LLVM_JIT_TIER0=0"
+                   "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0"
                    "${_wrapper}" --regression ${_t}
            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
   set_tests_properties("mini-regression/${_stem}" PROPERTIES LABELS regression)
@@ -112,7 +112,7 @@ endif()
 # whether the crossing broke it or the code generated for it is wrong.
 add_test(NAME "mini-regression/tier-seam-compiled"
          COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
-                 "MONO_LLVM_JIT_TIER0=0"
+                 "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0"
                  "${_wrapper}" --regression tier-seam.exe
          WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties("mini-regression/tier-seam-compiled" PROPERTIES LABELS regression)
@@ -126,8 +126,7 @@ set_tests_properties("mini-regression/tier-seam-compiled" PROPERTIES LABELS regr
 if(MONO_ENABLE_INTERPRETER)
   add_test(NAME "mini-regression/iltests-interp-ldftn"
            COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
-                   "MONO_LLVM_JIT_TIER0=tier0_ldftn_pointer"
-                   "MONO_LLVM_JIT_TIER1_THRESHOLD=0"
+                   "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=tier0_ldftn_pointer --llvm-opt=-mono-tier1-threshold=0"
                    "${_wrapper}" --regression iltests.exe
            WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
   set_tests_properties("mini-regression/iltests-interp-ldftn"
@@ -153,7 +152,7 @@ endif()
 add_test(NAME "mini-regression/xdomain-compiled"
          COMMAND "${CMAKE_COMMAND}" -E env
                  "MONO_PATH=${_xdomain_path}"
-                 "MONO_LLVM_JIT_TIER0=0"
+                 "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0"
                  "${_wrapper}" xdomain.exe
          WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties("mini-regression/xdomain-compiled" PROPERTIES LABELS regression)

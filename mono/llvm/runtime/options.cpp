@@ -5,6 +5,7 @@
 #include "naming.hpp"
 
 #include <llvm/ADT/StringRef.h>
+#include <llvm/Support/CommandLine.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -34,6 +35,11 @@ is_truthy_env_var (const char *value)
 	return !set.empty () && set != "0" && !set.equals_insensitive ("false");
 }
 
+llvm::cl::opt<std::string> Tier0FilterOpt (
+	"mono-tier0-filter", llvm::cl::Hidden, llvm::cl::init (""),
+	llvm::cl::desc ("Narrow tier 0 to methods whose full name contains this "
+	                "substring; 0 or false turns tier 0 off"));
+
 struct Tier0Setting {
 	bool enabled = true;
 	const char *substring = nullptr;
@@ -43,19 +49,101 @@ const Tier0Setting &
 tier0_setting ()
 {
 	static Tier0Setting setting = [] () -> Tier0Setting {
-		const char *value = g_getenv ("MONO_LLVM_JIT_TIER0");
-
-		if (value == nullptr)
+		if (Tier0FilterOpt.empty ())
 			return {};
 
-		if (!is_truthy_env_var (value))
+		if (!is_truthy_env_var (Tier0FilterOpt.c_str ()))
 			return { false, nullptr };
 
-		return { true, value };
+		return { true, Tier0FilterOpt.c_str () };
 	} ();
 
 	return setting;
 }
+
+llvm::cl::opt<bool> FoldCastsOpt (
+	"mono-fold-casts", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Answer a type test the translator can settle without a probe"));
+
+llvm::cl::opt<bool> FoldDelegatesOpt (
+	"mono-fold-delegates", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Fold a delegate Invoke whose target the translator can name"));
+
+llvm::cl::opt<bool> GuardArrayDispatchOpt (
+	"mono-guard-arrays", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Guard a dispatch on an array receiver with a vtable compare"));
+
+llvm::cl::opt<bool> GuardClassDispatchOpt (
+	"mono-guard-classes", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Guard a dispatch on a guessed receiver class with a vtable "
+	                "compare"));
+
+llvm::cl::opt<bool> FoldClauseBearingCalleesOpt (
+	"mono-fold-clauses", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Let the tier-2 cost model translate a clause-bearing callee"));
+
+llvm::cl::opt<bool> ThreadStaticFastPathOpt (
+	"mono-thread-static-fast-path", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Address a thread static directly instead of through the icall"));
+
+llvm::cl::opt<bool> DynCallsOpt (
+	"mono-dyn-calls", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Let the interpreter call compiled code through a dyn-call plan"));
+
+llvm::cl::opt<unsigned> Tier1ThresholdOpt (
+	"mono-tier1-threshold", llvm::cl::Hidden, llvm::cl::init (10),
+	llvm::cl::desc ("Calls an interpreted method takes before it is compiled"));
+
+llvm::cl::opt<uint64_t> Tier2ThresholdOpt (
+	"mono-tier2-threshold", llvm::cl::Hidden, llvm::cl::init (100000000),
+	llvm::cl::desc ("What a tier-1 body spends before it asks for tier 2"));
+
+llvm::cl::opt<uint64_t> Tier2EntryWeightOpt (
+	"mono-tier2-entry-weight", llvm::cl::Hidden, llvm::cl::init (5000),
+	llvm::cl::desc ("What one call adds to the tier-2 promotion count"));
+
+llvm::cl::opt<unsigned> BatchSizeOpt (
+	"mono-batch", llvm::cl::Hidden, llvm::cl::init (32),
+	llvm::cl::desc ("Promoted methods a tier-1 compile can take at once"));
+
+llvm::cl::opt<unsigned> WorkerCountOpt (
+	"mono-workers", llvm::cl::Hidden, llvm::cl::init (0),
+	llvm::cl::desc ("Compile threads the queue may start; 0 sizes it off the "
+	                "machine"));
+
+llvm::cl::opt<unsigned> WorkerIdleMsOpt (
+	"mono-worker-idle-ms", llvm::cl::Hidden, llvm::cl::init (1000),
+	llvm::cl::desc ("How long an idle compile worker waits before the queue "
+	                "retires it"));
+
+llvm::cl::opt<unsigned> InlineILLimitOpt (
+	"mono-inline-il-limit", llvm::cl::Hidden, llvm::cl::init (32),
+	llvm::cl::desc ("Largest callee in IL bytes the shape-test pre-pass folds in"));
+
+llvm::cl::opt<unsigned> InlineBudgetOpt (
+	"mono-inline-budget", llvm::cl::Hidden, llvm::cl::init (16),
+	llvm::cl::desc ("Bodies the shape-test pre-pass may fold into one method"));
+
+llvm::cl::opt<unsigned> CostedInlineBudgetOpt (
+	"mono-inline-cost-budget", llvm::cl::Hidden, llvm::cl::init (16),
+	llvm::cl::desc ("Bodies the tier-2 cost model may fold into one method"));
+
+llvm::cl::opt<unsigned> CostedInlineILLimitOpt (
+	"mono-inline-cost-il-limit", llvm::cl::Hidden, llvm::cl::init (128),
+	llvm::cl::desc ("Largest callee in IL bytes the tier-2 cost model will "
+	                "translate to weigh it"));
+
+llvm::cl::opt<unsigned> InlineDepthLimitOpt (
+	"mono-inline-depth", llvm::cl::Hidden, llvm::cl::init (4),
+	llvm::cl::desc ("Folds deep past a method the tier-2 inliner may go"));
+
+llvm::cl::opt<unsigned> InlineRoundLimitOpt (
+	"mono-inline-rounds", llvm::cl::Hidden, llvm::cl::init (4),
+	llvm::cl::desc ("Times the tier-2 inliner takes up a method's sites again"));
+
+llvm::cl::opt<unsigned> TrivialInlineDepthLimitOpt (
+	"mono-inline-prepass-depth", llvm::cl::Hidden, llvm::cl::init (8),
+	llvm::cl::desc ("Folds deep past root the shape-test pre-pass may go"));
 
 } // namespace
 
@@ -95,66 +183,39 @@ recompiling (MonoMethod *method)
 uint32_t
 tier1_threshold ()
 {
-	static uint32_t calls = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_TIER1_THRESHOLD");
-
-		if (value == nullptr)
-			return 10;
-
-		int set = atoi (value);
-
-		return set > 0 ? set : 0;
-	}();
-
-	return calls;
+	return Tier1ThresholdOpt;
 }
 
 uint32_t
 promotion_batch_size ()
 {
-	static uint32_t methods = [] () -> uint32_t {
-		const char *value = g_getenv ("MONO_LLVM_JIT_BATCH");
-
-		/*
-		 * A batch pays LLVM's per-compile floor once for every method in
-		 * it, so a bigger batch spreads that floor further. The queue has
-		 * the depth to use this: on Roslyn compiling corlib the average
-		 * method arrives in a batch of 27 of a possible 32, and a third of
-		 * the batches leave the queue completely full.
-		 *
-		 * Measure it method-weighted rather than batch-weighted. The
-		 * distribution is bimodal - a spike at one and a bigger spike at
-		 * the cap - so the average batch holds 14 while the average method
-		 * arrives in one of 27, and the second is what the amortising acts
-		 * on.
-		 *
-		 * The whole batch compiles before any of its methods is published,
-		 * so a big batch makes each method wait for the slowest in it. That
-		 * is what bounds the setting, rather than the amortising running
-		 * out.
-		 */
-		if (value == nullptr)
-			return 32;
-
-		int set = atoi (value);
-
-		return set > 1 ? (uint32_t) set : 1;
-	}();
-
-	return methods;
+	/*
+	 * A batch pays LLVM's per-compile floor once for every method in
+	 * it, so a bigger batch spreads that floor further. The queue has
+	 * the depth to use this: on Roslyn compiling corlib the average
+	 * method arrives in a batch of 27 of a possible 32, and a third of
+	 * the batches leave the queue completely full.
+	 *
+	 * Measure it method-weighted rather than batch-weighted. The
+	 * distribution is bimodal - a spike at one and a bigger spike at
+	 * the cap - so the average batch holds 14 while the average method
+	 * arrives in one of 27, and the second is what the amortising acts
+	 * on.
+	 *
+	 * The whole batch compiles before any of its methods is published,
+	 * so a big batch makes each method wait for the slowest in it. That
+	 * is what bounds the setting, rather than the amortising running
+	 * out.
+	 */
+	return std::max (BatchSizeOpt.getValue (), 1u);
 }
 
 uint32_t
 compile_worker_count ()
 {
 	static uint32_t threads = [] () -> uint32_t {
-		const char *value = g_getenv ("MONO_LLVM_JIT_WORKERS");
-
-		if (value != nullptr) {
-			int set = atoi (value);
-
-			return set > 1 ? (uint32_t) set : 1;
-		}
+		if (WorkerCountOpt > 0)
+			return std::max (WorkerCountOpt.getValue (), 1u);
 
 		/*
 		 * One thread while LLVM is printing. Both tiers print to stderr, and
@@ -199,137 +260,78 @@ compile_worker_count ()
 std::chrono::milliseconds
 compile_worker_idle_timeout ()
 {
-	static std::chrono::milliseconds timeout = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_WORKER_IDLE_MS");
-
-		/*
-		 * A second. That is long against the burst a promotion arrives in, and
-		 * short against the quiet a program settles into.
-		 *
-		 * An idle thread costs a signal and a wait at every collection. The
-		 * default suspend policy is preemptive, and it suspends an attached
-		 * thread wherever that thread parked. bh (BH.exe -b 700 -s 1000) takes
-		 * 51010 voluntary context switches and 1.64 s of system time while it
-		 * holds its workers, against 17367 and 0.75 s while it retires them.
-		 *
-		 * A restart costs one attach. It also costs the pipelines and the
-		 * TargetMachine on the first compile that follows, because those are
-		 * thread_local (jit.cpp). A 1 ms timeout retires a thread as soon as it
-		 * runs dry, and turns that same run into 114 more thread starts. Compile
-		 * CPU goes from 4.09 ms a method to 4.51, so a restart is around 0.7 ms.
-		 * Most of it is in cgsetup and pbsetup.
-		 *
-		 * The floor is therefore soft. A shorter timeout cuts more of the
-		 * transient that a short run is mostly made of, and 250 ms takes bh to
-		 * 7066 switches. A second is the conservative end of that range. It
-		 * keeps a program that promotes a method every few seconds from
-		 * restarting a thread for each one.
-		 */
-		if (value == nullptr)
-			return std::chrono::milliseconds (1000);
-
-		int set = atoi (value);
-
-		return std::chrono::milliseconds (set > 0 ? set : 0);
-	}();
-
-	return timeout;
+	/*
+	 * A second. That is long against the burst a promotion arrives in, and
+	 * short against the quiet a program settles into.
+	 *
+	 * An idle thread costs a signal and a wait at every collection. The
+	 * default suspend policy is preemptive, and it suspends an attached
+	 * thread wherever that thread parked. bh (BH.exe -b 700 -s 1000) takes
+	 * 51010 voluntary context switches and 1.64 s of system time while it
+	 * holds its workers, against 17367 and 0.75 s while it retires them.
+	 *
+	 * A restart costs one attach. It also costs the pipelines and the
+	 * TargetMachine on the first compile that follows, because those are
+	 * thread_local (jit.cpp). A 1 ms timeout retires a thread as soon as it
+	 * runs dry, and turns that same run into 114 more thread starts. Compile
+	 * CPU goes from 4.09 ms a method to 4.51, so a restart is around 0.7 ms.
+	 * Most of it is in cgsetup and pbsetup.
+	 *
+	 * The floor is therefore soft. A shorter timeout cuts more of the
+	 * transient that a short run is mostly made of, and 250 ms takes bh to
+	 * 7066 switches. A second is the conservative end of that range. It
+	 * keeps a program that promotes a method every few seconds from
+	 * restarting a thread for each one.
+	 */
+	return std::chrono::milliseconds (WorkerIdleMsOpt.getValue ());
 }
 
 bool
 tier2_enabled ()
 {
-	static bool on = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_TIER2");
-
-		return value == nullptr || is_truthy_env_var (value);
-	}();
-
-	return on;
+	return tier2_pipeline_enabled ();
 }
 
 bool
 fold_casts ()
 {
-	static bool on = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_FOLD_CASTS");
-
-		return value == nullptr || is_truthy_env_var (value);
-	}();
-
-	return on;
+	return FoldCastsOpt;
 }
 
 bool
 fold_delegates ()
 {
-	static bool on = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_FOLD_DELEGATES");
-
-		return value == nullptr || is_truthy_env_var (value);
-	}();
-
-	return on;
+	return FoldDelegatesOpt;
 }
 
 bool
 guard_array_dispatch ()
 {
-	static bool on = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_GUARD_ARRAYS");
-
-		return value == nullptr || is_truthy_env_var (value);
-	}();
-
-	return on;
+	return GuardArrayDispatchOpt;
 }
 
 bool
 guard_class_dispatch ()
 {
-	static bool on = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_GUARD_CLASSES");
-
-		return value == nullptr || is_truthy_env_var (value);
-	}();
-
-	return on;
+	return GuardClassDispatchOpt;
 }
 
 bool
 fold_clause_bearing_callees ()
 {
-	static bool on = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_FOLD_CLAUSES");
-
-		return value == nullptr || is_truthy_env_var (value);
-	}();
-
-	return on;
+	return FoldClauseBearingCalleesOpt;
 }
 
 bool
 thread_static_fast_path ()
 {
-	static bool on = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_THREAD_STATIC");
-
-		return value == nullptr || is_truthy_env_var (value);
-	}();
-
-	return on;
+	return ThreadStaticFastPathOpt;
 }
 
 bool
 dyn_calls ()
 {
-	static bool on = [] {
-		const char *value = g_getenv ("MONO_LLVM_JIT_DYN_CALL");
-
-		return value == nullptr || is_truthy_env_var (value);
-	}();
-
-	return on;
+	return DynCallsOpt;
 }
 
 llvm::FastMathFlags
@@ -408,196 +410,82 @@ relaxed_float_flags ()
 uint64_t
 tier2_threshold ()
 {
-	static uint64_t cost = [] () -> uint64_t {
-		const char *value = g_getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD");
-
-		if (value == nullptr)
-			return 100000000;
-
-		char *end = nullptr;
-		unsigned long long set = strtoull (value, &end, 10);
-
-		// Zero is an instrumented body that never promotes on its own, which
-		// is what a test driving the tiers through
-		// Mono.Tiering.MonoTier::PromoteNow wants. A value nothing parses
-		// answers the same way.
-		if (end == value || set == 0)
-			return 0;
-
-		// The counter is signed, so that a cost can take it past zero and the
-		// thread that crossed can see that it did.
-		return std::min<unsigned long long> (set, INT64_MAX);
-	}();
-
-	return cost;
+	// The counter is signed, so that a cost can take it past zero and the
+	// thread that crossed can see that it did.
+	return std::min<uint64_t> (Tier2ThresholdOpt.getValue (), INT64_MAX);
 }
 
 uint64_t
 tier2_entry_weight ()
 {
-	static uint64_t weight = [] () -> uint64_t {
-		// The threshold at zero turns automatic promotion off for good, and a
-		// weight with no counter to charge is worth nothing.
-		if (tier2_threshold () == 0)
-			return 0;
+	// The threshold at zero turns automatic promotion off for good, and a
+	// weight with no counter to charge is worth nothing.
+	if (tier2_threshold () == 0)
+		return 0;
 
-		const char *value = g_getenv ("MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT");
-
-		if (value == nullptr)
-			return 5000;
-
-		char *end = nullptr;
-		unsigned long long set = strtoull (value, &end, 10);
-
-		if (end == value)
-			return 0;
-
-		// A weight past the threshold would promote every body on its first
-		// exit, which the threshold itself already expresses.
-		return std::min<unsigned long long> (set, tier2_threshold ());
-	}();
-
-	return weight;
+	// A weight past the threshold would promote every body on its first
+	// exit, which the threshold itself already expresses.
+	return std::min<uint64_t> (Tier2EntryWeightOpt.getValue (), tier2_threshold ());
 }
 
 uint32_t
 trivial_inline_il_limit ()
 {
-	static uint32_t bytes = [] () -> uint32_t {
-		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_IL_LIMIT");
-
-		/*
-		 * A forwarder with eight arguments is 22 bytes, a field chain four
-		 * deep is 22, and a throw helper with three arguments is around 18.
-		 * The limit is a backstop on IL the shape test already read as one of
-		 * these shapes, not a policy of its own.
-		 */
-		if (value == nullptr)
-			return 32;
-
-		int set = atoi (value);
-
-		return set > 0 ? (uint32_t) set : 0;
-	}();
-
-	return bytes;
+	/*
+	 * A forwarder with eight arguments is 22 bytes, a field chain four
+	 * deep is 22, and a throw helper with three arguments is around 18.
+	 * The limit is a backstop on IL the shape test already read as one of
+	 * these shapes, not a policy of its own.
+	 */
+	return InlineILLimitOpt;
 }
 
 uint32_t
 trivial_inline_budget ()
 {
-	static uint32_t bodies = [] () -> uint32_t {
-		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_BUDGET");
-
-		// A translation each, against a compile that already costs LLVM's own
-		// per-method floor several times over.
-		if (value == nullptr)
-			return 16;
-
-		int set = atoi (value);
-
-		return set > 0 ? (uint32_t) set : 0;
-	}();
-
-	return bodies;
+	// A translation each, against a compile that already costs LLVM's own
+	// per-method floor several times over.
+	return InlineBudgetOpt;
 }
 
 uint32_t
 costed_inline_budget ()
 {
-	static uint32_t bodies = [] () -> uint32_t {
-		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_COST_BUDGET");
-
-		// The same count the pre-pass gets. What the cost model translates it
-		// also weighs, and a candidate it refuses is stripped again, so this
-		// bounds the questions rather than the code a body ends up with.
-		if (value == nullptr)
-			return 16;
-
-		int set = atoi (value);
-
-		return set > 0 ? (uint32_t) set : 0;
-	}();
-
-	return bodies;
+	// The same count the pre-pass gets. What the cost model translates it
+	// also weighs, and a candidate it refuses is stripped again, so this
+	// bounds the questions rather than the code a body ends up with.
+	return CostedInlineBudgetOpt;
 }
 
 uint32_t
 costed_inline_il_limit ()
 {
-	static uint32_t bytes = [] () -> uint32_t {
-		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_COST_IL_LIMIT");
-
-		/*
-		 * A number with no sweep behind it.
-		 */
-		if (value == nullptr)
-			return 128;
-
-		int set = atoi (value);
-
-		return set > 0 ? (uint32_t) set : 0;
-	}();
-
-	return bytes;
+	return CostedInlineILLimitOpt;
 }
 
 uint32_t
 inline_depth_limit ()
 {
-	static uint32_t levels = [] () -> uint32_t {
-		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_DEPTH");
-
-		if (value == nullptr)
-			return 4;
-
-		int set = atoi (value);
-
-		return set > 0 ? (uint32_t) set : 0;
-	}();
-
-	return levels;
+	return InlineDepthLimitOpt;
 }
 
 uint32_t
 inline_round_limit ()
 {
-	static uint32_t rounds = [] () -> uint32_t {
-		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_ROUNDS");
-
-		if (value == nullptr)
-			return 4;
-
-		int set = atoi (value);
-
-		return set > 0 ? (uint32_t) set : 1;
-	}();
-
-	return rounds;
+	return std::max (InlineRoundLimitOpt.getValue (), 1u);
 }
 
 uint32_t
 trivial_inline_depth_limit ()
 {
-	static uint32_t levels = [] () -> uint32_t {
-		const char *value = g_getenv ("MONO_LLVM_JIT_INLINE_PREPASS_DEPTH");
-
-		/*
-		 * Generous rather than tuned. Reach stops paying well before this on
-		 * both corpora we have, and the room past that is deliberate: we
-		 * would rather the pre-pass folds a little too much than too little,
-		 * and this is not tuned to the benchmarks in the tree. What bounds
-		 * the translation is the budget, in materialize_trivial_callees ().
-		 */
-		if (value == nullptr)
-			return 8;
-
-		int set = atoi (value);
-
-		return set > 0 ? (uint32_t) set : 0;
-	}();
-
-	return levels;
+	/*
+	 * Generous rather than tuned. Reach stops paying well before this on
+	 * both corpora we have, and the room past that is deliberate: we
+	 * would rather the pre-pass folds a little too much than too little,
+	 * and this is not tuned to the benchmarks in the tree. What bounds
+	 * the translation is the budget, in materialize_trivial_callees ().
+	 */
+	return TrivialInlineDepthLimitOpt;
 }
 
 int32_t

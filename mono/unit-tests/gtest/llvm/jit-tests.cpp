@@ -13,6 +13,7 @@
 #include "harness.hpp"
 
 #include "jit.hpp"
+#include "runtime/options.hpp"
 #include "passes/builtins.hpp"
 #include "passes/lower-builtins.hpp"
 #include "passes/tier-counter.hpp"
@@ -485,16 +486,13 @@ public:
 	{
 		MONO_SKIP_WITHOUT_CORPUS ();
 
-		if (::getenv ("MONO_LLVM_JIT_TIER2_THRESHOLD") == nullptr)
-			GTEST_SKIP () << "MONO_LLVM_JIT_TIER2_THRESHOLD is unset, so a "
-			                 "body under test can promote out from under it";
+		if (mono::tier2_threshold () <= 100000000)
+			GTEST_SKIP () << "the tier-2 threshold is not pinned past its "
+			                 "default, so a body under test can promote out "
+			                 "from under it";
 
-		const char *tier2 = ::getenv ("MONO_LLVM_JIT_TIER2");
-
-		if (tier2 != nullptr && (*tier2 == '\0' || StringRef (tier2) == "0"
-		                         || StringRef (tier2).equals_insensitive ("false")))
-			GTEST_SKIP () << "MONO_LLVM_JIT_TIER2 turns tier 2 off, so the "
-			                 "pipeline instruments nothing";
+		if (!tier2_pipeline_enabled ())
+			GTEST_SKIP () << "tier 2 is off, so the pipeline instruments nothing";
 
 		init_runtime ();
 	}

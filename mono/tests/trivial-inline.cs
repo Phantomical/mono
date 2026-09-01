@@ -15,8 +15,8 @@ using System.Runtime.CompilerServices;
  * helper that threw has a frame in it either way, but a folded body owns no
  * code: its frame reports the offset into the caller it was folded at, and a
  * helper the gates refuse reports an offset into itself.
- * MONO_LLVM_JIT_INLINE_IL_LIMIT=0 turns the pre-pass off, and this test then
- * fails on those checks alone.
+ * --llvm-opt=-mono-inline-il-limit=0 turns the pre-pass off, and this test
+ * then fails on those checks alone.
  *
  * The first call claims nothing about frames. Which engine it runs in is the
  * arm's choice: interpreted where tier 0 is on, compiled where it is off.

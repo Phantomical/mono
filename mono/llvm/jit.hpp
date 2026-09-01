@@ -62,6 +62,13 @@ unsigned host_max_atomic_bits (const llvm::Function &f);
 
 bool ir_verification_enabled ();
 
+/// Hands every option add_option () has queued to LLVM's command-line parser.
+///
+/// Idempotent: only the first call parses anything, so callers that need the
+/// parsed options settled before they read one of them can call this ahead of
+/// MonoJit::create (), which would otherwise be the first caller.
+llvm::Error apply_options ();
+
 /// Whether `--llvm-opt` asked LLVM to print what its passes did.
 ///
 /// It reads the options queued by add_option (), so it answers as soon as the
@@ -137,7 +144,7 @@ enum class JitTier {
 std::vector<uint8_t> build_profile (llvm::ArrayRef<ProfileCounters> counters);
 
 /// The entry count every body's profile is normalized to, or zero to leave the
-/// counts as they were counted. MONO_LLVM_JIT_PROFILE_ENTRY sets it.
+/// counts as they were counted.
 ///
 /// A body reaches tier 2 either on many calls or on a heavy loop, and the raw
 /// counts say which. LLVM reads a block cold against the rest of the profile, so
@@ -146,6 +153,13 @@ std::vector<uint8_t> build_profile (llvm::ArrayRef<ProfileCounters> counters);
 /// body separates a call site the profile calls rare from one that only looks
 /// rare beside a loop.
 uint64_t profile_entry_count ();
+
+/// Whether tier 2 exists at all, which decides whether a tier-1 body carries
+/// profiling instrumentation.
+///
+/// `mono::tier2_enabled ()` (runtime/options.hpp) answers the same question by
+/// calling this rather than parsing a second copy of the option.
+bool tier2_pipeline_enabled ();
 
 /// One frame slot, as a register number and a displacement whose sum is the
 /// slot's address - the shape MonoDebugVarInfo names a variable's home in.

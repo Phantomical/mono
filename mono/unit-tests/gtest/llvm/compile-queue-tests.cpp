@@ -277,7 +277,7 @@ TEST (CompileQueue, SeveralWorkersRunWorkAtOnce)
 
 /*
  * The other half of that: a queue of one still runs its work one piece at a
- * time, which is what MONO_LLVM_JIT_WORKERS=1 is for.
+ * time, which is what a worker count of one is for.
  */
 TEST (CompileQueue, OneWorkerRunsWorkOneAtATime)
 {

@@ -4,8 +4,9 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
- * Whether the tier-2 cost model folds a clause-bearing callee, gated by
- * MONO_LLVM_JIT_FOLD_CLAUSES.
+ * Whether the tier-2 cost model folds a clause-bearing callee. The suite
+ * runs this file twice, and MONO_FOLD_CLAUSES tells the test which arm it
+ * is in.
  *
  * DiesOnFold ()'s clause is dead once folded: Root () only ever passes a
  * freshly allocated Foo, so f != null answers true off the allocation's own
@@ -181,7 +182,7 @@ static class Program {
 
 	public static int Main ()
 	{
-		bool folding = Environment.GetEnvironmentVariable ("MONO_LLVM_JIT_FOLD_CLAUSES") != "0";
+		bool folding = Environment.GetEnvironmentVariable ("MONO_FOLD_CLAUSES") != "off";
 		MethodInfo root = typeof (Program).GetMethod ("Root",
 			BindingFlags.Static | BindingFlags.NonPublic);
 
@@ -219,13 +220,12 @@ static class Program {
 			Check (folded_dies, "a clause the fold makes dead folds into the root");
 		else
 			Check (!folded_dies,
-				"MONO_LLVM_JIT_FOLD_CLAUSES=0 refuses it the way the pre-pass does");
+				"MONO_FOLD_CLAUSES=off refuses it the way the pre-pass does");
 
 		Check (!folded_stays, "a clause the caller can still take never folds");
 
-		// Live on every call, so this stays refused whether
-		// MONO_LLVM_JIT_FOLD_CLAUSES is on or off, unlike DiesOnFold ()'s
-		// check above.
+		// Live on every call, so this stays refused whether MONO_FOLD_CLAUSES
+		// is on or off, unlike DiesOnFold ()'s check above.
 		Check (!folded_none, "a clause with no landing pad at all still never folds");
 
 		int before = Clauses.cleanups;

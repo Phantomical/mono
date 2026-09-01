@@ -1,13 +1,13 @@
 /**
  * \file
- * \brief The environment knobs the engine reads, the tier-0 filter the command
- * line sets, and the lock the trace prints under.
+ * \brief The compile-policy knobs the engine reads, most of them `--llvm-opt`
+ * flags, the rest environment variables, and the lock the trace prints under.
  *
- * Every value here is read once and cached, so setting one of these variables
- * after the first method has compiled does nothing. That is deliberate:
- * caching keeps a variable changed partway through a run from splitting a
- * method's state across two policies. This means a test that wants one has to
- * set it before starting the runtime, not around the call it is interested in.
+ * Every value here is read once and cached, so setting one of these after the
+ * first method has compiled does nothing. That is deliberate: caching keeps a
+ * variable changed partway through a run from splitting a method's state
+ * across two policies. This means a test that wants one has to set it before
+ * starting the runtime, not around the call it is interested in.
  */
 
 #ifndef MONO_LLVM_RUNTIME_OPTIONS_HPP
@@ -65,57 +65,55 @@ bool recompiling (MonoMethod *method);
 /// Ten, and it is not a tuned number. All a threshold has to do is keep
 /// methods called once or twice out of the compiler. What the trade is worth
 /// past that needs an execution-count distribution measured off a real
-/// workload, not an argument. MONO_LLVM_JIT_TIER1_THRESHOLD moves it, which is
-/// the point of it being a variable at all. Zero there leaves every tier-0
-/// method interpreted for good. That is what separates the tier-0 entry path
-/// from promotion when one of them misbehaves.
+/// workload, not an argument. Zero leaves every tier-0 method interpreted for
+/// good, which separates the tier-0 entry path from promotion when one of
+/// them misbehaves.
 uint32_t tier1_threshold ();
 
 /// How many methods a tier-1 promotion compile can take at once.
 ///
 /// Methods promoted close together are translated into one module and compiled
-/// together, which pays LLVM's per-compile cost once instead of once each.
-/// MONO_LLVM_JIT_BATCH moves it, and one there compiles every method on its own.
-/// Tier 2 is never batched: its code is laid out by its own method's counts.
+/// together, which pays LLVM's per-compile cost once instead of once each. One
+/// compiles every method on its own. Tier 2 is never batched: its code is laid
+/// out by its own method's counts.
 uint32_t promotion_batch_size ();
 
 /// The most threads the compile queue can run promotions on at once.
 ///
-/// MONO_LLVM_JIT_WORKERS moves it, and one there puts every background compile
-/// back on a single thread, which is what separates a bug in a compile from a
-/// bug in two compiles overlapping. The queue starts threads only as work
-/// outruns the ones it has, so this is a ceiling and not a count of threads a
-/// process will have.
+/// One puts every background compile back on a single thread, which separates
+/// a bug in a compile from a bug in two compiles overlapping. The queue starts
+/// threads only as work outruns the ones it has, so this is a ceiling and not
+/// a count of threads a process will have.
 uint32_t compile_worker_count ();
 
 /// How long a compile worker waits for work before the queue retires it.
 ///
-/// MONO_LLVM_JIT_WORKER_IDLE_MS moves it. Zero there keeps every thread the
-/// queue started for as long as the runtime lives, which is what separates the
-/// cost of retiring threads from the cost of holding them.
+/// Zero keeps every thread the queue started for as long as the runtime
+/// lives, which separates the cost of retiring threads from the cost of
+/// holding them.
 std::chrono::milliseconds compile_worker_idle_timeout ();
 
 /// Whether tier 2 exists at all, which is what decides whether a tier-1 body
 /// carries profiling instrumentation.
 ///
-/// On unless MONO_LLVM_JIT_TIER2 turns it off.
+/// On by default.
 bool tier2_enabled ();
 
-/// Whether MONO_LLVM_JIT_FOLD_CASTS left the type-test fold on.
+/// Whether the type-test fold is on.
 ///
 /// A false value leaves every cast for the lowering to write as the probe and
 /// the wrapper, which is what separates a wrong answer from a wrong probe. The
 /// translator writes the same IR either way, so the two arms differ in one pass.
 bool fold_casts ();
 
-/// Whether MONO_LLVM_JIT_FOLD_DELEGATES left the delegate-Invoke fold on.
+/// Whether the delegate-Invoke fold is on.
 ///
 /// A false value leaves every Invoke reading its entry off the delegate, which
 /// is the answer a fold has to agree with. The translator writes the same IR
 /// either way, so the two arms differ in one pass.
 bool fold_delegates ();
 
-/// Whether MONO_LLVM_JIT_GUARD_ARRAYS left the array dispatch guard on.
+/// Whether the array dispatch guard is on.
 ///
 /// A false value leaves every dispatch on an array receiver reading its callee
 /// out of the receiver's vtable, which is what separates a wrong target from a
@@ -123,8 +121,7 @@ bool fold_delegates ();
 /// arms differ in one pass.
 bool guard_array_dispatch ();
 
-/// Whether MONO_LLVM_JIT_GUARD_CLASSES left the guess on a dispatch whose
-/// receiver this compile cannot prove a class for.
+/// Whether the guessed-class dispatch guard is on.
 ///
 /// A false value leaves every such dispatch reading its callee out of the
 /// receiver's vtable, which is the answer a guess has to agree with. The
@@ -132,15 +129,15 @@ bool guard_array_dispatch ();
 /// pass.
 bool guard_class_dispatch ();
 
-/// Whether MONO_LLVM_JIT_FOLD_CLAUSES left the tier-2 cost model able to
-/// translate a clause-bearing callee at all.
+/// Whether the tier-2 cost model can translate a clause-bearing callee at
+/// all.
 ///
 /// A false value refuses one the way the shape-test pre-pass always does.
 /// clause_survives_fold ()'s trial has to give the same answer when it
 /// declines a callee for real.
 bool fold_clause_bearing_callees ();
 
-/// Whether MONO_LLVM_JIT_THREAD_STATIC left the thread-static fast path on.
+/// Whether the thread-static fast path is on.
 ///
 /// A false value sends every thread static back through mono_domain_get () and
 /// the mono_class_static_field_address icall, which is what separates a wrong
@@ -148,7 +145,7 @@ bool fold_clause_bearing_callees ();
 /// that answers differently between them has a defect in the fast path.
 bool thread_static_fast_path ();
 
-/// Whether MONO_LLVM_JIT_DYN_CALL left the interpreter's dyn calls on.
+/// Whether the interpreter's dyn calls are on.
 ///
 /// A false value takes every jit call back to a gsharedvt_out_sig wrapper
 /// compiled for its signature, which is what separates a defect in the plan
@@ -177,7 +174,7 @@ llvm::FastMathFlags relaxed_float_flags ();
 ///
 /// Zero for a body that never asks on a count of any kind, which leaves it
 /// instrumented and counting while something else decides when it promotes.
-/// MONO_LLVM_JIT_TIER2_THRESHOLD moves it, and the default is a hundred million.
+/// The default is a hundred million.
 uint64_t tier2_threshold ();
 
 /// What one call adds to the count tier2_threshold () bounds.
@@ -187,53 +184,50 @@ uint64_t tier2_threshold ();
 /// tier2_threshold () / tier2_entry_weight () calls. Zero counts work alone,
 /// which separates a promotion the work asked for from one the calls asked for.
 ///
-/// MONO_LLVM_JIT_TIER2_ENTRY_WEIGHT moves it, and the default is five thousand.
+/// The default is five thousand.
 uint64_t tier2_entry_weight ();
 
 /// The largest callee, in IL bytes, a compile folds into its caller before any
 /// cost model has looked at it.
 ///
 /// Thirty-two, which leaves room to spare on the shapes the pre-pass
-/// recognizes. MONO_LLVM_JIT_INLINE_IL_LIMIT moves it. Zero there turns the
-/// pre-pass off, which is what separates a bug in a folded body from one in
-/// the method that folded it.
+/// recognizes. Zero turns the pre-pass off, which separates a bug in a folded
+/// body from one in the method that folded it.
 uint32_t trivial_inline_il_limit ();
 
 /// How many bodies the shape-test pre-pass can fold into one method.
 ///
-/// MONO_LLVM_JIT_INLINE_BUDGET moves it. A chain of forwarders is what spends
-/// it. A batch gives each member its own count, so a method folds in the same
-/// bodies however many others promoted beside it.
+/// A chain of forwarders is what spends it. A batch gives each member its own
+/// count, so a method folds in the same bodies however many others promoted
+/// beside it.
 uint32_t trivial_inline_budget ();
 
 /// How many bodies the tier-2 cost model can fold into one method.
 ///
-/// MONO_LLVM_JIT_INLINE_COST_BUDGET moves it. A count of its own rather than
-/// the pre-pass's, so what one inliner takes in does not decide what the other
-/// one is left to fold.
+/// A count of its own rather than the pre-pass's, so what one inliner takes in
+/// does not decide what the other one is left to fold.
 uint32_t costed_inline_budget ();
 
 /// The largest callee, in IL bytes, the tier-2 cost model will translate in
 /// order to weigh it.
 ///
-/// MONO_LLVM_JIT_INLINE_COST_IL_LIMIT moves it, and zero there leaves tier 2
-/// with the shape-test pre-pass alone - which is what separates a bug in the
-/// cost model from one in what it folded.
+/// Zero leaves tier 2 with the shape-test pre-pass alone, which separates a
+/// bug in the cost model from one in what it folded.
 uint32_t costed_inline_il_limit ();
 
 /// How many folds deep past a method the tier-2 inliner can go.
 ///
-/// MONO_LLVM_JIT_INLINE_DEPTH moves it. A call graph with a cycle in it never
-/// runs out of sites, so the loop needs a floor whatever the budget says.
+/// A call graph with a cycle in it never runs out of sites, so the loop needs
+/// a floor whatever the budget says.
 uint32_t inline_depth_limit ();
 
 /// How many times the tier-2 inliner takes up a method's sites again.
 ///
-/// MONO_LLVM_JIT_INLINE_ROUNDS moves it, and one leaves the inliner with the
-/// sites the method arrived with. A fold settles the receiver's class at a
-/// dispatch below it, which `fold_dispatch_sites ()` then replaces with a direct call
-/// - a site that was not there when the sites were first read, and one an
-/// interface dispatch reaches no other way.
+/// One leaves the inliner with the sites the method arrived with. A fold
+/// settles the receiver's class at a dispatch below it, which
+/// `fold_dispatch_sites ()` then replaces with a direct call - a site that was
+/// not there when the sites were first read, and one an interface dispatch
+/// reaches no other way.
 ///
 /// What bounds the work is the budget rather than this. The count is what stops
 /// a cycle, the way the depth limit does.
@@ -241,9 +235,9 @@ uint32_t inline_round_limit ();
 
 /// How many folds deep past root the shape-test pre-pass can go.
 ///
-/// MONO_LLVM_JIT_INLINE_PREPASS_DEPTH moves it. A bound of its own rather than
-/// the cost model's, because the two take different candidates: this one takes
-/// a forwarder, and a chain of them reaches much further for the same budget.
+/// A bound of its own rather than the cost model's, because the two take
+/// different candidates: this one takes a forwarder, and a chain of them
+/// reaches much further for the same budget.
 ///
 /// The pre-pass drains its worklist least deep first, so this decides where the
 /// count left over goes rather than what the first folds are.
@@ -264,9 +258,9 @@ bool tier0_enabled ();
 /// Whether a method is entered by interpreting its bytecode rather than by
 /// compiling it.
 ///
-/// Every method the interpreter can run starts there. MONO_LLVM_JIT_TIER0
-/// narrows that for debugging. A false value keeps every method out of tier 0.
-/// Anything else is matched as a substring of the printed name.
+/// Every method the interpreter can run starts there. A debug filter narrows
+/// that: a false value keeps every method out of tier 0, and anything else is
+/// matched as a substring of the printed name.
 bool runs_at_tier0 (MonoMethod *method);
 
 } // namespace mono

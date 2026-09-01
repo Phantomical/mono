@@ -33,7 +33,7 @@ class InlinedFrames {
 	 * called, so on their own they would pass against a run that folded nothing.
 	 * A folded body owns no code: its frame reports the offset into the body it
 	 * was folded into, which is what tells the two apart. Running with
-	 * MONO_LLVM_JIT_INLINE_IL_LIMIT=0 is what this refuses.
+	 * --llvm-opt=-mono-inline-il-limit=0 is what this refuses.
 	 */
 	static void MustBeFolded (StackTrace st, string inlined, string host)
 	{

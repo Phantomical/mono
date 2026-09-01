@@ -15,8 +15,8 @@ using System.Runtime.CompilerServices;
  *
  * The suite runs twice, once on the default and once with the bonus zeroed,
  * and reads MONO_INLINE_POLICY to know which arm it is in. The trivial
- * pre-pass is off in both (MONO_LLVM_JIT_INLINE_IL_LIMIT=0), so a fold this
- * reads is the cost model's.
+ * pre-pass is off in both (--llvm-opt=-mono-inline-il-limit=0), so a fold
+ * this reads is the cost model's.
  *
  * What says a fold happened is the stack trace, the way tier2-inline-cost.cs
  * reads it: a folded body owns no code, so its frame reports the offset into
@@ -29,8 +29,9 @@ using System.Runtime.CompilerServices;
  * leaves at 80 in the off arm, fifty either side of the cost. Re-measure
  * when this starts failing on one arm:
  *
- *   MONO_LLVM_JIT_TRACE=1 MONO_LLVM_JIT_TIER2_THRESHOLD=0 \
- *   MONO_LLVM_JIT_INLINE_IL_LIMIT=0 mono-sgen \
+ *   MONO_LLVM_JIT_TRACE=1 mono-sgen \
+ *     --llvm-opt=-mono-tier2-threshold=0 \
+ *     --llvm-opt=-mono-inline-il-limit=0 \
  *     --llvm-opt=-mono-inline-cost-full \
  *     --llvm-opt=-mono-inline-cold-callsite-threshold=1 \
  *     tier2-inline-return-forward.exe

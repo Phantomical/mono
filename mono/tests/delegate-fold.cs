@@ -16,8 +16,8 @@
 //     only once the target is inlined, which is why it is asserted at tier 2
 //     alone - the fold is tier 2's, and nothing inlines a direct call below it.
 //
-// MONO_LLVM_JIT_FOLD_DELEGATES=0 is the other arm. The first two layers hold
-// there as well; the third is what the two arms disagree about.
+// MONO_FOLD_DELEGATES=off is the other arm. The first two layers hold there
+// as well; the third is what the two arms disagree about.
 //
 // The field-copy cases below are answer-only: a delegate copied into a field
 // of a fresh object, then read back at the call, the shape a LINQ iterator's
@@ -271,8 +271,7 @@ class DelegateFold {
 
 	static void Main ()
 	{
-		bool folding = Environment.GetEnvironmentVariable (
-			               "MONO_LLVM_JIT_FOLD_DELEGATES") != "0";
+		bool folding = Environment.GetEnvironmentVariable ("MONO_FOLD_DELEGATES") != "off";
 
 		// Warm every shape while it is interpreted, so the caches the compilers
 		// wrote hold a delegate before anything is compiled against them.

@@ -12,8 +12,8 @@ using System.Threading;
  * the sites a body holds and lifts it out of a loop.
  *
  * Every case below runs first interpreted and then at tier 2, and compares the
- * two. MONO_LLVM_JIT_THREAD_STATIC=0 puts the compiled arm back on the icall and
- * every case has to answer the same.
+ * two. --llvm-opt=-mono-thread-static-fast-path=0 puts the compiled arm back
+ * on the icall and every case has to answer the same.
  *
  * The second thread Main () starts is the arm the sharing can break: an address
  * that outlived the frame it was read in would give that thread the first

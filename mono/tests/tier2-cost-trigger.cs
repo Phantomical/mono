@@ -28,9 +28,10 @@ using System.Threading;
  * far too few for that and spends the rest of its counter in a long loop, so only
  * the turns it made before the exception can take it to tier 2.
  *
- * The suite registers this source twice. MONO_LLVM_JIT_TIER2_THRESHOLD is a
- * number one arm reaches and is zero in the other, which turns automatic
- * promotion off. The test reads the variable and asserts the arm it is in.
+ * The suite registers this source twice, with the tier-2 threshold a number
+ * one arm reaches and zero in the other, which turns automatic promotion off.
+ * MONO_WANT_TIER2 carries which arm to the test, so it can assert the arm it
+ * is in.
  */
 
 namespace Mono.Tiering {
@@ -469,9 +470,7 @@ static class Program {
 
 	public static int Main ()
 	{
-		string threshold = Environment.GetEnvironmentVariable (
-			"MONO_LLVM_JIT_TIER2_THRESHOLD");
-		bool want_tier2 = threshold != "0";
+		bool want_tier2 = Environment.GetEnvironmentVariable ("MONO_WANT_TIER2") != "off";
 
 		bool heavy_folded = Run ("HeavyKernel", true, heavy);
 		bool light_folded = Run ("LightKernel", false, light);

@@ -14,7 +14,7 @@ using System;
  *
  * Small () holds the same comparisons and stays under the limit. The two must
  * agree. Both run once, so both run interpreted - a method leaves for the
- * compiler only after MONO_LLVM_JIT_TIER1_THRESHOLD calls.
+ * compiler only after several calls.
  */
 
 class Tests

@@ -20,6 +20,8 @@
 #undef PIC
 #endif
 
+#include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/StringRef.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
@@ -160,6 +162,31 @@ public:
 
 const ::testing::Environment *dumps_selected =
 	::testing::AddGlobalTestEnvironment (new SelectDumps);
+
+/// Forwards MONO_ENV_OPTIONS's `--llvm-opt=` tokens to MonoJit::add_option (),
+/// which mono_main () does for the real runtime and no path does for this
+/// binary. Runs before any test's fixture, so it reaches every case whichever
+/// one first constructs a MonoJit.
+class ApplyEnvOptions : public ::testing::Environment {
+public:
+	void SetUp () override
+	{
+		const char *env = ::getenv ("MONO_ENV_OPTIONS");
+
+		if (env == nullptr)
+			return;
+
+		llvm::SmallVector<llvm::StringRef, 8> tokens;
+		llvm::StringRef (env).split (tokens, ' ', -1, false);
+
+		for (llvm::StringRef token : tokens)
+			if (token.consume_front ("--llvm-opt="))
+				MonoJit::add_option (token);
+	}
+};
+
+const ::testing::Environment *env_options_applied =
+	::testing::AddGlobalTestEnvironment (new ApplyEnvOptions);
 
 } // namespace
 

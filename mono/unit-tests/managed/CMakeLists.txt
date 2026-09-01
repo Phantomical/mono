@@ -240,7 +240,7 @@ foreach(_assembly IN LISTS _assemblies)
     PROPERTIES LABELS interp-unit
     XFAIL ${MONO_INTERP_TESTS_XFAIL}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
-                "MONO_LLVM_JIT_TIER1_THRESHOLD=0")
+                "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0")
 
   # These run purely on the tier1 jit
   mono_add_test_methods(
@@ -250,7 +250,7 @@ foreach(_assembly IN LISTS _assemblies)
     XFAIL ${MONO_INTERP_TESTS_JIT_XFAIL}
     UNMERGEABLE ${MONO_INTERP_TESTS_JIT_UNMERGEABLE}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
-                "MONO_LLVM_JIT_TIER0=0")
+                "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0")
 
   # First call on the interpreter, which promotes immediately.
   #
@@ -261,7 +261,7 @@ foreach(_assembly IN LISTS _assemblies)
     PROPERTIES LABELS interp-mixed
     XFAIL ${MONO_INTERP_TESTS_MIXED_XFAIL}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
-                "MONO_LLVM_JIT_TIER1_THRESHOLD=2")
+                "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=2")
 
   # The tier1 arm above, compiled again at tier 2 on its first call. Tier 1 runs
   # on the calling thread here and the tier-2 promotion runs on the compile
@@ -273,8 +273,7 @@ foreach(_assembly IN LISTS _assemblies)
     XFAIL ${MONO_INTERP_TESTS_TIER2_XFAIL}
     UNMERGEABLE ${MONO_INTERP_TESTS_JIT_UNMERGEABLE}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
-                "MONO_LLVM_JIT_TIER0=0"
-                "MONO_LLVM_JIT_TIER2_THRESHOLD=1")
+                "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0 --llvm-opt=-mono-tier2-threshold=1")
 endforeach()
 
 foreach(_assembly IN LISTS _assemblies)
@@ -286,7 +285,7 @@ foreach(_assembly IN LISTS _assemblies)
     PROPERTIES LABELS interp-unit
     XFAIL ${MONO_INTERP_TESTS_XFAIL}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
-                "MONO_LLVM_JIT_TIER1_THRESHOLD=0"
+                "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0"
                 "MONO_DEBUG=gen-seq-points"
                 # The transform's tracing decodes each opcode's operands from a
                 # table it keeps apart from the handlers, so it is worth running
@@ -305,7 +304,7 @@ foreach(_assembly IN LISTS _assemblies)
     PROPERTIES LABELS interp-unit
     XFAIL ${MONO_INTERP_TESTS_XFAIL}
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
-                "MONO_LLVM_JIT_TIER1_THRESHOLD=0"
+                "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0"
                 "MONO_INTERP_TESTS_OPTS=-all")
 endforeach()
 
@@ -316,7 +315,7 @@ mono_add_test_methods(
   ONLY "^WrappersIL:"
   PROPERTIES LABELS interp-unit
   ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc"
-              "MONO_LLVM_JIT_TIER1_THRESHOLD=0"
+              "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0"
               "MONO_INTERP_TESTS_OPTS=interp-only=WrappersIL")
 
 mono_corpus_target(interp-test-suites DEPENDS interp-test-runner)

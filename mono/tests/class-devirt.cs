@@ -33,7 +33,7 @@ using System.Runtime.CompilerServices;
  * site before the guard ever sees it, rather than the guard wrapping
  * a compare around an answer that needed none.
  *
- * `MONO_LLVM_JIT_GUARD_CLASSES=0` turns the guess off, and every site
+ * `--llvm-opt=-mono-guard-classes=0` turns the guess off, and every site
  * here has to answer the same either way: `runtime-class-guard` is
  * the arm whose threshold reaches the guard, and
  * `runtime-class-guard-off` runs this file again with the guess off,

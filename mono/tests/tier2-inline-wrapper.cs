@@ -9,8 +9,9 @@ using System.Runtime.CompilerServices;
  * A managed-to-native wrapper is a method with IL of its own: load the
  * arguments, call the icall, test for a pending interruption, return. may_fold ()
  * lets one through like any other callee, so what decides it is the cost model.
- * The suite turns the trivial pre-pass off (MONO_LLVM_JIT_INLINE_IL_LIMIT=0), so
- * every fold this reads is the model's.
+ * The suite turns the trivial pre-pass off
+ * (--llvm-opt=-mono-inline-il-limit=0), so every fold this reads is the
+ * model's.
  *
  * A covariant store is the shape. slots is declared object[] and holds a
  * string[], so the store has to ask mono_helper_stelem_ref_check () whether the

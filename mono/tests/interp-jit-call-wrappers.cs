@@ -6,9 +6,10 @@ using System.Runtime.CompilerServices;
 
 /*
  * Interpreted code calling a wrapper, over the wrapper kinds a call site
- * reaches. Run with MONO_LLVM_JIT_TIER0=Interpreted so that Interpreted's
- * methods run in the interpreter while everything else compiles: each call
- * Run () makes then leaves the interpreter through do_jit_call ().
+ * reaches. Run with --llvm-opt=-mono-tier0-filter=Interpreted so that
+ * Interpreted's methods run in the interpreter while everything else
+ * compiles: each call Run () makes then leaves the interpreter through
+ * do_jit_call ().
  *
  * A dynamic method is the shape this is written for. Tier 0 already ran one,
  * so before this change a compiled dynamic method was still entered by
