@@ -754,13 +754,15 @@ mono_runtime_suite(runtime-tier2-inline-dispatch-off TESTS ${_tier2_inline_dispa
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=256 --llvm-opt=-mono-inline-cold-callsite-threshold=190 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false")
 
 # What the cost model answers about a type test over a parameter. The off arm
-# turns that answer off alone, so what it separates is the answered cascade.
+# turns that answer off alone, so what it separates is the answered cascade. A
+# cold callsite's budget is the lower of the default threshold and the cold
+# one, so both arms raise both.
 _mono_exe_list(_tier2_inline_casts ${MONO_TESTS_TIER2_INLINE_CASTS_SRC})
 mono_runtime_suite(runtime-tier2-inline-casts TESTS ${_tier2_inline_casts}
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
 mono_runtime_suite(runtime-tier2-inline-casts-off TESTS ${_tier2_inline_casts}
                    ENV "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inline-cold-callsite-threshold=400 --llvm-opt=-mono-inline-answer-casts=false")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400 --llvm-opt=-mono-inline-answer-casts=false")
 
 # A wrapper folded into its caller. The off arm leaves the cost model nothing to
 # translate, which is what separates the fold from the frame: both arms assert
