@@ -57,12 +57,9 @@ enum class LowerStage {
 	/// tier compiled it.
 	pre_profile,
 
-	/// Behind `fold_type_tests ()`, so a site that pass could answer outright
-	/// never turns into a probe.
-	casts,
-
-	/// Behind the inliners and `GuardDispatchPass`, both of which read the
-	/// vtable and the slot straight off the call.
+	/// Behind the inliners, `GuardDispatchPass` and `fold_type_tests ()`,
+	/// which read a vtable, a slot or a cast's answer straight off the call.
+	/// A site none of them settled turns into a probe here.
 	post_inline,
 
 	/// Behind the optimization pipeline. A site that stands until here keeps the

@@ -502,13 +502,11 @@ MonoPassBuilder::buildTier1Pipeline ()
 
 	/*
 	 * Behind the instrumentation, so that both tiers hash a CFG with these
-	 * calls still opaque. Tier 2 moves LowerStage::casts much later, behind its
-	 * own inliner; see buildTier2Pipeline ().
+	 * calls still opaque.
 	 *
 	 * In front of TierCounterPass, which turns the calls that can unwind into
 	 * invokes on to the counter's own pad. The type test wrapper is one of them.
 	 */
-	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::casts));
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
 
 	// Beside the stage above rather than behind an optimization pipeline, which
@@ -675,9 +673,15 @@ MonoPassBuilder::buildTier2Pipeline ()
 
 	/*
 	 * Behind the inliner and GuardDispatchPass, both of which read the vtable
-	 * and the slot straight off the call. In front of the optimization
-	 * pipeline, which then reads what this writes as ordinary IR: a vtable
-	 * read becomes the load a loop hoists.
+	 * and the slot straight off the call. Behind fold_type_tests () too, since
+	 * TopDownInlinerPass already runs it on every root through its own
+	 * per-round simplification. A cast still standing here found no caller's
+	 * operand to answer it.
+	 *
+	 * In front of the optimization pipeline, which then reads what this
+	 * writes as ordinary IR. A vtable read becomes the load a loop hoists.
+	 * An unresolved cast becomes the probe that pipeline still gets to
+	 * optimize.
 	 */
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
 
@@ -696,15 +700,6 @@ MonoPassBuilder::buildTier2Pipeline ()
 
 	MPM.addPass (buildModuleOptimizationPipeline (llvm::OptimizationLevel::O3,
 	                                              llvm::ThinOrFullLTOPhase::None));
-
-	/*
-	 * The only point tier 2 lowers a cast that survived fold_type_tests () - a
-	 * root's own, and whatever inlining folded in. Behind TopDownInlinerPass
-	 * and the O3 pipeline above, so a caller's own operand has already had its
-	 * turn at a cast a materialized candidate's own declared bound could not
-	 * answer.
-	 */
-	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::casts));
 
 	/*
 	 * Behind the pipeline above. A fold brings the constructor in and SROA takes

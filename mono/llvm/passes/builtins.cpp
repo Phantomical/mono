@@ -142,12 +142,9 @@ MonoBuiltinLower::run (Module &m, ModuleAnalysisManager &)
 		changed = lower_array_shapes (m);
 		break;
 
-	case LowerStage::casts:
-		changed = lower_type_tests (m);
-		break;
-
 	case LowerStage::post_inline:
 		changed = lower_vtable_reads (m);
+		changed |= lower_type_tests (m);
 		break;
 
 	case LowerStage::post_optimization:

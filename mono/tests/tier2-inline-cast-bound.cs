@@ -4,12 +4,12 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
 /*
- * A type test whose site's own function declares the operand with a wider
- * bound than a caller can. fold_type_tests () answers what a candidate's own
- * declared parameter settles when the tier-2 inliner materializes it
- * standalone for costing; a caller's narrower bound is what answers the rest,
- * once the candidate is folded in and the caller's own compile reaches the
- * copy again.
+ * A type test whose declaring function takes a wider bound than any one
+ * caller's own argument type. fold_type_tests () answers what a candidate's
+ * own declared parameter settles, when the tier-2 inliner materializes it
+ * standalone for costing. A caller's narrower bound answers the rest, once
+ * the candidate is folded in and the caller's own compile reaches the copy
+ * again.
  */
 
 class PlainSource : IEnumerable<int> {

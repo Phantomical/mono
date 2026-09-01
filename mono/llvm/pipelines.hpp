@@ -110,8 +110,7 @@ public:
 	/// candidate put through anything else takes its weights from nothing.
 	///
 	/// A type test the candidate's own declared bound cannot answer stays a
-	/// symbolic marker rather than the runtime probe. A caller that inlines the
-	/// candidate can then answer it against a narrower operand.
+	/// symbolic marker rather than the runtime probe.
 	/// buildTier2Pipeline () lowers whatever is still standing once inlining is
 	/// done.
 	llvm::ModulePassManager buildTier2MaterializePipeline ();
