@@ -1,0 +1,31 @@
+name: Install dependencies
+description: >-
+  The toolchain, LLVM 22 and the distro mono, installed the same way in every
+  job. The test shards need less than the build does -- libllvm22 for the shared
+  library mono-sgen loads, and mono-devel for the one `tools` test that runs
+  csi.exe -- but they take the same step deliberately. What a shard needs is
+  decided by what the build linked and by what a corpus shells out to, and
+  neither is visible from here, so a second list would drift into a red run that
+  named a missing package rather than a defect.
+
+runs:
+  using: composite
+  steps:
+    # Noble's own archive stops at llvm-20 and the backend is written against
+    # 22 APIs, so LLVM comes from apt.llvm.org rather than from the distro.
+    #
+    # clang-18 by an exact name rather than the `clang` metapackage, whose
+    # version the llvm-22 list below would otherwise decide.
+    - shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          build-essential clang-18 cmake ninja-build python3 zlib1g-dev \
+          libgtest-dev ccache mono-devel zstd wget gnupg ca-certificates
+        wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key \
+          | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc > /dev/null
+        echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-22 main" \
+          | sudo tee /etc/apt/sources.list.d/llvm-22.list
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends llvm-22-dev
+        echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
