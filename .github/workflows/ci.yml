@@ -1,0 +1,338 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Actions evicts caches LRU against a 10 GB repo-wide budget, so the ceiling
+  # here is what keeps one branch's entry from crowding out the others'.
+  CCACHE_MAXSIZE: 3G
+  CCACHE_COMPRESS: "true"
+  # mono/mini/buildver-*.h is generated with the wall-clock build date in it.
+  # cmake/MonoGenBuildVer.cmake honours SOURCE_DATE_EPOCH, so pinning it keeps
+  # main.c and main-sgen.c cacheable too.
+  SOURCE_DATE_EPOCH: "1700000000"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # One build, because there is one configuration. The backend is the runtime's
+  # only JIT: mini-runtime.c calls mono_llvm_jit_compile_method () and eighteen
+  # siblings unguarded, and mono/CMakeLists.txt compiles the only definition of
+  # them under MONO_ENABLE_LLVM, so a build with the tier off does not link.
+  #
+  # The tests then run in shards against this job's build tree rather than
+  # rebuilding it. Testing was 74% of the wall clock when it was one job.
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build (Clang)
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # roslyn-binaries, corefx, cecil, boringssl and bdwgc are all build
+          # inputs.  The acceptance corpora are `update = none` in .gitmodules,
+          # so `recursive` still skips the gigabyte of them.
+          submodules: recursive
+
+      - name: Install dependencies
+        uses: ./.github/actions/deps
+
+      # Keyed on the commit so every run writes a fresh entry and the restore-key
+      # picks up the newest older one: a cache entry is immutable once written,
+      # so a fixed key would freeze at whatever the very first run compiled.
+      # Branch isolation comes from Actions' own cache scoping, not from the key.
+      #
+      # Restore and save are separate steps because the combined action saves in
+      # a post step, and a post step does not run for a cancelled job and is
+      # skipped for a failed one. With cancel-in-progress on and the suite
+      # downstream, that lost every entry: four runs left the repo with no
+      # ccache at all, and the fifth still compiled 1115 of 1271 objects cold
+      # against sources it had already built once. Saving as soon as the build
+      # succeeds is what makes the next run's hit rate a property of the
+      # sources rather than of how the suite ended.
+      - name: Restore ccache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.ccache
+          key: ccache-linux-x64-${{ github.sha }}
+          restore-keys: ccache-linux-x64-
+
+      # Everything the managed outputs are compiled from, as one exact key.  A
+      # tree SHA is instant and covers the whole subtree, where hashFiles () over
+      # mcs/ alone would read 51233 files.  The distro mono is in it because
+      # MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS makes it the compiler these assemblies
+      # come out of.
+      - name: Managed build cache key
+        id: managed-key
+        run: |
+          printf '%s\n' \
+            "$(git rev-parse HEAD:mcs)" \
+            "$(git rev-parse HEAD:cmake)" \
+            "$(git rev-parse HEAD:mono/tests)" \
+            "$(git rev-parse HEAD:external)" \
+            "$(dpkg-query -W -f='${Version}' mono-devel)" \
+            | sha256sum | cut -c1-40 \
+            | sed 's/^/key=managed-linux-x64-v1-/' >> "$GITHUB_OUTPUT"
+
+      # No restore-keys, deliberately.  The backdating below makes ninja trust
+      # the restored outputs, so an inexact hit would serve assemblies compiled
+      # from other sources and nothing downstream would notice.  A key that does
+      # not match exactly has to miss and rebuild.
+      - name: Restore managed build
+        id: managed-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/mcs
+            build/mono/tests
+            build/.ninja_log
+            build/.ninja_deps
+          key: ${{ steps.managed-key.outputs.key }}
+
+      # Ninja decides an edge is stale from the output mtime recorded in
+      # .ninja_log, not from the file on disk, so touching the restored outputs
+      # does nothing -- the inputs have to go back instead.  tar preserves the
+      # output mtimes on the way in, and SOURCE_DATE_EPOCH is already older than
+      # any of them.
+      - name: Backdate sources behind the restored outputs
+        if: steps.managed-cache.outputs.cache-hit == 'true'
+        run: |
+          find . -name .git -prune -o -path ./build -prune -o -print0 \
+            | xargs -0r touch -h -d "@$SOURCE_DATE_EPOCH"
+
+      # clang-18 rather than the default compiler, because that is what the
+      # development box configures with, so a green run here is a green run of
+      # the configuration people build.  The GCC job below is what covers the
+      # other toolchain accepting the sources.
+      #
+      # MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS hosts Roslyn on the distro mono rather
+      # than the one being built, which is worth roughly 4x on the C# half and
+      # takes it off the critical path behind the native link.  Only the
+      # compiler's host moves; the tests still run on the runtime built here.
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DMONO_LLVM_PREFIX=/usr/lib/llvm-22 \
+            -DCMAKE_INSTALL_PREFIX="$PWD/tmp" \
+            -DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        id: build
+        run: cmake --build build -j "$(nproc)"
+
+      # A hit restored exactly what this key describes, so there is nothing new
+      # to write back.
+      - name: Save managed build
+        if: >-
+          steps.build.outcome == 'success' &&
+          steps.managed-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            build/mcs
+            build/mono/tests
+            build/.ninja_log
+            build/.ninja_deps
+          key: ${{ steps.managed-key.outputs.key }}
+
+      - name: Save ccache
+        if: steps.build.outcome == 'success'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.ccache
+          key: ccache-linux-x64-${{ github.sha }}
+
+      - name: ccache statistics
+        run: ccache --show-stats --verbose
+
+      - name: Runtime identifies itself
+        run: |
+          ./build/mono/mini/mono-sgen --version
+          ./build/mono/mini/mono-sgen --version | grep -q 'LLVM:.*yes'
+
+      # The whole tree rather than a selection of it. 1.6G goes to 410M in 18s,
+      # which is far below what any pruning could be worth, and a prune that
+      # dropped a data file some corpus reads would surface as one red test in
+      # one shard rather than as a missing file.
+      #
+      # zstd rather than the artifact's own zip, which single-threads deflate
+      # over the whole tree. The upload then compresses a compressed file, so
+      # compression-level 0 keeps it from paying for that twice.
+      - name: Pack the build tree
+        run: tar -I 'zstd -3 -T0' -cf build.tzst build
+
+      - name: Upload the build tree
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-tree-linux-x64
+          path: build.tzst
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  # ---------------------------------------------------------------------------
+  # The native half under gcc. Everyone here configures with clang, so a
+  # construct only g++ rejects reaches the branch unreported.
+  #
+  # Nothing downstream consumes this job: the tests run against the clang tree
+  # above, and a second toolchain's runtime answers the same questions. It also
+  # takes no `needs`, so it runs beside that build and costs the run only what
+  # it is slower by.
+  # ---------------------------------------------------------------------------
+  build-gcc:
+    name: Build (GCC)
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        uses: ./.github/actions/deps
+
+      # A key of its own. A cache entry is immutable once written, so two jobs
+      # saving one key means the second save is refused and its objects are
+      # gone -- and ccache hashes the compiler, so neither job's objects would
+      # answer the other anyway.
+      - name: Restore ccache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.ccache
+          key: ccache-linux-x64-gcc-${{ github.sha }}
+          restore-keys: ccache-linux-x64-gcc-
+
+      # MONO_ENABLE_MCS_BUILD=OFF is what makes this the native half. The class
+      # libraries are Roslyn's output and no C++ compiler reaches them, so
+      # building them again here would report on nothing this job is about.
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_C_COMPILER=gcc \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DMONO_LLVM_PREFIX=/usr/lib/llvm-22 \
+            -DCMAKE_INSTALL_PREFIX="$PWD/tmp" \
+            -DMONO_ENABLE_MCS_BUILD=OFF \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        id: build
+        run: cmake --build build -j "$(nproc)"
+
+      - name: Save ccache
+        if: steps.build.outcome == 'success'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.ccache
+          key: ccache-linux-x64-gcc-${{ github.sha }}
+
+      - name: ccache statistics
+        run: ccache --show-stats --verbose
+
+  # ---------------------------------------------------------------------------
+  # ctest's own index filter is the shard: `-I <n>,,<count>` takes every count'th
+  # test from the filtered list, so the shards partition it with no overlap and
+  # no gaps, and nothing has to be checked in and kept current. Order comes from
+  # the generated CTestTestfile.cmake, which is the build job's own file here,
+  # so every shard indexes the same list.
+  #
+  # `strategy.job-total` is the count, so changing the shard list below is the
+  # whole edit.
+  #
+  # The selection is what the six per-suite steps this replaces added up to, and
+  # it is exactly that: the union was 11948 tests and this is the same 11948.
+  # `slow` is disjoint from all of them -- it is entirely bcl -- so excluding it
+  # here drops nothing the suites were running.
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test ${{ matrix.shard }}/${{ strategy.job-total }}
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    strategy:
+      # A shard that goes red must not take the other seven with it, or a
+      # failure names one family and hides the rest.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+
+    steps:
+      # The build tree's CTestTestfile.cmake names 5332 paths under mono/ and
+      # 5274 under cmake/, and one `tools` test runs csi.exe out of the
+      # roslyn-binaries submodule, so a shard needs the source tree as checked
+      # out for the build. The runner puts it at the same GITHUB_WORKSPACE in
+      # every job, which is what makes those absolute paths resolve here.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        uses: ./.github/actions/deps
+
+      - name: Download the build tree
+        uses: actions/download-artifact@v8
+        with:
+          name: build-tree-linux-x64
+
+      - name: Unpack the build tree
+        run: tar --zstd -xf build.tzst
+
+      # Cheap and immediate: a tree that did not survive the round trip, or an
+      # LLVM the shard cannot load, fails here rather than as 1494 red tests.
+      - name: Runtime identifies itself
+        run: |
+          ./build/mono/mini/mono-sgen --version
+          ./build/mono/mini/mono-sgen --version | grep -q 'LLVM:.*yes'
+
+      # apt.llvm.org builds LLVM with LLVM_ENABLE_ASSERTIONS OFF, so nothing
+      # here catches the API misuse an assertions build would. What an
+      # assertions build also turns on by itself is reachable without one:
+      # MONO_LLVM_JIT_VERIFY runs the IR verifier over the translator's output,
+      # over the module after each pass written here, and over the module
+      # codegen is handed, for 11-15% of compile CPU.
+      #
+      # interp-mixed is left out for the reason check-all leaves it out: it is
+      # red on a backend defect it exists to report.
+      - name: Test
+        env:
+          MONO_LLVM_JIT_VERIFY: "1"
+        run: >
+          ctest --test-dir build -j "$(nproc)" --output-on-failure
+          --output-junit junit-shard-${{ matrix.shard }}.xml
+          -LE "bcl|slow|stress|acceptance|interp-mixed"
+          -I ${{ matrix.shard }},,${{ strategy.job-total }}
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-linux-x64-${{ matrix.shard }}
+          path: |
+            build/junit-*.xml
+            build/Testing/Temporary/LastTest*.log
+          if-no-files-found: warn
+          retention-days: 14
