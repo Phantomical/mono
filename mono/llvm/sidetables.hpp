@@ -18,15 +18,18 @@
  *
  *   Header (16 bytes, little-endian):
  *     u32 magic   = 0x4d475244 ('MGRD')
- *     u16 version = 2
+ *     u16 version = 3
  *     u16 count
  *     u64 function    where the function this describes was linked
- *   Record[count] (20 bytes each, little-endian):
+ *   Record[count] (28 bytes each, little-endian):
  *     u32 clause_index     the IL clause the body belongs to
  *     u32 body_start       body covers [code+body_start, code+body_end)
  *     u32 body_end
  *     i32 exvar_offset     guard byte at exvar_dwarf_reg + exvar_offset
  *     i32 exvar_dwarf_reg  DWARF number of the register that offset is from
+ *     u64 owner            which method clause_index indexes into: 0 for the
+ *                          function this block names, same convention as
+ *                          `.mono_lsda`'s (mono_lsda.hpp)
  *
  * The register is carried as DWARF rather than as a mono hardware register so
  * the writer needs nothing from mono's target headers. The reader converts it
@@ -117,9 +120,9 @@
 namespace mono {
 
 constexpr uint32_t guards_section_magic = 0x4d475244; /* 'MGRD' */
-constexpr uint16_t guards_section_version = 2;
+constexpr uint16_t guards_section_version = 3;
 constexpr std::size_t guards_header_size = 16;
-constexpr std::size_t guards_record_size = 20;
+constexpr std::size_t guards_record_size = 28;
 
 constexpr uint32_t unwind_section_magic = 0x4d555744; /* 'MUWD' */
 constexpr uint16_t unwind_section_version = 2;

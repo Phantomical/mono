@@ -17,6 +17,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 /*
@@ -45,6 +46,15 @@ struct MonoLsdaEntry {
 	///     FILTER=1, FINALLY=2, FAULT=4, matching MonoExceptionEnum.
 	///   - a marker entry holds a kind from mono_lsda_format.hpp.
 	std::uint32_t kind = 0;
+
+	/// Which method clause_index indexes into: 0 for the method this section's
+	/// block was linked for, the shape every entry had before a fold could
+	/// merge a live clause in and what every entry still has today. Otherwise
+	/// (uint64_t)(uintptr_t) of a folded body's own MonoMethod*, same
+	/// convention as jit.hpp's IlInlineRow::callee. build_ex_info () resolves a
+	/// non-zero owner through the OwnerHeader a caller opts in with; without
+	/// one, any entry naming one is declined.
+	std::uint64_t owner = 0;
 };
 
 /// One thread-abort guard for a finally clause. A clause gets one guard per
@@ -56,7 +66,17 @@ struct MonoFinallyGuard {
 	std::uint32_t handler_end_off = 0;    ///< handler body end, code-relative.
 	std::int32_t exvar_offset = 0;        ///< frame offset of the guard's exvar.
 	std::uint8_t exvar_base_reg = 0;      ///< base register for exvar_offset.
+	std::uint64_t owner = 0;              ///< same convention as MonoLsdaEntry::owner.
 };
+
+/// Resolves a non-zero MonoLsdaEntry/MonoFinallyGuard owner to that method's
+/// own IL clause table. Called at most once per distinct owner build_ex_info ()
+/// finds, so a caller may cache and free through it freely. Returning false
+/// declines the whole join - a clause build_ex_info () cannot place safely is
+/// not one it guesses about.
+using OwnerHeader = std::function<bool (std::uint64_t owner,
+                                        const MonoExceptionClause *&clauses,
+                                        int &num_clauses)>;
 
 /**
  * Decodes the `.mono_lsda` block that describes the function linked at \p code.
@@ -87,12 +107,21 @@ bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *cod
  * \param guards       thread-abort guards for this method's FINALLY clauses.
  *                     Each becomes one guard-only entry, appended behind the
  *                     dispatch entries.
+ * \param owner_header resolves a non-zero owner (a fold merged a live clause
+ *                     in from another method) to that method's own IL clause
+ *                     table. Left empty, any entry naming one is declined -
+ *                     the caller has not opted in to joining against more
+ *                     than the one table every entry named before merging
+ *                     existed.
  *
  * \returns whether the join succeeded.
  *
  * \p entries, \p clauses and \p guards must all come from one compile.
  * build_ex_info () asserts on a disagreement between them instead of
- * declining.
+ * declining - except a disagreement \p owner_header itself reports by
+ * returning false, which declines rather than asserts, since that failure
+ * is reachable from a class this backend cannot load rather than only from
+ * our own round-trip.
  *
  * An empty \p entries, or one holding only marker entries, publishes no
  * protected-region entry of the method's own and succeeds. A tier-unwind marker
@@ -103,7 +132,8 @@ bool build_ex_info (const std::vector<MonoLsdaEntry> &entries,
                     const MonoExceptionClause *clauses, int num_clauses,
                     const std::uint8_t *native_code, std::uint32_t code_len,
                     std::vector<MonoJitExceptionInfo> &out,
-                    const std::vector<MonoFinallyGuard> &guards = {});
+                    const std::vector<MonoFinallyGuard> &guards = {},
+                    const OwnerHeader &owner_header = {});
 
 } // namespace mono
 

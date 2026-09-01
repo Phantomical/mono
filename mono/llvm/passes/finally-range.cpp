@@ -14,6 +14,7 @@
 #include "finally-range.hpp"
 
 #include "../eh-side-channel.hpp"
+#include "../il-line-table.hpp"
 #include "../mono_lsda_format.hpp"
 
 #include <map>
@@ -30,8 +31,11 @@
 #include <llvm/CodeGen/TargetInstrInfo.h>
 #include <llvm/CodeGen/TargetRegisterInfo.h>
 #include <llvm/CodeGen/TargetSubtargetInfo.h>
+#include <llvm/IR/DebugInfoMetadata.h>
+#include <llvm/IR/Module.h>
 #include <llvm/MC/MCContext.h>
 #include <llvm/MC/MCSymbol.h>
+#include <llvm/Support/ErrorHandling.h>
 
 using namespace llvm;
 
@@ -58,6 +62,44 @@ finally_marker (const MachineInstr &mi, int *clause, bool *is_start)
 	*clause = (int) (uint32_t) (id & MONO_LLVM_FINALLY_STACKMAP_ID_MASK);
 	return true;
 }
+
+/// Which method a marker's clause index indexes into: 0 for the method this
+/// compile is building, otherwise a folded body's own MonoMethod*, same
+/// convention and same resolution as eh-gather.cpp's landing-pad owner - off
+/// the marker's own DILocation scope, through the same id map
+/// il_debug_subprogram_ids () hands out. A marker's location must always name
+/// a subprogram this compile registered, since materialize_trivial_callees ()
+/// and the tier-2 inliner both translate through method_to_llvm (), which
+/// gives every function one; a marker that does not means our own emission or
+/// reader is wrong.
+uint64_t
+marker_owner (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self,
+             const MachineInstr &mi)
+{
+	const DILocation *loc = mi.getDebugLoc ().get ();
+	const DISubprogram *sp = loc ? loc->getScope ()->getSubprogram () : nullptr;
+	auto found = sp ? ids.find (sp) : ids.end ();
+
+	if (found == ids.end ())
+		report_fatal_error ("mono: a finally marker names no subprogram this compile registered - our own emission or reader is wrong");
+
+	return found->second == self ? 0 : found->second;
+}
+
+/// A clause index paired with the method it belongs to - two folded bodies
+/// can each declare a clause 0, and their finally markers must never be read
+/// as one clause's.
+struct ClauseKey {
+	uint64_t owner;
+	int clause;
+
+	bool operator< (const ClauseKey &o) const
+	{
+		if (owner != o.owner)
+			return owner < o.owner;
+		return clause < o.clause;
+	}
+};
 
 /// Returns the opening marker's frame slot, as a DWARF register and a
 /// displacement from it, or reg -1 if it named no slot.
@@ -99,29 +141,45 @@ plant_label (MachineBasicBlock &mbb, MachineBasicBlock::iterator at, MCContext &
 void
 close_range (MonoEHFinallyFunction &fn, MachineBasicBlock &mbb,
              MachineBasicBlock::iterator at, MCContext &ctx, const TargetInstrInfo *tii,
-             MCSymbol *begin, int clause, std::pair<int, std::int64_t> slot)
+             MCSymbol *begin, ClauseKey key, std::pair<int, std::int64_t> slot)
 {
 	MonoEHFinallyBody body;
 
 	body.body_begin = begin;
 	body.body_end = plant_label (mbb, at, ctx, tii, "mono_finally_end");
-	body.clause_index = clause;
+	body.clause_index = key.clause;
+	body.owner = key.owner;
 	body.exvar_dwarf_reg = slot.first;
 	body.exvar_offset = slot.second;
 	fn.bodies.push_back (body);
 }
 
-/// Whether mbb, entered inside clause's body or not, leaves inside it.
+/// Whether a marker in mbb names key, and if so its own clause index and
+/// whether it opens or closes the body - key.owner already answers which
+/// method, so the caller need not resolve it again.
 bool
-transfer (MachineBasicBlock &mbb, int clause, bool in)
+finally_marker_for (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self,
+                    const MachineInstr &mi, ClauseKey key, bool *is_start)
+{
+	int found;
+
+	if (!finally_marker (mi, &found, is_start) || found != key.clause)
+		return false;
+
+	return marker_owner (ids, self, mi) == key.owner;
+}
+
+/// Whether mbb, entered inside key's body or not, leaves inside it.
+bool
+transfer (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self,
+         MachineBasicBlock &mbb, ClauseKey key, bool in)
 {
 	bool state = in;
 
 	for (MachineInstr &mi : mbb) {
-		int found;
 		bool is_start;
 
-		if (!finally_marker (mi, &found, &is_start) || found != clause)
+		if (!finally_marker_for (ids, self, mi, key, &is_start))
 			continue;
 		state = is_start;
 	}
@@ -165,9 +223,10 @@ starts_inside_body (const MachineBasicBlock &mbb,
 	return inside;
 }
 
-/// Fills in_body with whether each block starts inside clause's handler body.
+/// Fills in_body with whether each block starts inside key's handler body.
 void
-solve (MachineFunction &mf, int clause, DenseMap<const MachineBasicBlock *, bool> &in_body)
+solve (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self, MachineFunction &mf,
+      ClauseKey key, DenseMap<const MachineBasicBlock *, bool> &in_body)
 {
 	DenseMap<const MachineBasicBlock *, bool> known, out_body;
 	bool changed = true;
@@ -193,7 +252,7 @@ solve (MachineFunction &mf, int clause, DenseMap<const MachineBasicBlock *, bool
 				have = true;
 			}
 
-			bool out = transfer (mbb, clause, in);
+			bool out = transfer (ids, self, mbb, key, in);
 
 			if (known[&mbb] != have || in_body[&mbb] != in || out_body[&mbb] != out) {
 				known[&mbb] = have;
@@ -205,12 +264,13 @@ solve (MachineFunction &mf, int clause, DenseMap<const MachineBasicBlock *, bool
 	}
 }
 
-/// Brackets each maximal run of clause's body instructions with a pair of
+/// Brackets each maximal run of key's body instructions with a pair of
 /// labels, and records it.
 void
-record_ranges (MachineFunction &mf, int clause,
-               const DenseMap<const MachineBasicBlock *, bool> &in_body,
-               MonoEHFinallyFunction &fn, std::pair<int, std::int64_t> slot)
+record_ranges (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self,
+              MachineFunction &mf, ClauseKey key,
+              const DenseMap<const MachineBasicBlock *, bool> &in_body,
+              MonoEHFinallyFunction &fn, std::pair<int, std::int64_t> slot)
 {
 	MCContext &ctx = mf.getContext ();
 	const TargetInstrInfo *tii = mf.getSubtarget ().getInstrInfo ();
@@ -223,17 +283,16 @@ record_ranges (MachineFunction &mf, int clause,
 			begin = plant_label (mbb, mbb.begin (), ctx, tii, "mono_finally_begin");
 
 		for (MachineBasicBlock::iterator it = mbb.begin (), end = mbb.end (); it != end; ++it) {
-			int found;
 			bool is_start;
 
-			if (!finally_marker (*it, &found, &is_start) || found != clause)
+			if (!finally_marker_for (ids, self, *it, key, &is_start))
 				continue;
 
 			if (is_start && !state) {
 				begin = plant_label (mbb, it, ctx, tii, "mono_finally_begin");
 				state = true;
 			} else if (!is_start && state) {
-				close_range (fn, mbb, it, ctx, tii, begin, clause, slot);
+				close_range (fn, mbb, it, ctx, tii, begin, key, slot);
 				begin = nullptr;
 				state = false;
 			}
@@ -257,9 +316,9 @@ record_ranges (MachineFunction &mf, int clause,
 
 			if (next)
 				close_range (fn, *next, next->begin (), ctx, tii, begin,
-				             clause, slot);
+				             key, slot);
 			else
-				close_range (fn, mbb, mbb.end (), ctx, tii, begin, clause,
+				close_range (fn, mbb, mbb.end (), ctx, tii, begin, key,
 				             slot);
 		}
 	}
@@ -268,11 +327,19 @@ record_ranges (MachineFunction &mf, int clause,
 } // namespace
 
 bool
+MonoFinallyRangePass::doInitialization (Module &m)
+{
+	ids_ = il_debug_subprogram_ids (m);
+	return false;
+}
+
+bool
 MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 {
 	const TargetRegisterInfo *tri = mf.getSubtarget ().getRegisterInfo ();
-	std::set<int> clauses;
-	std::map<int, std::pair<int, std::int64_t>> slots;
+	uint64_t self = ids_.lookup (mf.getFunction ().getSubprogram ());
+	std::set<ClauseKey> clauses;
+	std::map<ClauseKey, std::pair<int, std::int64_t>> slots;
 
 	for (MachineBasicBlock &mbb : mf) {
 		for (MachineInstr &mi : mbb) {
@@ -282,7 +349,9 @@ MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 			if (!finally_marker (mi, &clause, &is_start))
 				continue;
 
-			clauses.insert (clause);
+			ClauseKey key { marker_owner (ids_, self, mi), clause };
+
+			clauses.insert (key);
 			if (!is_start)
 				continue;
 
@@ -296,7 +365,7 @@ MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 			 * goes unguarded rather than wrongly.
 			 */
 			std::pair<int, std::int64_t> slot = marker_slot (mi, tri);
-			auto [known, fresh] = slots.emplace (clause, slot);
+			auto [known, fresh] = slots.emplace (key, slot);
 
 			if (!fresh && known->second != slot)
 				known->second = { -1, 0 };
@@ -321,11 +390,11 @@ MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 	 * classic JIT's nested handler ranges do, and what
 	 * find_last_handler_block () expects.
 	 */
-	for (int clause : clauses) {
+	for (ClauseKey key : clauses) {
 		DenseMap<const MachineBasicBlock *, bool> in_body;
 
-		solve (mf, clause, in_body);
-		record_ranges (mf, clause, in_body, fn, slots[clause]);
+		solve (ids_, self, mf, key, in_body);
+		record_ranges (ids_, self, mf, key, in_body, fn, slots[key]);
 	}
 
 	sc_->finally_functions.push_back (std::move (fn));

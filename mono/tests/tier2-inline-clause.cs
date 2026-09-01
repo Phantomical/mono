@@ -13,12 +13,23 @@ using System.Runtime.CompilerServices;
  * nonnull return, with no cast or class guess involved. StaysLive ()'s clause
  * stays live: Root () forwards its own takeClause parameter, which the fold
  * cannot see a fixed value for, so the clause runs on some calls and not
- * others.
+ * others. A finally clause that stays live is not the dead weight
+ * DiesOnFold ()'s is, but it still folds - eh-gather.cpp resolves such a
+ * clause's owner off the landing pad it reaches codegen on, so the fold
+ * merges the clause into Root ()'s own table instead of needing it gone.
  *
  * NoLandingPad ()'s clause has no landing pad at all: its try region calls
  * nothing, so the front end never builds one. Its finally body still runs on
  * every call, so the clause stays live the same way StaysLive ()'s does. The
- * fold has to catch this one through the marker channel alone.
+ * fold has to catch this one through the marker channel alone, and it folds
+ * for the same reason StaysLive ()'s does.
+ *
+ * StaysLiveCatch ()'s clause is a genuine catch, live the same way
+ * StaysLive ()'s finally is - Root () forwards the same kind of parameter the
+ * fold cannot see a fixed value for. It never folds: task #325's merge
+ * covers finally and fault only, and finally_or_fault_only ()
+ * (passes/top-down-inline.cpp) is what keeps a live catch declined the way
+ * every clause was before that merge existed.
  *
  * What says a fold happened is the stack trace, the way tier2-inline-policy.cs
  * reads it: a folded body owns no code, so its frame reports the offset into
@@ -81,6 +92,28 @@ static class Clauses {
 		}
 	}
 
+	public static int StaysLiveCatch (Foo f, bool takeClause, bool throwing)
+	{
+		if (!takeClause) {
+			int v = Fast (f);
+
+			if (throwing)
+				throw new InvalidOperationException ("stays-catch");
+
+			return v;
+		}
+
+		try {
+			return Slow (f);
+		} catch (ArgumentException) {
+			// Never taken - Slow () never throws one. What keeps the clause
+			// live is the same as StaysLive ()'s finally: a protected call
+			// the fold cannot prove will not throw, not whether the handler
+			// body itself runs.
+			return -1;
+		}
+	}
+
 	public static int NoLandingPad (int x, bool throwing)
 	{
 		int v;
@@ -101,8 +134,8 @@ static class Clauses {
 }
 
 static class Program {
-	static bool saw_dies, saw_stays, saw_none;
-	static bool folded_dies, folded_stays, folded_none;
+	static bool saw_dies, saw_stays, saw_catch, saw_none;
+	static bool folded_dies, folded_stays, folded_catch, folded_none;
 
 	static bool RunsInsideRoot (Exception e, string helper)
 	{
@@ -134,6 +167,9 @@ static class Program {
 		} else if (helper == "StaysLive") {
 			saw_stays |= trace.Contains ("Clauses.StaysLive");
 			folded_stays |= RunsInsideRoot (e, "StaysLive");
+		} else if (helper == "StaysLiveCatch") {
+			saw_catch |= trace.Contains ("Clauses.StaysLiveCatch");
+			folded_catch |= RunsInsideRoot (e, "StaysLiveCatch");
 		} else {
 			saw_none |= trace.Contains ("Clauses.NoLandingPad");
 			folded_none |= RunsInsideRoot (e, "NoLandingPad");
@@ -158,6 +194,12 @@ static class Program {
 			total += Clauses.StaysLive (f, takeClause, throwing);
 		} catch (InvalidOperationException e) {
 			Record (e, "StaysLive");
+		}
+
+		try {
+			total += Clauses.StaysLiveCatch (f, takeClause, throwing);
+		} catch (InvalidOperationException e) {
+			Record (e, "StaysLiveCatch");
 		}
 
 		try {
@@ -193,8 +235,9 @@ static class Program {
 
 		int want = Root (false, true);
 
-		Check (saw_dies && saw_stays && saw_none, "every helper has a frame before tier 2");
-		Check (!folded_dies && !folded_stays && !folded_none,
+		Check (saw_dies && saw_stays && saw_catch && saw_none,
+			"every helper has a frame before tier 2");
+		Check (!folded_dies && !folded_stays && !folded_catch && !folded_none,
 			"and none of them runs in a body of its own before tier 2");
 		Check (Clauses.cleanups == 0, "the live clause has not run yet");
 		Check (Clauses.landingless_cleanups == 1,
@@ -210,23 +253,29 @@ static class Program {
 			return 1;
 		}
 
-		saw_dies = saw_stays = saw_none = false;
-		folded_dies = folded_stays = folded_none = false;
+		saw_dies = saw_stays = saw_catch = saw_none = false;
+		folded_dies = folded_stays = folded_catch = folded_none = false;
 
 		Check (want == Root (false, true), "the answer at tier 2 is the answer before it");
-		Check (saw_dies && saw_stays && saw_none, "every helper still has a frame at tier 2");
+		Check (saw_dies && saw_stays && saw_catch && saw_none,
+			"every helper still has a frame at tier 2");
 
-		if (folding)
+		if (folding) {
 			Check (folded_dies, "a clause the fold makes dead folds into the root");
-		else
+			Check (folded_stays, "a live finally clause now folds into the root too");
+			Check (folded_none,
+				"a live finally clause with no landing pad folds the same way");
+		} else {
 			Check (!folded_dies,
 				"MONO_FOLD_CLAUSES=off refuses it the way the pre-pass does");
+			Check (!folded_stays, "MONO_FOLD_CLAUSES=off refuses a live finally too");
+			Check (!folded_none,
+				"MONO_FOLD_CLAUSES=off refuses a landing-pad-free finally too");
+		}
 
-		Check (!folded_stays, "a clause the caller can still take never folds");
-
-		// Live on every call, so this stays refused whether MONO_FOLD_CLAUSES
-		// is on or off, unlike DiesOnFold ()'s check above.
-		Check (!folded_none, "a clause with no landing pad at all still never folds");
+		// A live catch stays refused either way - task #325's merge covers
+		// finally and fault only, so this is not MONO_FOLD_CLAUSES's question.
+		Check (!folded_catch, "a live catch clause still never folds");
 
 		int before = Clauses.cleanups;
 

@@ -25,7 +25,10 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-internals.h"
 #include "mono/metadata/domain-internals.h"
+#include "mono/metadata/metadata.h"
 #include "mono/metadata/mono-debug.h"
+#include "mono/utils/mono-error.h"
+#include "mono/utils/mono-error-internals.h"
 
 #include "seq-point-marker.hpp"
 
@@ -132,11 +135,57 @@ parse_guards (const uint8_t *section, size_t size, const uint8_t *code,
 			                          "register a stack walk cannot rebuild");
 
 		g.exvar_base_reg = (uint8_t) hw_reg;
+		g.owner = read_le<uint64_t> (p + 20);
 		guards.push_back (g);
 	}
 
 	return guards;
 }
+
+/// Answers build_ex_info ()'s OwnerHeader callback for a folded body's own
+/// MonoMethod*, fetching and freeing each distinct owner at most once for as
+/// long as one register_jit_info () call needs it.
+///
+/// mono_method_get_header_internal () hands back a header build_ex_info ()
+/// only reads for the length of this call, never past it, so every header
+/// this cache fetches is freed in its own destructor rather than kept.
+class OwnerHeaderCache {
+public:
+	~OwnerHeaderCache ()
+	{
+		for (auto &[owner, header] : headers_)
+			if (header != nullptr)
+				mono_metadata_free_mh (header);
+	}
+
+	bool resolve (uint64_t owner, const MonoExceptionClause *&clauses, int &num_clauses)
+	{
+		auto it = headers_.find (owner);
+
+		if (it == headers_.end ()) {
+			ERROR_DECL (error);
+			auto *method = (MonoMethod *) (uintptr_t) owner;
+			MonoMethodHeader *header = mono_method_get_header_internal (method, error);
+
+			if (!is_ok (error)) {
+				mono_error_cleanup (error);
+				header = nullptr;
+			}
+
+			it = headers_.emplace (owner, header).first;
+		}
+
+		if (it->second == nullptr)
+			return false;
+
+		clauses = it->second->clauses;
+		num_clauses = (int) it->second->num_clauses;
+		return true;
+	}
+
+private:
+	std::map<uint64_t, MonoMethodHeader *> headers_;
+};
 
 } // namespace
 
@@ -611,9 +660,14 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 			return guards.takeError ();
 		}
 
+		OwnerHeaderCache owner_headers;
+
 		if (!build_ex_info (entries, header->clauses,
 		                    (int) header->num_clauses, code, code_size,
-		                    clauses, *guards)) {
+		                    clauses, *guards,
+		                    [&] (uint64_t owner, const MonoExceptionClause *&c, int &n) {
+			                    return owner_headers.resolve (owner, c, n);
+		                    })) {
 			g_free (encoded);
 			return createStringError (inconvertibleErrorCode (),
 			                          "the clause table does not join "

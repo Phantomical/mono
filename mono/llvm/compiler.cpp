@@ -652,7 +652,7 @@ public:
 
 private:
 	/**
-	 * `.mono_lsda`, in the v3 format mono_lsda.hpp declares and mono_lsda.cpp
+	 * `.mono_lsda`, in the v4 format mono_lsda.hpp declares and mono_lsda.cpp
 	 * reads back at load. One block per clause-bearing function, each naming
 	 * where that function was linked, so an object holding a batch of methods
 	 * keeps each method's geometry apart.
@@ -688,7 +688,7 @@ private:
 			};
 
 			streamer.emitIntValue (0x4d4c5344u, 4); /* 'MLSD' */
-			streamer.emitIntValue (3, 2);
+			streamer.emitIntValue (4, 2);
 			streamer.emitIntValue (fn.clauses.size (), 2);
 			streamer.emitValue (MCSymbolRefExpr::create (begin, ctx), 8);
 
@@ -703,6 +703,7 @@ private:
 				streamer.emitValue (from_begin (c.handler), 4);
 				streamer.emitIntValue ((uint32_t) c.clause_index, 4);
 				streamer.emitIntValue ((uint32_t) c.kind, 4);
+				streamer.emitIntValue (c.owner, 8);
 			}
 		}
 	}
@@ -753,6 +754,7 @@ private:
 				streamer.emitValue (from_begin (body->body_end), 4);
 				streamer.emitIntValue ((uint32_t) body->exvar_offset, 4);
 				streamer.emitIntValue ((uint32_t) body->exvar_dwarf_reg, 4);
+				streamer.emitIntValue (body->owner, 8);
 			}
 		}
 	}

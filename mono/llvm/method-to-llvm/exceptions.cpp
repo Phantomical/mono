@@ -195,7 +195,14 @@ MethodLLVMEmitter::emit_clause_geometry ()
 ///
 /// A landing pad's catch operands point into the object's type table, which is the
 /// one channel through which a clause's identity survives codegen. The table entry
-/// names this global, whose two words are the clause index and the clause's kind.
+/// names this global, whose three words are the clause index, the clause's kind,
+/// and which method clause is one of this instance's own - the same convention
+/// jit.hpp's IlInlineRow::callee uses, so eh-gather.cpp resolves owner off the
+/// clause itself rather than off ambient code position. A fold can move a folded
+/// body's own code under a clause of the root's that was never that body's own
+/// (innermost_try ()'s widening in eh-gather.cpp does exactly that on purpose),
+/// so nothing about where the protected code ends up answers which method a
+/// clause belongs to - only the clause's own marker does.
 /// The runtime reads them back to build the method's MonoJitInfo.
 llvm::Constant *
 MethodLLVMEmitter::clause_marker (uint32_t clause)
@@ -213,12 +220,14 @@ MethodLLVMEmitter::clause_marker (uint32_t clause)
 		return existing;
 
 	llvm::Type *i32 = llvm::Type::getInt32Ty (context ());
-	llvm::StructType *pair = llvm::StructType::get (i32, i32);
+	llvm::Type *i64 = llvm::Type::getInt64Ty (context ());
+	llvm::StructType *triple = llvm::StructType::get (i32, i32, i64);
 	llvm::Constant *value = llvm::ConstantStruct::get (
-		pair, { llvm::ConstantInt::get (i32, clause),
-	                llvm::ConstantInt::get (i32, clauses[clause].flags) });
+		triple, { llvm::ConstantInt::get (i32, clause),
+	                 llvm::ConstantInt::get (i32, clauses[clause].flags),
+	                 llvm::ConstantInt::get (i64, (uint64_t) (uintptr_t) method) });
 
-	return new llvm::GlobalVariable (*module, pair, /*isConstant=*/true,
+	return new llvm::GlobalVariable (*module, triple, /*isConstant=*/true,
 	                                 llvm::GlobalValue::PrivateLinkage, value, name);
 }
 
@@ -238,12 +247,14 @@ MethodLLVMEmitter::resume_marker (uint32_t clause)
 		return existing;
 
 	llvm::Type *i32 = llvm::Type::getInt32Ty (context ());
-	llvm::StructType *pair = llvm::StructType::get (i32, i32);
+	llvm::Type *i64 = llvm::Type::getInt64Ty (context ());
+	llvm::StructType *triple = llvm::StructType::get (i32, i32, i64);
 	llvm::Constant *value = llvm::ConstantStruct::get (
-		pair, { llvm::ConstantInt::get (i32, clause),
-	                llvm::ConstantInt::get (i32, MONO_LSDA_KIND_RESUME_PAD) });
+		triple, { llvm::ConstantInt::get (i32, clause),
+	                 llvm::ConstantInt::get (i32, MONO_LSDA_KIND_RESUME_PAD),
+	                 llvm::ConstantInt::get (i64, (uint64_t) (uintptr_t) method) });
 
-	return new llvm::GlobalVariable (*module, pair, /*isConstant=*/true,
+	return new llvm::GlobalVariable (*module, triple, /*isConstant=*/true,
 	                                 llvm::GlobalValue::PrivateLinkage, value, name);
 }
 

@@ -20,6 +20,19 @@
 namespace mono {
 
 /*
+ * The ECMA clause kinds mono_lsda_format.hpp's own kind values sit outside of
+ * (see above), spelled out here rather than left as a comment. A pass that
+ * has to tell a finally or fault clause from a catch or filter one - whether
+ * a clause a fold left standing is one top-down-inline.cpp may still merge -
+ * needs these, and passes/ may not include a mono header for the real
+ * MonoExceptionEnum.
+ */
+constexpr std::uint32_t MONO_ECMA_CLAUSE_NONE = 0;
+constexpr std::uint32_t MONO_ECMA_CLAUSE_FILTER = 1;
+constexpr std::uint32_t MONO_ECMA_CLAUSE_FINALLY = 2;
+constexpr std::uint32_t MONO_ECMA_CLAUSE_FAULT = 4;
+
+/*
  * The entry's landing pad is a cleanup's resume pad rather than an ordinary
  * handler pad.
  *

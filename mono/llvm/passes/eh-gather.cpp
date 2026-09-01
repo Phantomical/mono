@@ -16,6 +16,7 @@
 
 #include "../eh-side-channel.hpp"
 #include "../il-line-table.hpp"
+#include "clause-marker.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -39,58 +40,13 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Module.h>
 #include <llvm/MC/MCSymbol.h>
 #include <llvm/Support/ErrorHandling.h>
 
 using namespace llvm;
 
 namespace mono {
-
-/// Read the IL clause index and the clause kind back out of the type_info_N
-/// global a landing pad's TypeId names. Returns false when it does not decode.
-///
-/// mono smuggles both through the clause's ttype entry, so they are recovered
-/// in-process, with no ttype-table deref and no relocation dependency.
-///
-/// The v2 form is a 2-word {i32 clause_index, i32 kind} struct. clause_marker ()
-/// and resume_marker () (method-to-llvm/exceptions.cpp) build it, and so does
-/// unwind_marker () (passes/tier-counter.cpp). A bare i32 ConstantInt is the legacy 1-word
-/// form, clause_index alone with kind 0, and is still accepted. An all-zero
-/// struct lowers to ConstantAggregateZero, which is not a ConstantStruct, so the
-/// two words are read with Constant::getAggregateElement.
-static bool
-decode_clause_marker (const GlobalValue *gv, int &clause_index, int &kind)
-{
-	const auto *var = dyn_cast_or_null<GlobalVariable> (gv);
-
-	if (var == nullptr || !var->hasInitializer ())
-		return false;
-
-	const Constant *init = var->getInitializer ();
-
-	if (const auto *ci = dyn_cast<ConstantInt> (init)) {
-		clause_index = (int) ci->getSExtValue ();
-		kind = 0;
-		return true;
-	}
-
-	auto *st = dyn_cast<StructType> (init->getType ());
-
-	if (st == nullptr || st->getNumElements () != 2)
-		return false;
-
-	const auto *ci0 =
-		dyn_cast_or_null<ConstantInt> (init->getAggregateElement ((unsigned) 0));
-	const auto *ci1 =
-		dyn_cast_or_null<ConstantInt> (init->getAggregateElement ((unsigned) 1));
-
-	if (ci0 == nullptr || ci1 == nullptr)
-		return false;
-
-	clause_index = (int) ci0->getSExtValue ();
-	kind = (int) ci1->getZExtValue ();
-	return true;
-}
 
 namespace {
 
@@ -211,6 +167,13 @@ plant_label (MachineBasicBlock &mbb, MachineBasicBlock::iterator at, MCContext &
 }
 
 bool
+MonoEHGatherPass::doInitialization (Module &m)
+{
+	ids_ = il_debug_subprogram_ids (m);
+	return false;
+}
+
+bool
 MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 {
 	const std::vector<LandingPadInfo> &pads = mf.getLandingPads ();
@@ -258,7 +221,16 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 	 * often a handler or a cold path as the rest of the region. A block that
 	 * opens with no location therefore names no region, so a range never grows
 	 * into it.
+	 *
+	 * self is a different question from anything positions answers: which
+	 * method this whole machine function is itself the compiled body of,
+	 * read off the function's own subprogram rather than off any one
+	 * instruction. It never needs a fold's boundary respected the way a
+	 * per-instruction answer would, because it is a property of the
+	 * function, not of a position in it - see where it is used, below, for
+	 * why an instruction's own position cannot answer this question at all.
 	 */
+	std::uint64_t self = ids_.lookup (mf.getFunction ().getSubprogram ());
 	std::vector<Position> positions;
 	DenseMap<const MCSymbol *, unsigned> at_label;
 
@@ -395,11 +367,26 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 
 			clause.handler = handler;
 
+			/*
+			 * Which method clause_index indexes into, decoded off the
+			 * clause's own marker rather than off anything nearby in the
+			 * code: a fold can move a folded body's own code under a
+			 * clause of the root's that was never that body's own
+			 * (innermost_try ()'s widening above does exactly that, on
+			 * purpose), so ambient code position answers a different
+			 * question than clause ownership does. ids_ answers with the
+			 * compile's own id for the compile's own clause, same as any
+			 * other method this compile translated, so the comparison
+			 * turns that case back into the 0 every clause carried before
+			 * this existed.
+			 */
+			std::uint64_t marker_owner = 0;
+
 			// TypeIds are 1-based indices into getTypeInfos ().
 			if ((size_t) type_id <= type_infos.size ())
 				clause.clause_resolved = decode_clause_marker (
 					type_infos[type_id - 1], clause.clause_index,
-					clause.kind);
+					clause.kind, &marker_owner);
 			/*
 			 * type_info_N is a global we emit (clause_marker (),
 			 * method-to-llvm/exceptions.cpp) with a fixed, known
@@ -409,6 +396,8 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 			 */
 			if (!clause.clause_resolved)
 				report_fatal_error ("mono: type_info_N clause global did not decode - our own emission or reader is wrong");
+
+			clause.owner = marker_owner == self ? 0 : marker_owner;
 
 			chain.push_back (clause);
 		}

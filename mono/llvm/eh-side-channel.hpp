@@ -47,6 +47,13 @@ struct MonoEHClause {
 	const llvm::MCSymbol *handler = nullptr;
 	/// The IL clause index, smuggled through the type_info_N initializer.
 	int clause_index = -1;
+	/// Which method clause_index indexes into: 0 for the method this compile is
+	/// building (every clause until a fold merges a live one in), otherwise
+	/// (uint64_t)(uintptr_t) of a folded body's own MonoMethod*, the same
+	/// convention IlInlineRow::callee uses (jit.hpp) - eh-gather.cpp resolves it
+	/// off the landing pad's own DILocation scope, through the same id map
+	/// il_debug_subprogram_ids () (il-line-table.hpp) hands .mono_inlines.
+	std::uint64_t owner = 0;
 	/// The clause's IL flags, a MonoExceptionEnum: NONE=0 for catch, FINALLY=2,
 	/// FAULT=4. It rides alongside clause_index in the same type_info_N global,
 	/// and reaches the section's kind column, which is what makes the section
@@ -89,6 +96,9 @@ struct MonoEHFinallyBody {
 	const llvm::MCSymbol *body_end = nullptr;
 	/// The IL clause index, read back from the markers bracketing the run.
 	int clause_index = -1;
+	/// Same convention and same resolution as MonoEHClause::owner above, read
+	/// off the opening marker's own DILocation scope.
+	std::uint64_t owner = 0;
 	/// Where the clause's thread-abort guard byte sits in the frame: the DWARF
 	/// number of the register it is addressed off, and a displacement from it.
 	/// That is what mono_install_handler_block_guard () needs to reach it from a

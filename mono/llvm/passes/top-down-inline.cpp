@@ -2,10 +2,13 @@
 
 #include "pipelines.hpp"
 
+#include "clause-marker.hpp"
 #include "finally-marker.hpp"
 #include "inline-copies.hpp"
 #include "inline-cost.hpp"
 #include "tier-counter.hpp"
+
+#include "../mono_lsda_format.hpp"
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/AssumptionCache.h>
@@ -193,6 +196,49 @@ has_own_clause (const Function &callee)
 			return true;
 
 	return false;
+}
+
+/// Whether every clause on every landing pad callee's own translation wrote
+/// is a finally or a fault, decoded the same way eh-gather.cpp reads a
+/// landing pad's TypeIds back at the machine level - the front end publishes
+/// every clause kind through the same smuggled global, catch and filter
+/// included, so this is the one place that tells them apart before codegen.
+///
+/// A catch or filter clause answers no, the same as a decode this pass does
+/// not understand. What "merged" describes is scoped by this function alone
+/// - a decline here still leaves clause_survives_fold ()'s own trial as the
+/// correctness gate underneath, and eh-gather.cpp's own decode of the same
+/// marker is what actually places a merged clause once this has let the
+/// real fold through.
+bool
+finally_or_fault_only (const Function &callee)
+{
+	for (const Instruction &i : instructions (callee)) {
+		const auto *lpi = dyn_cast<LandingPadInst> (&i);
+
+		if (lpi == nullptr)
+			continue;
+
+		for (unsigned c = 0; c < lpi->getNumClauses (); ++c) {
+			// mono never writes an LLVM-level filter clause of its own
+			// (eh-gather.cpp's has_filter is the ECMA `catch (T) when (cond)`
+			// case, a different thing entirely) - one here is not a shape
+			// this backend produces, so it is refused rather than read.
+			if (lpi->isFilter (c))
+				return false;
+
+			const auto *gv = dyn_cast<GlobalValue> (lpi->getClause (c));
+			int clause_index, kind;
+
+			if (!decode_clause_marker (gv, clause_index, kind))
+				return false;
+
+			if (kind != (int) MONO_ECMA_CLAUSE_FINALLY && kind != (int) MONO_ECMA_CLAUSE_FAULT)
+				return false;
+		}
+	}
+
+	return true;
 }
 
 /// The kind clause_survives_fold () tags callee's own landing pads and
@@ -410,13 +456,23 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			}
 
 			if (has_own_clause (*callee)
-			    && clause_survives_fold (*call, *callee, simplify_, fam, get_ac)) {
+			    && clause_survives_fold (*call, *callee, simplify_, fam, get_ac)
+			    && !finally_or_fault_only (*callee)) {
 				candidates->declined (
 					*root, *callee,
 					InlineCost::getNever ("its clause has nowhere to sit once folded"),
 					site.count);
 				continue;
 			}
+
+			/*
+			 * A surviving finally or fault clause falls through to the real
+			 * fold below rather than being declined. eh-gather.cpp resolves
+			 * such a clause's owner off the landing pad it eventually reaches
+			 * codegen on, whichever function actually wrote it, so nothing
+			 * here has to tell it a merge happened - the fold itself is what
+			 * makes one.
+			 */
 
 			/*
 			 * No BFI on either side, so InlineFunction () scales nothing: the

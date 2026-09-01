@@ -94,28 +94,36 @@ make_lsda (std::uint32_t magic, std::uint16_t version, std::uint16_t count,
 		put_u32 (b, e.handler_off);
 		put_u32 (b, e.clause_index);
 		put_u32 (b, e.kind);
+		put_u64 (b, e.owner);
 	}
 	return b;
 }
 
 /*
- * The exact bytes a writer emits for the v3 format (self-describing kind
- * column), for a two-catch geometry with a trailing per-entry kind == 0:
- *   44534c4d 03000200   magic 'MLSD', version 3, count 2
- *   00102040 00000000   function 0x40201000
- *   01000000 05000000 11000000 07000000 00000000  {try=1, len=5, h=0x11, clause=7, kind=0}
- *   06000000 05000000 0f000000 03000000 00000000  {try=6, len=5, h=0x0f, clause=3, kind=0}
- * 56 bytes = 16 + 2*20. Decoded by hand from the format above.
+ * The exact bytes a writer emits for the v4 format (self-describing kind
+ * column, plus the owner it added), for a two-catch geometry with a trailing
+ * per-entry kind == 0 and owner == 0:
+ *   44534c4d 04000200            magic 'MLSD', version 4, count 2
+ *   00102040 00000000            function 0x40201000
+ *   01000000 05000000 11000000
+ *   07000000 00000000 00000000
+ *   00000000                     {try=1, len=5, h=0x11, clause=7, kind=0, owner=0}
+ *   06000000 05000000 0f000000
+ *   03000000 00000000 00000000
+ *   00000000                     {try=6, len=5, h=0x0f, clause=3, kind=0, owner=0}
+ * 72 bytes = 16 + 2*28. Decoded by hand from the format above.
  */
 const std::uint8_t GOLDEN_MLSD [] = {
-	0x44, 0x53, 0x4c, 0x4d, 0x03, 0x00, 0x02, 0x00,
+	0x44, 0x53, 0x4c, 0x4d, 0x04, 0x00, 0x02, 0x00,
 	0x00, 0x10, 0x20, 0x40, 0x00, 0x00, 0x00, 0x00,
 	0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
 	0x11, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 	0x06, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
 	0x0f, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00,
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
 #if defined (HOST_WIN32) || (defined (HAVE_SYS_MMAN_H) && defined (HAVE_UNISTD_H))
@@ -311,30 +319,30 @@ TEST_F (MonoLsdaParse, GoldenTwoEntry)
 /* A header-only block (count 0) is well-formed and decodes to nothing. */
 TEST_F (MonoLsdaParse, CountZeroHeaderOnly)
 {
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 0, {});
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 4, 0, {});
 
 	expect_parse (b.data (), b.size (), {});
 }
 
-/* One-entry block: exactly 16 + 20 bytes. Non-zero kind round-trips verbatim. */
+/* One-entry block: exactly 16 + 28 bytes. Non-zero kind round-trips verbatim. */
 TEST_F (MonoLsdaParse, OneEntry)
 {
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 1, { { 0x20, 0x08, 0x30, 0, 2 } });
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 4, 1, { { 0x20, 0x08, 0x30, 0, 2 } });
 
 	expect_parse (b.data (), b.size (), { { 0x20, 0x08, 0x30, 0, 2 } });
 }
 
 TEST_F (MonoLsdaParse, BadMagicDeclines)
 {
-	std::vector<std::uint8_t> b = make_lsda (0xdeadbeefu, 3, 1, { { 1, 5, 0x11, 7, 0 } });
+	std::vector<std::uint8_t> b = make_lsda (0xdeadbeefu, 4, 1, { { 1, 5, 0x11, 7, 0 } });
 
 	expect_decline (b.data (), b.size ());
 }
 
 /*
- * A v1 buffer declines against this v3-only loader. It is a genuine 16-byte-stride
+ * A v1 buffer declines against this v4-only loader. It is a genuine 16-byte-stride
  * v1 record (magic ok, version 1, one 16-byte entry): the loader recognises only
- * version 3, so the older format is refused rather than misread at the wrong
+ * version 4, so the older format is refused rather than misread at the wrong
  * stride.
  */
 TEST_F (MonoLsdaParse, Version1Declines)
@@ -356,10 +364,18 @@ TEST_F (MonoLsdaParse, Version2Declines)
 	expect_decline (b.data (), b.size ());
 }
 
+/* The version before this one declines too - its entries carry no owner column. */
+TEST_F (MonoLsdaParse, Version3Declines)
+{
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 1, { { 1, 5, 0x11, 7, 0 } });
+
+	expect_decline (b.data (), b.size ());
+}
+
 /* Truncated header: the function field cut short. */
 TEST_F (MonoLsdaParse, TruncatedHeaderDeclines)
 {
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 0, {});
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 4, 0, {});
 
 	b.pop_back ();
 	expect_decline (b.data (), b.size ());
@@ -371,7 +387,7 @@ TEST_F (MonoLsdaParse, TruncatedHeaderDeclines)
  */
 TEST_F (MonoLsdaParse, TruncatedEntryDeclines)
 {
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 2, { { 1, 5, 0x11, 7, 0 } });
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 4, 2, { { 1, 5, 0x11, 7, 0 } });
 
 	expect_decline (b.data (), b.size ());
 }
@@ -384,9 +400,9 @@ TEST_F (MonoLsdaParse, TruncatedEntryDeclines)
 TEST_F (MonoLsdaParse, TwoBlocksDecodeSeparately)
 {
 	const void *other = (const void *) (std::uintptr_t) 0x40209000u;
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 1, { { 1, 5, 0x11, 7, 0 } });
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 4, 1, { { 1, 5, 0x11, 7, 0 } });
 	std::vector<std::uint8_t> second =
-		make_lsda (MLSD_MAGIC, 3, 2, { { 2, 6, 0x12, 8, 0 }, { 9, 3, 0x20, 1, 2 } }, other);
+		make_lsda (MLSD_MAGIC, 4, 2, { { 2, 6, 0x12, 8, 0 }, { 9, 3, 0x20, 1, 2 } }, other);
 
 	b.insert (b.end (), second.begin (), second.end ());
 
@@ -398,7 +414,7 @@ TEST_F (MonoLsdaParse, TwoBlocksDecodeSeparately)
 /* A section that names only other functions declines rather than answering. */
 TEST_F (MonoLsdaParse, UnknownFunctionDeclines)
 {
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 1, { { 1, 5, 0x11, 7, 0 } });
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 4, 1, { { 1, 5, 0x11, 7, 0 } });
 
 	expect_decline (b.data (), b.size (), (const void *) (std::uintptr_t) 0x40209000u);
 }
@@ -409,7 +425,7 @@ TEST_F (MonoLsdaParse, UnknownFunctionDeclines)
  */
 TEST_F (MonoLsdaParse, TrailingByteAfterTheWantedBlockIsIgnored)
 {
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 1, { { 1, 5, 0x11, 7, 0 } });
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 4, 1, { { 1, 5, 0x11, 7, 0 } });
 
 	b.push_back (0xaa);
 	expect_parse (b.data (), b.size (), { { 1, 5, 0x11, 7, 0 } });
@@ -419,7 +435,7 @@ TEST_F (MonoLsdaParse, TrailingByteAfterTheWantedBlockIsIgnored)
 TEST_F (MonoLsdaParse, TrailingJunkBeforeTheWantedBlockDeclines)
 {
 	const void *other = (const void *) (std::uintptr_t) 0x40209000u;
-	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 3, 1, { { 1, 5, 0x11, 7, 0 } }, other);
+	std::vector<std::uint8_t> b = make_lsda (MLSD_MAGIC, 4, 1, { { 1, 5, 0x11, 7, 0 } }, other);
 
 	b.push_back (0xaa);
 	expect_decline (b.data (), b.size ());
@@ -457,6 +473,11 @@ namespace {
 /* Sentinel catch_class pointers (never dereferenced; build_ex_info only copies). */
 MonoClass * const CC0 = (MonoClass *) (std::uintptr_t) 0xC0FFEE00u;
 MonoClass * const CC1 = (MonoClass *) (std::uintptr_t) 0xC0FFEE11u;
+MonoClass * const CC2 = (MonoClass *) (std::uintptr_t) 0xC0FFEE22u;
+
+/* Sentinel owner ids, standing in for a folded-in body's MonoMethod*. */
+constexpr std::uint64_t OWNER_A = 0xa000000000000001ull;
+constexpr std::uint64_t OWNER_B = 0xa000000000000002ull;
 
 /*
  * A real code buffer to join against, so try_start/try_end/handler_start come out
@@ -818,6 +839,109 @@ TEST_F (MonoLsdaBuild, TouchingDisjointRangesAccept)
 
 	ASSERT_TRUE (mono::build_ex_info (ents, clauses, 2, base, code_len, out));
 	EXPECT_EQ (out.size (), 2u);
+}
+
+/* -------------------------------------------------------------- owner cases */
+
+/*
+ * A non-zero owner sends clause_index through owner_header instead of the
+ * clauses/num_clauses passed directly to build_ex_info (). Two entries both
+ * name clause_index 0, one through owner 0 (the fixture's own clauses) and one
+ * through OWNER_A, and each table answers a different catch_class at that
+ * index - a join that read the wrong table for either entry publishes the
+ * wrong class.
+ */
+TEST_F (MonoLsdaBuild, DistinctOwnersJoinTheirOwnClauseIndex)
+{
+	MonoExceptionClause owner_a [1];
+	std::vector<MonoJitExceptionInfo> out;
+
+	memset (owner_a, 0, sizeof (owner_a));
+	owner_a[0].flags = MONO_EXCEPTION_CLAUSE_NONE;
+	owner_a[0].data.catch_class = CC2;
+
+	auto owner_header = [&] (std::uint64_t owner, const MonoExceptionClause *&out_clauses,
+	                         int &out_num) {
+		if (owner != OWNER_A)
+			return false;
+		out_clauses = owner_a;
+		out_num = 1;
+		return true;
+	};
+
+	std::vector<MonoLsdaEntry> ents = {
+		{ 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE, 0 },       /* owner 0, clause 0 -> CC0 */
+		{ 0x50, 0x08, 0x80, 0, MONO_EXCEPTION_CLAUSE_NONE, OWNER_A }, /* OWNER_A, clause 0 -> CC2 */
+	};
+
+	ASSERT_TRUE (mono::build_ex_info (ents, clauses, 2, base, code_len, out, {}, owner_header));
+	ASSERT_EQ (out.size (), 2u);
+	EXPECT_EQ (out[0].data.catch_class, CC0);
+	EXPECT_EQ (out[1].data.catch_class, CC2);
+}
+
+/*
+ * Left without an owner_header, an entry naming a non-zero owner declines the
+ * whole join, matching the doc comment on build_ex_info () in mono_lsda.hpp.
+ */
+TEST_F (MonoLsdaBuild, NonZeroOwnerWithNoOwnerHeaderDeclines)
+{
+	expect_build_decline ({ { 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE, OWNER_A } });
+}
+
+/*
+ * An owner_header that itself declines - a class the merged body named failed to
+ * load, say - declines the join the same way an absent one does.
+ */
+TEST_F (MonoLsdaBuild, OwnerHeaderDeclineFailsTheJoin)
+{
+	std::vector<MonoLsdaEntry> ents = { { 0x10, 0x08, 0x40, 0, MONO_EXCEPTION_CLAUSE_NONE, OWNER_A } };
+	std::vector<MonoJitExceptionInfo> out;
+	auto owner_header = [] (std::uint64_t, const MonoExceptionClause *&, int &) { return false; };
+
+	EXPECT_FALSE (mono::build_ex_info (ents, clauses, 2, base, code_len, out, {}, owner_header));
+}
+
+/*
+ * A resume-pad marker and its dispatch entries share OWNER_A, so record_resume_pad ()
+ * has to record and read the pad against OWNER_A's own clause table rather than the
+ * caller's. An inner FINALLY (clause 0) encloses a CATCH (clause 1) in one chain, and
+ * the CATCH publishes the resume trampoline's target as its handler_start rather than
+ * the finally's own landing pad.
+ */
+TEST_F (MonoLsdaBuild, ResumePadChainsThroughItsOwnOwner)
+{
+	static constexpr std::uint32_t R_START = 0x10, R_LEN = 0x20, H_OFF = 0x40, RESUME_OFF = 0x90;
+	MonoExceptionClause owner_a [2];
+	std::vector<MonoJitExceptionInfo> out;
+
+	memset (owner_a, 0, sizeof (owner_a));
+	owner_a[0].flags = MONO_EXCEPTION_CLAUSE_FINALLY;
+	owner_a[1].flags = MONO_EXCEPTION_CLAUSE_NONE;
+	owner_a[1].data.catch_class = CC2;
+
+	auto owner_header = [&] (std::uint64_t owner, const MonoExceptionClause *&out_clauses,
+	                         int &out_num) {
+		if (owner != OWNER_A)
+			return false;
+		out_clauses = owner_a;
+		out_num = 2;
+		return true;
+	};
+
+	std::vector<MonoLsdaEntry> ents = {
+		{ R_START, R_LEN, H_OFF, 0, MONO_EXCEPTION_CLAUSE_FINALLY, OWNER_A },
+		{ R_START, R_LEN, H_OFF, 1, MONO_EXCEPTION_CLAUSE_NONE, OWNER_A },
+		{ 0, 0, RESUME_OFF, 0, mono::MONO_LSDA_KIND_RESUME_PAD, OWNER_A },
+	};
+
+	ASSERT_TRUE (mono::build_ex_info (ents, clauses, 2, base, code_len, out, {}, owner_header));
+	ASSERT_EQ (out.size (), 2u);
+	EXPECT_EQ (out[0].flags, (guint32) MONO_EXCEPTION_CLAUSE_FINALLY);
+	EXPECT_EQ (out[0].handler_start, (gpointer) MINI_ADDR_TO_FTNPTR (base + H_OFF));
+	EXPECT_EQ (out[1].flags, (guint32) MONO_EXCEPTION_CLAUSE_NONE);
+	EXPECT_EQ (out[1].data.catch_class, CC2);
+	EXPECT_EQ (out[1].handler_start, (gpointer) MINI_ADDR_TO_FTNPTR (base + RESUME_OFF));
 }
 
 /* ------------------------------------------------------ nesting chain cases */

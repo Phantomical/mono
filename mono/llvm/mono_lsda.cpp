@@ -8,10 +8,10 @@
  *
  *   Header (16 bytes):
  *     u32 magic   = 0x4d4c5344 ('MLSD')
- *     u16 version = 3
+ *     u16 version = 4
  *     u16 count            number of entries
  *     u64 function         where the function this describes was linked
- *   Entry[count] (20 bytes each):
+ *   Entry[count] (28 bytes each):
  *     u32 try_start_off    one protected range, [code+try_start_off, +try_len)
  *     u32 try_len
  *     u32 handler_off      landing pad = code + handler_off
@@ -19,6 +19,12 @@
  *     u32 kind             MonoExceptionEnum: 0=NONE(catch), 1=FILTER,
  *                          2=FINALLY, 4=FAULT. Any other value is a marker
  *                          kind from mono_lsda_format.hpp.
+ *     u64 owner            which method clause_index indexes into: 0 for the
+ *                          function this block was linked for, the shape
+ *                          every entry had before a fold could merge a live
+ *                          clause in from elsewhere. Otherwise a folded
+ *                          body's own MonoMethod*, same convention as
+ *                          jit.hpp's IlInlineRow::callee.
  *
  * One protected region contributes one entry per clause in its chain. A marker
  * entry describes something other than a protected region.
@@ -38,6 +44,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <map>
 #include <vector>
 
 #include "mono_lsda.hpp"
@@ -47,8 +54,8 @@ namespace mono {
 namespace {
 
 constexpr std::uint32_t MONO_LSDA_MAGIC = 0x4d4c5344u; /* 'MLSD' */
-constexpr std::uint16_t MONO_LSDA_VERSION = 3;
-constexpr std::size_t   MONO_LSDA_ENTRY_SIZE = 20;
+constexpr std::uint16_t MONO_LSDA_VERSION = 4;
+constexpr std::size_t   MONO_LSDA_ENTRY_SIZE = 28;
 
 // A bounds-checked little-endian cursor over [start, end). A failed read
 // latches ok () to false, so a whole structure can be decoded and then tested
@@ -151,7 +158,7 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *code,
 		if (version != MONO_LSDA_VERSION)
 			return false; // decline rather than misread an unknown version
 
-		// count is a u16, so count * 20 cannot overflow.
+		// count is a u16, so count * MONO_LSDA_ENTRY_SIZE cannot overflow.
 		std::size_t entries = static_cast<std::size_t> (count) * MONO_LSDA_ENTRY_SIZE;
 
 		if (function != (std::uint64_t) (std::uintptr_t) code) {
@@ -171,6 +178,7 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *code,
 			e.handler_off = r.u32 ();
 			e.clause_index = r.u32 ();
 			e.kind = r.u32 ();
+			e.owner = r.u64 ();
 			if (!r.ok ())
 				return false; // the block runs past the section
 			out.push_back (e);
@@ -180,6 +188,53 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *code,
 
 	return true;
 }
+
+/// One owner's own IL clause table.
+struct ClauseHeader {
+	const MonoExceptionClause *clauses = nullptr;
+	int num_clauses = 0;
+};
+
+/*
+ * Resolves an entry's owner to the IL clause table clause_index indexes into,
+ * caching each distinct owner build_ex_info () asks for. Every caller starts
+ * seeded with owner 0, the method the whole join is for - the only owner
+ * every entry named before a fold could merge a live clause in from
+ * elsewhere, and still what every entry names today.
+ *
+ * A non-zero owner past that seed is answered by owner_header, at most once
+ * each. header_for () returns nullptr for one owner_header cannot answer -
+ * left unset, that is every non-zero owner - which is what build_ex_info ()
+ * reads as a decline rather than a guess.
+ */
+class OwnerHeaders {
+public:
+	OwnerHeaders (const MonoExceptionClause *clauses, int num_clauses,
+	             const OwnerHeader &owner_header)
+	    : owner_header_ (owner_header)
+	{
+		table_[0] = { clauses, num_clauses };
+	}
+
+	const ClauseHeader *header_for (std::uint64_t owner)
+	{
+		auto it = table_.find (owner);
+
+		if (it != table_.end ())
+			return &it->second;
+
+		ClauseHeader h;
+
+		if (!owner_header_ || !owner_header_ (owner, h.clauses, h.num_clauses))
+			return nullptr;
+
+		return &(table_[owner] = h);
+	}
+
+private:
+	OwnerHeader owner_header_;
+	std::map<std::uint64_t, ClauseHeader> table_;
+};
 
 /*
  * Appends one inert entry per finally body range. Each carries that range and
@@ -196,18 +251,24 @@ parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *code,
  * twice. They go last so that the array order the pass-2 resume walk depends on
  * is unchanged.
  */
-static void
-append_finally_guards (const std::vector<MonoFinallyGuard> &guards,
-                       const MonoExceptionClause *clauses, int num_clauses,
+static bool
+append_finally_guards (const std::vector<MonoFinallyGuard> &guards, OwnerHeaders &headers,
                        const std::uint8_t *native_code, std::uint32_t code_len,
                        std::vector<MonoJitExceptionInfo> &out)
 {
 	for (const MonoFinallyGuard &g : guards) {
+		const ClauseHeader *h = headers.header_for (g.owner);
+
+		// An owner owner_header cannot answer for is the caller declining to
+		// join against it, not our own round-trip breaking.
+		if (h == nullptr)
+			return false;
+
 		// Both bounds are label differences inside this method's own code. A
 		// body that runs to the end of the function ends at exactly code_len,
 		// where its closing label sits. So the bound is <= and not <.
-		g_assert (static_cast<int> (g.clause_index) < num_clauses);
-		g_assert (clauses[g.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY);
+		g_assert (static_cast<int> (g.clause_index) < h->num_clauses);
+		g_assert (h->clauses[g.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY);
 		g_assert (g.handler_start_off < g.handler_end_off);
 		g_assert (g.handler_end_off <= code_len);
 
@@ -224,6 +285,8 @@ append_finally_guards (const std::vector<MonoFinallyGuard> &guards,
 
 		out.push_back (ei);
 	}
+
+	return true;
 }
 
 /// One published entry's [start, end) protected range.
@@ -261,25 +324,41 @@ ranges_equal_or_disjoint (const std::vector<RangeOff> &ranges)
 	return true;
 }
 
+/// One owner's own resume_pad vector: a clause's resume trampoline is only
+/// meaningful against that owner's own clause_index space, the same reason
+/// clauses itself is looked up per owner.
+using ResumePads = std::map<std::uint64_t, std::vector<gpointer>>;
+
 /// Writes into resume_pad, at the entry's clause index, where that clause's
 /// resume trampoline unwinds to once the cleanup has run. The chaining in
 /// build_ex_info_entries () routes the rest of a chain through that pad.
+/// Returns false for an owner headers cannot answer for.
 ///
 /// The caller publishes no MonoJitExceptionInfo for such an entry. Its range
 /// only covers the resume trampoline's call site, which cannot throw back into
 /// this frame.
-static void
-record_resume_pad (const MonoLsdaEntry &e, const MonoExceptionClause *clauses,
-                   const std::uint8_t *native_code, std::vector<gpointer> &resume_pad)
+static bool
+record_resume_pad (const MonoLsdaEntry &e, OwnerHeaders &headers,
+                   const std::uint8_t *native_code, ResumePads &resume_pad)
 {
+	const ClauseHeader *h = headers.header_for (e.owner);
+
+	if (h == nullptr)
+		return false;
+
 	// Only a cleanup resumes. emit_endfinally () is the only caller of
 	// emit_resume_exit () (method-to-llvm/exceptions.cpp), so the flags can only
 	// be FINALLY or FAULT.
-	g_assert (clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
-	          clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FAULT);
+	g_assert (h->clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
+	          h->clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FAULT);
 
-	resume_pad[e.clause_index] =
-		(gpointer) MINI_ADDR_TO_FTNPTR (native_code + e.handler_off);
+	std::vector<gpointer> &pads = resume_pad[e.owner];
+
+	if (pads.empty ())
+		pads.resize (h->num_clauses > 0 ? h->num_clauses : 0, nullptr);
+
+	pads[e.clause_index] = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + e.handler_off);
+	return true;
 }
 
 /*
@@ -316,8 +395,7 @@ append_tier_unwind (std::uint32_t handler_off, bool present, int num_clauses,
 }
 
 static bool
-build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
-                       const MonoExceptionClause *clauses, int num_clauses,
+build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries, OwnerHeaders &headers,
                        const std::uint8_t *native_code, std::uint32_t code_len,
                        std::vector<MonoJitExceptionInfo> &out,
                        std::uint32_t &tier_unwind_off, bool &tier_unwind)
@@ -350,10 +428,12 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 		return a.handler_off < b.handler_off;
 	});
 
-	// Per clause, the pad its resume trampoline unwinds to once the cleanup has
-	// run. The chaining below routes the rest of a chain through it, so the
-	// runtime re-enters carrying the state the cleanup left behind.
-	std::vector<gpointer> resume_pad (num_clauses > 0 ? num_clauses : 0, nullptr);
+	// Per owner per clause, the pad its resume trampoline unwinds to once the
+	// cleanup has run. The chaining below routes the rest of a chain through
+	// it, so the runtime re-enters carrying the state the cleanup left
+	// behind. Keyed by owner as well as clause_index: two folded bodies can
+	// each declare a clause 0, and their resume pads are not one clause's.
+	ResumePads resume_pad;
 
 	// The entries that describe a real protected region, in chain order. The
 	// markers drop out here: they say where code sits, not what it protects.
@@ -369,21 +449,29 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 		if (e.handler_off >= code_len)
 			return false;
 
-		// Before the assert below: this pad names no IL clause, and a method
-		// whose IL declared none fails it.
+		// Before the header lookup below: this pad names no IL clause, and a
+		// method whose IL declared none fails it.
 		if (e.kind == MONO_LSDA_KIND_TIER_UNWIND) {
 			tier_unwind_off = e.handler_off;
 			tier_unwind = true;
 			continue;
 		}
 
-		// clause_index came from cfg->header->clauses[] in the same compile that
-		// num_clauses comes from. Out of range means our own object round-trip
-		// broke, not that the IL is bad.
-		g_assert (num_clauses > 0 && e.clause_index < static_cast<std::uint32_t> (num_clauses));
+		const ClauseHeader *h = headers.header_for (e.owner);
+
+		// An owner nothing can answer for is the caller declining to join
+		// against it, not our own round-trip breaking.
+		if (h == nullptr)
+			return false;
+
+		// clause_index came from that owner's own header in the same compile
+		// that built it. Out of range means our own object round-trip broke,
+		// not that the IL is bad.
+		g_assert (h->num_clauses > 0 && e.clause_index < static_cast<std::uint32_t> (h->num_clauses));
 
 		if (e.kind == MONO_LSDA_KIND_RESUME_PAD) {
-			record_resume_pad (e, clauses, native_code, resume_pad);
+			if (!record_resume_pad (e, headers, native_code, resume_pad))
+				return false;
 			continue;
 		}
 
@@ -391,20 +479,20 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 		// the abort guard is built from the separate .mono_guards section
 		// instead. Publish nothing for it.
 		if (e.kind == MONO_LSDA_KIND_FINALLY_BODY) {
-			g_assert (clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY);
+			g_assert (h->clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY);
 			continue;
 		}
 
 		// The section's kind column was written from the same clauses[i].flags
 		// this reads back, in the same compile. A mismatch means our own
 		// round-trip broke. A catch clause has kind and flags both NONE.
-		g_assert (e.kind == static_cast<std::uint32_t> (clauses[e.clause_index].flags));
+		g_assert (e.kind == static_cast<std::uint32_t> (h->clauses[e.clause_index].flags));
 
 		// Catch (NONE), FILTER, FINALLY and FAULT are the publishable kinds.
-		g_assert (clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_NONE ||
-		         clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FILTER ||
-		         clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
-		         clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FAULT);
+		g_assert (h->clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_NONE ||
+		         h->clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FILTER ||
+		         h->clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FINALLY ||
+		         h->clauses[e.clause_index].flags == MONO_EXCEPTION_CLAUSE_FAULT);
 
 		dispatch.push_back (e);
 	}
@@ -448,7 +536,14 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 
 		for (std::size_t k = i; k < end; ++k) {
 			const MonoLsdaEntry &e = dispatch[k];
-			const MonoExceptionClause &cl = clauses[e.clause_index];
+			// Already resolved once for this owner in the loop above, which
+			// returned false on any resolution this one would fail too - so
+			// this is a cache hit, never a fresh call that can decline.
+			const ClauseHeader *h = headers.header_for (e.owner);
+
+			g_assert (h != nullptr);
+
+			const MonoExceptionClause &cl = h->clauses[e.clause_index];
 
 			/*
 			 * ei.flags is joined from the method's own IL header, and the
@@ -477,8 +572,12 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries,
 			ei.try_end = (gpointer) (native_code + e.try_start_off + e.try_len);
 			ei.handler_start = cur_handler;
 
-			if (resume_pad[e.clause_index])
-				cur_handler = resume_pad[e.clause_index];
+			auto owner_pads = resume_pad.find (e.owner);
+
+			if (owner_pads != resume_pad.end ()
+			    && e.clause_index < owner_pads->second.size ()
+			    && owner_pads->second[e.clause_index])
+				cur_handler = owner_pads->second[e.clause_index];
 
 			out.push_back (ei);
 			ranges.push_back ({ static_cast<std::uint64_t> (e.try_start_off),
@@ -496,16 +595,22 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
                const MonoExceptionClause *clauses, int num_clauses,
                const std::uint8_t *native_code, std::uint32_t code_len,
                std::vector<MonoJitExceptionInfo> &out,
-               const std::vector<MonoFinallyGuard> &guards)
+               const std::vector<MonoFinallyGuard> &guards,
+               const OwnerHeader &owner_header)
 {
 	std::uint32_t tier_unwind_off = 0;
 	bool tier_unwind = false;
+	OwnerHeaders headers (clauses, num_clauses, owner_header);
 
-	if (!build_ex_info_entries (entries, clauses, num_clauses, native_code, code_len, out,
+	if (!build_ex_info_entries (entries, headers, native_code, code_len, out,
 	                            tier_unwind_off, tier_unwind))
 		return false;
 
-	append_finally_guards (guards, clauses, num_clauses, native_code, code_len, out);
+	if (!append_finally_guards (guards, headers, native_code, code_len, out))
+		return false;
+
+	// The tier-unwind fault is the root's own instrumentation pad, never a
+	// folded body's, so it stays keyed to owner 0's own num_clauses.
 	append_tier_unwind (tier_unwind_off, tier_unwind, num_clauses, native_code, code_len, out);
 	return true;
 }

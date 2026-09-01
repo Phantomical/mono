@@ -15,7 +15,15 @@
 #undef PIC
 #endif
 
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/CodeGen/MachineFunctionPass.h>
+
+#include <cstdint>
+
+namespace llvm {
+class DISubprogram;
+class Module;
+} // namespace llvm
 
 namespace mono {
 
@@ -40,10 +48,16 @@ public:
 		return "Mono EH clause gather";
 	}
 
+	/* Builds ids_ once per module, rather than once per function - the same
+	 * cost IlLineHandler::beginModule () (compiler.cpp) already pays for the
+	 * same map. */
+	bool doInitialization (llvm::Module &m) override;
+
 	bool runOnMachineFunction (llvm::MachineFunction &mf) override;
 
 private:
 	MonoEHSideChannel *sc_;
+	llvm::DenseMap<const llvm::DISubprogram *, std::uint64_t> ids_;
 };
 
 } // namespace mono
