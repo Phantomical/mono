@@ -290,14 +290,34 @@ float_to_uint64 (llvm::IRBuilder<> &builder, llvm::Value *value, llvm::Type *to)
 	return builder.CreateSelect (below, converted, put_back);
 }
 
+/// value truncated toward zero into an unsigned integer of 32 bits or fewer.
+///
+/// Every such target's range fits inside a signed int64, so the conversion goes through
+/// that width and never asks for an unsigned one. cvttsd2si's indefinite value,
+/// 0x8000000000000000, truncates to the zero that mono_fconv_u4 ()
+/// (mono/mini/icalls/fconv.c) and the interpreter both give for a NaN or an out-of-range
+/// operand. AVX512F's vcvttsd2usi answers the same inputs with its own indefinite value
+/// instead, all-ones, which does not.
+llvm::Value *
+float_to_uint32_or_narrower (llvm::IRBuilder<> &builder, llvm::Value *value, llvm::Type *to)
+{
+	llvm::Value *wide = constrained_float_to_int (builder, value, builder.getInt64Ty (), true);
+
+	return builder.CreateTrunc (wide, to);
+}
+
 llvm::Value *
 float_to_int (llvm::IRBuilder<> &builder, llvm::Value *value, Target target)
 {
 	llvm::Type *to = builder.getIntNTy (stack_bits (target));
-	llvm::Value *converted =
-		!target.is_signed && target.bits == 64
-			? float_to_uint64 (builder, value, to)
-			: constrained_float_to_int (builder, value, to, target.is_signed);
+	llvm::Value *converted;
+
+	if (target.is_signed)
+		converted = constrained_float_to_int (builder, value, to, true);
+	else if (target.bits == 64)
+		converted = float_to_uint64 (builder, value, to);
+	else
+		converted = float_to_uint32_or_narrower (builder, value, to);
 
 	// int_to_int () applies the same truncation conv already uses for oversized integers.
 	return int_to_int (builder, converted, target);
