@@ -22,8 +22,8 @@ using System.Runtime.CompilerServices;
  *
  * The site sits in a cold block -- emit_stelem_ref_check ()
  * (method-to-llvm/arrays.cpp) puts it in one, because a store that fits is the
- * ordinary case. So the suite names a cold-callsite threshold of its own, the
- * way tier2-inline-casts.cs does.
+ * ordinary case. So the suite raises both the default and the cold-callsite
+ * threshold, since the cold arm's budget is the lower of the two.
  *
  * What says a fold happened is the same reading tier2-inline-casts.cs takes: a
  * folded body owns no code, so its frame reports the offset into Root () that it
