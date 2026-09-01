@@ -475,9 +475,8 @@ MonoClass * const CC0 = (MonoClass *) (std::uintptr_t) 0xC0FFEE00u;
 MonoClass * const CC1 = (MonoClass *) (std::uintptr_t) 0xC0FFEE11u;
 MonoClass * const CC2 = (MonoClass *) (std::uintptr_t) 0xC0FFEE22u;
 
-/* Sentinel owner ids, standing in for a folded-in body's MonoMethod*. */
+/* Sentinel owner id, standing in for a folded-in body's MonoMethod*. */
 constexpr std::uint64_t OWNER_A = 0xa000000000000001ull;
-constexpr std::uint64_t OWNER_B = 0xa000000000000002ull;
 
 /*
  * A real code buffer to join against, so try_start/try_end/handler_start come out
