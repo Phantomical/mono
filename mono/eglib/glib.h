@@ -66,10 +66,17 @@
 #define G_BEGIN_DECLS  extern "C" {
 #define G_END_DECLS    }
 #define G_EXTERN_C     extern "C"
+/* A variable declaration needs its own spelling: `extern "C" extern int x;`
+ * is invalid, because `extern "C" int x;` is already a declaration rather
+ * than a definition, but plain C still needs the explicit `extern` to keep
+ * the same declaration from defining the variable in every translation unit
+ * that includes it. */
+#define G_EXTERN_C_VAR extern "C"
 #else
 #define G_BEGIN_DECLS  /* nothing */
 #define G_END_DECLS    /* nothing */
 #define G_EXTERN_C     /* nothing */
+#define G_EXTERN_C_VAR extern
 #endif
 
 #ifdef __cplusplus

@@ -445,12 +445,12 @@ MonoException* mono_thread_force_interruption_checkpoint_noraise (void);
  * mono_thread_interruption_checkpoint () is always needed if the flag is not
  * zero.
  *
- * G_EXTERN_C because the interpreter and the backend read it from C++ and
+ * G_EXTERN_C_VAR because the interpreter and the backend read it from C++ and
  * mono/metadata/threads.c defines it.  See the note on ICALL_SIG in
  * mono/metadata/icall-signatures.h for why the mismatch is invisible under the
  * Itanium ABI and not under MSVC's.
  */
-G_EXTERN_C extern gint32 mono_thread_interruption_request_flag;
+G_EXTERN_C_VAR gint32 mono_thread_interruption_request_flag;
 
 uint32_t mono_alloc_special_static_data (uint32_t static_type, uint32_t size, uint32_t align, uintptr_t *bitmap, int numbits);
 

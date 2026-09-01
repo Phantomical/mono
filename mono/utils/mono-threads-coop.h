@@ -20,11 +20,11 @@
 #include "mono/metadata/icalls.h"
 
 /* JIT specific interface */
-/* G_EXTERN_C: the interpreter and the backend read this from C++, and
+/* G_EXTERN_C_VAR: the interpreter and the backend read this from C++, and
  * mono/utils/mono-threads-coop.c defines it.  See the note on the TLS
  * variables in mono/utils/mono-tls.h for why the mismatch is invisible under
  * the Itanium ABI and not under MSVC's. */
-G_EXTERN_C extern volatile size_t mono_polling_required;
+G_EXTERN_C_VAR volatile size_t mono_polling_required;
 
 /* Internal API */
 
@@ -76,7 +76,7 @@ mono_threads_suspend_policy_is_multiphase_stw_enabled (MonoThreadsSuspendPolicy 
 gboolean
 mono_threads_suspend_policy_is_blocking_transition_enabled (MonoThreadsSuspendPolicy p);
 
-G_EXTERN_C extern char mono_threads_suspend_policy_hidden_dont_modify;
+G_EXTERN_C_VAR char mono_threads_suspend_policy_hidden_dont_modify;
 
 static inline MonoThreadsSuspendPolicy
 mono_threads_suspend_policy (void) {
