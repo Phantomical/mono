@@ -3314,6 +3314,14 @@ deregister_reflection_info_roots (MonoDomain *domain)
 
 extern MonoCoopMutex mono_domain_unload_mutex;
 
+// Reads MONO_DOMAIN_UNLOAD_TIMEOUT in milliseconds, or 1000 if it is unset.
+static int
+domain_unload_threadpool_timeout_ms (void)
+{
+	const char *env = g_getenv ("MONO_DOMAIN_UNLOAD_TIMEOUT");
+	return env ? CLAMP (atoi (env), 0, G_MAXINT32) : 1000;
+}
+
 static gsize WINAPI
 unload_thread_main (void *arg)
 {
@@ -3347,7 +3355,13 @@ unload_thread_main (void *arg)
 		goto failure;
 	}
 
-	if (!mono_threadpool_remove_domain_jobs (domain, -1)) {
+	// A caller that is itself a pool worker can leave this wait unbounded:
+	// draining the queue needs a free worker, and a pinned worker supplies
+	// none. The pool's growth heuristic backs off under load instead of
+	// tightening (monitor_thread (), threadpool-worker-default.c). A finite
+	// timeout turns that into the CannotUnloadAppDomainException
+	// mono_domain_try_unload raises on this failure, rather than a hang.
+	if (!mono_threadpool_remove_domain_jobs (domain, domain_unload_threadpool_timeout_ms ())) {
 		data->failure_reason = g_strdup_printf ("Cleanup of threadpool jobs of domain %s timed out.", domain->friendly_name);
 		goto failure;
 	}

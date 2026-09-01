@@ -599,13 +599,24 @@ mono_threadpool_remove_domain_jobs (MonoDomain *domain, int timeout)
 		}
 	}
 
-	/* Remove from the list the worker threads look at */
-	tpdomain_remove (tpdomain);
+	if (ret) {
+		/* Remove from the list the worker threads look at */
+		tpdomain_remove (tpdomain);
 
-	domains_unlock ();
+		domains_unlock ();
 
-	mono_coop_cond_destroy (&tpdomain->cleanup_cond);
-	tpdomain_free (tpdomain);
+		mono_coop_cond_destroy (&tpdomain->cleanup_cond);
+		tpdomain_free (tpdomain);
+	} else {
+		// A timeout leaves outstanding_request + threadpool_jobs above zero,
+		// so a worker still touches tpdomain to run or finish a job in it.
+		// Freeing it here can race that worker's own decrement into a
+		// use-after-free. Leave it in the list. A retry finds it here, and
+		// worker_callback () takes it off the list once the count reaches
+		// zero — but does not free it. A domain whose Unload times out and
+		// is never retried leaks this struct.
+		domains_unlock ();
+	}
 
 	mono_refcount_dec (&threadpool);
 
