@@ -77,6 +77,36 @@ public class Detour
 		return new Shared<System.Exception> ().Read (x);
 	}
 
+	/*
+	 * The chain a native detour's own call back into managed code raises
+	 * an exception through: DeepThrow is interpreted, ThroughCompiled is
+	 * compiled and reaches it through the interpreter's entry thunk, and
+	 * Detoured is what the test points at native code that calls
+	 * ThroughCompiled's entry directly.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static void DeepThrow ()
+	{
+		throw new System.InvalidOperationException ("from beneath a detour");
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static void ThroughCompiled ()
+	{
+		DeepThrow ();
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static void Detoured ()
+	{
+	}
+
+	public static int CallDetoured ()
+	{
+		Detoured ();
+		return 0;
+	}
+
 	public static int Main ()
 	{
 		return 0;

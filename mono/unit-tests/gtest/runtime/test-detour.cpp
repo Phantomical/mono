@@ -56,6 +56,19 @@ detoured_instance_body (void *self, int x)
 	return x + 1000;
 }
 
+/* Set to a compiled method's entry before the detour below is installed. */
+void (*g_call_through_compiled) () = nullptr;
+
+/*
+ * A plain function rather than a lambda: mono_install_method_detour () takes
+ * a bare function pointer, with nothing to close over the target with.
+ */
+extern "C" void
+detoured_body_calls_managed ()
+{
+	g_call_through_compiled ();
+}
+
 MonoImage *g_image;
 
 class MethodDetour : public ::testing::Test {
@@ -548,4 +561,46 @@ TEST_F (MethodDetour, IsMissedByAnInlinedCallee)
 	ASSERT_EQ (1001, entry (1));
 
 	EXPECT_EQ (2, invoke (caller, 1));
+}
+
+/*
+ * A detour target is native code with no MonoJitInfo and no LMF of its own -
+ * unlike a P/Invoke or an icall, which both go through a wrapper that pushes
+ * one. The chain: an interpreted caller reaches a detour through a jit call,
+ * the detour calls into a compiled method with no wrapper in between, and
+ * that method calls back into the interpreter, which throws.
+ */
+TEST_F (MethodDetour, DetourCallsBackIntoManagedAndThrows)
+{
+	ERROR_DECL (error);
+	MonoDomain *domain = mono_domain_get ();
+	MonoMethod *detoured = method_named ("Detoured", 0);
+	MonoMethod *caller = method_named ("CallDetoured", 0);
+	MonoMethod *through_compiled = method_named ("ThroughCompiled", 0);
+	MonoMethod *deep_throw = method_named ("DeepThrow", 0);
+
+	ASSERT_NE (nullptr, detoured);
+	ASSERT_NE (nullptr, caller);
+	ASSERT_NE (nullptr, through_compiled);
+	ASSERT_NE (nullptr, deep_throw);
+	ASSERT_GT (mono_llvm_jit_tier0_calls (caller), 0)
+		<< "the caller no longer starts at tier 0, so it is not interpreted";
+	ASSERT_GT (mono_llvm_jit_tier0_calls (deep_throw), 0)
+		<< "the throw site no longer starts at tier 0, so this checks nothing";
+
+	g_call_through_compiled =
+		(void (*) ()) mono_compile_method_checked (through_compiled, error);
+	mono_error_assert_ok (error);
+	ASSERT_NE (nullptr, g_call_through_compiled);
+
+	mono_install_method_detour (detoured, domain, (void *) detoured_body_calls_managed);
+
+	mono_runtime_invoke_checked (caller, nullptr, nullptr, error);
+
+	ASSERT_FALSE (is_ok (error))
+		<< "the throw from beneath the detour never reached the invoke";
+	MonoException *exc = mono_error_convert_to_exception (error);
+	ASSERT_NE (nullptr, exc);
+	EXPECT_STREQ ("InvalidOperationException",
+	             m_class_get_name (mono_object_class ((MonoObject *) exc)));
 }

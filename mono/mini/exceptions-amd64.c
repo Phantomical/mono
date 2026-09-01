@@ -542,53 +542,26 @@ mono_arch_unwind_frame (MonoDomain *domain, MonoJitTlsData *jit_tls,
 		return TRUE;
 	} else if (*lmf) {
 		guint64 rip;
+		gboolean via_tramp = FALSE;
 
 		g_assert ((((guint64)(*lmf)->previous_lmf) & 2) == 0);
 
 		if (((guint64)(*lmf)->previous_lmf) & 4) {
 			MonoLMFTramp *ext = (MonoLMFTramp*)(*lmf);
 
+			via_tramp = TRUE;
 			rip = (guint64)MONO_CONTEXT_GET_IP (ext->ctx);
+			for (i = 0; i < AMD64_NREG; ++i)
+				new_ctx->gregs [i] = ext->ctx->gregs [i];
 		} else if ((*lmf)->rsp == 0) {
 			/* Top LMF entry - nothing above it to hop to, so walk out of the frame. */
 			return unwind_native_frame (ctx, new_ctx, save_locations, frame);
 		} else {
-			/* 
-			 * The rsp field is set just before the call which transitioned to native 
+			/*
+			 * The rsp field is set just before the call which transitioned to native
 			 * code. Obtain the rip from the stack.
 			 */
 			rip = *(guint64*)((*lmf)->rsp - sizeof(host_mgreg_t));
-		}
-
-		ji = mini_jit_info_table_find (domain, (char *)rip, NULL);
-		/*
-		 * FIXME: ji == NULL can happen when a managed-to-native wrapper is interrupted
-		 * in the soft debugger suspend code, since (*lmf)->rsp no longer points to the
-		 * return address.
-		 */
-		//g_assert (ji);
-		if (!ji)
-			return unwind_native_frame (ctx, new_ctx, save_locations, frame);
-
-		frame->ji = ji;
-		frame->type = FRAME_TYPE_MANAGED_TO_NATIVE;
-
-		if (((guint64)(*lmf)->previous_lmf) & 4) {
-			MonoLMFTramp *ext = (MonoLMFTramp*)(*lmf);
-
-			/* Trampoline frame */
-			for (i = 0; i < AMD64_NREG; ++i)
-				new_ctx->gregs [i] = ext->ctx->gregs [i];
-			/* Adjust IP */
-			new_ctx->gregs [AMD64_RIP] --;
-		} else {
-			/*
-			 * The registers saved in the LMF will be restored using the normal unwind info,
-			 * when the wrapper frame is processed.
-			 */
-			/* Adjust IP */
-			rip --;
-			new_ctx->gregs [AMD64_RIP] = rip;
 			new_ctx->gregs [AMD64_RSP] = (*lmf)->rsp;
 			new_ctx->gregs [AMD64_RBP] = (*lmf)->rbp;
 			for (i = 0; i < AMD64_NREG; ++i) {
@@ -596,6 +569,36 @@ mono_arch_unwind_frame (MonoDomain *domain, MonoJitTlsData *jit_tls,
 					new_ctx->gregs [i] = 0;
 			}
 		}
+		new_ctx->gregs [AMD64_RIP] = rip;
+
+		ji = mini_jit_info_table_find (domain, (char *)rip, NULL);
+		if (!ji) {
+			if (via_tramp) {
+				/*
+				 * No ji here means rip is inside mono_llvm_dyn_call_thunk. It
+				 * carries no jit info and pushes no MonoLMF of its own. Per
+				 * dyn-call-thunk.S, such a walk belongs at the LMF its caller
+				 * pushed before the call, so hand back what is now underneath
+				 * rather than trying a native unwind here.
+				 */
+				*lmf = (MonoLMF *)(((guint64)(*lmf)->previous_lmf) & ~7);
+				frame->type = FRAME_TYPE_TRAMPOLINE;
+				return TRUE;
+			}
+			/*
+			 * FIXME: ji == NULL can happen when a managed-to-native wrapper is interrupted
+			 * in the soft debugger suspend code, since (*lmf)->rsp no longer points to the
+			 * return address.
+			 */
+			//g_assert (ji);
+			return unwind_native_frame (new_ctx, new_ctx, save_locations, frame);
+		}
+
+		frame->ji = ji;
+		frame->type = FRAME_TYPE_MANAGED_TO_NATIVE;
+
+		/* Adjust IP */
+		new_ctx->gregs [AMD64_RIP] --;
 
 		*lmf = (MonoLMF *)(((guint64)(*lmf)->previous_lmf) & ~7);
 
