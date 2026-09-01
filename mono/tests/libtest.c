@@ -8490,6 +8490,31 @@ test_invoke_by_name (struct invoke_names *names)
 		sym_mono_thread_detach (thread);
 }
 
+/*
+ * Calls mono_runtime_invoke () on the named static, argument-free method, on
+ * the calling thread rather than a freshly attached one.
+ */
+LIBTEST_API mono_bool STDCALL
+mono_test_reenter_invoke_by_name (const char *assm_name, const char *name_space, const char *name, const char *meth_name)
+{
+	mono_test_init_symbols ();
+
+	MonoDomain *domain = sym_mono_domain_get ();
+	g_assert (domain);
+	MonoAssembly *assm = sym_mono_domain_assembly_open (domain, assm_name);
+	g_assert (assm);
+	MonoImage *image = sym_mono_assembly_get_image (assm);
+	MonoClass *klass = sym_mono_class_from_name (image, name_space, name);
+	g_assert (klass);
+	MonoMethod *method = sym_mono_class_get_method_from_name (klass, meth_name, -1);
+	g_assert (method);
+
+	MonoObject *exc = NULL;
+	sym_mono_runtime_invoke (method, NULL, NULL, &exc);
+
+	return exc != NULL;
+}
+
 #ifndef HOST_WIN32
 static void*
 invoke_foreign_thread (void* user_data)

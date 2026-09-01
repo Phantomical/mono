@@ -986,6 +986,7 @@ set(MONO_TESTS_FORCED_UNWIND_SRC
 set(MONO_TESTS_TIER_PINNED_SRC
   handle-stack-tiers.cs
   typedbyref-tier-entry.cs
+  eh-runtime-invoke-reentry.cs
 )
 
 # The same pinning, for a test whose calli has to be written by hand.
