@@ -862,6 +862,122 @@ dump_memory_around_ip (MonoContext *mctx)
 	}
 }
 
+#if defined (__linux__) && !defined (HOST_ANDROID)
+
+/// Parses the hex digits at *str and advances *str past them. Returns
+/// whether it found any. Hand-rolled because strtoull () is not signal-safe.
+static gboolean
+hex_digits_to_u64 (const char **str, guint64 *out)
+{
+	const char *p = *str;
+	guint64 value = 0;
+	gboolean any = FALSE;
+
+	while (isxdigit ((unsigned char) *p)) {
+		char c = *p;
+		value = (value << 4) | (guint64) (c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10);
+		any = TRUE;
+		p++;
+	}
+
+	*str = p;
+	*out = value;
+	return any;
+}
+
+/// Fills `out` with one line of /proc/self/maps, across however many reads
+/// that takes. Returns FALSE at end of file. A line longer than `out_size`
+/// is truncated, at the cost of the tail of a mapped file's path.
+static gboolean
+read_maps_line (int handle, char *out, size_t out_size)
+{
+	size_t used = 0;
+	gboolean newline = FALSE;
+
+	while (!newline) {
+		char chunk [32];
+		int n = g_async_safe_fgets (chunk, sizeof (chunk), handle, &newline);
+		if (n == 0 && !newline)
+			return used > 0;
+
+		for (int i = 0; i < n && used < out_size - 1; i++)
+			out [used++] = chunk [i];
+	}
+
+	out [used] = '\0';
+	return TRUE;
+}
+
+/// Prints which mapped file, if any, backs the fault address in `info`.
+/// No-op if `info` is NULL or carries no address.
+static void
+dump_fault_address_mapping (MONO_SIG_HANDLER_INFO_TYPE *info)
+{
+	if (!info || !info->si_addr)
+		return;
+
+	int handle = g_open ("/proc/self/maps", O_RDONLY, 0);
+	if (handle == -1)
+		return;
+
+	guint64 target = (guint64) (gsize) info->si_addr;
+	char line [512];
+
+	while (read_maps_line (handle, line, sizeof (line))) {
+		const char *p = line;
+		guint64 start, end, file_offset;
+
+		if (!hex_digits_to_u64 (&p, &start) || *p != '-')
+			continue;
+		p++;
+		if (!hex_digits_to_u64 (&p, &end) || target < start || target >= end)
+			continue;
+
+		// Each line is "start-end perms offset dev inode [pathname]".
+		while (*p == ' ')
+			p++;
+		while (*p && *p != ' ') // perms
+			p++;
+		while (*p == ' ')
+			p++;
+		if (!hex_digits_to_u64 (&p, &file_offset))
+			file_offset = 0;
+		while (*p == ' ')
+			p++;
+		while (*p && *p != ' ') // dev
+			p++;
+		while (*p == ' ')
+			p++;
+		while (*p && *p != ' ') // inode
+			p++;
+		while (*p == ' ')
+			p++;
+
+		g_async_safe_printf ("\n=================================================================\n");
+		g_async_safe_printf ("\tFault Address Mapping\n");
+		g_async_safe_printf ("=================================================================\n");
+		if (*p == '\0' || *p == '[') {
+			g_async_safe_printf ("Fault address %p is inside the anonymous mapping %p-%p.\n",
+				info->si_addr, (gpointer) start, (gpointer) end);
+		} else {
+			g_async_safe_printf ("Fault address %p is inside '%s', mapped at %p-%p, file offset 0x%" PRIx64 ".\n",
+				info->si_addr, p, (gpointer) start, (gpointer) end, file_offset + (target - start));
+		}
+		break;
+	}
+
+	close (handle);
+}
+
+#else
+
+static void
+dump_fault_address_mapping (MONO_SIG_HANDLER_INFO_TYPE *info)
+{
+}
+
+#endif /* defined (__linux__) && !defined (HOST_ANDROID) */
+
 static void
 assert_printer_callback (void)
 {
@@ -1104,6 +1220,7 @@ mono_dump_native_crash_info (const char *signal, MonoContext *mctx, MONO_SIG_HAN
 {
 	dump_native_stacktrace (signal, mctx);
 	dump_memory_around_ip (mctx);
+	dump_fault_address_mapping (info);
 }
 
 void
