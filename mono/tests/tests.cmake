@@ -243,6 +243,7 @@ set(MONO_TESTS_CS_SRC
   stack-merge-class.cs
   tier2-inline-override.cs
   cast-fold.cs
+  tier2-inline-cast-bound.cs
   array-devirt.cs
   array-native-int-cast.cs
   class-devirt.cs

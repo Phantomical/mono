@@ -108,6 +108,12 @@ public:
 	/// body has. That shape is what the profile is keyed on: the counter
 	/// indices were assigned over the CFG this pipeline leaves behind, so a
 	/// candidate put through anything else takes its weights from nothing.
+	///
+	/// A type test the candidate's own declared bound cannot answer stays a
+	/// symbolic marker rather than the runtime probe. A caller that inlines the
+	/// candidate can then answer it against a narrower operand.
+	/// buildTier2Pipeline () lowers whatever is still standing once inlining is
+	/// done.
 	llvm::ModulePassManager buildTier2MaterializePipeline ();
 
 private:

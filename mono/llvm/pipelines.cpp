@@ -502,8 +502,8 @@ MonoPassBuilder::buildTier1Pipeline ()
 
 	/*
 	 * Behind the instrumentation, so that both tiers hash a CFG with these
-	 * calls still opaque. Tier 2 moves LowerStage::casts earlier; see
-	 * buildTier2SimplificationPipeline ().
+	 * calls still opaque. Tier 2 moves LowerStage::casts much later, behind its
+	 * own inliner; see buildTier2Pipeline ().
 	 *
 	 * In front of TierCounterPass, which turns the calls that can unwind into
 	 * invokes on to the counter's own pad. The type test wrapper is one of them.
@@ -602,17 +602,6 @@ MonoPassBuilder::buildTier2SimplificationPipeline ()
 		buildTier2FunctionSimplificationPipeline (), PTO.EagerlyInvalidateAnalyses));
 
 	/*
-	 * Behind `fold_type_tests ()`, so a cast that pass could still answer
-	 * never becomes a probe.
-	 *
-	 * This function is also buildTier2MaterializePipeline (), so a candidate
-	 * the cost model materializes arrives with its casts already lowered. A
-	 * dispatch right after one can then devirtualize on the operand the
-	 * lowered cast leaves, where an opaque call left it nothing to read.
-	 */
-	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::casts));
-
-	/*
 	 * Behind the O3 pass above, which finds more of these than the common
 	 * pipeline's own O1 pass does, and behind buildPgoUsePipeline (), so the
 	 * CFG that reader matches against is still the one tier 1 instrumented -
@@ -707,6 +696,15 @@ MonoPassBuilder::buildTier2Pipeline ()
 
 	MPM.addPass (buildModuleOptimizationPipeline (llvm::OptimizationLevel::O3,
 	                                              llvm::ThinOrFullLTOPhase::None));
+
+	/*
+	 * The only point tier 2 lowers a cast that survived fold_type_tests () - a
+	 * root's own, and whatever inlining folded in. Behind TopDownInlinerPass
+	 * and the O3 pipeline above, so a caller's own operand has already had its
+	 * turn at a cast a materialized candidate's own declared bound could not
+	 * answer.
+	 */
+	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::casts));
 
 	/*
 	 * Behind the pipeline above. A fold brings the constructor in and SROA takes
