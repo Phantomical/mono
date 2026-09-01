@@ -180,6 +180,16 @@ is_small_enough (MonoMethodHeader *header, uint32_t il_limit)
 }
 
 bool
+has_filter_clause (MonoMethodHeader *header)
+{
+	for (uint32_t i = 0; i < header->num_clauses; ++i)
+		if (header->clauses[i].flags == MONO_EXCEPTION_CLAUSE_FILTER)
+			return true;
+
+	return false;
+}
+
+bool
 already_folded (const InlineScope &scope, MonoMethod *callee)
 {
 	return any_of (scope.folded, [&] (const InlineScope::Folded &entry) {

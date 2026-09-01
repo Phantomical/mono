@@ -169,6 +169,12 @@ ProfileInliner::materialize (Function &decl, Module &into)
 	if (!fits)
 		return nullptr;
 
+	// getInlineCost refuses this callee outright once has_filter_clause () is
+	// true (see inline-scope.hpp), so translating a copy would only strand its
+	// filter function once StripInlineCopiesPass takes the copy back off.
+	if (has_filter_clause (header))
+		return nullptr;
+
 	size_t resolved = externals_.size ();
 	Function *copy = materialize_inline_copy (into, target_.domain, callee, cfg.get (),
 	                                          externals_, types_, scope_,

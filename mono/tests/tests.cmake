@@ -1028,6 +1028,13 @@ set(MONO_TESTS_TIER2_INLINE_CLAUSE_SRC
   tier2-inline-clause.cs
 )
 
+# Whether the cost model can weigh a filter-bearing callee without aborting
+# the compile. It runs twice, on the default and with
+# MONO_LLVM_JIT_FOLD_CLAUSES=0, and expects the same refusal either way.
+set(MONO_TESTS_TIER2_INLINE_FILTER_SRC
+  tier2-inline-filter.cs
+)
+
 # The scalarize-arg-bonus, on a callee that only reads an uncaptured
 # argument's fields rather than dispatching on it. It runs twice, on the
 # default and with the bonus zeroed, and reads the variable to know which arm

@@ -119,6 +119,9 @@ bool is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_limit);
 /// (passes/top-down-inline.cpp) is what keeps a clause-bearing fold safe.
 bool is_small_enough (MonoMethodHeader *header, uint32_t il_limit);
 
+/// Whether any of header's clauses is a filter.
+bool has_filter_clause (MonoMethodHeader *header);
+
 /// Whether this root has taken callee in already. It answers yes for root
 /// itself, which the list holds so that a candidate calling back into root does
 /// not copy root into its own callee.

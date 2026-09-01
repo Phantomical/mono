@@ -709,6 +709,18 @@ mono_runtime_suite(runtime-tier2-inline-clause-off TESTS ${_tier2_inline_clause}
                    ENV "MONO_FOLD_CLAUSES=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-fold-clauses=0")
 
+# A filter-bearing callee can never fold -- getInlineCost refuses its
+# llvm.localescape outright -- so both arms expect the same refusal.
+# PromoteNow drives the compiles the same way runtime-tier2-inline-clause does.
+_mono_exe_list(_tier2_inline_filter ${MONO_TESTS_TIER2_INLINE_FILTER_SRC})
+mono_runtime_suite(runtime-tier2-inline-filter TESTS ${_tier2_inline_filter}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0")
+mono_runtime_suite(runtime-tier2-inline-filter-off TESTS ${_tier2_inline_filter}
+                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
+                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
+                       "MONO_LLVM_JIT_FOLD_CLAUSES=0")
+
 # The raising arm mono-inline-implicit-null-free leaves out of a callee's
 # cost. The body is past the default cost-translate limit and past the
 # default cold-callsite threshold, so both arms raise both -- the file says
