@@ -143,7 +143,7 @@ public:
 	/// callers reach it at.
 	Expected<void *> publish (StringRef name, void *target)
 	{
-		Expected<Thunk> thunk = Thunk::allocate (&arena_, nullptr);
+		Expected<Thunk> thunk = Thunk::allocate (&arena_, thunks_, nullptr);
 
 		if (!thunk)
 			return thunk.takeError ();
@@ -179,7 +179,7 @@ public:
 		if (!trampoline)
 			return trampoline.takeError ();
 
-		Expected<Thunk> thunk = Thunk::allocate (&arena_, nullptr);
+		Expected<Thunk> thunk = Thunk::allocate (&arena_, thunks_, nullptr);
 
 		if (!thunk) {
 			callbacks_->release (*trampoline);
@@ -269,6 +269,8 @@ private:
 
 	/// Declared first, so it outlives everything carved out of it.
 	CodeArena arena_;
+	/// arena_'s own thunk pool - see ThunkPool.
+	ThunkPool thunks_;
 	std::unique_ptr<MonoJit> jit_;
 	std::unique_ptr<LazyCallbacks> callbacks_;
 	/// published_/trampolines_ are this Engine's own bookkeeping and need
@@ -442,8 +444,9 @@ TEST_F (Thunks, CallsInitialTargetAndFollowsRedirects)
 TEST_F (Thunks, TheUnboxEntryStepsTheReceiverPastTheObjectHeader)
 {
 	CodeArena arena;
+	ThunkPool thunks;
 
-	Expected<Thunk> thunk = Thunk::allocate (&arena, nullptr);
+	Expected<Thunk> thunk = Thunk::allocate (&arena, thunks, nullptr);
 	ASSERT_TRUE (bool (thunk)) << toString (thunk.takeError ());
 
 	thunk->redirect ((void *) &thunk_receiver_target_one);

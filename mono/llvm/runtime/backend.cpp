@@ -129,6 +129,9 @@ struct MonoBackend::DomainState {
 	/// after them.
 	CodeArena code;
 
+	/// code's own thunk pool - see ThunkPool.
+	ThunkPool thunks;
+
 	std::unique_ptr<MonoJit> jit;
 
 	std::unique_ptr<LazyCallbacks> callbacks;
@@ -403,7 +406,7 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 	 * through whichever domain's thunk its own code was compiled against, and
 	 * the method alone cannot name that domain.
 	 */
-	llvm::Expected<Thunk> thunk = Thunk::allocate (&domain.code, &dm);
+	llvm::Expected<Thunk> thunk = Thunk::allocate (&domain.code, domain.thunks, &dm);
 
 	if (!thunk) {
 		domain.callbacks->release (*trampoline);

@@ -19,11 +19,23 @@
 
 #include <atomic>
 #include <cstddef>
+#include <mutex>
 #include <string_view>
 
 #include <llvm/Support/Error.h>
 
 namespace mono {
+
+/// A CodeArena reservation shared by a run of thunks, and the state of
+/// filling it - see Thunk::allocate ().
+///
+/// Owned by whoever owns the CodeArena it draws from, so the two share a
+/// lifetime.
+struct ThunkPool {
+	std::mutex mutex;
+	char *base = nullptr;
+	size_t filled = 0;
+};
 
 /// A redirectable thunk.
 class Thunk {
@@ -40,10 +52,10 @@ public:
 	/// Allocates a new thunk with no target set.
 	///
 	/// The slot starts null, so calling through it before the first
-	/// redirect () faults.
+	/// redirect () faults. pool must be arena's own - see ThunkPool.
 	///
 	/// Returns an error if allocation fails.
-	static llvm::Expected<Thunk> allocate (CodeArena *arena, void *key = nullptr);
+	static llvm::Expected<Thunk> allocate (CodeArena *arena, ThunkPool &pool, void *key = nullptr);
 
 	/// Returns the function pointer for this thunk.
 	void *code () const;

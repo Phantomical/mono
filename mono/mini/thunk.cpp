@@ -22,7 +22,6 @@
 #include <llvm/Support/Memory.h>
 
 #include <mutex>
-#include <unordered_map>
 
 namespace mono {
 
@@ -69,22 +68,12 @@ stub_unwind_info ()
 /// what a bigger group amortizes further.
 constexpr size_t thunk_batch_size = 32;
 
-/// One CodeArena reservation shared by up to thunk_batch_size thunks, and the
-/// state of filling it.
-///
-/// Every thunk here runs the same stub_unwind_info () program: a jump keeps
-/// the caller's frame. One FrameFunction spanning the whole reservation
-/// describes them all, including thunks not yet allocated, because the
-/// description names no thunk's own bytes. That is why publish_thunk_pool ()
-/// writes only once, at the reservation itself.
-struct ThunkPool {
-	std::mutex mutex;
-	char *base = nullptr;
-	size_t filled = 0;
-};
-
 /// Publishes pool's whole reservation as one perf-dump record, covering
 /// thunks not yet allocated along with the ones already there.
+///
+/// Every thunk in a pool runs the same stub_unwind_info () program, so one
+/// FrameFunction spanning the reservation describes them all. That is why
+/// this writes once, not once per thunk.
 ///
 /// perf never reads a record's code bytes to unwind. It reads the address
 /// range and the eh_frame this call hands it, both already known at the
@@ -100,16 +89,6 @@ publish_thunk_pool (const ThunkPool &pool)
 	perf::publish ("redirect thunks", {(const uint8_t *) pool.base, extent, room},
 	              {perf::FrameFunction{0, extent, {}}});
 }
-
-/// The pool each arena is filling, and the map's lock, separate from each
-/// pool's own - so filling one arena never blocks another.
-///
-/// A domain unload frees its DomainState and the CodeArena inside it
-/// (MonoBackend::release_domain_impl (), runtime/backend.cpp) without
-/// erasing this entry. A later domain whose CodeArena reuses that address
-/// would look up the freed domain's stale pool.
-std::mutex g_thunk_pools_mutex;
-std::unordered_map<CodeArena *, ThunkPool> g_thunk_pools;
 
 } // namespace
 
@@ -179,7 +158,7 @@ Thunk::register_jinfo (std::string_view name, MonoDomain *domain, MonoMethod *me
 }
 
 llvm::Expected<Thunk>
-Thunk::allocate (CodeArena *arena, void *key)
+Thunk::allocate (CodeArena *arena, ThunkPool &pool, void *key)
 {
 	if (!perf::enabled ()) {
 		llvm::Expected<char *> data = arena->reserve (arch::thunk_size, arch::thunk_alignment);
@@ -194,35 +173,29 @@ Thunk::allocate (CodeArena *arena, void *key)
 		return thunk;
 	}
 
-	ThunkPool *pool;
-	{
-		std::lock_guard<std::mutex> lock (g_thunk_pools_mutex);
-		pool = &g_thunk_pools[arena];
-	}
+	std::lock_guard<std::mutex> lock (pool.mutex);
 
-	std::lock_guard<std::mutex> lock (pool->mutex);
-
-	if (pool->base == nullptr) {
+	if (pool.base == nullptr) {
 		llvm::Expected<char *> reservation = arena->reserve (
 			thunk_batch_size * arch::thunk_size + perf::code_slack (),
 			arch::thunk_alignment);
 		if (!reservation)
 			return reservation.takeError ();
-		pool->base = *reservation;
-		pool->filled = 0;
-		publish_thunk_pool (*pool);
+		pool.base = *reservation;
+		pool.filled = 0;
+		publish_thunk_pool (pool);
 	}
 
-	char *data = pool->base + pool->filled * arch::thunk_size;
+	char *data = pool.base + pool.filled * arch::thunk_size;
 	arch::write_thunk (data, key);
 	Thunk thunk (data);
 
 	llvm::sys::Memory::InvalidateInstructionCache (data, arch::thunk_size);
 
-	++pool->filled;
-	if (pool->filled == thunk_batch_size) {
-		pool->base = nullptr;
-		pool->filled = 0;
+	++pool.filled;
+	if (pool.filled == thunk_batch_size) {
+		pool.base = nullptr;
+		pool.filled = 0;
 	}
 
 	return thunk;
