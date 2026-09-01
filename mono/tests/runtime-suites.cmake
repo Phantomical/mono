@@ -765,13 +765,14 @@ mono_runtime_suite(runtime-tier2-inline-casts-off TESTS ${_tier2_inline_casts}
 # A wrapper folded into its caller. The off arm leaves the cost model nothing to
 # translate, which is what separates the fold from the frame: both arms assert
 # that the wrapper still has a frame, and only the fold moves its offset onto the
-# caller's. The site is cold, so both name a threshold that reaches it.
+# caller's. A cold callsite's budget is the lower of the default threshold and
+# the cold one, so both arms raise both.
 _mono_exe_list(_tier2_inline_wrapper ${MONO_TESTS_TIER2_INLINE_WRAPPER_SRC})
 mono_runtime_suite(runtime-tier2-inline-wrapper TESTS ${_tier2_inline_wrapper}
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
 mono_runtime_suite(runtime-tier2-inline-wrapper-off TESTS ${_tier2_inline_wrapper}
                    ENV "MONO_WRAPPER_FOLD=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=0 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
 
 # MONO_ENV_OPTIONS has to reach the runtime before it parses its own argv.
 foreach(_gc IN LISTS _mono_gcs)
