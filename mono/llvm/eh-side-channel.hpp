@@ -48,11 +48,12 @@ struct MonoEHClause {
 	/// The IL clause index, smuggled through the type_info_N initializer.
 	int clause_index = -1;
 	/// Which method clause_index indexes into: 0 for the method this compile is
-	/// building (every clause until a fold merges a live one in), otherwise
-	/// (uint64_t)(uintptr_t) of a folded body's own MonoMethod*, the same
-	/// convention IlInlineRow::callee uses (jit.hpp) - eh-gather.cpp resolves it
-	/// off the landing pad's own DILocation scope, through the same id map
-	/// il_debug_subprogram_ids () (il-line-table.hpp) hands .mono_inlines.
+	/// building, otherwise (uint64_t)(uintptr_t) of a folded body's own
+	/// MonoMethod*, the same convention IlInlineRow::callee uses (jit.hpp).
+	/// eh-gather.cpp reads it off the clause's own marker (clause-marker.hpp)
+	/// rather than off ambient code position, because a fold can move a folded
+	/// body's own code under a clause of the root's that was never that body's
+	/// own.
 	std::uint64_t owner = 0;
 	/// The clause's IL flags, a MonoExceptionEnum: NONE=0 for catch, FINALLY=2,
 	/// FAULT=4. It rides alongside clause_index in the same type_info_N global,
@@ -96,8 +97,10 @@ struct MonoEHFinallyBody {
 	const llvm::MCSymbol *body_end = nullptr;
 	/// The IL clause index, read back from the markers bracketing the run.
 	int clause_index = -1;
-	/// Same convention and same resolution as MonoEHClause::owner above, read
-	/// off the opening marker's own DILocation scope.
+	/// Same convention as MonoEHClause::owner above: 0 for this compile's own
+	/// method, otherwise a folded body's own MonoMethod*. finally-range.cpp
+	/// reads it off a finally marker's own DILocation scope, which a marker
+	/// never shares with the code around it.
 	std::uint64_t owner = 0;
 	/// Where the clause's thread-abort guard byte sits in the frame: the DWARF
 	/// number of the register it is addressed off, and a displacement from it.

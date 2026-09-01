@@ -64,14 +64,15 @@ finally_marker (const MachineInstr &mi, int *clause, bool *is_start)
 }
 
 /// Which method a marker's clause index indexes into: 0 for the method this
-/// compile is building, otherwise a folded body's own MonoMethod*, same
-/// convention and same resolution as eh-gather.cpp's landing-pad owner - off
-/// the marker's own DILocation scope, through the same id map
-/// il_debug_subprogram_ids () hands out. A marker's location must always name
-/// a subprogram this compile registered, since materialize_trivial_callees ()
-/// and the tier-2 inliner both translate through method_to_llvm (), which
-/// gives every function one; a marker that does not means our own emission or
-/// reader is wrong.
+/// compile is building, otherwise a folded body's own MonoMethod*, the same
+/// convention eh-gather.cpp's landing-pad owner uses. A marker never shares
+/// its DILocation with the code around it, unlike a landing pad's protected
+/// range, so this reads it straight off the marker instruction's own scope,
+/// through the same id map il_debug_subprogram_ids () hands out. A marker's
+/// location must always name a subprogram this compile registered, since
+/// materialize_trivial_callees () and the tier-2 inliner both translate
+/// through method_to_llvm (), which gives every function one. A marker that
+/// does not means our own emission or reader is wrong.
 uint64_t
 marker_owner (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self,
              const MachineInstr &mi)

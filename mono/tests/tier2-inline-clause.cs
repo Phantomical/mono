@@ -14,9 +14,9 @@ using System.Runtime.CompilerServices;
  * stays live: Root () forwards its own takeClause parameter, which the fold
  * cannot see a fixed value for, so the clause runs on some calls and not
  * others. A finally clause that stays live is not the dead weight
- * DiesOnFold ()'s is, but it still folds - eh-gather.cpp resolves such a
- * clause's owner off the landing pad it reaches codegen on, so the fold
- * merges the clause into Root ()'s own table instead of needing it gone.
+ * DiesOnFold ()'s is, but it still folds - eh-gather.cpp reads such a
+ * clause's owner straight off its own marker, so the fold merges the clause
+ * into Root ()'s own table instead of needing it gone.
  *
  * NoLandingPad ()'s clause has no landing pad at all: its try region calls
  * nothing, so the front end never builds one. Its finally body still runs on

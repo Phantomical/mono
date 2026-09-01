@@ -52,8 +52,8 @@ struct MonoLsdaEntry {
 	/// merge a live clause in and what every entry still has today. Otherwise
 	/// (uint64_t)(uintptr_t) of a folded body's own MonoMethod*, same
 	/// convention as jit.hpp's IlInlineRow::callee. build_ex_info () resolves a
-	/// non-zero owner through the OwnerHeader a caller opts in with; without
-	/// one, any entry naming one is declined.
+	/// non-zero owner through the OwnerHeader a caller opts in with. Left
+	/// unset, any entry naming one is declined.
 	std::uint64_t owner = 0;
 };
 

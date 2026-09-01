@@ -26,13 +26,13 @@ namespace mono {
 ///
 /// The v3 form is a 3-word {i32 clause_index, i32 kind, i64 owner} struct.
 /// clause_marker () and resume_marker () (method-to-llvm/exceptions.cpp)
-/// build it. owner is which method clause_index indexes into -
+/// build it. owner is which method clause_index indexes into:
 /// (uint64_t)(uintptr_t) of a MonoMethod*, the same convention jit.hpp's
-/// IlInlineRow::callee uses - read here instead of off ambient code position,
-/// because a fold can move a folded body's own code under a clause of the
-/// root's that was never that body's own (innermost_try ()'s widening in
-/// eh-gather.cpp does exactly that, on purpose), so nothing about where the
-/// protected code ends up answers which method a clause belongs to.
+/// IlInlineRow::callee uses. It is read here rather than off ambient code
+/// position, because a fold can move a folded body's own code under a clause
+/// of the root's that was never that body's own - innermost_try ()'s
+/// widening in eh-gather.cpp does exactly that, on purpose. So nothing about
+/// where the protected code ends up answers which method a clause belongs to.
 ///
 /// The v2 form is a 2-word {i32 clause_index, i32 kind} struct, still built by
 /// unwind_marker () (passes/tier-counter.cpp) for a pad that is always the

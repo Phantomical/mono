@@ -199,17 +199,18 @@ has_own_clause (const Function &callee)
 }
 
 /// Whether every clause on every landing pad callee's own translation wrote
-/// is a finally or a fault, decoded the same way eh-gather.cpp reads a
-/// landing pad's TypeIds back at the machine level - the front end publishes
-/// every clause kind through the same smuggled global, catch and filter
-/// included, so this is the one place that tells them apart before codegen.
+/// is a finally or a fault. It decodes each one the way eh-gather.cpp reads a
+/// landing pad's TypeIds back at the machine level, because the front end
+/// publishes every clause kind - catch and filter included - through the
+/// same smuggled global, so this is the one place that tells them apart
+/// before codegen.
 ///
 /// A catch or filter clause answers no, the same as a decode this pass does
-/// not understand. What "merged" describes is scoped by this function alone
-/// - a decline here still leaves clause_survives_fold ()'s own trial as the
-/// correctness gate underneath, and eh-gather.cpp's own decode of the same
-/// marker is what actually places a merged clause once this has let the
-/// real fold through.
+/// not understand. What "merged" describes is scoped to this function alone:
+/// a decline here still leaves clause_survives_fold ()'s own trial as the
+/// correctness gate underneath, and it is eh-gather.cpp's own decode of the
+/// same marker that places a merged clause once this has let the real fold
+/// through.
 bool
 finally_or_fault_only (const Function &callee)
 {
@@ -467,11 +468,11 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 			/*
 			 * A surviving finally or fault clause falls through to the real
-			 * fold below rather than being declined. eh-gather.cpp resolves
-			 * such a clause's owner off the landing pad it eventually reaches
-			 * codegen on, whichever function actually wrote it, so nothing
-			 * here has to tell it a merge happened - the fold itself is what
-			 * makes one.
+			 * fold below rather than being declined. eh-gather.cpp reads such
+			 * a clause's owner straight off its own marker, whichever
+			 * function's landing pad it ends up on after codegen, so nothing
+			 * here has to flag that a merge happened - the fold itself is
+			 * what makes one.
 			 */
 
 			/*

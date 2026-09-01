@@ -197,10 +197,9 @@ struct ClauseHeader {
 
 /*
  * Resolves an entry's owner to the IL clause table clause_index indexes into,
- * caching each distinct owner build_ex_info () asks for. Every caller starts
- * seeded with owner 0, the method the whole join is for - the only owner
- * every entry named before a fold could merge a live clause in from
- * elsewhere, and still what every entry names today.
+ * caching each distinct owner build_ex_info () asks for. Seeded with owner 0
+ * against the clauses and num_clauses the constructor is given - the method
+ * the whole join is for (MonoLsdaEntry::owner, mono_lsda.hpp).
  *
  * A non-zero owner past that seed is answered by owner_header, at most once
  * each. header_for () returns nullptr for one owner_header cannot answer -

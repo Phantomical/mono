@@ -227,7 +227,7 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 	 * read off the function's own subprogram rather than off any one
 	 * instruction. It never needs a fold's boundary respected the way a
 	 * per-instruction answer would, because it is a property of the
-	 * function, not of a position in it - see where it is used, below, for
+	 * function, not of a position in it. See where it is used, below, for
 	 * why an instruction's own position cannot answer this question at all.
 	 */
 	std::uint64_t self = ids_.lookup (mf.getFunction ().getSubprogram ());
@@ -370,10 +370,10 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 			/*
 			 * Which method clause_index indexes into, decoded off the
 			 * clause's own marker rather than off anything nearby in the
-			 * code: a fold can move a folded body's own code under a
-			 * clause of the root's that was never that body's own
-			 * (innermost_try ()'s widening above does exactly that, on
-			 * purpose), so ambient code position answers a different
+			 * code. A fold can move a folded body's own code under a
+			 * clause of the root's that was never that body's own -
+			 * innermost_try ()'s widening above does exactly that, on
+			 * purpose - so ambient code position answers a different
 			 * question than clause ownership does. ids_ answers with the
 			 * compile's own id for the compile's own clause, same as any
 			 * other method this compile translated, so the comparison
