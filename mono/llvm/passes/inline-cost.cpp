@@ -2257,6 +2257,39 @@ void InlineCostCallAnalyzer::updateThreshold(CallBase &Call, Function &Callee) {
   }
 }
 
+/// Returns whether Pred(LHS, RHS) already holds at CxtI, or nullopt if the
+/// blocks above it do not say. isImpliedByDomCondition (ValueTracking.h)
+/// checks one such hop. A folded type-test cascade -- mono's own
+/// `cast_answer ()` among them -- chains several one-predecessor blocks in a
+/// row, so this walks the same chain further before it gives up.
+static std::optional<bool>
+isImpliedByDomChain(CmpInst::Predicate Pred, Value *LHS, Value *RHS,
+                    const Instruction *CxtI, const DataLayout &DL) {
+  using namespace llvm::PatternMatch;
+
+  const unsigned MaxHops = 8;
+  const BasicBlock *BB = CxtI->getParent();
+
+  for (unsigned Hop = 0; Hop < MaxHops; ++Hop) {
+    const BasicBlock *PredBB = BB->getSinglePredecessor();
+    if (!PredBB)
+      return std::nullopt;
+
+    Value *Cond;
+    BasicBlock *TrueBB, *FalseBB;
+    if (!match(PredBB->getTerminator(), m_Br(m_Value(Cond), TrueBB, FalseBB)) ||
+        TrueBB == FalseBB)
+      return std::nullopt;
+
+    if (std::optional<bool> Implied =
+            isImpliedCondition(Cond, Pred, LHS, RHS, DL, TrueBB == BB))
+      return Implied;
+
+    BB = PredBB;
+  }
+  return std::nullopt;
+}
+
 bool CallAnalyzer::visitCmpInst(CmpInst &I) {
   Value *LHS = I.getOperand(0), *RHS = I.getOperand(1);
   // First try to handle simplified comparisons.
@@ -2299,11 +2332,29 @@ bool CallAnalyzer::visitCmpInst(CmpInst &I) {
   // If the comparison is an equality comparison with null, we can simplify it
   // if we know the value (argument) can't be null
   if (I.isEquality() && isa<ConstantPointerNull>(I.getOperand(1))) {
-    if (isKnownNonNullInCallee(I.getOperand(0))) {
+    // folded_type_test ()'s Yes answer substitutes a call's own operand for
+    // the call, so isKnownNonNullInCallee () needs Settled to see through
+    // it. Try I.getOperand (0) too: on a formal argument used directly,
+    // Settled instead resolves to the caller's own operand, which carries no
+    // attribute of this call site's.
+    Value *Settled = getSimplifiedValueUnchecked(I.getOperand(0));
+    if (isKnownNonNullInCallee(I.getOperand(0)) ||
+        (Settled && isKnownNonNullInCallee(Settled))) {
       bool IsNotEqual = I.getPredicate() == CmpInst::ICMP_NE;
       SimplifiedValues[&I] = IsNotEqual ? ConstantInt::getTrue(I.getType())
                                         : ConstantInt::getFalse(I.getType());
       return true;
+    }
+    // Try both: a dominating check may have named I.getOperand (0) directly,
+    // or the operand a mono fold substituted in as Settled.
+    for (Value *Operand : {I.getOperand(0), Settled}) {
+      if (!Operand)
+        continue;
+      if (std::optional<bool> Implied = isImpliedByDomChain(
+              I.getPredicate(), Operand, I.getOperand(1), &I, DL)) {
+        SimplifiedValues[&I] = ConstantInt::getBool(I.getType(), *Implied);
+        return true;
+      }
     }
     // Implicit null checks act as unconditional branches and their comparisons
     // should be treated as simplified and free of cost.
