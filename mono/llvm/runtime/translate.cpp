@@ -646,8 +646,82 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 		}
 	}
 
-	std::vector<ProfileCounters> layout =
-		MonoJit::optimize (*module, shared.tier, shared.profile);
+	/*
+	 * Without a compile in scope, current_compile ().domain is null, and
+	 * fold_dispatch_sites (), fold_object_vtables () and initonly_static_read ()
+	 * all leave their site alone. This is where nearly every tier-1 compile
+	 * happens. Without the closures below, a tier-1 body and a tier-2 compile
+	 * of the same method can fold different sites and hash different CFGs.
+	 *
+	 * One pair of closures serves the whole batch. publish_callee closes over
+	 * only the domain (see member->publish_callee above), so it answers the
+	 * same for every member. A symbol named here resolves against the shared
+	 * module_symbols, whichever member's function asked for it.
+	 */
+	std::vector<ExternalSymbol> late_externals;
+	auto resolve = [&] (ArrayRef<ExternalSymbol> named) {
+		timing::Scope timed (timing::Phase::resolve);
+
+		return resolve_externals (*shared.jit, shared.domain, named,
+		                          shared.publish_callee, module_symbols);
+	};
+
+	auto publish_declaration = [&] (llvm::Function &decl, MonoMethod *callee) -> llvm::Function * {
+		llvm::Module &holder = *decl.getParent ();
+		std::string published = stub_symbol (callee);
+		size_t from = late_externals.size ();
+
+		late_externals.push_back (
+			{ decl.getName ().str (), ExternalSymbol::Kind::Code, callee });
+
+		Error named = bind_symbols (holder);
+		if (!named)
+			named = resolve (ArrayRef (late_externals).slice (
+				from, late_externals.size () - from));
+
+		if (named) {
+			consumeError (std::move (named));
+			late_externals.resize (from);
+			return nullptr;
+		}
+
+		return holder.getFunction (published);
+	};
+
+	std::unordered_set<MonoClass *> refused_vtables;
+	auto name_vtable = [&] (llvm::Module &holder, MonoClass *klass) -> Constant * {
+		if (refused_vtables.count (klass) != 0)
+			return nullptr;
+
+		MethodLLVMEmitter namer (&holder, members.front ()->cfg->get (),
+		                         members.front ()->method, &late_externals);
+		size_t from = late_externals.size ();
+		Constant *symbol = namer.vtable_for (klass);
+		Error named = symbol != nullptr
+		                      ? resolve (ArrayRef (late_externals).slice (
+					      from, late_externals.size () - from))
+		                      : Error::success ();
+
+		if (symbol == nullptr || named) {
+			consumeError (std::move (named));
+			late_externals.resize (from);
+			refused_vtables.insert (klass);
+			return nullptr;
+		}
+
+		return symbol;
+	};
+
+	std::vector<ProfileCounters> layout;
+
+	{
+		// Scoped to the call the closures above are for. give_up () below
+		// can run a single-method compile of its own, which takes this same
+		// thread's current_compile () for that compile in turn.
+		CompileScope compiling ({ shared.domain, publish_declaration, name_vtable });
+
+		layout = MonoJit::optimize (*module, shared.tier, shared.profile);
+	}
 
 	if (Error err = inline_copies_stripped (*module)) {
 		consumeError (std::move (err));
