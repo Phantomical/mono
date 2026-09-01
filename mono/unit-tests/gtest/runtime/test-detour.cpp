@@ -595,12 +595,19 @@ TEST_F (MethodDetour, DetourCallsBackIntoManagedAndThrows)
 
 	mono_install_method_detour (detoured, domain, (void *) detoured_body_calls_managed);
 
-	mono_runtime_invoke_checked (caller, nullptr, nullptr, error);
+	/*
+	 * mono_runtime_try_invoke (), not mono_runtime_invoke_checked (): a null
+	 * exc there only gets a substitute under a coop suspend policy
+	 * (mono_jit_runtime_invoke ()'s catchExcInMonoError), and this backend's
+	 * default is preemptive. A real exc is what puts the runtime-invoke
+	 * wrapper on its own protected path instead of the bare, uncaught one.
+	 */
+	MonoObject *exc_obj = nullptr;
+	mono_runtime_try_invoke (caller, nullptr, nullptr, &exc_obj, error);
 
-	ASSERT_FALSE (is_ok (error))
+	mono_error_assert_ok (error);
+	ASSERT_NE (nullptr, exc_obj)
 		<< "the throw from beneath the detour never reached the invoke";
-	MonoException *exc = mono_error_convert_to_exception (error);
-	ASSERT_NE (nullptr, exc);
 	EXPECT_STREQ ("InvalidOperationException",
-	             m_class_get_name (mono_object_class ((MonoObject *) exc)));
+	             m_class_get_name (mono_object_class (exc_obj)));
 }
