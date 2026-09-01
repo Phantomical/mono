@@ -54,6 +54,19 @@ struct CompileState {
 	/// cannot answer for the class: it is open, or laying it out failed. The
 	/// caller then has to leave its site as it was.
 	llvm::function_ref<llvm::Constant *(llvm::Module &m, MonoClass *klass)> vtable_of;
+
+	/// Whether this compile's pipeline is past the point where
+	/// PGOInstrumentationGen or PGOInstrumentationUse took the module's CFG
+	/// hash.
+	///
+	/// A fold reading an initonly static's value must not answer before this
+	/// is true, or a tier-1 compile and its tier-2 recompile of the same body
+	/// can hash two different CFGs and lose the tier-1 counts. Checked by
+	/// initonly_static_read () directly. ClassInitWarmPass and
+	/// StaticConstFoldPass ask the same live question for a class's init flag,
+	/// and stay safe without reading this flag at all: the pipeline places
+	/// both only behind the pass that sets it (`pipelines.cpp`).
+	bool past_pgo_hash = false;
 };
 
 /// This thread's compile. Empty outside one, which every reader has to take as

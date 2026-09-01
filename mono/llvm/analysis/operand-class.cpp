@@ -197,9 +197,17 @@ initonly_static_value (MonoDomain *domain, MonoClassField *field)
 
 /// The object \p v reads out of an initonly static, or null where \p v is not
 /// such a read or this compile cannot answer for it.
+///
+/// Refused before CompileState::past_pgo_hash, so this cannot fold on one
+/// class for a tier-1 compile and a different one for its tier-2 recompile.
+/// It answers once each tier's own pipeline reaches this point again after
+/// the hash is taken.
 MonoObject *
 initonly_static_read (const Value *v)
 {
+	if (!current_compile ().past_pgo_hash)
+		return nullptr;
+
 	MonoClassField *field = initonly_static_field (v);
 
 	return field != nullptr ? initonly_static_value (current_compile ().domain, field)

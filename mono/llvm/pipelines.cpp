@@ -2,6 +2,7 @@
 
 #include "analysis/constant-values.hpp"
 #include "arch/arch.hpp"
+#include "compile-state.hpp"
 #include "jit.hpp"
 #include "passes/builtins.hpp"
 #include "passes/clamp-frame-align.hpp"
@@ -186,6 +187,18 @@ public:
 
 		// The counts every later question reads are what this moves.
 		return llvm::PreservedAnalyses::none ();
+	}
+};
+
+/// Sets CompileState::past_pgo_hash. Placed unconditionally, right after
+/// where PGOInstrumentationGen or PGOInstrumentationUse would run: with
+/// PTO.EnablePGO off there was never a hash for a fold behind this to move.
+class MarkPastPgoHashPass : public llvm::PassInfoMixin<MarkPastPgoHashPass> {
+public:
+	llvm::PreservedAnalyses run (llvm::Module &, llvm::ModuleAnalysisManager &)
+	{
+		current_compile ().past_pgo_hash = true;
+		return llvm::PreservedAnalyses::all ();
 	}
 };
 
@@ -485,6 +498,8 @@ MonoPassBuilder::buildTier1Pipeline ()
 	if (PTO.EnablePGO)
 		MPM.addPass (buildPgoInstrumentationPipeline ());
 
+	MPM.addPass (MarkPastPgoHashPass ());
+
 	/*
 	 * Behind the instrumentation, so that both tiers hash a CFG with these
 	 * calls still opaque. Tier 2 moves LowerStage::casts earlier; see
@@ -555,6 +570,8 @@ MonoPassBuilder::buildTier2SimplificationPipeline ()
 
 	if (PTO.EnablePGO)
 		MPM.addPass (buildPgoUsePipeline ());
+
+	MPM.addPass (MarkPastPgoHashPass ());
 
 	// Behind the counts, so that the tier the profile was gathered at and the
 	// tier reading it back hash the same CFG. A check this drops sits on an
@@ -719,6 +736,8 @@ MonoPassBuilder::buildTier2Pipeline ()
 	// Again, because unrolling and jump threading copied whatever the run in
 	// the common pipeline left standing.
 	FPM.addPass (mono::ClassInitPass ());
+	FPM.addPass (mono::ClassInitWarmPass ());
+	FPM.addPass (mono::StaticConstFoldPass ());
 	FPM.addPass (mono::RgctxDedupPass ());
 
 	// Last, because what it repairs is the pipeline's own doing.
