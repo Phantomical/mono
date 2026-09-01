@@ -487,6 +487,15 @@ the same way as the tiering ones above:
   rather than code size, because LLVM's own threshold decides what is worth folding.
   Zero leaves tier 2 with the pre-pass alone, which separates a cost-model defect from a
   pre-pass one.
+- `--llvm-opt=-mono-inline-threshold=<n>` (`passes/inline-cost.cpp`) — the tier-2 cost
+  model's base budget, default 225. `-mono-inlinedefault-threshold=<n>` sets the same
+  field and is what wins when `-mono-inline-threshold` is not given explicitly.
+  `updateThreshold ()` only ever narrows this per site, through `min ()` against
+  `-mono-inline-cold-callsite-threshold` (default 45) for a cold one and `max ()`
+  against `-mono-inlinehint-threshold` (default 325) for a hinted one, and it zeroes
+  every bonus on the cold arm besides. Raising the cold threshold past the base buys
+  nothing until the base is raised too — `#301` and `#321` both named a cold threshold
+  of 400 with the base left at 225, and both got 225.
 - `--llvm-opt=-mono-inline-depth=<n>` (`runtime/options.cpp`) — folds deep past a method
   the cost model may go, default 4. A call graph with a cycle never runs out of sites, so
   the loop needs this whatever the budget says.
