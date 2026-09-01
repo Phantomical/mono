@@ -90,6 +90,10 @@ llvm::cl::opt<bool> DynCallsOpt (
 	"mono-dyn-calls", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Let the interpreter call compiled code through a dyn-call plan"));
 
+llvm::cl::opt<bool> TagNonPointerInvariantGroupOpt (
+	"mono-invariant-group-nonptr", llvm::cl::Hidden, llvm::cl::init (false),
+	llvm::cl::desc ("Tag a non-pointer array-header read with !invariant.group"));
+
 llvm::cl::opt<unsigned> Tier1ThresholdOpt (
 	"mono-tier1-threshold", llvm::cl::Hidden, llvm::cl::init (10),
 	llvm::cl::desc ("Calls an interpreted method takes before it is compiled"));
@@ -332,6 +336,12 @@ bool
 dyn_calls ()
 {
 	return DynCallsOpt;
+}
+
+bool
+tag_non_pointer_invariant_group ()
+{
+	return TagNonPointerInvariantGroupOpt;
 }
 
 llvm::FastMathFlags

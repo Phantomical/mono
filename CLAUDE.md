@@ -469,6 +469,13 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   interpreter's dyn-call plan, so every jit call back into compiled code goes through a
   `gsharedvt_out_sig` wrapper instead. On by default. `mono/tests/dyn-call.cs` gates both
   arms.
+- `--llvm-opt=-mono-invariant-group-nonptr=<1|true>` (`runtime/options.cpp`) — tag a
+  non-pointer array-header read (`max_length`, a dimension's length or lower bound) with
+  `!invariant.group`, the same as the bounds pointer always carries. Off by default,
+  unlike every other knob in this list: `llvm/llvm-project#219885` crashes GVN reading a
+  dangling instruction out of its own cache for exactly this shape, on the LLVM this
+  backend builds against. Turn it on once the fix, `#219929`, ships in the installed
+  LLVM.
 
 Inlining. `MONO_LLVM_JIT_TRACE=1` prints a line for each fold, which is the only place a
 fold is visible from outside. Every knob below is an LLVM command-line option, reached

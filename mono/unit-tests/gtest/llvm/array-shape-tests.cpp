@@ -10,6 +10,7 @@
  * are made at.
  */
 
+#include "cl-opt-override.hpp"
 #include "passes/array-shape.hpp"
 
 #include "analysis/constant-values.hpp"
@@ -121,8 +122,6 @@ struct ShapeModule {
 	}
 };
 
-/// Dimension zero is read out of the array: the bounds pointer, then either
-/// max_length or the first dimension's length.
 /// The managers a fold asks its analyses through, held for as long as the call.
 struct Analyses {
 	ModuleAnalysisManager mam;
@@ -144,8 +143,27 @@ struct Analyses {
 	}
 };
 
+/// Dimension zero is read out of the array: the bounds pointer, then either
+/// max_length or the first dimension's length. Only the bounds pointer is
+/// tagged while `tag_non_pointer_invariant_group ()` is off: `max_length` and
+/// the first dimension's length are not pointers.
 TEST (ArrayShape, ZeroReadsTheHeader)
 {
+	ShapeModule m (array_shape_length, 0);
+	unsigned total = 0, tagged = 0;
+
+	ASSERT_NO_FATAL_FAILURE (m.run ());
+	m.count_loads (&total, &tagged);
+	EXPECT_EQ (total, 3u);
+	EXPECT_EQ (tagged, 1u);
+	EXPECT_EQ (m.count_calls (), 0u);
+}
+
+/// The two non-pointer reads join the bounds pointer once
+/// `-mono-invariant-group-nonptr` turns the non-pointer case back on.
+TEST (ArrayShape, ZeroReadsTheHeaderFullyTaggedWhenEnabled)
+{
+	BoolOptionOverride enabled ("mono-invariant-group-nonptr", true);
 	ShapeModule m (array_shape_length, 0);
 	unsigned total = 0, tagged = 0;
 
@@ -157,9 +175,26 @@ TEST (ArrayShape, ZeroReadsTheHeader)
 }
 
 /// A lower bound is zero where there is no bounds vector, so that arm reads
-/// nothing.
+/// nothing. The remaining read, the lower bound itself, is not a pointer, so
+/// only the bounds pointer is tagged while
+/// `tag_non_pointer_invariant_group ()` is off.
 TEST (ArrayShape, ZeroLowerBoundReadsTheBoundsOnly)
 {
+	ShapeModule m (array_shape_lower_bound, 0);
+	unsigned total = 0, tagged = 0;
+
+	ASSERT_NO_FATAL_FAILURE (m.run ());
+	m.count_loads (&total, &tagged);
+	EXPECT_EQ (total, 2u);
+	EXPECT_EQ (tagged, 1u);
+	EXPECT_EQ (m.count_calls (), 0u);
+}
+
+/// The lower-bound read joins the bounds pointer once
+/// `-mono-invariant-group-nonptr` turns the non-pointer case back on.
+TEST (ArrayShape, ZeroLowerBoundFullyTaggedWhenEnabled)
+{
+	BoolOptionOverride enabled ("mono-invariant-group-nonptr", true);
 	ShapeModule m (array_shape_lower_bound, 0);
 	unsigned total = 0, tagged = 0;
 

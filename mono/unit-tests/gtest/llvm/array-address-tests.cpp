@@ -12,6 +12,7 @@
  * catches it.
  */
 
+#include "cl-opt-override.hpp"
 #include "passes/array-address.hpp"
 
 #include <llvm/Analysis/ValueTracking.h>
@@ -102,9 +103,25 @@ struct AddressModule {
 	}
 };
 
-/// A szarray has no bounds vector, so the check reads only max_length.
-TEST (ArrayAddress, SzarrayLengthIsInvariant)
+/// A szarray has no bounds vector, so the check reads only max_length, which
+/// is not a pointer and so goes untagged while
+/// `tag_non_pointer_invariant_group ()` is off.
+TEST (ArrayAddress, SzarrayLengthUntaggedByDefault)
 {
+	AddressModule m (1, szarray_spec);
+	unsigned total = 0, tagged = 0;
+
+	ASSERT_NO_FATAL_FAILURE (m.run ());
+	m.count_loads (&total, &tagged);
+	EXPECT_EQ (total, 1u);
+	EXPECT_EQ (tagged, 0u);
+}
+
+/// The same read is tagged once `-mono-invariant-group-nonptr` turns the
+/// non-pointer case back on.
+TEST (ArrayAddress, SzarrayLengthTaggedWhenEnabled)
+{
+	BoolOptionOverride enabled ("mono-invariant-group-nonptr", true);
 	AddressModule m (1, szarray_spec);
 	unsigned total = 0, tagged = 0;
 
@@ -115,9 +132,24 @@ TEST (ArrayAddress, SzarrayLengthIsInvariant)
 }
 
 /// A rectangular array reads the bounds pointer, then a length and a lower
-/// bound for each of the two dimensions.
-TEST (ArrayAddress, RectangularHeaderIsInvariant)
+/// bound for each of the two dimensions. Only the bounds pointer is tagged
+/// while `tag_non_pointer_invariant_group ()` is off.
+TEST (ArrayAddress, RectangularHeaderPartiallyTaggedByDefault)
 {
+	AddressModule m (2, rect_spec);
+	unsigned total = 0, tagged = 0;
+
+	ASSERT_NO_FATAL_FAILURE (m.run ());
+	m.count_loads (&total, &tagged);
+	EXPECT_EQ (total, 5u);
+	EXPECT_EQ (tagged, 1u);
+}
+
+/// The four non-pointer reads join the bounds pointer once
+/// `-mono-invariant-group-nonptr` turns the non-pointer case back on.
+TEST (ArrayAddress, RectangularHeaderFullyTaggedWhenEnabled)
+{
+	BoolOptionOverride enabled ("mono-invariant-group-nonptr", true);
 	AddressModule m (2, rect_spec);
 	unsigned total = 0, tagged = 0;
 

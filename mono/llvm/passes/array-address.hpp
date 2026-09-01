@@ -14,7 +14,10 @@
 #ifndef MONO_LLVM_PASSES_ARRAY_ADDRESS_HPP
 #define MONO_LLVM_PASSES_ARRAY_ADDRESS_HPP
 
+#include "../runtime/options.hpp"
+
 #include <llvm/ADT/StringRef.h>
+#include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Metadata.h>
@@ -29,7 +32,8 @@ namespace mono {
 constexpr llvm::StringRef array_address_prefix = "mono.array.address.";
 constexpr llvm::StringRef array_address_attribute = "mono-array-address";
 
-/// Marks a read of the array header as `!invariant.group`.
+/// Marks a read of the array header as `!invariant.group`, unless it is a
+/// non-pointer read and `tag_non_pointer_invariant_group ()` is off.
 ///
 /// The header is the `bounds` pointer, `max_length`, and the length and the
 /// lower bound of each dimension. `mono_gc_alloc_vector ()` and
@@ -48,6 +52,9 @@ constexpr llvm::StringRef array_address_attribute = "mono-array-address";
 inline void
 mark_array_header_load (llvm::LoadInst *load)
 {
+	if (!load->getType ()->isPointerTy () && !tag_non_pointer_invariant_group ())
+		return;
+
 	load->setMetadata (llvm::LLVMContext::MD_invariant_group,
 	                   llvm::MDNode::get (load->getContext (), {}));
 }

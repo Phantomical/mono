@@ -154,6 +154,12 @@ bool thread_static_fast_path ();
 /// else.
 bool dyn_calls ();
 
+/// Whether a non-pointer array-header read — `max_length`, or a dimension's
+/// length or lower bound — is tagged `!invariant.group`.
+///
+/// Disabled by default because of llvm/llvm-project#219885.
+bool tag_non_pointer_invariant_group ();
+
 /// The fast-math flags the float operations a method asks for carry.
 ///
 /// Empty unless --ffast-math is on the command line, which is the only way to
