@@ -1030,6 +1030,14 @@ set(MONO_TESTS_TIER2_INLINE_NULLCHECK_SRC
   tier2-inline-nullcheck.cs
 )
 
+# The raising arm mono-inline-noreturn-free leaves out of a callee's cost,
+# on a guard shaped as an ordinary comparison rather than a folded null
+# check. It runs twice, on the default and with the option off, and reads
+# the variable to know which arm it is in.
+set(MONO_TESTS_TIER2_INLINE_NORETURN_SRC
+  tier2-inline-noreturn.cs
+)
+
 # Whether the cost model folds a clause-bearing callee. It runs twice, on the
 # default and with the fold off, and reads MONO_FOLD_CLAUSES to know which arm
 # it is in.

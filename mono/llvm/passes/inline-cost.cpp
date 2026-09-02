@@ -3162,6 +3162,14 @@ InlineResult CallAnalyzer::analyze() {
           findDeadBlocks(BB, NextBB);
           continue;
         }
+        // An arm that only reaches a throw is priced the same way, whatever
+        // branch shape it grew from.
+        if (BasicBlock *NextBB = mono::noreturn_free_successor(*BI)) {
+          BBWorklist.insert(NextBB);
+          KnownSuccessors[BB] = NextBB;
+          findDeadBlocks(BB, NextBB);
+          continue;
+        }
       }
     } else if (SwitchInst *SI = dyn_cast<SwitchInst>(TI)) {
       Value *Cond = SI->getCondition();

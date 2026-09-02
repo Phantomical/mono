@@ -22,16 +22,18 @@ using System.Runtime.CompilerServices;
  * Root () that it was folded at, and a body that was really called reports an
  * offset into itself.
  *
- * Walk () holds eighteen dereferences, at code size past the 128-byte default
- * -mono-inline-cost-il-limit, so both arms raise it. With
- * -mono-inline-cost-full, the option costs the body 380 and leaving it off
- * costs 1010 -- the 630 gap is the eighteen raising arms, each an
- * InvalidOperationException-shaped throw once counted. Both figures are past
- * 225, the base threshold's default, and raising -mono-inline-cold-callsite-
- * threshold alone would not help: MinIfValid takes the lesser of it and the
- * base threshold. So the suite raises both -- -mono-inlinedefault-threshold
- * at 1200 together with -mono-inline-cold-callsite-threshold at 700 leave
- * 320 either side of both costs. Re-measure all of it when this starts
+ * Walk () holds eighteen dereferences and one explicit throw, at code size
+ * past the 128-byte default -mono-inline-cost-il-limit, so both arms raise
+ * it. mono-inline-noreturn-free generalizes this option past the null-check
+ * shape, so it frees the same eighteen arms on its own and the explicit
+ * throw besides -- the off arm below turns both off to see every one of
+ * them counted. With -mono-inline-cost-full, the defaults cost the body 255
+ * and turning both options off costs 1010. Raising
+ * -mono-inline-cold-callsite-threshold alone would not help: MinIfValid
+ * takes the lesser of it and the base threshold, 225 by default. So the
+ * suite raises both -- -mono-inlinedefault-threshold at 1200 together with
+ * -mono-inline-cold-callsite-threshold at 700 puts the effective budget at
+ * 700, between the two costs. Re-measure both of them when this starts
  * failing on one arm:
  *
  *   MONO_LLVM_JIT_TRACE=1 mono-sgen --llvm-opt=-mono-tier2-threshold=0 \
@@ -42,7 +44,8 @@ using System.Runtime.CompilerServices;
  *     tier2-inline-nullcheck.exe
  *
  * That gives the on arm's cost. Add
- * --llvm-opt=-mono-inline-implicit-null-free=false for the off arm's.
+ * --llvm-opt=-mono-inline-implicit-null-free=false
+ * --llvm-opt=-mono-inline-noreturn-free=false for the off arm's.
  * -mono-inline-cost-full is what makes the printed cost the whole cost --
  * the model stops adding once it is past the budget, so the cost a plain run
  * prints is cut off there.

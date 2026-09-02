@@ -15,6 +15,8 @@
 #include "mono/metadata/tabledefs.h"
 
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/BlockFrequencyInfo.h>
 #include <llvm/Analysis/CaptureTracking.h>
@@ -22,6 +24,7 @@
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/CFG.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalValue.h>
@@ -45,6 +48,11 @@ cl::opt<bool> ImplicitNullCheckFree (
 	"mono-inline-implicit-null-free", cl::Hidden, cl::init (true),
 	cl::desc ("Leave the raising arm of a folded null check out of a callee's "
 	          "cost"));
+
+cl::opt<bool> NoreturnArmFree (
+	"mono-inline-noreturn-free", cl::Hidden, cl::init (true),
+	cl::desc ("Leave an arm whose every exit reaches a noreturn call out of a "
+	          "callee's cost"));
 
 cl::opt<bool> DispatchIsALoad (
 	"mono-inline-dispatch-is-a-load", cl::Hidden, cl::init (true),
@@ -631,6 +639,57 @@ implicit_null_check_successor (const BranchInst &branch)
 	default:
 		return nullptr;
 	}
+}
+
+/// Whether every path leaving \p block ends at a noreturn call.
+///
+/// `collect_write_backs ()` (tier-counter.cpp) reads the same shape: an
+/// `unreachable` behind a call marked `doesNotReturn ()` is a throw that
+/// never returns to the frame.
+bool
+reaches_only_noreturn (const BasicBlock &block, SmallPtrSetImpl<const BasicBlock *> &on_path)
+{
+	// A block already on this path closes a cycle without leaving it, so it
+	// answers the same as the call that put it there.
+	if (!on_path.insert (&block).second)
+		return true;
+
+	const Instruction *terminator = block.getTerminator ();
+	bool result;
+
+	if (isa<UnreachableInst> (terminator)) {
+		const auto *call = dyn_cast_or_null<CallInst> (terminator->getPrevNode ());
+		result = call != nullptr && call->doesNotReturn ();
+	} else if (terminator->getNumSuccessors () == 0) {
+		result = false; // a ret or a resume actually leaves this subtree
+	} else {
+		result = llvm::all_of (successors (terminator), [&] (const BasicBlock *succ) {
+			return reaches_only_noreturn (*succ, on_path);
+		});
+	}
+
+	on_path.erase (&block);
+	return result;
+}
+
+BasicBlock *
+noreturn_free_successor (const BranchInst &branch)
+{
+	if (!NoreturnArmFree || !branch.isConditional ())
+		return nullptr;
+
+	BasicBlock *first = branch.getSuccessor (0), *second = branch.getSuccessor (1);
+	SmallPtrSet<const BasicBlock *, 8> on_path;
+
+	if (reaches_only_noreturn (*second, on_path))
+		return first;
+
+	on_path.clear ();
+
+	if (reaches_only_noreturn (*first, on_path))
+		return second;
+
+	return nullptr;
 }
 
 int

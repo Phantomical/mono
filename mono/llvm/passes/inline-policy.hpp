@@ -91,6 +91,14 @@ llvm::Value *folded_type_test (llvm::CallBase &call, SettledValue settled);
 /// A caller can walk that successor alone and leave the raising arm uncounted.
 llvm::BasicBlock *implicit_null_check_successor (const llvm::BranchInst &branch);
 
+/// The successor of \p branch that a run reaches, or null if neither arm's
+/// every path ends at a noreturn call.
+///
+/// Generalizes implicit_null_check_successor () past the null-check shape: a
+/// caller can walk the named successor alone and leave the arm that only
+/// throws uncounted.
+llvm::BasicBlock *noreturn_free_successor (const llvm::BranchInst &branch);
+
 /// What to add to the threshold a call site is weighed against, in the units
 /// the model costs an instruction in.
 ///
