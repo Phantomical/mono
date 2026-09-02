@@ -719,6 +719,14 @@ mono_runtime_suite(runtime-tier2-inline-clause-off TESTS ${_tier2_inline_clause}
                    ENV "MONO_FOLD_CLAUSES=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-fold-clauses=0")
 
+# Whether a candidate the cost model materializes is weighed on its own
+# tier-1 record or the root's. The suite drives both promotions itself, so
+# self-promotion is off, and the trivial pre-pass is off so the fold the
+# test reads is never that one's instead.
+_mono_exe_list(_tier2_inline_profile_context ${MONO_TESTS_TIER2_INLINE_PROFILE_CONTEXT_SRC})
+mono_runtime_suite(runtime-tier2-inline-profile-context TESTS ${_tier2_inline_profile_context}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
+
 # A filter-bearing callee can never fold -- getInlineCost refuses its
 # llvm.localescape outright -- so both arms expect the same refusal.
 # PromoteNow drives the compiles the same way runtime-tier2-inline-clause does.

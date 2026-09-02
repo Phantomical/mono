@@ -1037,6 +1037,12 @@ set(MONO_TESTS_TIER2_INLINE_CLAUSE_SRC
   tier2-inline-clause.cs
 )
 
+# Whether a candidate the cost model materializes is weighed on its own
+# record or the root's. Single arm: nothing turns this off.
+set(MONO_TESTS_TIER2_INLINE_PROFILE_CONTEXT_SRC
+  tier2-inline-profile-context.cs
+)
+
 # Whether the cost model can weigh a filter-bearing callee without aborting
 # the compile. It runs twice, on the default and with
 # MONO_LLVM_JIT_FOLD_CLAUSES=0, and expects the same refusal either way.

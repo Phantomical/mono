@@ -2,6 +2,8 @@
 
 #include "profile-inlines.hpp"
 
+#include "backend.hpp"
+#include "domain-method.hpp"
 #include "externals.hpp"
 #include "method-symbols.hpp"
 #include "minimal-compile.hpp"
@@ -109,6 +111,28 @@ ProfileInliner::bind_and_resolve (Module &module, size_t from, size_t to)
 		*target_.jit, target_.domain,
 		ArrayRef<ExternalSymbol> (externals_).slice (from, to - from),
 		target_.publish_callee, module_symbols_);
+}
+
+ArrayRef<uint8_t>
+ProfileInliner::profile_for (Function &decl)
+{
+	MonoMethod *callee = marked_method (decl);
+
+	if (callee == nullptr)
+		return {};
+
+	MonoDomainMethod *dm = domain_method_find (target_.domain, callee);
+
+	if (dm == nullptr)
+		return {};
+
+	std::optional<ProfileCounters> profile = MonoBackend::profile_of (*dm);
+
+	if (!profile)
+		return {};
+
+	profile_scratch_ = build_profile (ArrayRef<ProfileCounters> (*profile));
+	return profile_scratch_;
 }
 
 Function *

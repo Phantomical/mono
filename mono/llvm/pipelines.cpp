@@ -659,7 +659,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 	between.addPass (buildTier2FunctionSimplificationPipeline ());
 
 	MPM.addPass (mono::TopDownInlinerPass (*TM, buildTier2MaterializePipeline (),
-	                                       std::move (between)));
+	                                       std::move (between), *ProfileFS));
 
 	MPM.addPass (mono::StripInlineCopiesPass ());
 

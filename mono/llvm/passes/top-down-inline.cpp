@@ -99,11 +99,17 @@ struct ScratchAnalyses {
 /// and one of them is an always-inliner, which would otherwise fold bodies into
 /// the root behind the walk that is working on it.
 ///
+/// The preparation's own PGOInstrumentationUse reads whatever profile_fs
+/// currently serves - the root's own counts, pushed there before this runs.
+/// Without the push below, a callee promoted through tier 1 on its own
+/// would be weighed on the root's profile instead of its own.
+///
 /// Returns null when the engine refused the method or the link declined, and
 /// the site then keeps its call.
 Function *
 materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
-                       ModulePassManager &prepare, ScratchAnalyses &scratch)
+                       ModulePassManager &prepare, ScratchAnalyses &scratch,
+                       OneFileFS &profile_fs)
 {
 	std::string name = decl.getName ().str ();
 	auto into = std::make_unique<Module> (name, m.getContext ());
@@ -153,8 +159,21 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 
 	made->removeFnAttr (inline_copy_attribute);
 
+	OneFileFS::CurrentFileGuard counts =
+		pushProfile (profile_fs, candidates.profile_for (decl));
+
 	prepare.run (*into, scratch.mam);
 	scratch.clear ();
+
+	/*
+	 * PGOInstrumentationUse just wrote the candidate's own summary, keyed to
+	 * whatever profile_for () answered. Linking two modules whose summary
+	 * flags disagree is a hard error, so this copies the root's over it.
+	 * Only the branch weights on individual instructions are what this
+	 * compile wants the candidate's own profile for.
+	 */
+	if (Metadata *summary = m.getProfileSummary (/*IsCS=*/false))
+		into->setProfileSummary (summary, ProfileSummary::PSK_Instr);
 
 	// Read before the link. Satisfying a declaration is what the link does to
 	// it, and the pointer does not survive that.
@@ -435,7 +454,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			 */
 			if (callee->isDeclaration ()) {
 				callee = materialize_candidate (m, *callee, *candidates,
-				                                materialize_, scratch);
+				                                materialize_, scratch, *profile_fs_);
 
 				if (callee == nullptr)
 					continue;

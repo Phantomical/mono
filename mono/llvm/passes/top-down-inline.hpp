@@ -6,6 +6,7 @@
 #ifndef MONO_LLVM_PASSES_TOP_DOWN_INLINE_HPP
 #define MONO_LLVM_PASSES_TOP_DOWN_INLINE_HPP
 
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/IR/PassManager.h>
 
 #include <cstdint>
@@ -18,6 +19,8 @@ class TargetMachine;
 } // namespace llvm
 
 namespace mono {
+
+class OneFileFS;
 
 /// The interface the engine implements so the pass can ask about a candidate.
 ///
@@ -45,6 +48,13 @@ public:
 	/// metadata will not load, or the compile has spent the translation it is
 	/// allowed.
 	virtual llvm::Function *materialize (llvm::Function &decl, llvm::Module &into) = 0;
+
+	/// The counts \p decl's own callee gathered on its own account, in the form
+	/// PGOInstrumentationUse reads back.
+	///
+	/// Empty is a callee this domain never promoted through tier 1: its
+	/// branches then come from LLVM's static estimates.
+	virtual llvm::ArrayRef<uint8_t> profile_for (llvm::Function &decl) = 0;
 
 	virtual void folded (llvm::Function &caller, llvm::Function &callee) = 0;
 
@@ -130,10 +140,13 @@ public:
 	///
 	/// Which engine to ask comes from InlineCandidatesAnalysis instead, which
 	/// the analysis manager the pass runs under has to have registered.
+	///
+	/// profile_fs is the same file the root's own compile pushed its counts
+	/// through - see run_tier2_pipeline ().
 	TopDownInlinerPass (llvm::TargetMachine &target, llvm::ModulePassManager materialize,
-	                    llvm::FunctionPassManager simplify)
+	                    llvm::FunctionPassManager simplify, OneFileFS &profile_fs)
 	    : target_ (&target), materialize_ (std::move (materialize)),
-	      simplify_ (std::move (simplify))
+	      simplify_ (std::move (simplify)), profile_fs_ (&profile_fs)
 	{
 	}
 
@@ -143,6 +156,7 @@ private:
 	llvm::TargetMachine *target_;
 	llvm::ModulePassManager materialize_;
 	llvm::FunctionPassManager simplify_;
+	OneFileFS *profile_fs_;
 };
 
 } // namespace mono

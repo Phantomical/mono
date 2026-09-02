@@ -53,6 +53,7 @@ public:
 	}
 
 	llvm::Function *materialize (llvm::Function &decl, llvm::Module &into) override;
+	llvm::ArrayRef<uint8_t> profile_for (llvm::Function &decl) override;
 	void folded (llvm::Function &caller, llvm::Function &callee) override;
 	void declined (llvm::Function &caller, llvm::Function &callee,
 	               const llvm::InlineCost &cost, uint64_t count) override;
@@ -65,6 +66,10 @@ private:
 	ModuleTypes &types_;
 	InlineScope &scope_;
 	std::vector<std::pair<llvm::StringRef, void *>> &module_symbols_;
+
+	/// Owns the bytes the last profile_for () call returned; a second call
+	/// overwrites them.
+	std::vector<uint8_t> profile_scratch_;
 
 	llvm::Error bind_and_resolve (llvm::Module &module, size_t from, size_t to);
 };
