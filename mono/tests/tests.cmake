@@ -1050,12 +1050,12 @@ set(MONO_TESTS_TIER2_INLINE_FILTER_SRC
   tier2-inline-filter.cs
 )
 
-# The scalarize-arg-bonus, on a callee that only reads an uncaptured
+# The two alloc-elision bonuses, on a callee that only reads an uncaptured
 # argument's fields rather than dispatching on it. It runs twice, on the
-# default and with the bonus zeroed, and reads the variable to know which arm
-# it is in.
-set(MONO_TESTS_TIER2_INLINE_SCALARIZE_SRC
-  tier2-inline-scalarize.cs
+# default and with both bonuses zeroed, and reads the variable to know which
+# arm it is in.
+set(MONO_TESTS_TIER2_INLINE_ALLOC_ELISION_SRC
+  tier2-inline-alloc-elision.cs
 )
 
 # The return-devirtualization bonus, on a callee that forwards a further

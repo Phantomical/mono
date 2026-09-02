@@ -760,16 +760,18 @@ mono_runtime_suite(runtime-tier2-inline-nullcheck-off TESTS ${_tier2_inline_null
                    ENV "MONO_INLINE_POLICY=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inlinedefault-threshold=1200 --llvm-opt=-mono-inline-cold-callsite-threshold=700 --llvm-opt=-mono-inline-implicit-null-free=false")
 
-# The scalarize-arg-bonus, on a callee that only reads an uncaptured
+# The two alloc-elision bonuses, on a callee that only reads an uncaptured
 # argument's fields. The off arm leaves the other bonuses alone, because what
-# it separates is this one from the fold tier2-inline-policy.cs's Measure ()
-# takes with the argument bonus instead.
-_mono_exe_list(_tier2_inline_scalarize ${MONO_TESTS_TIER2_INLINE_SCALARIZE_SRC})
-mono_runtime_suite(runtime-tier2-inline-scalarize TESTS ${_tier2_inline_scalarize}
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=200")
-mono_runtime_suite(runtime-tier2-inline-scalarize-off TESTS ${_tier2_inline_scalarize}
+# it separates is this pair from the fold tier2-inline-policy.cs's Measure ()
+# takes with the argument bonus instead. The threshold is sized for the full
+# bonus alone -- the file says why -- so the pending bonus's own site
+# declines on both arms too.
+_mono_exe_list(_tier2_inline_alloc_elision ${MONO_TESTS_TIER2_INLINE_ALLOC_ELISION_SRC})
+mono_runtime_suite(runtime-tier2-inline-alloc-elision TESTS ${_tier2_inline_alloc_elision}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=100")
+mono_runtime_suite(runtime-tier2-inline-alloc-elision-off TESTS ${_tier2_inline_alloc_elision}
                    ENV "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=200 --llvm-opt=-mono-inline-scalarize-arg-bonus=0")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=100 --llvm-opt=-mono-inline-alloc-elision-bonus=0 --llvm-opt=-mono-inline-alloc-elision-pending-bonus=0")
 
 # What the cost model answers about a receiver the call site allocated. The off
 # arm turns those answers off and leaves the bonuses alone, because what it

@@ -12,6 +12,7 @@
 
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/tabledefs.h"
 
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/SmallVector.h>
@@ -79,10 +80,20 @@ cl::opt<int> DevirtualizeArgumentBonus (
 	cl::desc ("Threshold bonus for a callee that dispatches on a parameter the "
 	          "site fills with an object of a named class"));
 
-cl::opt<int> ScalarizeArgumentBonus (
-	"mono-inline-scalarize-arg-bonus", cl::Hidden, cl::init (150),
+/*
+ * Staged in two magnitudes: alloc_elision_fate () (below) decides which one a
+ * site earns, and withholds both from a guaranteed escape.
+ */
+cl::opt<int> AllocElisionBonus (
+	"mono-inline-alloc-elision-bonus", cl::Hidden, cl::init (1000),
 	cl::desc ("Threshold bonus for a callee that does not capture a parameter "
-	          "the site fills with a fresh allocation"));
+	          "the site fills with a fresh allocation the caller holds no "
+	          "other use of"));
+
+cl::opt<int> AllocElisionPendingBonus (
+	"mono-inline-alloc-elision-pending-bonus", cl::Hidden, cl::init (150),
+	cl::desc ("Threshold bonus for the same fold where the caller still holds, "
+	          "or may yet fold away, another use of the allocation"));
 
 cl::opt<int> SaveLmfPenalty (
 	"mono-inline-save-lmf-penalty", cl::Hidden, cl::init (100),
@@ -145,18 +156,120 @@ allocated_under_a_named_class (const Value *v, unsigned depth = 4)
 	return false;
 }
 
-/// Whether LLVM can erase \p v once nothing reads it.
+/// The allocation behind \p v if LLVM can erase it once nothing reads it, and
+/// null otherwise.
 ///
 /// LLVM erases the call only if it carries an alloc kind, and `mono.alloc.*`
 /// carries one for every class an erasure is invisible on. That declaration is
 /// the same under either collector, so this answers the same as well.
-bool
+const CallBase *
 erasable_allocation (const Value *v)
 {
 	const auto *call = dyn_cast<CallBase> (v->stripPointerCasts ());
 	const Function *allocator = call != nullptr ? call->getCalledFunction () : nullptr;
 
-	return allocator != nullptr && allocator->hasFnAttribute (Attribute::AllocKind);
+	return allocator != nullptr && allocator->hasFnAttribute (Attribute::AllocKind)
+	       ? call : nullptr;
+}
+
+/// Whether a call to \p callee is a shape no round of this compile folds. A
+/// use that passes an allocation to it is then a way out for the pointer.
+///
+/// A cheap approximation of may_fold () (`runtime/inline-scope.cpp`) from the
+/// declaration alone. A noreturn callee, an unmarked declaration -- a builtin
+/// or an icall with no wrapper of its own -- or a NoInlining method all count
+/// as won't fold here. So does every wrapper, coarser than may_fold () sorts
+/// them. Refusing more than may_fold () does only costs a caller-side bonus,
+/// never the erasure the callee-side test still guards.
+bool
+call_wont_fold (const Function &callee)
+{
+	if (callee.doesNotReturn ())
+		return true;
+
+	MonoMethod *method = marked_method (callee);
+
+	if (method == nullptr)
+		return true;
+
+	if ((method->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0)
+		return true;
+
+	return method->wrapper_type != MONO_WRAPPER_NONE;
+}
+
+/// What the caller still does with the allocation \p object once \p costed_at,
+/// the site being weighed, is set aside.
+enum class AllocElisionFate {
+	/// A shape this scan can prove keeps the pointer reachable: the value is
+	/// returned, or passed to a call this round provably will not fold.
+	escapes,
+	/// Everything else: at least a store into a field, or a pass to a call
+	/// this round may yet fold. Each keeps the object reachable in principle,
+	/// and telling them apart for real needs a walk this analysis will not
+	/// pay for.
+	pending,
+	/// \p costed_at is the only use the scan counts, so folding it there is
+	/// what takes the last reader away.
+	dead,
+};
+
+/// One scan of \p object's own users, excluding \p costed_at itself -- passing
+/// the object to the call being costed is the fold, not an escape. No
+/// recursion past a direct user and no analysis-manager query, which is what
+/// keeps this affordable per candidate per round. `allocation_escapes ()`
+/// (`analysis/escape.hpp`) is the walk that answers a field store for real,
+/// and paying for it here is too much.
+///
+/// A GEP off \p object computes a field address without handing the pointer
+/// anywhere. The scan stops there rather than following it to whatever reads
+/// or writes through it, which is what no recursion means above. A load
+/// directly off \p object, with no GEP between them, is passed over the same
+/// way.
+///
+/// A store counts only where \p object is the value written, never the
+/// address written to. That is also why the vtable store every allocation
+/// carries is passed over: it writes through \p object rather than writing
+/// \p object out.
+AllocElisionFate
+alloc_elision_fate (const CallBase &object, const CallBase &costed_at)
+{
+	bool held_elsewhere = false;
+
+	for (const Use &use : object.uses ()) {
+		const User *user = use.getUser ();
+
+		if (user == &costed_at)
+			continue;
+
+		if (isa<GetElementPtrInst> (user) || isa<LoadInst> (user))
+			continue;
+
+		if (const auto *store = dyn_cast<StoreInst> (user)) {
+			if (store->getPointerOperand () == &object)
+				continue;
+
+			held_elsewhere = true;
+			continue;
+		}
+
+		if (isa<ReturnInst> (user))
+			return AllocElisionFate::escapes;
+
+		if (const auto *call = dyn_cast<CallBase> (user)) {
+			const Function *callee = call->getCalledFunction ();
+
+			if (callee == nullptr || call_wont_fold (*callee))
+				return AllocElisionFate::escapes;
+
+			held_elsewhere = true;
+			continue;
+		}
+
+		held_elsewhere = true;
+	}
+
+	return held_elsewhere ? AllocElisionFate::pending : AllocElisionFate::dead;
 }
 
 /// Whether \p f returns a value whose class the IR states outright: an
@@ -571,10 +684,22 @@ call_site_bonus (const CallBase &call, const Function &callee)
 		 * as the program runs, so it is never provably non-escaping the way a
 		 * fresh allocation can be.
 		 */
-		if (named && erasable_allocation (arg)
+		const CallBase *allocation = named ? erasable_allocation (arg) : nullptr;
+
+		if (allocation != nullptr
 		    && capturesNothing (PointerMayBeCaptured (
-			    param, /*ReturnCaptures=*/true, CaptureComponents::Provenance)))
-			bonus += ScalarizeArgumentBonus;
+			    param, /*ReturnCaptures=*/true, CaptureComponents::Provenance))) {
+			switch (alloc_elision_fate (*allocation, call)) {
+			case AllocElisionFate::escapes:
+				break;
+			case AllocElisionFate::pending:
+				bonus += AllocElisionPendingBonus;
+				break;
+			case AllocElisionFate::dead:
+				bonus += AllocElisionBonus;
+				break;
+			}
+		}
 	}
 
 	return bonus;

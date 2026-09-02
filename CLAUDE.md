@@ -912,14 +912,23 @@ of its own, which puts a run back on LLVM's own answers without a rebuild:
   under a class it names, and the caller dispatches on that answer.
 - `-mono-inline-devirt-arg-bonus` — the site passes an object of a named class into a
   parameter the callee dispatches on.
-- `-mono-inline-scalarize-arg-bonus` — the site passes a fresh allocation into a
-  parameter the callee does not capture, so the fold hands SROA the accesses a call was
-  hiding. What lets LLVM erase the allocation behind the scalarized fields is the alloc
-  kind on `mono.alloc.object`, which both collectors emit, so this answers the same
-  under either.
+- `-mono-inline-alloc-elision-bonus` and `-mono-inline-alloc-elision-pending-bonus` —
+  the site passes a fresh allocation into a parameter the callee does not capture, so
+  the fold hands SROA the accesses a call was hiding. Named for what the fold buys
+  rather than for scalarize, the mechanism: a second, caller-side test decides which of
+  the two a site earns, with a linear scan of the allocation's own uses that excludes
+  the site being weighed. The scan withholds both bonuses where it can prove the pointer
+  gets out anyway — returned, or passed to a call `call_wont_fold ()`
+  (`passes/inline-policy.cpp`) says no round of this compile takes — and otherwise awards
+  the full bonus where the site being weighed is the pointer's only remaining use, and the
+  pending bonus everywhere else: a store into a field, whose escape needs a recursive walk
+  this scan will not pay for, or a pass to another call this round may yet fold, which is
+  a **pending** escape a later round settles on its own. What lets LLVM erase the
+  allocation behind the scalarized fields, once nothing reads it, is the alloc kind on
+  `mono.alloc.object`, which both collectors emit, so this answers the same under either.
 
-The three bonuses are threshold bonuses rather than cost discounts, and each is priced
-as a count of calls the fold takes away. They go in behind `SingleBBBonus` and
+The three call-site bonuses are threshold bonuses rather than cost discounts, and each is
+priced as a count of calls the fold takes away. They go in behind `SingleBBBonus` and
 `VectorBonus`, which are shares of the threshold, and behind the cold-callsite clamp,
 which is what lets one reach a cold site at all. A hot site is weighed against
 `HotCallSiteThreshold`, which is large enough that none of them decides anything there.
