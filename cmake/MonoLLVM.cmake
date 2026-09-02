@@ -26,19 +26,39 @@ endif()
 # 18.x -> 1800, the way build_llvm_config.sh derived it.
 math(EXPR MONO_LLVM_API_VERSION "${LLVM_VERSION_MAJOR} * 100")
 
+set(_llvm_components analysis core bitwriter linker passes orcjit x86codegen x86asmparser)
+
 # Prefer the single libLLVM dylib when the install has one.  A Unity build
-# takes the component archives instead, because an allocation inside the dylib
-# binds to the player's operator new.
-if(MONO_UNITY_BUILD AND NOT TARGET LLVMCore)
-  message(FATAL_ERROR
-    "MONO_UNITY_BUILD needs LLVM's component archives; ${LLVM_INSTALL_PREFIX} "
-    "ships the dylib alone")
-endif()
-if(TARGET LLVM AND NOT MONO_UNITY_BUILD)
+# takes a static LLVM instead, because an allocation inside the dylib binds to
+# the player's operator new.
+#
+# libLLVM.a comes before the component archives, because an install built with
+# LLVM_ENABLE_LTO leaves bitcode in those and ld answers "file format not
+# recognized".  Linking the bitcode instead runs a ThinLTO of the whole of LLVM
+# on every relink, so such an install wants that link done once and archived.
+# A raw path carries none of the dependencies an imported target would, which
+# is what llvm-config is asked for here.
+if(MONO_UNITY_BUILD)
+  find_library(MONO_LLVM_STATIC NAMES libLLVM.a
+               PATHS "${LLVM_LIBRARY_DIRS}" NO_DEFAULT_PATH
+               DOC "Static LLVM the Unity build links")
+  if(MONO_LLVM_STATIC)
+    execute_process(
+      COMMAND "${LLVM_TOOLS_BINARY_DIR}/llvm-config" --link-static --system-libs
+      OUTPUT_VARIABLE _llvm_system_libs OUTPUT_STRIP_TRAILING_WHITESPACE)
+    separate_arguments(_llvm_system_libs NATIVE_COMMAND "${_llvm_system_libs}")
+    set(_llvm_libs "${MONO_LLVM_STATIC}" ${_llvm_system_libs})
+  elseif(TARGET LLVMCore)
+    llvm_map_components_to_libnames(_llvm_libs ${_llvm_components})
+  else()
+    message(FATAL_ERROR
+      "MONO_UNITY_BUILD needs a static LLVM; ${LLVM_INSTALL_PREFIX} ships the "
+      "dylib alone")
+  endif()
+elseif(TARGET LLVM)
   set(_llvm_libs LLVM)
 else()
-  llvm_map_components_to_libnames(_llvm_libs
-    analysis core bitwriter linker passes orcjit x86codegen x86asmparser)
+  llvm_map_components_to_libnames(_llvm_libs ${_llvm_components})
 endif()
 
 target_include_directories(mono_llvm SYSTEM INTERFACE ${LLVM_INCLUDE_DIRS})
