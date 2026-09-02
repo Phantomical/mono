@@ -33,7 +33,7 @@ CompileWorker::start ()
 
 	MonoInternalThread *internal = mono_thread_internal_current ();
 
-	mono_thread_set_name_constant_ignore_error (internal, "LLVM compiler",
+	mono_thread_set_name_constant_ignore_error (internal, "Mono JIT",
 	                                            MonoSetThreadNameFlag_Permanent);
 
 	/*
