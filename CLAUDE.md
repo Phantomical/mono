@@ -536,6 +536,23 @@ the same way as the tiering ones above:
   when none of its own landing pads are left standing. `mono/tests/tier2-inline-clause.cs`
   gates both arms, reading the `MONO_FOLD_CLAUSES` environment variable the suite sets
   alongside the flag to know which arm it is in.
+- `--llvm-opt=-mono-inline-enable-cost-benefit-analysis=<0|1>` (`passes/inline-cost.cpp`)
+  — turn on the copy's cycles-against-size verdict. `finalizeAnalysis ()` asks it
+  ahead of the three bonuses above: a site `costBenefitAnalysis ()` can decide, it
+  settles outright, and only a site it declines — cold, unprofiled, or landing in
+  the undecided middle band — falls through to `Cost < Threshold`, where the
+  bonuses live. Off by default: `-mono-inline-savings-multiplier` and
+  `-mono-inline-savings-profitable-multiplier` are uncalibrated for this backend,
+  and each falls back to x86's `TargetTransformInfo` answer — 8 for both — unless
+  given explicitly, which is not the 4 this file's own default for the second one
+  reads, because that default only takes effect once the option is passed.
+  `-mono-inline-size-allowance`, default 100, is what lets a tiny callee in
+  regardless of the ratio. The hot-call-site gate asks `tier2_site_heat ()` first,
+  the same as `isColdCallSite ()` and `getHotCallSiteThreshold ()`, so a promoted
+  body's own counters decide it rather than the module's `ProfileSummary`
+  percentile. Task #344 is what calibrates the multipliers and turns this on, once
+  #331 gives a materialized candidate the entry counts `costBenefitAnalysis ()`
+  needs.
 
 ## Architecture of the backend (`mono/llvm/`)
 

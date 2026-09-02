@@ -105,17 +105,17 @@ is in another block. A `Dispose ()` call in a landing pad is such a site. In
 `linq-devirt`'s `ListOne` that call kept the enumerator field in memory. The
 early return is above the addition at the tail, so the bonus needs a second site.
 
-**`InlineCostCallAnalyzer::isColdCallSite ()` and `getHotCallSiteThreshold ()`
-ask `tier2_site_heat ()` first.** Both otherwise rank the site against the
-module's `ProfileSummary`, and a tier-2 compile holds one promoted body, so that
-summary is built from that body's own counters. The percentile each threshold is
-taken at then lands on one of that body's own count levels, and the ranking
-degenerates in opposite directions. In a body with a loop the cold threshold
-lands on the entry count, so every call the body always makes reads cold. In a
-body without one every counter holds the same value, so every block reads hot.
-`tier2_site_heat ()` answers against the caller's entry count instead. It
-answers nothing for a caller that carries no tier-2 counter, and the summary
-then decides as before.
+**`InlineCostCallAnalyzer::isColdCallSite ()`, `getHotCallSiteThreshold ()` and
+`isCostBenefitAnalysisEnabled ()` ask `tier2_site_heat ()` first.** All three
+otherwise rank the site against the module's `ProfileSummary`, and a tier-2
+compile holds one promoted body, so that summary is built from that body's own
+counters. The percentile each threshold is taken at then lands on one of that
+body's own count levels, and the ranking degenerates in opposite directions. In
+a body with a loop the cold threshold lands on the entry count, so every call
+the body always makes reads cold. In a body without one every counter holds the
+same value, so every block reads hot. `tier2_site_heat ()` answers against the
+caller's entry count instead. It answers nothing for a caller that carries no
+tier-2 counter, and the summary then decides as before.
 
 **`CallAnalyzer::isLoweredToCall ()` asks `lowers_to_a_load ()` first.** Mono
 writes a dispatch read as a call to a declaration, and
@@ -162,8 +162,9 @@ same decision the ones above got: drop it when a header declares it, keep it whe
 no header does. Watch the block walk in `analyze ()`, the head and the tail of
 `updateThreshold ()`, the head of `isLoweredToCall ()`, the head of
 `visitLoad ()`, the head of `visitCallBase ()`, the heads of
-`isColdCallSite ()` and `getHotCallSiteThreshold ()`, and the coldcc check in
-`onAnalysisStart ()`, because that is where the mono calls sit.
+`isColdCallSite ()`, `getHotCallSiteThreshold ()` and
+`isCostBenefitAnalysisEnabled ()`, and the coldcc check in `onAnalysisStart ()`,
+because that is where the mono calls sit.
 `isLoweredToCall ()` and `visitLoad ()` churn upstream more than the rest do,
 so budget for them at each bump.
 

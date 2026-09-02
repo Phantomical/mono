@@ -948,9 +948,15 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
     if (!CallerBFI)
       return false;
 
-    // For now, limit to hot call site.
-    if (!PSI->isHotCallSite(CandidateCall, CallerBFI))
+    // See isColdCallSite (). The same summary answers hotness, and in a
+    // promoted body with no loop it reads every block as hot.
+    if (std::optional<mono::SiteHeat> Heat =
+            mono::tier2_site_heat(CandidateCall, CallerBFI)) {
+      if (*Heat != mono::SiteHeat::hot)
+        return false;
+    } else if (!PSI->isHotCallSite(CandidateCall, CallerBFI)) {
       return false;
+    }
 
     // Make sure we have a nonzero entry count.
     auto EntryCount = F.getEntryCount();
