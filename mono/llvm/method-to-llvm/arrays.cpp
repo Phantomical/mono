@@ -611,10 +611,10 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 		builder.CreateCondBr (builder.CreateICmpEQ (wanted, *any), done, subclass);
 	}
 
-	// `mono_class_has_parent_fast ()` inlined. value_class's supertypes chain
+	// `mono_class_has_parent_fast ()` inlined: value_class's supertypes chain
 	// holds only single inheritance, so it never names an interface or
-	// another array class, and a miss here always falls through to the
-	// icall, which is what those two still need.
+	// another array class. A miss here falls through to the icall, which is
+	// what those two still need.
 	builder.SetInsertPoint (subclass);
 
 	llvm::Value *wanted_idepth;
@@ -655,8 +655,8 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 
 	builder.CreateCondBr (builder.CreateICmpEQ (at_depth, wanted), done, ask);
 
-	// A class implementing an interface element class, and a transparent
-	// proxy standing in for either, are legal and still miss here.
+	// An interface element class, and a transparent proxy standing in for
+	// any class, both still reach the icall.
 	builder.SetInsertPoint (ask);
 	emit_protected_call (builder, *check,
 	                     adapt_to_callee (builder, *check, { array.value, stored }));
