@@ -38,6 +38,9 @@ constexpr StringRef class_attribute = "mono-class";
 /// The same for the MonoClass whose static fields a block holds.
 constexpr StringRef statics_class_attribute = "mono-statics-class";
 
+/// The same for the MonoString an interned string literal's symbol stands for.
+constexpr StringRef ldstr_attribute = "mono-ldstr";
+
 /// The same for a symbol holding the MonoMethod itself. Kept apart from
 /// method_attribute, which is what the renaming below reads.
 constexpr StringRef method_pointer_attribute = "mono-method-pointer";
@@ -130,6 +133,20 @@ marked_statics_class (const GlobalValue &value)
 	std::optional<uintptr_t> address = pointer_marker (value, statics_class_attribute);
 
 	return address ? reinterpret_cast<MonoClass *> (*address) : nullptr;
+}
+
+void
+mark_ldstr_reference (GlobalValue &value, MonoString *interned)
+{
+	mark_pointer (value, ldstr_attribute, interned);
+}
+
+MonoString *
+marked_ldstr (const GlobalValue &value)
+{
+	std::optional<uintptr_t> address = pointer_marker (value, ldstr_attribute);
+
+	return address ? reinterpret_cast<MonoString *> (*address) : nullptr;
 }
 
 void

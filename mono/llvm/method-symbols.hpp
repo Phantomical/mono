@@ -26,6 +26,7 @@ class Module;
 
 typedef struct _MonoClass MonoClass;
 typedef struct _MonoMethod MonoMethod;
+typedef struct _MonoString MonoString;
 
 namespace mono {
 
@@ -62,6 +63,12 @@ void mark_statics_reference (llvm::GlobalValue &value, MonoClass *klass);
 /// Returns the class whose statics \p value holds, or null when it carries no
 /// marker.
 MonoClass *marked_statics_class (const llvm::GlobalValue &value);
+
+/// The same for a symbol that stands for one interned string literal.
+void mark_ldstr_reference (llvm::GlobalValue &value, MonoString *interned);
+
+/// Returns the string \p value stands for, or null when it carries no marker.
+MonoString *marked_ldstr (const llvm::GlobalValue &value);
 
 /// The same for a symbol that holds the MonoMethod itself rather than the
 /// method's code.

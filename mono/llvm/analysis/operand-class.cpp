@@ -135,8 +135,9 @@ settled_delegate_target_of (MonoObject *held)
 	return delegate->method;
 }
 
-/// The static field of \p klass that lives at \p offset in its statics block,
-/// or null where no field of that class is declared there.
+/// The static field of \p klass whose storage covers \p offset, or null
+/// where no field of that class reaches there. A struct-typed field answers
+/// for any offset nested inside it, not only its own start.
 MonoClassField *
 static_field_at (MonoClass *klass, int offset)
 {
@@ -151,7 +152,15 @@ static_field_at (MonoClass *klass, int offset)
 		    || (flags & FIELD_ATTRIBUTE_LITERAL) != 0)
 			continue;
 
-		if (m_field_get_offset (field) == offset)
+		int start = m_field_get_offset (field);
+
+		if (offset < start)
+			continue;
+
+		int align;
+		int size = mono_type_size (mono_field_get_type_internal (field), &align);
+
+		if (offset < start + size)
 			return field;
 	}
 
@@ -208,7 +217,7 @@ initonly_static_read (const Value *v)
 	if (!current_compile ().past_pgo_hash)
 		return nullptr;
 
-	MonoClassField *field = initonly_static_field (v);
+	MonoClassField *field = initonly_static_field (v).first;
 
 	return field != nullptr ? initonly_static_value (current_compile ().domain, field)
 	                        : nullptr;
@@ -375,13 +384,13 @@ class_of (Value *v, const Function &f, ClassRule rule, const ConstantValues &val
 
 } // namespace
 
-MonoClassField *
+std::pair<MonoClassField *, int64_t>
 initonly_static_field (const Value *v)
 {
 	const auto *load = dyn_cast<LoadInst> (v);
 
 	if (load == nullptr || current_compile ().domain == nullptr)
-		return nullptr;
+		return { nullptr, 0 };
 
 	const DataLayout &layout = load->getModule ()->getDataLayout ();
 	const Value *address = load->getPointerOperand ();
@@ -390,22 +399,22 @@ initonly_static_field (const Value *v)
 		layout, offset, /*AllowNonInbounds=*/true));
 
 	if (block == nullptr || offset.isNegative () || !offset.isSignedIntN (32))
-		return nullptr;
+		return { nullptr, 0 };
 
 	MonoClass *klass = marked_statics_class (*block);
 
 	if (klass == nullptr)
-		return nullptr;
+		return { nullptr, 0 };
 
-	MonoClassField *field =
-		static_field_at (klass, static_cast<int> (offset.getSExtValue ()));
+	int64_t raw = offset.getSExtValue ();
+	MonoClassField *field = static_field_at (klass, static_cast<int> (raw));
 
 	if (field == nullptr || (mono_field_get_flags (field) & FIELD_ATTRIBUTE_INIT_ONLY) == 0)
-		return nullptr;
+		return { nullptr, 0 };
 
 	// A special static lives per thread or per context, so what stands there
 	// now says nothing about what a compiled body will read.
-	return field->offset >= 0 ? field : nullptr;
+	return field->offset >= 0 ? std::make_pair (field, raw) : std::make_pair (nullptr, int64_t { 0 });
 }
 
 void

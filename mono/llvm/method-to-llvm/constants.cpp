@@ -1,4 +1,5 @@
 #include "method-to-llvm.hpp"
+#include "method-symbols.hpp"
 #include "runtime-error.hpp"
 #include "mono/metadata/class-abi-details.h"
 #include "mono/metadata/class-internals.h"
@@ -14,6 +15,7 @@
 #include <llvm/ADT/APInt.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
+#include <llvm/IR/GlobalValue.h>
 
 #include <string>
 #include <string_view>
@@ -257,6 +259,7 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 	llvm::Constant *value = address_symbol (identity_symbol (name, image), interned);
 
 	g_free (name);
+	mark_ldstr_reference (*llvm::cast<llvm::GlobalValue> (value), interned);
 	push_stack (value, m_class_get_byval_arg (mono_defaults.string_class));
 	return llvm::Error::success ();
 }

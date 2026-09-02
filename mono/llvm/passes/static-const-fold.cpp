@@ -3,19 +3,24 @@
 #include "analysis/operand-class.hpp"
 #include "class-init-warm.hpp"
 #include "compile-state.hpp"
+#include "method-symbols.hpp"
 
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/APInt.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Module.h>
 #include <llvm/IR/Type.h>
 
 #include <cstdint>
 #include <cstring>
 
+#include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/object-internals.h"
 
@@ -72,7 +77,7 @@ constant_of (Type *type, const char *bytes)
 Constant *
 warm_static_constant (const LoadInst &load)
 {
-	MonoClassField *field = initonly_static_field (&load);
+	auto [field, offset] = initonly_static_field (&load);
 
 	if (field == nullptr || MONO_TYPE_IS_REFERENCE (mono_field_get_type_internal (field)))
 		return nullptr;
@@ -84,10 +89,39 @@ warm_static_constant (const LoadInst &load)
 		return nullptr;
 
 	MonoVTable *vtable = mono_class_try_get_vtable (domain, klass);
-	const char *bytes =
-		(const char *) mono_vtable_get_static_field_data (vtable) + field->offset;
+	// offset, not field->offset: a load into a struct-typed field's member
+	// reads that member's own byte, not the struct's first one.
+	const char *bytes = (const char *) mono_vtable_get_static_field_data (vtable) + offset;
 
 	return constant_of (load.getType (), bytes);
+}
+
+/// The length \p load reads off an interned string literal, or null where
+/// \p load is not a load of `MonoString::length` off a symbol `emit_ldstr ()`
+/// marked.
+///
+/// Unlike a static field, this waits on no class warmth. `emit_ldstr ()`
+/// already interned the literal, and interning fixes its length for the
+/// object's whole life.
+Constant *
+ldstr_length_constant (const LoadInst &load)
+{
+	const DataLayout &layout = load.getModule ()->getDataLayout ();
+	const Value *address = load.getPointerOperand ();
+	APInt offset (layout.getIndexTypeSizeInBits (address->getType ()), 0);
+	const auto *block = dyn_cast<GlobalValue> (address->stripAndAccumulateConstantOffsets (
+		layout, offset, /*AllowNonInbounds=*/true));
+
+	if (block == nullptr || offset.isNegative () || !offset.isSignedIntN (32)
+	    || offset.getSExtValue () != MONO_STRUCT_OFFSET (MonoString, length))
+		return nullptr;
+
+	MonoString *literal = marked_ldstr (*block);
+
+	if (literal == nullptr)
+		return nullptr;
+
+	return constant_of (load.getType (), (const char *) literal + offset.getSExtValue ());
 }
 
 } // namespace
@@ -101,9 +135,12 @@ StaticConstFoldPass::run (Function &f, FunctionAnalysisManager &)
 	SmallVector<std::pair<LoadInst *, Constant *>, 4> found;
 
 	for (Instruction &i : instructions (f))
-		if (auto *load = dyn_cast<LoadInst> (&i))
+		if (auto *load = dyn_cast<LoadInst> (&i)) {
 			if (Constant *value = warm_static_constant (*load))
 				found.push_back ({ load, value });
+			else if (Constant *value = ldstr_length_constant (*load))
+				found.push_back ({ load, value });
+		}
 
 	if (found.empty ())
 		return PreservedAnalyses::all ();

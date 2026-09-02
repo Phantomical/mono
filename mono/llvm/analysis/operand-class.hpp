@@ -41,6 +41,7 @@
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringRef.h>
 
+#include <cstdint>
 #include <utility>
 
 namespace llvm {
@@ -141,9 +142,13 @@ bool bound_is_exact (MonoClass *klass);
 /// allocation or an initonly static states.
 MonoClass *guessed_class (llvm::Value *v, const llvm::Function &f, const ConstantValues &values);
 
-/// The initonly static field \p v reads, or null where \p v is not that shape
-/// - a load off a marked statics block at a constant offset - the field is a
-/// special static, or this compile has no domain to answer for.
+/// The initonly static field \p v reads, and the byte offset its address
+/// names off the class's statics block.
+///
+/// Null where \p v is not that shape - a load off a marked statics block at a
+/// constant offset - the field is a special static, or this compile has no
+/// domain to answer for. The offset member is meaningless whenever the field
+/// is.
 ///
 /// The shape is what a translator's own mark on the load cannot survive:
 /// InstCombine folds the address GEP into the load's pointer operand and
@@ -151,9 +156,12 @@ MonoClass *guessed_class (llvm::Value *v, const llvm::Function &f, const Constan
 /// the offset outlive every pass instead, because no instruction-level
 /// transform rebuilds a global.
 ///
+/// A struct-typed field answers for any offset nested inside it, so the
+/// second member can differ from the field's own offset.
+///
 /// What a caller reads through the field - a reference, or a primitive this
 /// compile finds the class already warm for - is its own question.
-MonoClassField *initonly_static_field (const llvm::Value *v);
+std::pair<MonoClassField *, int64_t> initonly_static_field (const llvm::Value *v);
 
 /// Says that \p site produces a delegate whose target method is \p target.
 ///
