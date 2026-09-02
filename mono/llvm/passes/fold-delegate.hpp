@@ -20,6 +20,7 @@
 #include <llvm/IR/PassManager.h>
 
 namespace llvm {
+class CallBase;
 class Function;
 class LoadInst;
 class Value;
@@ -63,6 +64,25 @@ struct DelegateTarget {
 /// copies stand between, which \p values is what settles.
 DelegateTarget delegate_target_at (llvm::Value *receiver,
                                   const ConstantValues &values);
+
+/// Whether \p site reads its callee out of the delegate it passes.
+///
+/// `delegate_invoke_callee ()` (`method-to-llvm/call.cpp`) writes every Invoke as
+/// one shape, and this is that shape read back:
+///
+///     %impl   = load ptr, ptr (getelementptr i8, %d, invoke_impl)
+///     %isnull = icmp eq ptr %impl, null
+///     %callee = select i1 %isnull, %dispatch, %impl
+///     call %callee (%d, ...)
+///
+/// The delegate the site passes has to be the object the load reads, which is
+/// what separates this from any other call through a selected pointer.
+///
+/// Reading the shape rather than a mark on the call is what still recognizes a
+/// site an inliner moved. Metadata does not survive a transform that builds a
+/// new instruction, and inlining a body into a try does exactly that: it writes
+/// each call again as an invoke of the caller's pad.
+bool reads_callee_off_delegate (const llvm::CallBase &site);
 
 /// Enters the delegate's target at each Invoke in \p f the IR names one for: a
 /// settled target directly, a candidate behind a compare against the delegate's

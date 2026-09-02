@@ -88,7 +88,12 @@ such a check, so the arms are most of what a freshly translated body costs.
 **`InlineCostCallAnalyzer::updateThreshold ()` adds `call_site_bonus ()`, at two
 places.** The first is behind `SingleBBBonus` and `VectorBonus`, which are shares
 of the threshold, and behind the target's multiplier, because what it adds is an
-absolute count rather than a proportion.
+absolute count rather than a proportion. Both places pass `GetConstantValues`, a
+member with no upstream counterpart, threaded the same way as `GetBFI` from
+`getInlineCost ()`'s caller down through `InlineCostCallAnalyzer`'s constructor.
+It answers a settled walk of the caller's own values, off the same memory model
+`FoldDelegateInvokesPass` reads, which is what a delegate argument bonus needs
+and no other bonus here does.
 
 The second is the early return `updateThreshold ()` takes when
 `allowSizeGrowth ()` answers no, which upstream leaves at a threshold of zero.

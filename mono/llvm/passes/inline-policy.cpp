@@ -1,11 +1,13 @@
 #include "inline-policy.hpp"
 
+#include "analysis/constant-values.hpp"
 #include "analysis/operand-class.hpp"
 #include "analysis/strip-casts.hpp"
 #include "analysis/vtable-info.hpp"
 #include "cast-func.hpp"
 #include "compile-state.hpp"
 #include "fold-cast.hpp"
+#include "fold-delegate.hpp"
 #include "method-symbols.hpp"
 #include "tier-counter.hpp"
 #include "vtable-func.hpp"
@@ -102,6 +104,11 @@ cl::opt<int> AllocElisionPendingBonus (
 	"mono-inline-alloc-elision-pending-bonus", cl::Hidden, cl::init (150),
 	cl::desc ("Threshold bonus for the same fold where the caller still holds, "
 	          "or may yet fold away, another use of the allocation"));
+
+cl::opt<int> DevirtualizeDelegateArgumentBonus (
+	"mono-inline-devirt-delegate-arg-bonus", cl::Hidden, cl::init (50),
+	cl::desc ("Threshold bonus for a callee that invokes a parameter the site "
+	          "fills with a delegate whose target the compile can name"));
 
 cl::opt<int> SaveLmfPenalty (
 	"mono-inline-save-lmf-penalty", cl::Hidden, cl::init (100),
@@ -387,6 +394,29 @@ dispatches_unresolved_on (const Value *object, const Function &f)
 				return true;
 		}
 	}
+
+	return false;
+}
+
+/// Whether a site in \p f invokes \p object as a delegate that no fold has
+/// already named a target for.
+///
+/// A delegate Invoke carries no declaration to read the users of the way
+/// `dispatches_unresolved_on ()` does, so this walks \p f's instructions
+/// instead.
+bool
+invokes_unresolved_on (const Value *object, const Function &f)
+{
+	object = strip_casts (object);
+
+	for (const BasicBlock &block : f)
+		for (const Instruction &at : block) {
+			const auto *site = dyn_cast<CallBase> (&at);
+
+			if (site != nullptr && reads_callee_off_delegate (*site)
+			    && strip_casts (site->getArgOperand (0)) == object)
+				return true;
+		}
 
 	return false;
 }
@@ -712,7 +742,8 @@ noreturn_free_successor (const BranchInst &branch)
 }
 
 int
-call_site_bonus (const CallBase &call, const Function &callee)
+call_site_bonus (const CallBase &call, const Function &callee,
+                 function_ref<ConstantValues &(Function &)> get_constants)
 {
 	const Function *caller = call.getCaller ();
 
@@ -731,53 +762,68 @@ call_site_bonus (const CallBase &call, const Function &callee)
 	unsigned shared =
 		std::min<unsigned> (call.arg_size (), callee.arg_size ());
 
+	// The walk is the same one FoldDelegateInvokesPass reads the site's own
+	// delegate through, and every shared argument below reads it off this
+	// same result.
+	ConstantValues *constants =
+		get_constants ? &get_constants (const_cast<Function &> (*caller)) : nullptr;
+
 	for (unsigned i = 0; i < shared; i++) {
 		Value *arg = call.getArgOperand (i);
+		const Argument *param = callee.getArg (i);
 		bool named = allocated_under_a_named_class (arg);
 		auto [klass, exact] = stated_class (arg, *caller);
 
 		// An initonly static's own read states a class exactly too, the same
 		// as a fresh allocation, so it clears the gate on its own.
-		if (!named && !(klass != nullptr && exact))
-			continue;
+		if (named || (klass != nullptr && exact)) {
+			// The class arrives with the argument, so a dispatch the body
+			// cannot resolve on its own gets an operand once the body is
+			// folded in.
+			if (dispatches_unresolved_on (param, callee))
+				bonus += DevirtualizeArgumentBonus;
 
-		const Argument *param = callee.getArg (i);
+			/*
+			 * SROA scalarizes an allocation only when it can see every access,
+			 * and a call hides the accesses inside the callee. The fold
+			 * uncovers them for a parameter the body does not capture.
+			 *
+			 * The test asks about provenance alone, because taking the address
+			 * does not keep an object in memory. A dereference of the argument
+			 * compares it against null first, and LLVM counts that comparison
+			 * as a capture of the address.
+			 *
+			 * Gated on `named` alone. A static's referent is reachable for as
+			 * long as the program runs, so it is never provably non-escaping
+			 * the way a fresh allocation can be.
+			 */
+			const CallBase *allocation = named ? erasable_allocation (arg) : nullptr;
 
-		// The class arrives with the argument, so a dispatch the body cannot
-		// resolve on its own gets an operand once the body is folded in.
-		if (dispatches_unresolved_on (param, callee))
-			bonus += DevirtualizeArgumentBonus;
-
-		/*
-		 * SROA scalarizes an allocation only when it can see every access, and
-		 * a call hides the accesses inside the callee. The fold uncovers them
-		 * for a parameter the body does not capture.
-		 *
-		 * The test asks about provenance alone, because taking the address does
-		 * not keep an object in memory. A dereference of the argument compares
-		 * it against null first, and LLVM counts that comparison as a capture
-		 * of the address.
-		 *
-		 * Gated on `named` alone. A static's referent is reachable for as long
-		 * as the program runs, so it is never provably non-escaping the way a
-		 * fresh allocation can be.
-		 */
-		const CallBase *allocation = named ? erasable_allocation (arg) : nullptr;
-
-		if (allocation != nullptr
-		    && capturesNothing (PointerMayBeCaptured (
-			    param, /*ReturnCaptures=*/true, CaptureComponents::Provenance))) {
-			switch (alloc_elision_fate (*allocation, call)) {
-			case AllocElisionFate::escapes:
-				break;
-			case AllocElisionFate::pending:
-				bonus += AllocElisionPendingBonus;
-				break;
-			case AllocElisionFate::dead:
-				bonus += AllocElisionBonus;
-				break;
+			if (allocation != nullptr
+			    && capturesNothing (PointerMayBeCaptured (
+				    param, /*ReturnCaptures=*/true, CaptureComponents::Provenance))) {
+				switch (alloc_elision_fate (*allocation, call)) {
+				case AllocElisionFate::escapes:
+					break;
+				case AllocElisionFate::pending:
+					bonus += AllocElisionPendingBonus;
+					break;
+				case AllocElisionFate::dead:
+					bonus += AllocElisionBonus;
+					break;
+				}
 			}
 		}
+
+		// The target arrives with the argument, so an Invoke the body cannot
+		// resolve on its own gets one once the body is folded in. The gate
+		// above answers from a leaf read alone, so a field cache merging a
+		// stored delegate with a fresh one skips it and reaches here anyway:
+		// the walk `constants` reads is what settles a merge, not a leaf.
+		if (constants != nullptr
+		    && delegate_target_at (arg, *constants).method != nullptr
+		    && invokes_unresolved_on (param, callee))
+			bonus += DevirtualizeDelegateArgumentBonus;
 	}
 
 	return bonus;

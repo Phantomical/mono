@@ -1073,6 +1073,14 @@ set(MONO_TESTS_TIER2_INLINE_GENERIC_SCOPE_SRC
   tier2-inline-generic-scope.cs
 )
 
+# The delegate-arg-bonus, on a callee that invokes a parameter the site fills
+# with a delegate whose target the compile can name. It runs twice, on the
+# default and with the bonus zeroed, and reads the variable to know which arm
+# it is in.
+set(MONO_TESTS_TIER2_INLINE_DELEGATE_ARG_SRC
+  tier2-inline-delegate-arg.cs
+)
+
 # The return-devirtualization bonus, on a callee that forwards a further
 # call's answer instead of allocating its own. It runs twice, on the default
 # and with the bonus zeroed, and reads the variable to know which arm it is

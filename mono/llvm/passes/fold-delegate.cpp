@@ -286,59 +286,6 @@ entry_at (CallBase &site, MonoMethod *named, const CompileState &compile)
 	return std::make_pair (entry, *receiver);
 }
 
-/**
- * Whether \p site reads its callee out of the delegate it passes.
- *
- * `delegate_invoke_callee ()` (`method-to-llvm/call.cpp`) writes every Invoke as
- * one shape, and this is that shape read back:
- *
- *     %impl   = load ptr, ptr (getelementptr i8, %d, invoke_impl)
- *     %isnull = icmp eq ptr %impl, null
- *     %callee = select i1 %isnull, %dispatch, %impl
- *     call %callee (%d, ...)
- *
- * The delegate the site passes has to be the object the load reads, which is
- * what separates this from any other call through a selected pointer.
- *
- * Reading the shape rather than a mark on the call is what lets the fold see a
- * site an inliner moved. Metadata does not survive a transform that builds a new
- * instruction, and inlining a body into a try does exactly that: it writes each
- * call again as an invoke of the caller's pad.
- */
-bool
-reads_callee_off_delegate (const CallBase &site)
-{
-	if (site.arg_size () < 1 || site.getCalledFunction () != nullptr)
-		return false;
-
-	const auto *pick = dyn_cast<SelectInst> (strip_casts (site.getCalledOperand ()));
-
-	if (pick == nullptr)
-		return false;
-
-	const auto *test = dyn_cast<ICmpInst> (pick->getCondition ());
-	const auto *impl = dyn_cast<LoadInst> (strip_casts (pick->getFalseValue ()));
-
-	// The arms sit the way CreateSelect (CreateIsNull (impl), dispatch, impl)
-	// wrote them, so the load answers on the arm where it is not null.
-	if (test == nullptr || impl == nullptr
-	    || test->getPredicate () != ICmpInst::ICMP_EQ
-	    || !isa<ConstantPointerNull> (test->getOperand (1))
-	    || strip_casts (test->getOperand (0)) != impl)
-		return false;
-
-	const DataLayout &layout = site.getModule ()->getDataLayout ();
-	const Value *address = impl->getPointerOperand ();
-	APInt offset (layout.getIndexTypeSizeInBits (address->getType ()), 0);
-	const Value *object = address->stripAndAccumulateConstantOffsets (
-		layout, offset, /*AllowNonInbounds=*/true);
-
-	// stripAndAccumulateConstantOffsets () peels offsets and stops, so it leaves
-	// a freeze that the other side's peel takes off.
-	return strip_casts (object) == strip_casts (site.getArgOperand (0))
-	       && offset == MONO_STRUCT_OFFSET (MonoDelegate, invoke_impl);
-}
-
 /// Every Invoke in \p f, read off the shape the translator writes.
 SmallVector<CallBase *, 8>
 invoke_sites (Function &f)
@@ -577,6 +524,40 @@ mark_delegate_method_ptr_read (LoadInst *load)
 {
 	load->setMetadata (LLVMContext::MD_invariant_group,
 	                   MDNode::get (load->getContext (), {}));
+}
+
+bool
+reads_callee_off_delegate (const CallBase &site)
+{
+	if (site.arg_size () < 1 || site.getCalledFunction () != nullptr)
+		return false;
+
+	const auto *pick = dyn_cast<SelectInst> (strip_casts (site.getCalledOperand ()));
+
+	if (pick == nullptr)
+		return false;
+
+	const auto *test = dyn_cast<ICmpInst> (pick->getCondition ());
+	const auto *impl = dyn_cast<LoadInst> (strip_casts (pick->getFalseValue ()));
+
+	// The arms sit the way CreateSelect (CreateIsNull (impl), dispatch, impl)
+	// wrote them, so the load answers on the arm where it is not null.
+	if (test == nullptr || impl == nullptr
+	    || test->getPredicate () != ICmpInst::ICMP_EQ
+	    || !isa<ConstantPointerNull> (test->getOperand (1))
+	    || strip_casts (test->getOperand (0)) != impl)
+		return false;
+
+	const DataLayout &layout = site.getModule ()->getDataLayout ();
+	const Value *address = impl->getPointerOperand ();
+	APInt offset (layout.getIndexTypeSizeInBits (address->getType ()), 0);
+	const Value *object = address->stripAndAccumulateConstantOffsets (
+		layout, offset, /*AllowNonInbounds=*/true);
+
+	// stripAndAccumulateConstantOffsets () peels offsets and stops, so it leaves
+	// a freeze that the other side's peel takes off.
+	return strip_casts (object) == strip_casts (site.getArgOperand (0))
+	       && offset == MONO_STRUCT_OFFSET (MonoDelegate, invoke_impl);
 }
 
 DelegateTarget

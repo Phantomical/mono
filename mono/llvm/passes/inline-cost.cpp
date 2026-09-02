@@ -635,6 +635,11 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
   /// Tunable parameters that control the analysis.
   const InlineParams &Params;
 
+  /// Getter for the caller's settled values, off the same walk
+  /// FoldDelegateInvokesPass reads. Only updateThreshold ()'s call into
+  /// mono::call_site_bonus () reads this, and nothing upstream does.
+  function_ref<ConstantValues &(Function &)> GetConstantValues;
+
   // This DenseMap stores the delta change in cost and threshold after
   // accounting for the given instruction. The map is filled only with the
   // flag PrintInstructionComments on.
@@ -1238,13 +1243,15 @@ public:
       OptimizationRemarkEmitter *ORE = nullptr, bool BoostIndirect = true,
       bool IgnoreThreshold = false,
       function_ref<EphemeralValuesCache &(Function &)> GetEphValuesCache =
-          nullptr)
+          nullptr,
+      function_ref<ConstantValues &(Function &)> GetConstantValues = nullptr)
       : CallAnalyzer(Callee, Call, TTI, GetAssumptionCache, GetBFI, GetTLI, PSI,
                      ORE, GetEphValuesCache),
         ComputeFullInlineCost(OptComputeFullInlineCost ||
                               Params.ComputeFullInlineCost || ORE ||
                               isCostBenefitAnalysisEnabled()),
-        Params(Params), Threshold(Params.DefaultThreshold),
+        Params(Params), GetConstantValues(GetConstantValues),
+        Threshold(Params.DefaultThreshold),
         BoostIndirectCalls(BoostIndirect), IgnoreThreshold(IgnoreThreshold),
         CostBenefitAnalysisEnabled(isCostBenefitAnalysisEnabled()),
         Writer(this) {
@@ -2123,7 +2130,7 @@ void InlineCostCallAnalyzer::updateThreshold(CallBase &Call, Function &Callee) {
   // for every call above it. The loop that pays for that is somewhere else in
   // the function, so the block the call sits in says nothing about the fold.
   if (!allowSizeGrowth(Call)) {
-    Threshold = mono::call_site_bonus(Call, F);
+    Threshold = mono::call_site_bonus(Call, F, GetConstantValues);
     return;
   }
 
@@ -2246,7 +2253,7 @@ void InlineCostCallAnalyzer::updateThreshold(CallBase &Call, Function &Callee) {
   // Behind the two above, which are shares of the threshold, and behind the
   // target's multiplier. What mono adds is an absolute count of calls the fold
   // takes away, so neither scaling applies to it.
-  Threshold += mono::call_site_bonus(Call, F);
+  Threshold += mono::call_site_bonus(Call, F, GetConstantValues);
 
   // If there is only one call of the function, and it has internal linkage,
   // the cost of inlining it drops dramatically. It may seem odd to update
@@ -3294,10 +3301,11 @@ InlineCost getInlineCost(
     function_ref<const TargetLibraryInfo &(Function &)> GetTLI,
     function_ref<BlockFrequencyInfo &(Function &)> GetBFI,
     ProfileSummaryInfo *PSI, OptimizationRemarkEmitter *ORE,
-    function_ref<EphemeralValuesCache &(Function &)> GetEphValuesCache) {
+    function_ref<EphemeralValuesCache &(Function &)> GetEphValuesCache,
+    function_ref<ConstantValues &(Function &)> GetConstantValues) {
   return mono::getInlineCost(Call, Call.getCalledFunction(), Params, CalleeTTI,
                              GetAssumptionCache, GetTLI, GetBFI, PSI, ORE,
-                             GetEphValuesCache);
+                             GetEphValuesCache, GetConstantValues);
 }
 
 std::optional<int> getInliningCostEstimate(
@@ -3422,7 +3430,8 @@ InlineCost getInlineCost(
     function_ref<const TargetLibraryInfo &(Function &)> GetTLI,
     function_ref<BlockFrequencyInfo &(Function &)> GetBFI,
     ProfileSummaryInfo *PSI, OptimizationRemarkEmitter *ORE,
-    function_ref<EphemeralValuesCache &(Function &)> GetEphValuesCache) {
+    function_ref<EphemeralValuesCache &(Function &)> GetEphValuesCache,
+    function_ref<ConstantValues &(Function &)> GetConstantValues) {
 
   auto UserDecision =
       mono::getAttributeBasedInliningDecision(Call, Callee, CalleeTTI, GetTLI);
@@ -3444,7 +3453,7 @@ InlineCost getInlineCost(
   InlineCostCallAnalyzer CA(*Callee, Call, Params, CalleeTTI,
                             GetAssumptionCache, GetBFI, GetTLI, PSI, ORE,
                             BoostIndirectCallSites, /*IgnoreThreshold=*/false,
-                            GetEphValuesCache);
+                            GetEphValuesCache, GetConstantValues);
   InlineResult ShouldInline = CA.analyze();
 
   LLVM_DEBUG(CA.dump());

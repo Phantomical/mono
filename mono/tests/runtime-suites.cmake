@@ -793,6 +793,17 @@ mono_runtime_suite(runtime-tier2-inline-alloc-elision-off TESTS ${_tier2_inline_
                    ENV "MONO_INLINE_POLICY=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=100 --llvm-opt=-mono-inline-alloc-elision-bonus=0 --llvm-opt=-mono-inline-alloc-elision-pending-bonus=0 --llvm-opt=-mono-inline-noreturn-free=false")
 
+# The delegate-arg-bonus, on a callee that invokes a parameter the site fills
+# with a delegate whose target the compile can name. The off arm leaves the
+# other bonuses alone, because what it separates is this one from the class
+# argument bonus tier2-inline-policy.cs's Measure () takes instead.
+_mono_exe_list(_tier2_inline_delegate_arg ${MONO_TESTS_TIER2_INLINE_DELEGATE_ARG_SRC})
+mono_runtime_suite(runtime-tier2-inline-delegate-arg TESTS ${_tier2_inline_delegate_arg}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=165")
+mono_runtime_suite(runtime-tier2-inline-delegate-arg-off TESTS ${_tier2_inline_delegate_arg}
+                   ENV "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=165 --llvm-opt=-mono-inline-devirt-delegate-arg-bonus=0 --llvm-opt=-mono-inline-noreturn-free=false")
+
 # What the cost model answers about a receiver the call site allocated. The off
 # arm turns those answers off and leaves the bonuses alone, because what it
 # separates is the fold rather than a threshold.

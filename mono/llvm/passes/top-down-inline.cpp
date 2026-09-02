@@ -2,6 +2,7 @@
 
 #include "pipelines.hpp"
 
+#include "analysis/constant-values.hpp"
 #include "clause-marker.hpp"
 #include "finally-marker.hpp"
 #include "inline-copies.hpp"
@@ -364,6 +365,9 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 	auto get_bfi = [&] (Function &f) -> BlockFrequencyInfo & {
 		return fam.getResult<BlockFrequencyAnalysis> (f);
 	};
+	auto get_constants = [&] (Function &f) -> ConstantValues & {
+		return fam.getResult<MonoMemoryValues> (f);
+	};
 
 	InlineParams params = mono::getInlineParams ();
 	bool changed = false;
@@ -476,7 +480,8 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			InlineCost cost = mono::getInlineCost (
 				*call, callee, params,
 				fam.getResult<TargetIRAnalysis> (*callee), get_ac, get_tli,
-				get_bfi, &psi);
+				get_bfi, &psi, /*ORE=*/nullptr, /*GetEphValuesCache=*/nullptr,
+				get_constants);
 
 			if (!cost) {
 				candidates->declined (*root, *callee, cost, site.count);

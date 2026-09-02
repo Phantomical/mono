@@ -39,6 +39,8 @@ class TargetTransformInfo;
 /// lookup beside this one, and the two are ambiguous.
 namespace mono {
 
+class ConstantValues;
+
 llvm::InlineCost getInlineCost(
     llvm::CallBase &Call, const llvm::InlineParams &Params,
     llvm::TargetTransformInfo &CalleeTTI,
@@ -48,6 +50,8 @@ llvm::InlineCost getInlineCost(
     llvm::ProfileSummaryInfo *PSI = nullptr,
     llvm::OptimizationRemarkEmitter *ORE = nullptr,
     llvm::function_ref<llvm::EphemeralValuesCache &(llvm::Function &)> GetEphValuesCache =
+        nullptr,
+    llvm::function_ref<ConstantValues &(llvm::Function &)> GetConstantValues =
         nullptr);
 
 llvm::InlineCost getInlineCost(
@@ -59,6 +63,8 @@ llvm::InlineCost getInlineCost(
     llvm::ProfileSummaryInfo *PSI = nullptr,
     llvm::OptimizationRemarkEmitter *ORE = nullptr,
     llvm::function_ref<llvm::EphemeralValuesCache &(llvm::Function &)> GetEphValuesCache =
+        nullptr,
+    llvm::function_ref<ConstantValues &(llvm::Function &)> GetConstantValues =
         nullptr);
 
 std::optional<llvm::InlineResult> getAttributeBasedInliningDecision(

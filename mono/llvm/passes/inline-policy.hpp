@@ -27,6 +27,8 @@ class Value;
 
 namespace mono {
 
+class ConstantValues;
+
 /// How often a call site runs, against the body it sits in.
 enum class SiteHeat { cold, ordinary, hot };
 
@@ -106,8 +108,14 @@ llvm::BasicBlock *noreturn_free_successor (const llvm::BranchInst &branch);
 /// can see the caller's own values. LLVM's model cannot estimate it: resolving
 /// a dispatch needs the operand's class, and an IR pointer carries none.
 ///
+/// \p get_constants answers a settled walk of the caller's own values, off the
+/// same memory model `FoldDelegateInvokesPass` reads. Null skips the bonus that
+/// needs it rather than asking for what nothing can answer.
+///
 /// Zero for a site no bonus recognizes.
-int call_site_bonus (const llvm::CallBase &call, const llvm::Function &callee);
+int call_site_bonus (const llvm::CallBase &call, const llvm::Function &callee,
+                     llvm::function_ref<ConstantValues &(llvm::Function &)>
+                             get_constants = nullptr);
 
 /// What to add to \p callee's cost for the frame `emit_push_lmf ()` pushes, or
 /// zero.
