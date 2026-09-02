@@ -92,6 +92,14 @@ struct InlineScope {
 		/// trivial callees folded in, and those come out of trivial above.
 		uint32_t costed = 0;
 
+		/// IL bytes the tier-2 cost model may still translate into this root,
+		/// alongside costed above. Charged in materialize_inline_copy () the
+		/// same way costed is: once per candidate translated for the costed
+		/// inliner, whether the fold is accepted or not. Not charged against
+		/// trivial, which already keeps its own candidates small through
+		/// trivial_inline_il_limit ().
+		uint32_t costed_bytes = 0;
+
 		uint32_t &of (Inliner who) { return who == Inliner::trivial ? trivial : costed; }
 	};
 

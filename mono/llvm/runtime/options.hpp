@@ -214,12 +214,33 @@ uint32_t trivial_inline_budget ();
 /// does not decide what the other one is left to fold.
 uint32_t costed_inline_budget ();
 
+/// How many IL bytes of candidate the tier-2 cost model can still translate
+/// into one root, alongside the count above.
+///
+/// A count cannot tell a 5-byte getter from a 250-byte body, so a root that
+/// spends its count on small forwarders never reaches a large candidate
+/// standing behind them. This is charged the same way: once per candidate
+/// translated, whether the fold is accepted or not, since the compile cost is
+/// paid either way.
+uint32_t costed_inline_byte_budget ();
+
 /// The largest callee, in IL bytes, the tier-2 cost model will translate in
 /// order to weigh it.
 ///
 /// Zero leaves tier 2 with the shape-test pre-pass alone, which separates a
 /// bug in the cost model from one in what it folded.
 uint32_t costed_inline_il_limit ();
+
+/// costed_inline_il_limit (), but for a site tier2_site_heat () answers hot.
+///
+/// A hot site is where the IL gate actually binds: the cost model's own
+/// budget at a hot site is generous enough that it is the gate, not the cost,
+/// that refuses a large profitable callee. 0 takes costed_inline_il_limit ().
+uint32_t costed_inline_il_limit_hot ();
+
+/// costed_inline_il_limit (), but for a site tier2_site_heat () answers cold.
+/// 0 takes costed_inline_il_limit ().
+uint32_t costed_inline_il_limit_cold ();
 
 /// How many folds deep past a method the tier-2 inliner can go.
 ///

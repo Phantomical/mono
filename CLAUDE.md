@@ -494,6 +494,23 @@ the same way as the tiering ones above:
   rather than code size, because LLVM's own threshold decides what is worth folding.
   Zero leaves tier 2 with the pre-pass alone, which separates a cost-model defect from a
   pre-pass one.
+- `--llvm-opt=-mono-inline-cost-il-limit-hot=<n>` (`runtime/options.cpp`) — the same
+  limit, for a site `tier2_site_heat ()` answers hot, default 1024. The flat limit is
+  the binding refusal at a hot site in practice — the cost model's own budget there is
+  generous enough that nothing declines by cost once translated, so the gate decides
+  instead of the model. 0 takes `-mono-inline-cost-il-limit`.
+  `.claude/scratch/inline-advisor-eval/EVALUATION.md` §5 has the corpus counts and the
+  fixture wins this default is measured against. `tier2_site_heat ()`'s fallback rule
+  calls every site in a loop-free root hot, which is every root a small calibration
+  fixture has, so a suite that pins its own flat `-mono-inline-cost-il-limit` to isolate
+  one variable needs `-hot`/`-cold` pinned to 0 alongside it to hold that limit constant
+  — `tier2-inline-nullcheck`, `-noreturn`, `-dispatch`, `-casts` and `-alloc-elision`
+  are the suites `runtime-suites.cmake` does this for (#349), the same isolation shape
+  `#342`'s landing added for its own affected suites.
+- `--llvm-opt=-mono-inline-cost-il-limit-cold=<n>` (`runtime/options.cpp`) — the same,
+  for a site answered cold, default 64. A cold site pays full translation for a body
+  that hardly runs; the tighter limit is what keeps that bounded. 0 takes
+  `-mono-inline-cost-il-limit`.
 - `--llvm-opt=-mono-inline-threshold=<n>` (`passes/inline-cost.cpp`) — the tier-2 cost
   model's base budget, default 225. `-mono-inlinedefault-threshold=<n>` sets the same
   field and is what wins when `-mono-inline-threshold` is not given explicitly.
@@ -515,10 +532,25 @@ the same way as the tiering ones above:
   member gets its own count, so `-mono-batch` changes how many compiles run, not what
   any one of them folds in.
 - `--llvm-opt=-mono-inline-cost-budget=<n>` (`runtime/options.cpp`) — bodies the tier-2
-  cost model may fold into one method, default 16. A count of its own, so what one
+  cost model may fold into one method, default 32. A count of its own, so what one
   inliner takes in does not decide what the other is left to fold. Zero refuses every
   method this root has not folded already, which separates a cost-model fold from a
-  pre-pass one.
+  pre-pass one. Raised from 16: a wider count widens what a root can reach past a chain
+  of small forwarders (`SharpSAT`'s `set_svar_value`, `IronPython`'s `CallSite.Target`),
+  and the compile CPU it costs is mostly background-thread time a short benchmark's own
+  process-CPU sweep charges to the process but a 30+ minute program's own clock does not
+  see — checked directly against `SharpSATbench`'s self-timed solve loop, flat at this
+  default. `-mono-inline-cost-budget=64` is not this default for the same check: its own
+  solve time moves, not just the sweep's process CPU.
+  `.claude/scratch/inline-advisor-eval/EVALUATION.md` §12 has the sweep, the mechanism
+  and the workload-clock check.
+- `--llvm-opt=-mono-inline-cost-byte-budget=<n>` (`runtime/options.cpp`) — translated IL
+  bytes the tier-2 cost model may still spend on one root, alongside the count above,
+  default 4096. A count cannot tell a 5-byte getter from a 250-byte body, so a root that
+  spends its count on small forwarders never reaches a large candidate standing behind
+  them — `lcscbench`'s `shiftNonterm` roots are the corpus case. Charged the same way the
+  count is: once per candidate the costed inliner translates, whether the fold is
+  accepted or not, because the compile cost is paid either way.
 - `--llvm-opt=-mono-inline-rounds=<n>` (`runtime/options.cpp`) — times the tier-2
   inliner takes up a method's sites again, default 4. One reads them once, which is what
   separates a fold a round exposed from one the method arrived with. A dispatch is not a
