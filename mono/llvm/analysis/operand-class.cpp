@@ -301,9 +301,8 @@ leaf_operand_class (const Value *v, const Function &f)
 		if (index == nullptr || index->getZExtValue () != arg->getArgNo ())
 			continue;
 
-		// A declared type is an upper bound. Every class the slot admits is
-		// assignable to it, and none of them has to be it.
-		return { class_in (pair, 1), false };
+		MonoClass *klass = class_in (pair, 1);
+		return { klass, bound_is_exact (klass) };
 	}
 
 	return { nullptr, false };

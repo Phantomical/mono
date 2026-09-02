@@ -161,7 +161,8 @@ erasable_allocation (const Value *v)
 
 /// Whether \p f returns a value whose class the IR states outright: an
 /// allocation under a named class, an initonly static read, or a further
-/// call whose own declared return type is sealed.
+/// call whose own declared return type is sealed. A parameter -- `this`
+/// included -- with an exact declared class counts too.
 bool
 returns_a_named_class (const Function &f)
 {
