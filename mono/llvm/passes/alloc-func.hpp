@@ -31,9 +31,9 @@ namespace mono {
  * for a class the compile can name, and the value an rgctx fetch answered for
  * one it cannot.
  *
- * size is the instance size for an object and the element count for a vector.
- * A zero instance size names a class whose layout the compile does not know. A
- * zero element count is an ordinary empty vector.
+ * size is the instance size for an object and the element count for a vector
+ * or a string. A zero instance size names a class whose layout the compile
+ * does not know. A zero element count is an ordinary empty vector or string.
  *
  * allocator is the function the lowering calls. It takes the vtable and the
  * second operand in that order, and an allocator declaring one parameter gets
@@ -44,6 +44,10 @@ namespace mono {
  * The `.kept` name means the same allocation as the name beside it, and LLVM
  * must keep it. The name carries that rather than the site, because an alloc
  * kind is an attribute of the declaration.
+ *
+ * `mono.alloc.string` carries its own name rather than share `mono.alloc.vector`'s.
+ * An array's element storage always reads back zero, and `FastAllocateString`'s
+ * characters do not under Boehm, so the two need different `allockind`s.
  *
  * None of the declarations is nounwind. Both allocators raise
  * OutOfMemoryException, so a site inside a clause is an invoke and the lowering
@@ -57,19 +61,26 @@ constexpr llvm::StringRef alloc_object_name = "mono.alloc.object";
 /// gives.
 constexpr llvm::StringRef alloc_vector_name = "mono.alloc.vector";
 
+/// Allocates a string, of the length the second operand gives.
+constexpr llvm::StringRef alloc_string_name = "mono.alloc.string";
+
 /// Allocates an object whose allocation the program can observe.
 constexpr llvm::StringRef alloc_object_kept_name = "mono.alloc.object.kept";
 
 /// Allocates a vector whose allocation the program can observe.
 constexpr llvm::StringRef alloc_vector_kept_name = "mono.alloc.vector.kept";
 
+/// Allocates a string whose allocation the program can observe.
+constexpr llvm::StringRef alloc_string_kept_name = "mono.alloc.string.kept";
+
 /// The kind of object an allocation site makes.
 enum class AllocShape {
 	object,
 	vector,
+	string,
 };
 
-/// The declaration in \p m for one of the four forms, created on first use.
+/// The declaration in \p m the shape and \p erasable select, created on first use.
 ///
 /// \p erasable marks the form LLVM can erase once nothing reads the object.
 llvm::Function *alloc_func_decl (llvm::Module &m, AllocShape shape, bool erasable);

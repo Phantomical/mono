@@ -4388,6 +4388,7 @@ register_icalls (void)
 	register_icall (ves_icall_object_new_specific, mono_icall_sig_object_ptr, FALSE);
 	register_icall (ves_icall_array_new, mono_icall_sig_object_ptr_ptr_int32, FALSE);
 	register_icall (ves_icall_array_new_specific, mono_icall_sig_object_ptr_int32, FALSE);
+	register_icall (ves_icall_string_new_specific, mono_icall_sig_object_ptr_int32, FALSE);
 	register_icall (ves_icall_runtime_class_init, mono_icall_sig_void_ptr, FALSE);
 	register_icall (mono_ldftn, mono_icall_sig_ptr_ptr, FALSE);
 	register_icall (mono_ldvirtfn, mono_icall_sig_ptr_object_ptr, FALSE);

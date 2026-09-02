@@ -1188,6 +1188,56 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 	return created;
 }
 
+/// Allocates a string of length chars and answers it. length is a signed
+/// integer of any width, and a negative or oversized value raises
+/// OutOfMemoryException from the icall rather than from anything emitted here.
+///
+/// `FastAllocateString` has no managed allocator of its own, so this always
+/// serves the call through `ves_icall_string_new_specific`.
+llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::emit_string_alloc (MonoIrBuilder &builder, llvm::Value *length)
+{
+	llvm::Expected<llvm::Value *> vtable =
+		class_operand (builder, mono_defaults.string_class, "mono_vtable_");
+
+	if (!vtable)
+		return vtable.takeError ();
+
+	llvm::Expected<llvm::Function *> icall =
+		icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_string_new_specific);
+
+	if (!icall)
+		return icall.takeError ();
+
+	(*icall)->addRetAttr (llvm::Attribute::NoAlias);
+
+	llvm::Type *native = builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8);
+	llvm::Value *count = builder.CreateSExtOrTrunc (length, native);
+	llvm::Value *created = emit_protected_call (
+		builder,
+		alloc_func_decl (*module, AllocShape::string,
+		                 !allocation_is_observable (mono_defaults.string_class)),
+		{*vtable, count, *icall});
+
+	if (auto *made = llvm::dyn_cast<llvm::Instruction> (created))
+		mark_exact_class (*made, mono_defaults.string_class);
+
+	store_object_vtable (builder, created, *vtable);
+
+	// The allocator writes this field itself, but through memory the call
+	// declares inaccessible, so a plain load after the call cannot see it.
+	// This store, at the width emit_string_length () loads, is what a later
+	// load forwards from instead.
+	builder.CreateAlignedStore (
+		builder.CreateSExtOrTrunc (count, builder.getInt32Ty ()),
+		builder.CreateGEP (
+			builder.getInt8Ty (), created,
+			builder.getInt32 (MONO_STRUCT_OFFSET (MonoString, length))),
+		llvm::Align (4));
+
+	return created;
+}
+
 /*
  * III.4.20  newarr - create a zero-based, one-dimensional array
  *

@@ -1146,6 +1146,9 @@ private:
 	llvm::Error emit_array_dimension (MonoIrBuilder &builder, MonoMethod *accessor,
 	                                  bool lower_bound);
 	llvm::Error emit_string_length (MonoIrBuilder &builder);
+	llvm::Expected<llvm::Value *> emit_string_alloc (MonoIrBuilder &builder,
+	                                                 llvm::Value *length);
+	llvm::Error emit_string_alloc_call (MonoIrBuilder &builder, MonoMethodSignature *sig);
 	llvm::Error emit_get_type (MonoIrBuilder &builder, bool receiver_by_reference);
 
 	/// A System.Type object's MonoType, and the word that holds its tag fields.

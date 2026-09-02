@@ -17,6 +17,7 @@
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/ModRef.h>
 
 using namespace llvm;
@@ -27,10 +28,16 @@ namespace {
 StringRef
 name_of (AllocShape shape, bool erasable)
 {
-	if (shape == AllocShape::object)
+	switch (shape) {
+	case AllocShape::object:
 		return erasable ? alloc_object_name : alloc_object_kept_name;
+	case AllocShape::vector:
+		return erasable ? alloc_vector_name : alloc_vector_kept_name;
+	case AllocShape::string:
+		return erasable ? alloc_string_name : alloc_string_kept_name;
+	}
 
-	return erasable ? alloc_vector_name : alloc_vector_kept_name;
+	llvm_unreachable ("unhandled AllocShape");
 }
 
 /// \p args, reshaped to what \p callee declares, and cut to the parameters it
@@ -148,10 +155,17 @@ alloc_func_decl (Module &m, AllocShape shape, bool erasable)
 	 *
 	 * `emit_object_alloc ()` and `emit_vector_alloc ()` store the words an
 	 * allocator writes itself again, right beside the call.
+	 *
+	 * `mono_gc_alloc_string ()` is the exception: under Boehm it leaves the
+	 * characters `FastAllocateString`'s caller is about to fill uninitialized.
+	 * `uninitialized` still lets LLVM erase the call, without claiming a load of
+	 * an unfilled character reads zero.
 	 */
 	if (erasable)
 		decl->addFnAttr (Attribute::getWithAllocKind (
-			c, AllocFnKind::Alloc | AllocFnKind::Zeroed));
+			c, AllocFnKind::Alloc
+				| (shape == AllocShape::string ? AllocFnKind::Uninitialized
+			                                        : AllocFnKind::Zeroed)));
 
 	return decl;
 }
@@ -161,7 +175,7 @@ lower_allocations (Module &m)
 {
 	bool changed = false;
 
-	for (AllocShape shape : { AllocShape::object, AllocShape::vector })
+	for (AllocShape shape : { AllocShape::object, AllocShape::vector, AllocShape::string })
 		for (bool erasable : { true, false }) {
 			StringRef name = name_of (shape, erasable);
 

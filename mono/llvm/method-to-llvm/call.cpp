@@ -1185,6 +1185,30 @@ MethodLLVMEmitter::emit_string_length (MonoIrBuilder &builder)
 	return llvm::Error::success ();
 }
 
+/// Emits FastAllocateString (int32) as an allocation instead of the call the
+/// IL named, so the site carries an alloc kind the way `newarr` already does.
+llvm::Error
+MethodLLVMEmitter::emit_string_alloc_call (MonoIrBuilder &builder, MonoMethodSignature *sig)
+{
+	if (stack.empty ())
+		return unbalanced_stack (1);
+
+	StackValue length = get_stack (0);
+
+	if (stack_type (length.type) != Int32)
+		return invalid_il (llvm::Twine ("a string length was expected, not operand type ")
+		                   + describe (length.type, stack_type (length.type)));
+
+	llvm::Expected<llvm::Value *> created = emit_string_alloc (builder, length.value);
+
+	if (!created)
+		return created.takeError ();
+
+	pop_stack (1);
+	push_stack (*created, sig->ret);
+	return llvm::Error::success ();
+}
+
 /// Reads the System.Type an object's vtable carries, which is what
 /// object.GetType () answers.
 ///
@@ -1445,6 +1469,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	    && std::string_view (callee_method->name) == "get_Length"
 	    && sig->hasthis && sig->param_count == 0)
 		return emit_string_length (builder);
+
+	if (callee_method->klass == mono_defaults.string_class
+	    && std::string_view (callee_method->name) == "FastAllocateString"
+	    && !sig->hasthis && sig->param_count == 1)
+		return emit_string_alloc_call (builder, sig);
 
 	if (answers_array_shape (callee_method, sig)) {
 		std::string_view what = callee_method->name;

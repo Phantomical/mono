@@ -33,6 +33,13 @@ using System.Runtime.CompilerServices;
  * Both collectors run every arm against the same declaration, so an arm that
  * answers differently under the two names the collector.
  *
+ * `mono.alloc.string` is the third declaration, reached through `ToUpper ()`
+ * rather than through IL this file writes: FastAllocateString is internal to
+ * corlib. It carries `allockind(uninitialized)` rather than `(zeroed)`, since
+ * `mono_gc_alloc_string ()` leaves the characters unset under Boehm.
+ * KeptStringStep is KeptArrayStep's arm for it: the length store and the
+ * characters both have to survive whichever tier compiles the call.
+ *
  * Each arm is one call of a small method, driven from a loop in Main. A method
  * holding its own loop is entered once, and both counters count entries, so the
  * arm would stay in the interpreter. The loop count gets the arms to tier 1.
@@ -154,6 +161,20 @@ class AllocElide {
 		return a.Length;
 	}
 
+	/*
+	 * The length varies with n, so what Length answers is the store
+	 * emit_string_alloc () writes behind the call. 'A' is what
+	 * ToUpperInternal () wrote into memory FastAllocateString left
+	 * uninitialized.
+	 */
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int KeptStringStep (int n)
+	{
+		string s = new string ('a', (n & 7) + 1).ToUpper ();
+
+		return s.Length + (s[0] == 'A' ? 1 : 0);
+	}
+
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int ReadsElement (int[] a, int at)
 	{
@@ -225,7 +246,7 @@ class AllocElide {
 		int kept = 0;
 		double dot = 0;
 		int dead = 0, keptArray = 0, refusedDead = 0, refusedRead = 0;
-		int length = 0, expectedLength = 0, freshElement = 0;
+		int length = 0, expectedLength = 0, freshElement = 0, keptString = 0;
 		long straddle = 0;
 		Vec a = new Vec (3, 4, 5), b = new Vec (1, 2, 3);
 		Cell cell = new Cell ();
@@ -239,6 +260,7 @@ class AllocElide {
 			keptArray += KeptArrayStep (i);
 			length += LengthStep (i);
 			expectedLength += i & 7;
+			keptString += KeptStringStep (i);
 			freshElement += FreshElementStep (i);
 			straddle += StraddleStep (cell, i);
 
@@ -257,6 +279,8 @@ class AllocElide {
 		Check ("a dead array changes no answer", dead == (long) N * (N + 1) / 2);
 		Check ("a used array keeps its elements", keptArray == 2 * N);
 		Check ("a fresh array reads back its length", length == expectedLength);
+		Check ("a fresh string reads back its length and its characters",
+		       keptString == expectedLength + 2 * N);
 		Check ("an element nothing wrote reads as zero", freshElement == 0);
 		Check ("a dead array's negative length still raises", refusedDead == N);
 		Check ("a read array's negative length still raises", refusedRead == N);

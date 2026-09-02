@@ -7092,13 +7092,12 @@ mono_string_new_size (MonoDomain *domain, gint32 len)
 	return str;
 }
 
-MonoStringHandle
-mono_string_new_size_handle (MonoDomain *domain, gint32 len, MonoError *error)
+MonoString*
+mono_string_new_specific_checked (MonoVTable *vtable, gint32 len, MonoError *error)
 {
 	MONO_REQ_GC_UNSAFE_MODE;
 
-	MonoStringHandle s;
-	MonoVTable *vtable;
+	MonoString *s;
 	size_t size;
 
 	error_init (error);
@@ -7106,21 +7105,43 @@ mono_string_new_size_handle (MonoDomain *domain, gint32 len, MonoError *error)
 	/* check for overflow */
 	if (len < 0 || len > ((SIZE_MAX - G_STRUCT_OFFSET (MonoString, chars) - 8) / 2)) {
 		mono_error_set_out_of_memory (error, "Could not allocate %i bytes", -1);
-		return NULL_HANDLE_STRING;
+		return NULL;
 	}
 
 	size = (G_STRUCT_OFFSET (MonoString, chars) + (((size_t)len + 1) * 2));
 	g_assert (size > 0);
 
-	vtable = mono_class_vtable_checked (domain, mono_defaults.string_class, error);
-	return_val_if_nok (error, NULL_HANDLE_STRING);
+	s = mono_gc_alloc_string (vtable, size, len);
 
-	s = mono_gc_alloc_handle_string (vtable, size, len);
-
-	if (G_UNLIKELY (MONO_HANDLE_IS_NULL (s)))
+	if (G_UNLIKELY (!s))
 		mono_error_set_out_of_memory (error, "Could not allocate %" G_GSIZE_FORMAT " bytes", size);
 
 	return s;
+}
+
+MonoString*
+ves_icall_string_new_specific (MonoVTable *vtable, gint32 len)
+{
+	ERROR_DECL (error);
+	MonoString *s = mono_string_new_specific_checked (vtable, len, error);
+	mono_error_set_pending_exception (error);
+
+	return s;
+}
+
+MonoStringHandle
+mono_string_new_size_handle (MonoDomain *domain, gint32 len, MonoError *error)
+{
+	MONO_REQ_GC_UNSAFE_MODE;
+
+	MonoVTable *vtable;
+
+	error_init (error);
+
+	vtable = mono_class_vtable_checked (domain, mono_defaults.string_class, error);
+	return_val_if_nok (error, NULL_HANDLE_STRING);
+
+	return MONO_HANDLE_NEW (MonoString, mono_string_new_specific_checked (vtable, len, error));
 }
 
 MonoString *

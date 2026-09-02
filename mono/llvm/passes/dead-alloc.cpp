@@ -267,7 +267,7 @@ erase_dead_allocations (Function &f)
 
 		again = false;
 
-		for (StringRef name : { alloc_object_name, alloc_vector_name })
+		for (StringRef name : { alloc_object_name, alloc_vector_name, alloc_string_name })
 			for (CallBase *site : builtin_sites (f, name)) {
 				// A site inside a clause is an invoke. Erasing one asks
 				// for a repair of the pads its edges name, so it keeps

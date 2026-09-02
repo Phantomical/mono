@@ -22,8 +22,7 @@ namespace mono {
 /// one step, so the object never exists and owes no card. A barrier erased on
 /// its own leaves a store the collector has no card for.
 ///
-/// Only `mono.alloc.object` and `mono.alloc.vector` are read, so the `.kept`
-/// forms keep their objects.
+/// The `.kept` forms are not read, so those objects are kept regardless.
 ///
 /// Run it in front of the `LowerStage::post_optimization` lowering. That
 /// lowering writes a barrier back as a compare and a byte store, which this

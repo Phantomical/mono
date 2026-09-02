@@ -1806,6 +1806,10 @@ ICALL_EXPORT
 MonoArray*
 ves_icall_array_new_specific (MonoVTable *vtable, uintptr_t n);
 
+ICALL_EXPORT
+MonoString*
+ves_icall_string_new_specific (MonoVTable *vtable, gint32 len);
+
 #ifndef DISABLE_REMOTING
 MonoRemoteClass*
 mono_remote_class (MonoDomain *domain, MonoStringHandle class_name, MonoClass *proxy_class, MonoError *error);
@@ -2121,6 +2125,9 @@ mono_object_handle_isinst_mbyref (MonoObjectHandle obj, MonoClass *klass, MonoEr
 
 gboolean
 mono_object_handle_isinst_mbyref_raw (MonoObjectHandle obj, MonoClass *klass, MonoError *error);
+
+MonoString*
+mono_string_new_specific_checked (MonoVTable *vtable, gint32 len, MonoError *error);
 
 MonoStringHandle
 mono_string_new_size_handle (MonoDomain *domain, gint32 len, MonoError *error);
