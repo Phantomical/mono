@@ -22,9 +22,9 @@ namespace mono {
 /*
  * The ECMA clause kinds the file doc above names as the range this file's own
  * kind values sit outside of, given as constants rather than left in prose.
- * top-down-inline.cpp compares against these to tell a finally or fault
- * clause from a catch or filter one, and passes/ may not include a mono
- * header for the real MonoExceptionEnum.
+ * top-down-inline.cpp compares against these to tell a mergeable clause -
+ * catch, finally or fault - from a filter, and passes/ may not include a
+ * mono header for the real MonoExceptionEnum.
  */
 constexpr std::uint32_t MONO_ECMA_CLAUSE_NONE = 0;
 constexpr std::uint32_t MONO_ECMA_CLAUSE_FILTER = 1;

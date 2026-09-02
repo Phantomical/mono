@@ -199,20 +199,22 @@ has_own_clause (const Function &callee)
 }
 
 /// Whether every clause on every landing pad callee's own translation wrote
-/// is a finally or a fault. It decodes each one the way eh-gather.cpp reads a
-/// landing pad's TypeIds back at the machine level, because the front end
-/// publishes every clause kind - catch and filter included - through the
-/// same smuggled global, so this is the one place that tells them apart
-/// before codegen.
+/// is a kind the merge below knows how to place: a catch, a finally or a
+/// fault. It decodes each one the way eh-gather.cpp reads a landing pad's
+/// TypeIds back at the machine level, because the front end publishes every
+/// clause kind - filter included - through the same smuggled global, so this
+/// is the one place that tells them apart before codegen.
 ///
-/// A catch or filter clause answers no, the same as a decode this pass does
-/// not understand. What "merged" describes is scoped to this function alone:
+/// A filter clause answers no, the same as a decode this pass does not
+/// understand. What "merged" describes is scoped to this function alone:
 /// a decline here still leaves clause_survives_fold ()'s own trial as the
 /// correctness gate underneath, and it is eh-gather.cpp's own decode of the
 /// same marker that places a merged clause once this has let the real fold
-/// through.
+/// through. mono_lsda.cpp's per-owner join already resolves catch_class off
+/// whichever header the clause's owner names, the same as it always has for
+/// the root's own catch clauses, so a catch needs no case of its own there.
 bool
-finally_or_fault_only (const Function &callee)
+mergeable_clause_kinds_only (const Function &callee)
 {
 	for (const Instruction &i : instructions (callee)) {
 		const auto *lpi = dyn_cast<LandingPadInst> (&i);
@@ -234,8 +236,14 @@ finally_or_fault_only (const Function &callee)
 			if (!decode_clause_marker (gv, clause_index, kind))
 				return false;
 
-			if (kind != (int) MONO_ECMA_CLAUSE_FINALLY && kind != (int) MONO_ECMA_CLAUSE_FAULT)
+			switch ((std::uint32_t) kind) {
+			case MONO_ECMA_CLAUSE_NONE:
+			case MONO_ECMA_CLAUSE_FINALLY:
+			case MONO_ECMA_CLAUSE_FAULT:
+				break;
+			default:
 				return false;
+			}
 		}
 	}
 
@@ -458,7 +466,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 			if (has_own_clause (*callee)
 			    && clause_survives_fold (*call, *callee, simplify_, fam, get_ac)
-			    && !finally_or_fault_only (*callee)) {
+			    && !mergeable_clause_kinds_only (*callee)) {
 				candidates->declined (
 					*root, *callee,
 					InlineCost::getNever ("its clause has nowhere to sit once folded"),
@@ -467,9 +475,9 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			}
 
 			/*
-			 * A surviving finally or fault clause falls through to the real
-			 * fold below rather than being declined. eh-gather.cpp reads such
-			 * a clause's owner straight off its own marker, whichever
+			 * A surviving catch, finally or fault clause falls through to the
+			 * real fold below rather than being declined. eh-gather.cpp reads
+			 * such a clause's owner straight off its own marker, whichever
 			 * function's landing pad it ends up on after codegen, so nothing
 			 * here has to flag that a merge happened - the fold itself is
 			 * what makes one.
