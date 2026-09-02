@@ -593,8 +593,27 @@ folded_type_test (CallBase &call, SettledValue settled)
 	Value *object = call.getArgOperand (0);
 	std::pair<MonoClass *, bool> held =
 		settled_class (object, *call.getFunction (), settled);
+	CastAnswer answer = cast_answer (target, held.first, held.second);
 
-	switch (cast_answer (target, held.first, held.second)) {
+	/*
+	 * The merge names no class, but a phi's own edges can each answer on
+	 * their own - castclass excepted, because a "no" edge has to raise and a
+	 * phi cannot raise on one edge alone. This only prices the call site, so
+	 * it returns the operand unchanged rather than the per-edge value
+	 * rebuild_isinst_over_incoming () would build for a real fold.
+	 */
+	if (answer == CastAnswer::Unknown && !raises) {
+		auto *phi = dyn_cast_or_null<PHINode> (
+			settled (const_cast<Value *> (strip_casts (object))));
+
+		if (phi != nullptr && isinst_settles_over_incoming (*phi, [&] (Value *incoming) {
+			    auto [klass, exact] = stated_class (incoming, *phi->getFunction ());
+			    return cast_answer (target, klass, exact);
+		    }))
+			return object;
+	}
+
+	switch (answer) {
 	case CastAnswer::Yes:
 		return object;
 	case CastAnswer::No:

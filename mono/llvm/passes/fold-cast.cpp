@@ -136,6 +136,39 @@ cast_answer (MonoClass *target, MonoClass *held, bool exact)
 	                                                             : CastAnswer::No;
 }
 
+bool
+isinst_settles_over_incoming (PHINode &phi, function_ref<CastAnswer (Value *)> answer)
+{
+	for (unsigned i = 0, n = phi.getNumIncomingValues (); i < n; i++)
+		if (answer (phi.getIncomingValue (i)) == CastAnswer::Unknown)
+			return false;
+
+	return true;
+}
+
+Value *
+rebuild_isinst_over_incoming (PHINode &phi, function_ref<CastAnswer (Value *)> answer)
+{
+	if (!isinst_settles_over_incoming (phi, answer))
+		return nullptr;
+
+	unsigned n = phi.getNumIncomingValues ();
+	auto *rebuilt = PHINode::Create (phi.getType (), n, "isinst_merge", phi.getIterator ());
+
+	// A "no" edge takes null rather than being dropped, which is what lets a
+	// later jump-threading pass split the merge and fold each cascade
+	// against its own class.
+	for (unsigned i = 0; i < n; i++) {
+		Value *edge = answer (phi.getIncomingValue (i)) == CastAnswer::Yes
+			? phi.getIncomingValue (i)
+			: ConstantPointerNull::get (PointerType::get (phi.getContext (), 0));
+
+		rebuilt->addIncoming (edge, phi.getIncomingBlock (i));
+	}
+
+	return rebuilt;
+}
+
 namespace {
 
 /// Replaces \p site with \p value, keeping the block structure the site's own
@@ -220,8 +253,8 @@ fold_sites (Function &f, StringRef name, bool throw_on_fail,
 			values = &fam.getResult<MonoConstantValues> (f);
 
 		Value *obj = site->getArgOperand (0);
-		CastAnswer answer =
-			answer_for (obj, tested_class (site, *values), f, *values);
+		MonoClass *target = tested_class (site, *values);
+		CastAnswer answer = answer_for (obj, target, f, *values);
 
 		// Both forms answer the operand where the test passes, since both
 		// answer null for null and neither changes what it is handed.
@@ -237,6 +270,24 @@ fold_sites (Function &f, StringRef name, bool throw_on_fail,
 		if (answer == CastAnswer::No && !throw_on_fail) {
 			answer_with (site, ConstantPointerNull::get (
 						   PointerType::get (f.getContext (), 0)));
+			changed = true;
+			continue;
+		}
+
+		// A merge with no single answer can still answer edge by edge.
+		// castclass keeps its cost here too: a "no" edge has to raise, and a
+		// phi cannot raise on one edge alone.
+		auto *phi = dyn_cast<PHINode> (const_cast<Value *> (strip_casts (obj)));
+
+		if (answer != CastAnswer::Unknown || throw_on_fail || phi == nullptr)
+			continue;
+
+		Value *rebuilt = rebuild_isinst_over_incoming (*phi, [&] (Value *incoming) {
+			return answer_for (incoming, target, f, *values);
+		});
+
+		if (rebuilt != nullptr) {
+			answer_with (site, rebuilt);
 			changed = true;
 		}
 	}

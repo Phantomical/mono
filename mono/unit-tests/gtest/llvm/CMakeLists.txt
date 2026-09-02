@@ -19,7 +19,7 @@ set(MONO_LLVM_TEST_SOURCES
     profile-counters-tests.cpp profile-counter-promoter-tests.cpp
     rgctx-fetch-tests.cpp rgctx-dedup-tests.cpp clamp-frame-align-tests.cpp
     array-address-tests.cpp array-shape-tests.cpp ir-dump-tests.cpp
-    cast-func-tests.cpp fold-delegate-tests.cpp inline-heat-tests.cpp
+    cast-func-tests.cpp fold-delegate-tests.cpp fold-cast-tests.cpp inline-heat-tests.cpp
     inline-cost-dom-chain-tests.cpp
     gc-barrier-tests.cpp operand-class-tests.cpp dead-alloc-tests.cpp
     escape-tests.cpp promote-alloc-tests.cpp constant-values-tests.cpp
