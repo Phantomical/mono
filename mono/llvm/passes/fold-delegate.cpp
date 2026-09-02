@@ -30,6 +30,7 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
@@ -353,6 +354,40 @@ invoke_sites (Function &f)
 	return found;
 }
 
+/// Whether \p call is the keep_alive () marker call.cpp writes for
+/// \p delegate.
+bool
+is_keep_alive_of (const CallBase &call, const Value &delegate)
+{
+	return call.getCalledFunction () == nullptr
+	       && isa<InlineAsm> (call.getCalledOperand ())
+	       && call.arg_size () == 1
+	       && strip_casts (call.getArgOperand (0)) == strip_casts (&delegate);
+}
+
+/// The keep_alive () marker written for \p site's delegate, or null where
+/// call.cpp emitted none.
+CallInst *
+keep_alive_for (CallBase &site)
+{
+	BasicBlock *scope = site.getParent ();
+	// Starts right after site, not at the block's front, so an earlier
+	// Invoke on the same delegate in this block cannot donate its marker.
+	BasicBlock::iterator start = std::next (site.getIterator ());
+
+	if (auto *unwinds = dyn_cast<InvokeInst> (&site)) {
+		scope = unwinds->getNormalDest ();
+		start = scope->begin ();
+	}
+
+	for (Instruction &at : llvm::make_range (start, scope->end ()))
+		if (auto *call = dyn_cast<CallInst> (&at))
+			if (is_keep_alive_of (*call, *site.getArgOperand (0)))
+				return call;
+
+	return nullptr;
+}
+
 /// Replaces \p site with a call that enters \p entry.
 void
 enter_directly (CallBase &site, Function *entry, Receiver receiver)
@@ -428,8 +463,15 @@ guard_fits (CallBase *site)
 
 /// Sends \p site through a compare of the delegate's entry against \p entry,
 /// with a direct call on the arm that matches.
+///
+/// \p marker, where not null, is call.cpp's keep_alive () for this delegate.
+/// The compare only proves \p entry on the direct-call arm, so \p marker
+/// comes off there and stays on the dispatch arm. \p target_dynamic keeps
+/// it on both arms, because only the delegate roots a dynamic method's
+/// code across the call.
 void
-guard_entry (CallBase &site, Function *entry, Receiver receiver, MDNode *weights)
+guard_entry (CallBase &site, Function *entry, Receiver receiver, MDNode *weights,
+            CallInst *marker, bool target_dynamic)
 {
 	LLVMContext &c = site.getContext ();
 	Function *f = site.getFunction ();
@@ -446,10 +488,27 @@ guard_entry (CallBase &site, Function *entry, Receiver receiver, MDNode *weights
 	BasicBlock *fast = BasicBlock::Create (c, "delegate_direct", f, tail);
 	BasicBlock *slow = BasicBlock::Create (c, "delegate_dispatch", f, tail);
 
+	// tail's real predecessor on the dispatching arm: slow itself, unless the
+	// marker below needs a block of its own past slow's own terminator.
+	BasicBlock *slow_pred = slow;
+
 	// The site keeps its own identity on the dispatching arm, so everything it
 	// carried travels without being copied.
 	site.removeFromParent ();
 	site.insertInto (slow, slow->end ());
+
+	if (marker != nullptr && !target_dynamic) {
+		marker->removeFromParent ();
+
+		if (unwinds == nullptr) {
+			marker->insertInto (slow, slow->end ());
+		} else {
+			slow_pred = BasicBlock::Create (c, "delegate_dispatch_done", f, tail);
+			marker->insertInto (slow_pred, slow_pred->end ());
+			IRBuilder<> (slow_pred).CreateBr (tail);
+			unwinds->setNormalDest (slow_pred);
+		}
+	}
 
 	IRBuilder<> b (fast);
 
@@ -462,9 +521,10 @@ guard_entry (CallBase &site, Function *entry, Receiver receiver, MDNode *weights
 		IRBuilder<> (slow).CreateBr (tail);
 	} else {
 		// Both arms reach the pad and the continuation now, where the one
-		// invoke reached each of them from the block above.
-		tail->replacePhiUsesWith (head, slow);
-		share_phis_with (tail, slow, fast);
+		// invoke reached each of them from the block above. tail's real
+		// predecessor here is slow_pred, defined above, not slow itself.
+		tail->replacePhiUsesWith (head, slow_pred);
+		share_phis_with (tail, slow_pred, fast);
 		pad->replacePhiUsesWith (head, slow);
 		share_phis_with (pad, slow, fast);
 	}
@@ -477,7 +537,7 @@ guard_entry (CallBase &site, Function *entry, Receiver receiver, MDNode *weights
 		// does not reach into the phi's own operand for the dispatched answer.
 		site.replaceAllUsesWith (merged);
 		merged->addIncoming (direct, fast);
-		merged->addIncoming (&site, slow);
+		merged->addIncoming (&site, slow_pred);
 	}
 
 	// head is left without a terminator either way: an invoke was the
@@ -621,10 +681,19 @@ FoldDelegateInvokesPass::run (Function &f, FunctionAnalysisManager &fam)
 		if (!entry)
 			continue;
 
-		if (at.weights == nullptr)
+		CallInst *marker = keep_alive_for (*at.site);
+
+		if (at.weights == nullptr) {
 			enter_directly (*at.site, entry->first, entry->second);
-		else
-			guard_entry (*at.site, entry->first, entry->second, at.weights);
+
+			// No dispatch survives this site, so only a dynamic method still
+			// needs the marker to keep its code alive.
+			if (marker != nullptr && !at.target->dynamic)
+				marker->eraseFromParent ();
+		} else {
+			guard_entry (*at.site, entry->first, entry->second, at.weights,
+			            marker, at.target->dynamic);
+		}
 
 		changed = true;
 	}
