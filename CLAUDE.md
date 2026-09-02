@@ -490,7 +490,7 @@ the same way as the tiering ones above:
   it loses bodies and above it buys almost none. Raising `-mono-inline-budget` with it
   moves that 878 to 889, so neither knob is a large lever past the defaults.
 - `--llvm-opt=-mono-inline-cost-il-limit=<n>` (`runtime/options.cpp`) — largest callee
-  the tier-2 cost model translates so it can weigh it, default 128. It bounds translation
+  the tier-2 cost model translates so it can weigh it, default 256. It bounds translation
   rather than code size, because LLVM's own threshold decides what is worth folding.
   Zero leaves tier 2 with the pre-pass alone, which separates a cost-model defect from a
   pre-pass one.

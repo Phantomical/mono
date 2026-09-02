@@ -133,7 +133,7 @@ llvm::cl::opt<unsigned> CostedInlineBudgetOpt (
 	llvm::cl::desc ("Bodies the tier-2 cost model may fold into one method"));
 
 llvm::cl::opt<unsigned> CostedInlineILLimitOpt (
-	"mono-inline-cost-il-limit", llvm::cl::Hidden, llvm::cl::init (128),
+	"mono-inline-cost-il-limit", llvm::cl::Hidden, llvm::cl::init (256),
 	llvm::cl::desc ("Largest callee in IL bytes the tier-2 cost model will "
 	                "translate to weigh it"));
 
