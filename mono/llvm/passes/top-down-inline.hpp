@@ -6,13 +6,17 @@
 #ifndef MONO_LLVM_PASSES_TOP_DOWN_INLINE_HPP
 #define MONO_LLVM_PASSES_TOP_DOWN_INLINE_HPP
 
+#include "inline-policy.hpp"
+
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/IR/PassManager.h>
 
 #include <cstdint>
+#include <optional>
 #include <utility>
 
 namespace llvm {
+class CallBase;
 class Function;
 class InlineCost;
 class TargetMachine;
@@ -47,7 +51,17 @@ public:
 	/// Null means the site keeps its call. The engine refuses the method, its
 	/// metadata will not load, or the compile has spent the translation it is
 	/// allowed.
-	virtual llvm::Function *materialize (llvm::Function &decl, llvm::Module &into) = 0;
+	///
+	/// \p heat is what tier2_site_heat () says of the site asking, or nothing,
+	/// so the engine can size the translation it is willing to do by how hot
+	/// the site is rather than by one flat limit. \p call is that site itself,
+	/// so the engine can also ask what the caller's own IR already states about
+	/// an argument -- carries_an_elision_candidate () (`inline-policy.hpp`) is
+	/// what a cold site's limit reads it for -- without needing decl translated
+	/// first to answer.
+	virtual llvm::Function *materialize (llvm::Function &decl, llvm::Module &into,
+	                                     std::optional<SiteHeat> heat,
+	                                     const llvm::CallBase &call) = 0;
 
 	/// The counts \p decl's own callee gathered on its own account, in the form
 	/// PGOInstrumentationUse reads back.
@@ -56,7 +70,11 @@ public:
 	/// branches then come from LLVM's static estimates.
 	virtual llvm::ArrayRef<uint8_t> profile_for (llvm::Function &decl) = 0;
 
-	virtual void folded (llvm::Function &caller, llvm::Function &callee) = 0;
+	/// Says that the cost model weighed \p callee at a site in \p caller and
+	/// folded it. \p cost and \p count are what declined () below gets, for a
+	/// trace that can read a fold and a decline the same way.
+	virtual void folded (llvm::Function &caller, llvm::Function &callee,
+	                     const llvm::InlineCost &cost, uint64_t count) = 0;
 
 	/// Says that the cost model weighed \p callee at a site in \p caller and
 	/// declined it.

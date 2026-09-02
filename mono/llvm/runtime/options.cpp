@@ -129,13 +129,39 @@ llvm::cl::opt<unsigned> InlineBudgetOpt (
 	llvm::cl::desc ("Bodies the shape-test pre-pass may fold into one method"));
 
 llvm::cl::opt<unsigned> CostedInlineBudgetOpt (
-	"mono-inline-cost-budget", llvm::cl::Hidden, llvm::cl::init (16),
+	"mono-inline-cost-budget", llvm::cl::Hidden, llvm::cl::init (32),
 	llvm::cl::desc ("Bodies the tier-2 cost model may fold into one method"));
+
+llvm::cl::opt<unsigned> CostedInlineByteBudgetOpt (
+	"mono-inline-cost-byte-budget", llvm::cl::Hidden, llvm::cl::init (4096),
+	llvm::cl::desc ("Translated IL bytes the tier-2 cost model may still spend "
+	                "on one root, alongside the body count above"));
 
 llvm::cl::opt<unsigned> CostedInlineILLimitOpt (
 	"mono-inline-cost-il-limit", llvm::cl::Hidden, llvm::cl::init (256),
 	llvm::cl::desc ("Largest callee in IL bytes the tier-2 cost model will "
 	                "translate to weigh it"));
+
+/*
+ * The fallback-hot rule (inline-policy.cpp) calls a site hot whenever its
+ * root carries no loop, which is every root a small, purpose-built
+ * calibration fixture has - so this default reaches every existing suite
+ * that pins its own flat -mono-inline-cost-il-limit to hold one variable
+ * constant while it tests another. Each such suite's own MONO_ENV_OPTIONS
+ * now pins -hot/-cold to 0 alongside its flat limit, the same isolation
+ * shape #342's landing added for its own affected suites - see
+ * runtime-suites.cmake's comments on tier2-inline-nullcheck, -dispatch,
+ * -casts, -alloc-elision and -wrapper for the ones that needed it.
+ */
+llvm::cl::opt<unsigned> CostedInlineILLimitHotOpt (
+	"mono-inline-cost-il-limit-hot", llvm::cl::Hidden, llvm::cl::init (1024),
+	llvm::cl::desc ("IL limit the tier-2 cost model translates a callee at a "
+	                "hot site under; 0 takes -mono-inline-cost-il-limit"));
+
+llvm::cl::opt<unsigned> CostedInlineILLimitColdOpt (
+	"mono-inline-cost-il-limit-cold", llvm::cl::Hidden, llvm::cl::init (64),
+	llvm::cl::desc ("IL limit the tier-2 cost model translates a callee at a "
+	                "cold site under; 0 takes -mono-inline-cost-il-limit"));
 
 llvm::cl::opt<unsigned> InlineDepthLimitOpt (
 	"mono-inline-depth", llvm::cl::Hidden, llvm::cl::init (4),
@@ -468,9 +494,33 @@ costed_inline_budget ()
 }
 
 uint32_t
+costed_inline_byte_budget ()
+{
+	// A count treats a 5-byte getter the same as a 250-byte body, so a root
+	// that spends its count on small forwarders never reaches the large one
+	// behind them. This is the other half of the same bound, in the unit
+	// compile time is actually spent in.
+	return CostedInlineByteBudgetOpt;
+}
+
+uint32_t
 costed_inline_il_limit ()
 {
 	return CostedInlineILLimitOpt;
+}
+
+uint32_t
+costed_inline_il_limit_hot ()
+{
+	return CostedInlineILLimitHotOpt == 0 ? CostedInlineILLimitOpt.getValue ()
+	                                      : CostedInlineILLimitHotOpt.getValue ();
+}
+
+uint32_t
+costed_inline_il_limit_cold ()
+{
+	return CostedInlineILLimitColdOpt == 0 ? CostedInlineILLimitOpt.getValue ()
+	                                       : CostedInlineILLimitColdOpt.getValue ();
 }
 
 uint32_t

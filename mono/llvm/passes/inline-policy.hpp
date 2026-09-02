@@ -101,6 +101,16 @@ llvm::BasicBlock *implicit_null_check_successor (const llvm::BranchInst &branch)
 /// throws uncounted.
 llvm::BasicBlock *noreturn_free_successor (const llvm::BranchInst &branch);
 
+/// Whether \p call passes an argument this compile can already tell, from the
+/// caller's own IR alone, is a fresh allocation still flowing toward
+/// erasure -- checked with no need to look at, or translate, the callee.
+///
+/// The caller-side half of what call_site_bonus () asks in full once the
+/// callee is available: whether a fold could plausibly erase an allocation,
+/// not whether it will. Meant for a gate that runs before translation, such
+/// as the IL limit a cold site would otherwise be held to.
+bool carries_an_elision_candidate (const llvm::CallBase &call);
+
 /// What to add to the threshold a call site is weighed against, in the units
 /// the model costs an instruction in.
 ///

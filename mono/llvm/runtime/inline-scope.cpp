@@ -15,6 +15,8 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
 
+#include <algorithm>
+
 #include "mini.h"
 
 #include "mono/metadata/class-internals.h"
@@ -310,8 +312,18 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 	 * cost as much as one that did not, and the budget is all that stops a
 	 * second site from asking for the same body.
 	 */
-	if (entry == nullptr)
+	if (entry == nullptr) {
 		--scope.budget.of (who);
+
+		// The byte budget is the costed inliner's own; the trivial pre-pass
+		// keeps its candidates small through trivial_inline_il_limit () rather
+		// than a running total.
+		if (who == Inliner::costed) {
+			uint32_t size = (uint32_t) cfg->header->code_size;
+
+			scope.budget.costed_bytes -= std::min (scope.budget.costed_bytes, size);
+		}
+	}
 
 	if (!materialized) {
 		consumeError (materialized.takeError ());

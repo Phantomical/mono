@@ -10,6 +10,7 @@
 #include "naming.hpp"
 #include "options.hpp"
 #include "passes/inline-copies.hpp"
+#include "passes/inline-policy.hpp"
 #include "timing.hpp"
 #include "trivial-inlines.hpp"
 
@@ -43,7 +44,8 @@ ProfileInliner::round_limit () const
 }
 
 void
-ProfileInliner::folded (Function &caller, Function &callee)
+ProfileInliner::folded (Function &caller, Function &callee, const InlineCost &cost,
+                        uint64_t count)
 {
 	if (!is_jit_trace_enabled ())
 		return;
@@ -59,7 +61,14 @@ ProfileInliner::folded (Function &caller, Function &callee)
 
 	MONO_LOCK (jit_trace_mutex ())
 	{
-		fprintf (stderr, "[llvm-jit] folding %s into %s\n", folded, host);
+		if (cost.isVariable ())
+			fprintf (stderr, "[llvm-jit] folding %s into %s at a site counted %"
+			                 G_GUINT64_FORMAT " times: costs %d against a budget of %d\n",
+			         folded, host, count, cost.getCost (), cost.getThreshold ());
+		else
+			fprintf (stderr, "[llvm-jit] folding %s into %s at a site counted %"
+			                 G_GUINT64_FORMAT " times: %s\n",
+			         folded, host, count, cost.getReason ());
 	}
 	g_free (folded);
 	g_free (host);
@@ -135,8 +144,29 @@ ProfileInliner::profile_for (Function &decl)
 	return profile_scratch_;
 }
 
+/// Prints why materialize () handed back nothing for \p callee, under the trace.
+/// The site that asked keeps its call, and nothing else says this happened -
+/// StripInlineCopiesPass never saw a body to take back off.
+static void
+trace_refusal (const InlineScope &scope, MonoMethod *callee, const char *why)
+{
+	if (!is_jit_trace_enabled () || scope.root == nullptr)
+		return;
+
+	char *host = mono_method_full_name (scope.root, TRUE);
+	char *refused = mono_method_full_name (callee, TRUE);
+
+	MONO_LOCK (jit_trace_mutex ())
+	{
+		fprintf (stderr, "[llvm-jit] refusing %s into %s: %s\n", refused, host, why);
+	}
+	g_free (refused);
+	g_free (host);
+}
+
 Function *
-ProfileInliner::materialize (Function &decl, Module &into)
+ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHeat> heat,
+                             const CallBase &call)
 {
 	MonoMethod *callee = marked_method (decl);
 
@@ -164,17 +194,42 @@ ProfileInliner::materialize (Function &decl, Module &into)
 			return standing;
 	}
 
+	// The site's heat picks the limit, so a hot site can be allowed a larger
+	// body than a cold one - see costed_inline_il_limit_hot/cold ()'s own
+	// comments for why the gate is tiered at all.
 	uint32_t limit = costed_inline_il_limit ();
+
+	if (heat == SiteHeat::hot)
+		limit = costed_inline_il_limit_hot ();
+	else if (heat == SiteHeat::cold) {
+		limit = costed_inline_il_limit_cold ();
+
+		// The IL limit bounds translation cost; it is not meant to be the
+		// fold/decline answer itself, and a cold site carrying an argument
+		// this compile can already tell, from the caller's own IR, is a live
+		// elision candidate is exactly the case where the cold limit would be
+		// making that call on a proxy. What the callee does with the
+		// argument - capture it, dispatch on it - still decides the actual
+		// fold, once this lets the candidate translate at all.
+		if (carries_an_elision_candidate (call))
+			limit = costed_inline_il_limit ();
+	}
 
 	// A folded copy carries no sequence points of its own; see
 	// materialize_trivial_callees (). A rebuild is free, so only a method new
-	// to this root meets the budget.
-	if (limit == 0 || (!rebuild && scope_.budget.costed == 0)
-	    || mini_get_debug_options ()->gen_sdb_seq_points)
+	// to this root meets either budget below.
+	if (limit == 0 || mini_get_debug_options ()->gen_sdb_seq_points)
 		return nullptr;
 
-	if (!may_fold (target_.domain, callee))
+	if (!rebuild && scope_.budget.costed == 0) {
+		trace_refusal (scope_, callee, "the cost model's fold budget is spent");
 		return nullptr;
+	}
+
+	if (!may_fold (target_.domain, callee)) {
+		trace_refusal (scope_, callee, "may_fold () refuses it");
+		return nullptr;
+	}
 
 	ERROR_DECL (metadata_error);
 	MinimalCompile cfg (callee, target_.domain, metadata_error);
@@ -190,8 +245,30 @@ ProfileInliner::materialize (Function &decl, Module &into)
 	bool fits = fold_clause_bearing_callees () ? is_small_enough (header, limit)
 	                                           : is_small_and_clause_free (header, limit);
 
-	if (!fits)
+	if (!fits) {
+		if (is_jit_trace_enabled ()) {
+			char why[128];
+			const char *at = heat == SiteHeat::hot  ? "hot"
+			                 : heat == SiteHeat::cold ? "cold"
+			                 : heat.has_value ()      ? "ordinary"
+			                                          : "unranked";
+
+			snprintf (why, sizeof why, "%u IL bytes%s over the limit of %u at a %s site",
+			          header->code_size, header->num_clauses != 0 ? " with clauses" : "",
+			          limit, at);
+			trace_refusal (scope_, callee, why);
+		}
 		return nullptr;
+	}
+
+	// A count treats a 5-byte getter the same as a 250-byte body, so this is
+	// the other half of the bound: what this root has left to translate, in
+	// the unit compile time is actually spent in. Charged below, alongside the
+	// count, once translation is committed to rather than merely fits.
+	if (!rebuild && header->code_size > scope_.budget.costed_bytes) {
+		trace_refusal (scope_, callee, "the cost model's byte budget is spent");
+		return nullptr;
+	}
 
 	// getInlineCost refuses this callee outright once has_filter_clause () is
 	// true (see inline-scope.hpp), so translating a copy would only strand its

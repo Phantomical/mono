@@ -1038,6 +1038,29 @@ set(MONO_TESTS_TIER2_INLINE_NORETURN_SRC
   tier2-inline-noreturn.cs
 )
 
+# mono-inline-cost-il-limit-hot/-cold let the cost model translate a bigger
+# candidate at a hot site than at a cold one. One run: the same body folds at
+# a hot site and declines at a cold one.
+set(MONO_TESTS_TIER2_INLINE_HEAT_IL_LIMIT_SRC
+  tier2-inline-heat-il-limit.cs
+)
+
+# mono-inline-cost-byte-budget bounds translated IL bytes per root, alongside
+# mono-inline-cost-budget's plain count. It runs twice, on a byte budget small
+# enough to bind and one large enough not to, and reads the variable to know
+# which arm it is in.
+set(MONO_TESTS_TIER2_INLINE_BYTE_BUDGET_SRC
+  tier2-inline-byte-budget.cs
+)
+
+# carries_an_elision_candidate () lets a cold site translate under the
+# ordinary IL limit when the caller's own IR already shows a fresh,
+# unescaped allocation. One run: an unescaped and an escaping candidate of
+# the same size at the same heat class settle the question inside it.
+set(MONO_TESTS_TIER2_INLINE_COLD_ELISION_SRC
+  tier2-inline-cold-elision.cs
+)
+
 # Whether the cost model folds a clause-bearing callee. It runs twice, on the
 # default and with the fold off, and reads MONO_FOLD_CLAUSES to know which arm
 # it is in.

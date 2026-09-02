@@ -52,9 +52,12 @@ public:
 	{
 	}
 
-	llvm::Function *materialize (llvm::Function &decl, llvm::Module &into) override;
+	llvm::Function *materialize (llvm::Function &decl, llvm::Module &into,
+	                             std::optional<SiteHeat> heat,
+	                             const llvm::CallBase &call) override;
 	llvm::ArrayRef<uint8_t> profile_for (llvm::Function &decl) override;
-	void folded (llvm::Function &caller, llvm::Function &callee) override;
+	void folded (llvm::Function &caller, llvm::Function &callee,
+	            const llvm::InlineCost &cost, uint64_t count) override;
 	void declined (llvm::Function &caller, llvm::Function &callee,
 	               const llvm::InlineCost &cost, uint64_t count) override;
 	unsigned depth_limit () const override;

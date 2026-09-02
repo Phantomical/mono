@@ -494,6 +494,37 @@ the same way as the tiering ones above:
   rather than code size, because LLVM's own threshold decides what is worth folding.
   Zero leaves tier 2 with the pre-pass alone, which separates a cost-model defect from a
   pre-pass one.
+- `--llvm-opt=-mono-inline-cost-il-limit-hot=<n>` (`runtime/options.cpp`) — the same
+  limit, for a site `tier2_site_heat ()` answers hot, default 1024. The flat limit is
+  the binding refusal at a hot site in practice — the cost model's own budget there is
+  generous enough that nothing declines by cost once translated, so the gate decides
+  instead of the model. 0 takes `-mono-inline-cost-il-limit`.
+  `.claude/scratch/inline-advisor-eval/EVALUATION.md` §5 has the corpus counts and the
+  fixture wins this default is measured against. `tier2_site_heat ()`'s fallback rule
+  calls every site in a loop-free root hot, which is every root a small calibration
+  fixture has, so a suite that pins its own flat `-mono-inline-cost-il-limit` to isolate
+  one variable needs `-hot`/`-cold` pinned to 0 alongside it to hold that limit constant
+  — `tier2-inline-nullcheck`, `-noreturn`, `-dispatch`, `-casts` and `-alloc-elision`
+  are the suites `runtime-suites.cmake` does this for (#349), the same isolation shape
+  `#342`'s landing added for its own affected suites.
+- `--llvm-opt=-mono-inline-cost-il-limit-cold=<n>` (`runtime/options.cpp`) — the same,
+  for a site answered cold, default 64. A cold site pays full translation for a body
+  that hardly runs; the tighter limit is what keeps that bounded. 0 takes
+  `-mono-inline-cost-il-limit`.
+- `--llvm-opt=-mono-inline-cold-elision-il-limit=<0|false|empty>`
+  (`passes/inline-policy.cpp`) — on by default. The IL limit bounds translation cost;
+  it is not meant to be the fold/decline answer itself, and a cold site is exactly
+  where that distinction matters most, because the elision bonus below is worth far
+  more than the cold cost budget (45) that would otherwise weigh the candidate once
+  translated. `carries_an_elision_candidate ()` reads the *caller's* own IR alone —
+  no need to translate the callee first — for an argument that is a fresh,
+  named-class allocation `alloc_elision_fate ()` has not already ruled out as an
+  escape, and a cold site carrying one translates its candidate under the ordinary
+  limit instead of the cold one. What the callee actually does with the argument —
+  capture it, dispatch on it — still decides the real fold, once this lets the
+  candidate translate at all. `mono/tests/tier2-inline-cold-elision.cs` gates it: an
+  unescaped and an escaping candidate of the same size at the same cold site settle
+  the question inside one run.
 - `--llvm-opt=-mono-inline-threshold=<n>` (`passes/inline-cost.cpp`) — the tier-2 cost
   model's base budget, default 225. `-mono-inlinedefault-threshold=<n>` sets the same
   field and is what wins when `-mono-inline-threshold` is not given explicitly.
@@ -515,10 +546,25 @@ the same way as the tiering ones above:
   member gets its own count, so `-mono-batch` changes how many compiles run, not what
   any one of them folds in.
 - `--llvm-opt=-mono-inline-cost-budget=<n>` (`runtime/options.cpp`) — bodies the tier-2
-  cost model may fold into one method, default 16. A count of its own, so what one
+  cost model may fold into one method, default 32. A count of its own, so what one
   inliner takes in does not decide what the other is left to fold. Zero refuses every
   method this root has not folded already, which separates a cost-model fold from a
-  pre-pass one.
+  pre-pass one. Raised from 16: a wider count widens what a root can reach past a chain
+  of small forwarders (`SharpSAT`'s `set_svar_value`, `IronPython`'s `CallSite.Target`),
+  and the compile CPU it costs is mostly background-thread time a short benchmark's own
+  process-CPU sweep charges to the process but a 30+ minute program's own clock does not
+  see — checked directly against `SharpSATbench`'s self-timed solve loop, flat at this
+  default. `-mono-inline-cost-budget=64` is not this default for the same check: its own
+  solve time moves, not just the sweep's process CPU.
+  `.claude/scratch/inline-advisor-eval/EVALUATION.md` §12 has the sweep, the mechanism
+  and the workload-clock check.
+- `--llvm-opt=-mono-inline-cost-byte-budget=<n>` (`runtime/options.cpp`) — translated IL
+  bytes the tier-2 cost model may still spend on one root, alongside the count above,
+  default 4096. A count cannot tell a 5-byte getter from a 250-byte body, so a root that
+  spends its count on small forwarders never reaches a large candidate standing behind
+  them — `lcscbench`'s `shiftNonterm` roots are the corpus case. Charged the same way the
+  count is: once per candidate the costed inliner translates, whether the fold is
+  accepted or not, because the compile cost is paid either way.
 - `--llvm-opt=-mono-inline-rounds=<n>` (`runtime/options.cpp`) — times the tier-2
   inliner takes up a method's sites again, default 4. One reads them once, which is what
   separates a fold a round exposed from one the method arrived with. A dispatch is not a
@@ -937,19 +983,28 @@ of its own, which puts a run back on LLVM's own answers without a rebuild:
 - `-mono-inline-devirt-arg-bonus` — the site passes an object of a named class into a
   parameter the callee dispatches on.
 - `-mono-inline-alloc-elision-bonus` and `-mono-inline-alloc-elision-pending-bonus` —
-  the site passes a fresh allocation into a parameter the callee does not capture, so
-  the fold hands SROA the accesses a call was hiding. Named for what the fold buys
-  rather than for scalarize, the mechanism: a second, caller-side test decides which of
-  the two a site earns, with a linear scan of the allocation's own uses that excludes
-  the site being weighed. The scan withholds both bonuses where it can prove the pointer
-  gets out anyway — returned, or passed to a call `call_wont_fold ()`
-  (`passes/inline-policy.cpp`) says no round of this compile takes — and otherwise awards
-  the full bonus where the site being weighed is the pointer's only remaining use, and the
-  pending bonus everywhere else: a store into a field, whose escape needs a recursive walk
-  this scan will not pay for, or a pass to another call this round may yet fold, which is
-  a **pending** escape a later round settles on its own. What lets LLVM erase the
-  allocation behind the scalarized fields, once nothing reads it, is the alloc kind on
-  `mono.alloc.object`, which both collectors emit, so this answers the same under either.
+  the site passes a fresh allocation into a parameter neither side keeps reachable past
+  the fold, so the fold hands SROA the accesses a call was hiding. Named for what the
+  fold buys rather than for scalarize, the mechanism is `alloc_elision_fate ()`
+  (`passes/inline-policy.cpp`): a linear scan of a pointer's own uses, excluding
+  whichever one is the fold itself, that withholds both bonuses where it can prove the
+  pointer gets out anyway — returned, or passed to a call `call_wont_fold ()` says no
+  round of this compile takes — and otherwise awards the full bonus where the use being
+  weighed is the pointer's only remaining one, and the pending bonus everywhere else: a
+  store into a field, whose escape needs a recursive walk this scan will not pay for, or
+  a pass to another call this round may yet fold, which is a **pending** escape a later
+  round settles on its own. Run twice and combined pessimistically (an escape on either
+  side wins): once caller-side over the allocation's own uses, the same question
+  `-mono-inline-cold-elision-il-limit` above asks before the callee is even translated,
+  and once callee-side over the parameter's uses once it is. The callee-side run replaced
+  LLVM's own capture analysis (`PointerMayBeCaptured`) here, which answers conservatively
+  for a call to *any* opaque function — a constructor's call to its own base class's
+  included, since neither is marked `nocapture` — and so never cleared for a constructor
+  callee at all before this changed; the same `call_wont_fold ()` rule the caller-side
+  scan already uses answers that correctly instead, without needing a second, separate
+  policy. What lets LLVM erase the allocation behind the scalarized fields, once nothing
+  reads it, is the alloc kind on `mono.alloc.object`, which both collectors emit, so this
+  answers the same under either.
 
 The three call-site bonuses are threshold bonuses rather than cost discounts, and each is
 priced as a count of calls the fold takes away. They go in behind `SingleBBBonus` and

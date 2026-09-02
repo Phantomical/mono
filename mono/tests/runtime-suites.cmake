@@ -760,38 +760,80 @@ mono_runtime_suite(runtime-tier2-inline-filter-off TESTS ${_tier2_inline_filter}
 # The raising arm mono-inline-implicit-null-free leaves out of a callee's
 # cost. The body is past the default cost-translate limit and past the
 # default cold-callsite threshold, so both arms raise both -- the file says
-# why.
+# why. Its site is fallback-hot (Root () carries no loop), so both arms also
+# pin -hot/-cold to 0 to hold the flat 512 this suite is calibrated against;
+# #349's landing added this, the same isolation shape #342's own landing
+# added elsewhere.
 _mono_exe_list(_tier2_inline_nullcheck ${MONO_TESTS_TIER2_INLINE_NULLCHECK_SRC})
 mono_runtime_suite(runtime-tier2-inline-nullcheck TESTS ${_tier2_inline_nullcheck}
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inlinedefault-threshold=1200 --llvm-opt=-mono-inline-cold-callsite-threshold=700")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inlinedefault-threshold=1200 --llvm-opt=-mono-inline-cold-callsite-threshold=700")
 mono_runtime_suite(runtime-tier2-inline-nullcheck-off TESTS ${_tier2_inline_nullcheck}
                    ENV "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inlinedefault-threshold=1200 --llvm-opt=-mono-inline-cold-callsite-threshold=700 --llvm-opt=-mono-inline-implicit-null-free=false --llvm-opt=-mono-inline-noreturn-free=false")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inlinedefault-threshold=1200 --llvm-opt=-mono-inline-cold-callsite-threshold=700 --llvm-opt=-mono-inline-implicit-null-free=false --llvm-opt=-mono-inline-noreturn-free=false")
 
 # The raising arm mono-inline-noreturn-free leaves out of a callee's cost, on
 # a guard that raises through an ordinary comparison rather than a folded
 # null check. The default cold-callsite threshold already sits between the
 # two costs, so neither arm needs one of its own -- the file says what they
-# measured.
+# measured. Its site is fallback-hot too, so both arms pin -hot/-cold to 0 to
+# hold the flat -mono-inline-cost-il-limit default (256) this suite is
+# calibrated against, the same reason tier2-inline-nullcheck above needs it.
 _mono_exe_list(_tier2_inline_noreturn ${MONO_TESTS_TIER2_INLINE_NORETURN_SRC})
 mono_runtime_suite(runtime-tier2-inline-noreturn TESTS ${_tier2_inline_noreturn}
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0")
 mono_runtime_suite(runtime-tier2-inline-noreturn-off TESTS ${_tier2_inline_noreturn}
                    ENV "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-noreturn-free=false")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inline-noreturn-free=false")
+
+# mono-inline-cost-il-limit-hot/-cold, on the same body under two names at a
+# hot and a cold site. One arm: the file's own comment says why no second one
+# is needed -- the hot/cold contrast inside this one run is what the flag is
+# for.
+_mono_exe_list(_tier2_inline_heat_il_limit ${MONO_TESTS_TIER2_INLINE_HEAT_IL_LIMIT_SRC})
+mono_runtime_suite(runtime-tier2-inline-heat-il-limit TESTS ${_tier2_inline_heat_il_limit}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit-hot=500 --llvm-opt=-mono-inline-cost-il-limit-cold=100")
+
+# mono-inline-cost-byte-budget, on two 113-byte candidates the count budget
+# alone would let both through. 150 admits one and leaves too little for the
+# other; re-measure both if this starts failing:
+#
+#   MONO_LLVM_JIT_TRACE=1 mono-sgen --llvm-opt=-mono-tier2-threshold=0 \
+#     --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit-hot=10 \
+#     tier2-inline-byte-budget.exe
+#
+# names each candidate's own size ("N IL bytes over the limit of 10"); the off
+# arm sets the byte budget far past what both together spend, so it is no
+# longer the binding constraint and the count budget's own default (32) is.
+_mono_exe_list(_tier2_inline_byte_budget ${MONO_TESTS_TIER2_INLINE_BYTE_BUDGET_SRC})
+mono_runtime_suite(runtime-tier2-inline-byte-budget TESTS ${_tier2_inline_byte_budget}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-byte-budget=150")
+mono_runtime_suite(runtime-tier2-inline-byte-budget-off TESTS ${_tier2_inline_byte_budget}
+                   ENV "MONO_INLINE_POLICY=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-byte-budget=1000000")
+
+# carries_an_elision_candidate (), on two ~113-byte constructors at cold
+# sites -- past the flat 64-byte cold default, under the 256-byte ordinary
+# one. One arm: an unescaped and an escaping candidate settle the question
+# inside the same run, the same reason tier2-inline-heat-il-limit's own
+# single arm suffices.
+_mono_exe_list(_tier2_inline_cold_elision ${MONO_TESTS_TIER2_INLINE_COLD_ELISION_SRC})
+mono_runtime_suite(runtime-tier2-inline-cold-elision TESTS ${_tier2_inline_cold_elision}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
 
 # The two alloc-elision bonuses, on a callee that only reads an uncaptured
 # argument's fields. The off arm leaves the other bonuses alone, because what
 # it separates is this pair from the fold tier2-inline-policy.cs's Measure ()
 # takes with the argument bonus instead. The threshold is sized for the full
 # bonus alone -- the file says why -- so the pending bonus's own site
-# declines on both arms too.
+# declines on both arms too. Its site is fallback-hot, so both arms pin
+# -hot/-cold to 0 to hold the flat -mono-inline-cost-il-limit default (256)
+# the threshold above is calibrated against.
 _mono_exe_list(_tier2_inline_alloc_elision ${MONO_TESTS_TIER2_INLINE_ALLOC_ELISION_SRC})
 mono_runtime_suite(runtime-tier2-inline-alloc-elision TESTS ${_tier2_inline_alloc_elision}
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=100")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inline-cold-callsite-threshold=100")
 mono_runtime_suite(runtime-tier2-inline-alloc-elision-off TESTS ${_tier2_inline_alloc_elision}
                    ENV "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=100 --llvm-opt=-mono-inline-alloc-elision-bonus=0 --llvm-opt=-mono-inline-alloc-elision-pending-bonus=0 --llvm-opt=-mono-inline-noreturn-free=false")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inline-cold-callsite-threshold=100 --llvm-opt=-mono-inline-alloc-elision-bonus=0 --llvm-opt=-mono-inline-alloc-elision-pending-bonus=0 --llvm-opt=-mono-inline-noreturn-free=false")
 
 # The delegate-arg-bonus, on a callee that invokes a parameter the site fills
 # with a delegate whose target the compile can name. The off arm leaves the
@@ -806,36 +848,43 @@ mono_runtime_suite(runtime-tier2-inline-delegate-arg-off TESTS ${_tier2_inline_d
 
 # What the cost model answers about a receiver the call site allocated. The off
 # arm turns those answers off and leaves the bonuses alone, because what it
-# separates is the fold rather than a threshold.
+# separates is the fold rather than a threshold. Its site is fallback-hot, so
+# both arms pin -hot/-cold to 0 to hold the flat 256 this suite is calibrated
+# against.
 _mono_exe_list(_tier2_inline_dispatch ${MONO_TESTS_TIER2_INLINE_DISPATCH_SRC})
 mono_runtime_suite(runtime-tier2-inline-dispatch TESTS ${_tier2_inline_dispatch}
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=256 --llvm-opt=-mono-inline-cold-callsite-threshold=190")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=256 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inline-cold-callsite-threshold=190")
 mono_runtime_suite(runtime-tier2-inline-dispatch-off TESTS ${_tier2_inline_dispatch}
                    ENV "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=256 --llvm-opt=-mono-inline-cold-callsite-threshold=190 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false --llvm-opt=-mono-inline-noreturn-free=false")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=256 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inline-cold-callsite-threshold=190 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false --llvm-opt=-mono-inline-noreturn-free=false")
 
 # What the cost model answers about a type test over a parameter. The off arm
 # turns that answer off alone, so what it separates is the answered cascade. A
 # cold callsite's budget is the lower of the default threshold and the cold
-# one, so both arms raise both.
+# one, so both arms raise both. Its site is fallback-hot, so both arms also
+# pin -hot/-cold to 0 to hold the flat 512 this suite is calibrated against.
 _mono_exe_list(_tier2_inline_casts ${MONO_TESTS_TIER2_INLINE_CASTS_SRC})
 mono_runtime_suite(runtime-tier2-inline-casts TESTS ${_tier2_inline_casts}
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
 mono_runtime_suite(runtime-tier2-inline-casts-off TESTS ${_tier2_inline_casts}
                    ENV "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400 --llvm-opt=-mono-inline-answer-casts=false --llvm-opt=-mono-inline-noreturn-free=false")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400 --llvm-opt=-mono-inline-answer-casts=false --llvm-opt=-mono-inline-noreturn-free=false")
 
 # A wrapper folded into its caller. The off arm leaves the cost model nothing to
 # translate, which is what separates the fold from the frame: both arms assert
 # that the wrapper still has a frame, and only the fold moves its offset onto the
 # caller's. A cold callsite's budget is the lower of the default threshold and
-# the cold one, so both arms raise both.
+# the cold one, so both arms raise both. Only the off arm needs -hot/-cold
+# pinned to 0: it relies on -cost-il-limit=0 taking the cost model out of the
+# fold entirely, and its fallback-hot site would otherwise put it back in at
+# -hot's default. The on arm's own assertions (a fold happened, a frame moved)
+# do not depend on the exact limit, so it is unaffected either way.
 _mono_exe_list(_tier2_inline_wrapper ${MONO_TESTS_TIER2_INLINE_WRAPPER_SRC})
 mono_runtime_suite(runtime-tier2-inline-wrapper TESTS ${_tier2_inline_wrapper}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
 mono_runtime_suite(runtime-tier2-inline-wrapper-off TESTS ${_tier2_inline_wrapper}
                    ENV "MONO_WRAPPER_FOLD=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=0 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
 
 # MONO_ENV_OPTIONS has to reach the runtime before it parses its own argv.
 foreach(_gc IN LISTS _mono_gcs)
