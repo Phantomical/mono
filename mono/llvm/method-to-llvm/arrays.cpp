@@ -580,7 +580,9 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 
 	// A value of exactly the element class is the general answer, so it goes
 	// first. A store the compare below catches pays this one as well.
-	llvm::BasicBlock *inexact = ask;
+	llvm::BasicBlock *subclass =
+		llvm::BasicBlock::Create (context (), "stelem_subclass", function);
+	llvm::BasicBlock *inexact = subclass;
 
 	if (element == nullptr)
 		inexact = llvm::BasicBlock::Create (context (), "stelem_inexact", function);
@@ -606,12 +608,55 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 		if (!any)
 			return any.takeError ();
 
-		builder.CreateCondBr (builder.CreateICmpEQ (wanted, *any), done, ask);
+		builder.CreateCondBr (builder.CreateICmpEQ (wanted, *any), done, subclass);
 	}
 
-	// Both tests are exact, so a legal store still arrives here. A derived
-	// class, a class implementing an interface element class, and a
-	// transparent proxy standing in for either are all legal and all miss.
+	// `mono_class_has_parent_fast ()` inlined. value_class's supertypes chain
+	// holds only single inheritance, so it never names an interface or
+	// another array class, and a miss here always falls through to the
+	// icall, which is what those two still need.
+	builder.SetInsertPoint (subclass);
+
+	llvm::Value *wanted_idepth;
+
+	if (element != nullptr) {
+		mono_class_setup_supertypes (element);
+		wanted_idepth = builder.getInt16 (m_class_get_idepth (element));
+	} else {
+		wanted_idepth = builder.CreateAlignedLoad (
+			builder.getInt16Ty (),
+			builder.CreateGEP (builder.getInt8Ty (), wanted,
+		                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, idepth))),
+			llvm::Align (2), "wanted_idepth");
+	}
+
+	llvm::Value *value_idepth = builder.CreateAlignedLoad (
+		builder.getInt16Ty (),
+		builder.CreateGEP (builder.getInt8Ty (), value_class,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, idepth))),
+		llvm::Align (2), "value_idepth");
+
+	llvm::BasicBlock *deep_enough =
+		llvm::BasicBlock::Create (context (), "stelem_subclass_deep", function);
+
+	builder.CreateCondBr (builder.CreateICmpUGE (value_idepth, wanted_idepth), deep_enough, ask);
+	builder.SetInsertPoint (deep_enough);
+
+	llvm::Value *value_supertypes = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (builder.getInt8Ty (), value_class,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, supertypes))),
+		llvm::Align (TARGET_SIZEOF_VOID_P), "value_supertypes");
+	llvm::Value *index = builder.CreateZExt (
+		builder.CreateSub (wanted_idepth, builder.getInt16 (1)), builder.getInt32Ty ());
+	llvm::Value *at_depth = builder.CreateAlignedLoad (
+		ptr, builder.CreateGEP (ptr, value_supertypes, index),
+		llvm::Align (TARGET_SIZEOF_VOID_P), "value_supertype");
+
+	builder.CreateCondBr (builder.CreateICmpEQ (at_depth, wanted), done, ask);
+
+	// A class implementing an interface element class, and a transparent
+	// proxy standing in for either, are legal and still miss here.
 	builder.SetInsertPoint (ask);
 	emit_protected_call (builder, *check,
 	                     adapt_to_callee (builder, *check, { array.value, stored }));
