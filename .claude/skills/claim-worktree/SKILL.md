@@ -1,6 +1,6 @@
 ---
 name: claim-worktree
-description: Claim a worktree under .claude/worktrees before working in it, so two agents on this box do not take the same tree. Use before taking an existing worktree, immediately after `git worktree add` for one you create, to check who holds a tree, and to release one when you are done with it.
+description: Claim a worktree under .claude/worktrees before working in it, so two agents on this box do not take the same tree. Use before taking an existing worktree, immediately after `git worktree add` for one you create, to check who holds a tree, and to release one once its work has landed.
 ---
 
 # Claiming a worktree
@@ -55,11 +55,17 @@ Both are read-only.
 ## Refresh and release
 
     "$S/claim-worktree.sh" <worktree> --agent <id> --update   # new task text, new timestamp
-    "$S/claim-worktree.sh" <worktree> --agent <id> --release  # done with the tree
+    "$S/claim-worktree.sh" <worktree> --agent <id> --release  # work has landed
 
-Release when you finish with a tree. `--update` and `--release` refuse a claim held by
-another agent unless `--force` is given; use `--force` only when the user tells you to
-take a tree over.
+Release only once the work has landed: merged to its target branch, or otherwise
+disposed of in a way nothing further needs the tree for. Finishing a change, committing
+it, or opening it for review is not landing it — the tree still has to survive review
+comments, and a peer that grabs a released tree during review will clobber them out from
+under you. Between "done" and "landed", keep the claim and use `--update` to say the tree
+is now waiting on review rather than being actively edited, so a peer checking `--status`
+sees why it looks idle. `--update` and `--release` refuse a claim held by another agent
+unless `--force` is given; use `--force` only when the user tells you to take a tree
+over.
 
 ## Before you write in the tree
 
