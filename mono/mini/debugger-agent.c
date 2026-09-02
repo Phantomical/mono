@@ -900,7 +900,7 @@ update_mdb_optimizations ()
 {
 	gboolean enable = disable_optimizations;
 #ifndef RUNTIME_IL2CPP
-	mini_get_debug_options ()->gen_sdb_seq_points = enable;
+	mini_get_debug_options ()->gen_sdb_seq_points = enable && !mini_get_debug_options ()->force_disable_seq_points;
 	/*
 	 * This is needed because currently we don't handle liveness info.
 	 */
@@ -1076,7 +1076,8 @@ debugger_agent_init (void)
 	objrefs_init ();
 	suspend_init ();
 
-	mini_get_debug_options ()->gen_sdb_seq_points = TRUE;
+	if (!mini_get_debug_options ()->force_disable_seq_points)
+		mini_get_debug_options ()->gen_sdb_seq_points = TRUE;
 	/* 
 	 * This is needed because currently we don't handle liveness info.
 	 */

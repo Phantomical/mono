@@ -3692,6 +3692,8 @@ mini_parse_debug_option (const char *option)
 		fprintf (stderr, "Mono Warning: option gen-compact-seq-points is deprecated.\n");
 	else if (!strcmp (option, "no-compact-seq-points"))
 		mini_debug_options.no_seq_points_compact_data = TRUE;
+	else if (!strcmp (option, "force-disable-seq-points"))
+		mini_debug_options.force_disable_seq_points = TRUE;
 	else if (!strcmp (option, "single-imm-size"))
 		mini_debug_options.single_imm_size = TRUE;
 	else if (!strcmp (option, "init-stacks"))
@@ -3759,10 +3761,13 @@ mini_parse_debug_options (void)
 			// test-tailcall-require is also accepted but not documented.
 			// empty string is also accepted and ignored as a consequence
 			// of appending ",foo" without checking for empty.
-			fprintf (stderr, "Available options: 'handle-sigint', 'keep-delegates', 'reverse-pinvoke-exceptions', 'collect-pagefault-stats', 'break-on-unverified', 'no-gdb-backtrace', 'suspend-on-native-crash', 'suspend-on-sigsegv', 'suspend-on-exception', 'suspend-on-unhandled', 'dont-free-domains', 'dyn-runtime-invoke', 'explicit-null-checks', 'gen-seq-points', 'no-compact-seq-points', 'single-imm-size', 'init-stacks', 'casts', 'soft-breakpoints', 'check-pinvoke-callconv', 'use-fallback-tls', 'debug-domain-unload', 'partial-sharing', 'align-small-structs', 'native-debugger-break', 'thread-dump-dir=DIR', 'no-verbose-gdb', 'llvm_disable_inlining', 'llvm-disable-self-init', 'llvm-disable-implicit-null-checks', 'weak-memory-model'.\n");
+			fprintf (stderr, "Available options: 'handle-sigint', 'keep-delegates', 'reverse-pinvoke-exceptions', 'collect-pagefault-stats', 'break-on-unverified', 'no-gdb-backtrace', 'suspend-on-native-crash', 'suspend-on-sigsegv', 'suspend-on-exception', 'suspend-on-unhandled', 'dont-free-domains', 'dyn-runtime-invoke', 'explicit-null-checks', 'gen-seq-points', 'no-compact-seq-points', 'force-disable-seq-points', 'single-imm-size', 'init-stacks', 'casts', 'soft-breakpoints', 'check-pinvoke-callconv', 'use-fallback-tls', 'debug-domain-unload', 'partial-sharing', 'align-small-structs', 'native-debugger-break', 'thread-dump-dir=DIR', 'no-verbose-gdb', 'llvm_disable_inlining', 'llvm-disable-self-init', 'llvm-disable-implicit-null-checks', 'weak-memory-model'.\n");
 			exit (1);
 		}
 	}
+
+	if (mini_debug_options.force_disable_seq_points)
+		mini_debug_options.gen_sdb_seq_points = FALSE;
 
 	g_strfreev (args);
 }

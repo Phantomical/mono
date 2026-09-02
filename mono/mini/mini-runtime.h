@@ -230,6 +230,11 @@ typedef struct MonoDebugOptions {
 	gboolean gen_sdb_seq_points;
 	gboolean no_seq_points_compact_data;
 	/*
+	 * Keeps gen_sdb_seq_points false no matter what sets it: MONO_DEBUG's
+	 * gen-seq-points, or the debugger agent attaching.
+	 */
+	gboolean force_disable_seq_points;
+	/*
 	 * Setting single_imm_size should guarantee that each time managed code is compiled
 	 * the same instructions and registers are used, regardless of the size of used values.
 	 */
