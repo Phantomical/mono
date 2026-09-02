@@ -541,7 +541,12 @@ the same way as the tiering ones above:
   ahead of the three bonuses above: a site `costBenefitAnalysis ()` can decide, it
   settles outright, and only a site it declines — cold, unprofiled, or landing in
   the undecided middle band — falls through to `Cost < Threshold`, where the
-  bonuses live. Off by default: `-mono-inline-savings-multiplier` and
+  bonuses live. `cl::init (false)` is not what governs this in practice: passing
+  `=0` explicitly does turn the analysis off, but leaving the option unset takes
+  `isCostBenefitAnalysisEnabled ()`'s other arm, which asks for an instrumentation
+  profile instead — and `PGOInstrumentationUse` runs unconditionally for every
+  tier-2 compile here, so that arm is satisfied whether or not the option is ever
+  named. `-mono-inline-savings-multiplier` and
   `-mono-inline-savings-profitable-multiplier` are uncalibrated for this backend,
   and each falls back to x86's `TargetTransformInfo` answer — 8 for both — unless
   given explicitly, which is not the 4 this file's own default for the second one
@@ -550,9 +555,11 @@ the same way as the tiering ones above:
   regardless of the ratio. The hot-call-site gate asks `tier2_site_heat ()` first,
   the same as `isColdCallSite ()` and `getHotCallSiteThreshold ()`, so a promoted
   body's own counters decide it rather than the module's `ProfileSummary`
-  percentile. Task #344 is what calibrates the multipliers and turns this on, once
-  #331 gives a materialized candidate the entry counts `costBenefitAnalysis ()`
-  needs.
+  percentile — and on the 10-benchmark corpus #194 uses, no call site clears that
+  gate at all, with `#331` landed and either hotness rule tried: the analysis has
+  a live path today but nothing in that corpus reaches it, which is what task #344
+  is still working out before either multiplier can be calibrated against
+  anything.
 
 ## Architecture of the backend (`mono/llvm/`)
 
