@@ -21,7 +21,6 @@
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/BlockFrequencyInfo.h>
-#include <llvm/Analysis/CaptureTracking.h>
 #include <llvm/Analysis/ConstantFolding.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Attributes.h>
@@ -219,8 +218,8 @@ call_wont_fold (const Function &callee)
 	return method->wrapper_type != MONO_WRAPPER_NONE;
 }
 
-/// What the caller still does with the allocation \p object once \p costed_at,
-/// the site being weighed, is set aside.
+/// What a body still does with the allocation \p object once \p exclude, the
+/// use that stands for the fold itself, is set aside.
 enum class AllocElisionFate {
 	/// A shape this scan can prove keeps the pointer reachable: the value is
 	/// returned, or passed to a call this round provably will not fold.
@@ -230,15 +229,15 @@ enum class AllocElisionFate {
 	/// and telling them apart for real needs a walk this analysis will not
 	/// pay for.
 	pending,
-	/// \p costed_at is the only use the scan counts, so folding it there is
+	/// \p exclude is the only use the scan counts, so folding it there is
 	/// what takes the last reader away.
 	dead,
 };
 
-/// One scan of \p object's own users, excluding \p costed_at itself -- passing
-/// the object to the call being costed is the fold, not an escape. No
-/// recursion past a direct user and no analysis-manager query, which is what
-/// keeps this affordable per candidate per round. `allocation_escapes ()`
+/// One scan of \p object's own users, excluding \p exclude if it names one --
+/// passing the object to the call being costed is the fold, not an escape.
+/// No recursion past a direct user and no analysis-manager query, which is
+/// what keeps this affordable per candidate per round. `allocation_escapes ()`
 /// (`analysis/escape.hpp`) is the walk that answers a field store for real,
 /// and paying for it here is too much.
 ///
@@ -252,15 +251,24 @@ enum class AllocElisionFate {
 /// address written to. That is also why the vtable store every allocation
 /// carries is passed over: it writes through \p object rather than writing
 /// \p object out.
+///
+/// \p object need not be the allocation call itself. Reading the fate of a
+/// callee's own parameter -- \p exclude null, since nothing inside the
+/// callee stands for a fold that happens in its caller -- is what
+/// call_site_bonus () asks once the callee is available, in place of asking
+/// LLVM's own capture analysis: that answer is conservative about a call to
+/// *any* opaque function, a constructor's call to its own base class's
+/// included, where this scan already knows the same rule call_wont_fold ()
+/// applies to a caller's own allocation applies here too.
 AllocElisionFate
-alloc_elision_fate (const CallBase &object, const CallBase &costed_at)
+alloc_elision_fate (const Value &object, const CallBase *exclude)
 {
 	bool held_elsewhere = false;
 
 	for (const Use &use : object.uses ()) {
 		const User *user = use.getUser ();
 
-		if (user == &costed_at)
+		if (exclude != nullptr && user == exclude)
 			continue;
 
 		if (isa<GetElementPtrInst> (user) || isa<LoadInst> (user))
@@ -291,6 +299,15 @@ alloc_elision_fate (const CallBase &object, const CallBase &costed_at)
 	}
 
 	return held_elsewhere ? AllocElisionFate::pending : AllocElisionFate::dead;
+}
+
+/// The worse of \p a and \p b: an escape on either side is an escape
+/// overall, dead only where both sides are. This enum is declared worst
+/// first, so that reads as the smaller of the two.
+AllocElisionFate
+worse_elision_fate (AllocElisionFate a, AllocElisionFate b)
+{
+	return std::min (a, b);
 }
 
 /// Whether \p f returns a value whose class the IR states outright: an
@@ -776,7 +793,7 @@ carries_an_elision_candidate (const CallBase &call)
 		const CallBase *allocation = erasable_allocation (arg);
 
 		if (allocation != nullptr
-		    && alloc_elision_fate (*allocation, call) != AllocElisionFate::escapes)
+		    && alloc_elision_fate (*allocation, &call) != AllocElisionFate::escapes)
 			return true;
 	}
 
@@ -828,23 +845,34 @@ call_site_bonus (const CallBase &call, const Function &callee,
 			/*
 			 * SROA scalarizes an allocation only when it can see every access,
 			 * and a call hides the accesses inside the callee. The fold
-			 * uncovers them for a parameter the body does not capture.
-			 *
-			 * The test asks about provenance alone, because taking the address
-			 * does not keep an object in memory. A dereference of the argument
-			 * compares it against null first, and LLVM counts that comparison
-			 * as a capture of the address.
+			 * uncovers them for a parameter the body does not itself keep
+			 * reachable past the call.
 			 *
 			 * Gated on `named` alone. A static's referent is reachable for as
 			 * long as the program runs, so it is never provably non-escaping
 			 * the way a fresh allocation can be.
+			 *
+			 * Two scans, not LLVM's own capture analysis: one over the
+			 * allocation's uses in the caller (the same one
+			 * carries_an_elision_candidate () runs before the callee even
+			 * exists), one over the parameter's uses in the callee, each
+			 * excusing only the use that is this fold itself. Capture
+			 * analysis answers conservatively for a call to *any* opaque
+			 * function - a constructor's call to its own base class's
+			 * included, since neither is marked nocapture - and a
+			 * constructor is exactly the shape that call would then never
+			 * clear. Both scans already know the rule that matters here:
+			 * call_wont_fold () is what tells a call this compile could
+			 * still take the pointer's escape apart from one it cannot.
 			 */
 			const CallBase *allocation = named ? erasable_allocation (arg) : nullptr;
 
-			if (allocation != nullptr
-			    && capturesNothing (PointerMayBeCaptured (
-				    param, /*ReturnCaptures=*/true, CaptureComponents::Provenance))) {
-				switch (alloc_elision_fate (*allocation, call)) {
+			if (allocation != nullptr) {
+				AllocElisionFate fate = worse_elision_fate (
+					alloc_elision_fate (*allocation, &call),
+					alloc_elision_fate (*param, nullptr));
+
+				switch (fate) {
 				case AllocElisionFate::escapes:
 					break;
 				case AllocElisionFate::pending:

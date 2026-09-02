@@ -983,19 +983,28 @@ of its own, which puts a run back on LLVM's own answers without a rebuild:
 - `-mono-inline-devirt-arg-bonus` — the site passes an object of a named class into a
   parameter the callee dispatches on.
 - `-mono-inline-alloc-elision-bonus` and `-mono-inline-alloc-elision-pending-bonus` —
-  the site passes a fresh allocation into a parameter the callee does not capture, so
-  the fold hands SROA the accesses a call was hiding. Named for what the fold buys
-  rather than for scalarize, the mechanism: a second, caller-side test decides which of
-  the two a site earns, with a linear scan of the allocation's own uses that excludes
-  the site being weighed. The scan withholds both bonuses where it can prove the pointer
-  gets out anyway — returned, or passed to a call `call_wont_fold ()`
-  (`passes/inline-policy.cpp`) says no round of this compile takes — and otherwise awards
-  the full bonus where the site being weighed is the pointer's only remaining use, and the
-  pending bonus everywhere else: a store into a field, whose escape needs a recursive walk
-  this scan will not pay for, or a pass to another call this round may yet fold, which is
-  a **pending** escape a later round settles on its own. What lets LLVM erase the
-  allocation behind the scalarized fields, once nothing reads it, is the alloc kind on
-  `mono.alloc.object`, which both collectors emit, so this answers the same under either.
+  the site passes a fresh allocation into a parameter neither side keeps reachable past
+  the fold, so the fold hands SROA the accesses a call was hiding. Named for what the
+  fold buys rather than for scalarize, the mechanism is `alloc_elision_fate ()`
+  (`passes/inline-policy.cpp`): a linear scan of a pointer's own uses, excluding
+  whichever one is the fold itself, that withholds both bonuses where it can prove the
+  pointer gets out anyway — returned, or passed to a call `call_wont_fold ()` says no
+  round of this compile takes — and otherwise awards the full bonus where the use being
+  weighed is the pointer's only remaining one, and the pending bonus everywhere else: a
+  store into a field, whose escape needs a recursive walk this scan will not pay for, or
+  a pass to another call this round may yet fold, which is a **pending** escape a later
+  round settles on its own. Run twice and combined pessimistically (an escape on either
+  side wins): once caller-side over the allocation's own uses, the same question
+  `-mono-inline-cold-elision-il-limit` above asks before the callee is even translated,
+  and once callee-side over the parameter's uses once it is. The callee-side run replaced
+  LLVM's own capture analysis (`PointerMayBeCaptured`) here, which answers conservatively
+  for a call to *any* opaque function — a constructor's call to its own base class's
+  included, since neither is marked `nocapture` — and so never cleared for a constructor
+  callee at all before this changed; the same `call_wont_fold ()` rule the caller-side
+  scan already uses answers that correctly instead, without needing a second, separate
+  policy. What lets LLVM erase the allocation behind the scalarized fields, once nothing
+  reads it, is the alloc kind on `mono.alloc.object`, which both collectors emit, so this
+  answers the same under either.
 
 The three call-site bonuses are threshold bonuses rather than cost discounts, and each is
 priced as a count of calls the fold takes away. They go in behind `SingleBBBonus` and
