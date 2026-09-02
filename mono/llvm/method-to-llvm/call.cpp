@@ -21,13 +21,12 @@
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
-#include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Type.h>
-#include <llvm/Support/ModRef.h>
 
 #include <string_view>
 
@@ -414,33 +413,23 @@ MethodLLVMEmitter::delegate_invoke_callee (MonoIrBuilder &builder, llvm::Value *
 	                             virtual_callee (builder, receiver, target), impl);
 }
 
-/// Emits something that reads value, so it stays live here.
+/// Emits a use of value that generates no code, so it stays live here.
 ///
-/// An empty asm with a register constraint is the cheapest way to do this. It
-/// emits no code, and it leaves the value wherever the allocator can still reach
-/// it: a callee-saved register or a spill slot, both of which the collector scans.
+/// `llvm.fake.use` already carries the memory effects this needs.
+/// IntrInaccessibleMemOnly keeps LICM from reading the call as touching
+/// every location, so a loop's invariant loads still hoist past it.
+///
+/// FastISel drops the intrinsic instead of lowering it. LowerKeepAlivePass
+/// (passes/lower-keepalive.hpp) rewrites every one of these back into an
+/// inline asm read before a tier-1 compile reaches codegen.
 static void
 keep_alive (llvm::IRBuilderBase &builder, llvm::Value *value)
 {
-	llvm::CallInst *held = builder.CreateCall (
-		llvm::InlineAsm::get (llvm::FunctionType::get (builder.getVoidTy (),
-	                                                       { value->getType () }, false),
-	                              "", "r", /*hasSideEffects=*/true),
-		{ value });
+	llvm::Module *module = builder.GetInsertBlock ()->getModule ();
+	llvm::Function *fake_use =
+		llvm::Intrinsic::getOrInsertDeclaration (module, llvm::Intrinsic::fake_use);
 
-	/*
-	 * An inline asm has no callee to read a memory attribute off, and a call of
-	 * one carries none itself. Alias analysis then reads this as touching every
-	 * location, and LICM leaves a loop's invariant loads where they are.
-	 *
-	 * The asm touches less than this claims, and the wider claim is what holds
-	 * the call at its site. LICM does not lift a call that writes out of a loop,
-	 * and lifting this one would stop rooting the delegate.
-	 *
-	 * `llvm.fake.use` carries the same effects. FastISel ignores it, so tier 1
-	 * would keep the delegate nowhere.
-	 */
-	held->setMemoryEffects (llvm::MemoryEffects::inaccessibleMemOnly ());
+	builder.CreateCall (fake_use, { value });
 }
 
 /// Names the address the engine must resolve for target's own MonoMethod, the

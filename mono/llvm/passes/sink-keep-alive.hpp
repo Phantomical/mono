@@ -2,11 +2,12 @@
  * \file
  * \brief Moving a delegate keep_alive () marker out of the loop it pins.
  *
- * `keep_alive ()` (`method-to-llvm/call.cpp`) is inline asm, and
+ * `keep_alive ()` (`method-to-llvm/call.cpp`) writes `llvm.fake.use`, and
  * `LoopVectorizationLegality::canVectorizeInstrs ()` refuses to vectorize any
- * loop that holds one. Where a marker's delegate stays one object every turn,
- * a single marker after the loop keeps it rooted for exactly as long. The
- * loop is then left without a call blocking the vectorizer.
+ * loop that holds a call, marker included. Where a marker's delegate stays
+ * one object every turn, a single marker after the loop keeps it rooted for
+ * exactly as long. The loop is then left without a call blocking the
+ * vectorizer.
  */
 
 #ifndef MONO_LLVM_PASSES_SINK_KEEP_ALIVE_HPP

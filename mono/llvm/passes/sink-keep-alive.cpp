@@ -14,9 +14,9 @@
 #include <llvm/IR/Dominators.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
-#include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Intrinsics.h>
 
 using namespace llvm;
 
@@ -24,19 +24,10 @@ namespace mono {
 namespace {
 
 /// Whether \p call is the marker call.cpp's keep_alive () writes.
-///
-/// The empty asm string and the lone "r" constraint are what that function's
-/// own `InlineAsm::get ()` spells. Every other inline asm call this backend
-/// builds takes zero arguments: arch/amd64/{lmf,eh}.cpp and
-/// method-to-llvm/seq-points.cpp.
 bool
 is_keep_alive_marker (const CallInst &call)
 {
-	const auto *callee = dyn_cast<InlineAsm> (call.getCalledOperand ());
-
-	return callee != nullptr && call.arg_size () == 1
-	       && callee->getAsmString ().empty ()
-	       && callee->getConstraintString () == "r";
+	return call.getIntrinsicID () == Intrinsic::fake_use && call.arg_size () == 1;
 }
 
 /// The outermost loop enclosing \p from where \p delegate stays one value
@@ -88,16 +79,8 @@ SinkKeepAlivePass::run (Function &f, FunctionAnalysisManager &fam)
 	DenseMap<std::pair<Loop *, Value *>, SmallVector<CallInst *, 2>> groups;
 
 	for (CallInst *marker : markers) {
-		Value *raw = marker->getArgOperand (0);
-		Value *delegate = const_cast<Value *> (strip_casts (raw));
-
-		// strip_casts () also peels a ptrtoint/inttoptr pair, which changes
-		// the type. The marker's own InlineAsm was built against raw's type,
-		// so a peel that lands somewhere else no longer fits the call this
-		// pass clones.
-		if (delegate->getType () != raw->getType ())
-			continue;
-
+		Value *delegate =
+			const_cast<Value *> (strip_casts (marker->getArgOperand (0)));
 		Loop *outer = outermost_invariant_loop (
 			loops.getLoopFor (marker->getParent ()), delegate, dt);
 

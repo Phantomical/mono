@@ -30,9 +30,9 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
-#include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Metadata.h>
@@ -306,8 +306,7 @@ invoke_sites (Function &f)
 bool
 is_keep_alive_of (const CallBase &call, const Value &delegate)
 {
-	return call.getCalledFunction () == nullptr
-	       && isa<InlineAsm> (call.getCalledOperand ())
+	return call.getIntrinsicID () == Intrinsic::fake_use
 	       && call.arg_size () == 1
 	       && strip_casts (call.getArgOperand (0)) == strip_casts (&delegate);
 }

@@ -15,6 +15,7 @@
 #include "passes/fold-delegate.hpp"
 #include "passes/fold-empty-finally.hpp"
 #include "passes/inline-copies.hpp"
+#include "passes/lower-keepalive.hpp"
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
 #include "passes/promote-alloc.hpp"
@@ -557,6 +558,10 @@ MonoPassBuilder::buildTier1Pipeline ()
 	// convention passes in memory.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClampFrameAlignPass ()));
 
+	// Last: FastISel runs straight off whatever this pass manager leaves, with
+	// no later pass in between to catch a marker this one missed.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::LowerKeepAlivePass ()));
+
 	addAnnotationRemarksPass (MPM);
 
 	return MPM;
@@ -688,10 +693,9 @@ MonoPassBuilder::buildTier2Pipeline ()
 
 	/*
 	 * Behind both delegate-fold rounds, so a marker still here is one no
-	 * round could settle. In front of the optimization pipeline below: its
-	 * LoopVectorize refuses any loop that still holds a marker, because
-	 * inline asm is neither an intrinsic nor a function with a vector
-	 * variant.
+	 * round could settle. In front of the optimization pipeline below, whose
+	 * LoopVectorize refuses any loop still holding one - llvm.fake.use is
+	 * not on its short list of vectorizable intrinsics.
 	 */
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::SinkKeepAlivePass ()));
 

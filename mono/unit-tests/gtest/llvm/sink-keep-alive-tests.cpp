@@ -4,8 +4,8 @@
  * run.
  *
  * Each case gives the pass a module built from raw IR - the shape
- * call.cpp's keep_alive () writes, `call void asm sideeffect "", "r"(ptr
- * %d)` - and reads back how many markers a named block holds afterward.
+ * call.cpp's keep_alive () writes, `call void (...) @llvm.fake.use(ptr %d)`
+ * - and reads back how many markers a named block holds afterward.
  *
  * Pure LLVM. Nothing here reads a MonoMethod or any other runtime state.
  */
@@ -16,6 +16,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
@@ -33,6 +34,9 @@ namespace mono {
 namespace test {
 namespace {
 
+/// What every module below declares.
+constexpr const char *preamble = "declare void @llvm.fake.use(...)\n";
+
 /// A module the pass has run over.
 struct Sunk {
 	LLVMContext context;
@@ -44,7 +48,7 @@ struct Sunk {
 	{
 		SMDiagnostic problem;
 
-		module = parseAssemblyString (ir, problem, context);
+		module = parseAssemblyString (ir + preamble, problem, context);
 
 		if (module == nullptr) {
 			std::string complaint;
@@ -93,7 +97,7 @@ struct Sunk {
 
 			for (const Instruction &at : block)
 				if (const auto *call = dyn_cast<CallInst> (&at))
-					if (isa<InlineAsm> (call->getCalledOperand ()))
+					if (call->getIntrinsicID () == Intrinsic::fake_use)
 						++seen;
 
 			return seen;
@@ -115,7 +119,7 @@ header:
   br i1 %cond, label %body, label %exit
 
 body:
-  call void asm sideeffect "", "r"(ptr %delegate)
+  call void (...) @llvm.fake.use(ptr %delegate)
   br label %header
 
 exit:
@@ -142,7 +146,7 @@ header:
 
 body:
   %delegate = load ptr, ptr %ref, align 8
-  call void asm sideeffect "", "r"(ptr %delegate)
+  call void (...) @llvm.fake.use(ptr %delegate)
   br label %header
 
 exit:
@@ -163,7 +167,7 @@ entry:
   br label %body
 
 body:
-  call void asm sideeffect "", "r"(ptr %delegate)
+  call void (...) @llvm.fake.use(ptr %delegate)
   br label %body
 }
 )");
@@ -177,7 +181,7 @@ TEST (SinkKeepAliveTest, LeavesAMarkerOutsideAnyLoop)
 	Sunk m (R"(
 define void @caller(ptr %delegate) {
 entry:
-  call void asm sideeffect "", "r"(ptr %delegate)
+  call void (...) @llvm.fake.use(ptr %delegate)
   ret void
 }
 )");
@@ -197,8 +201,8 @@ header:
   br i1 %cond, label %body, label %exit
 
 body:
-  call void asm sideeffect "", "r"(ptr %delegate)
-  call void asm sideeffect "", "r"(ptr %delegate)
+  call void (...) @llvm.fake.use(ptr %delegate)
+  call void (...) @llvm.fake.use(ptr %delegate)
   br label %header
 
 exit:
@@ -225,7 +229,7 @@ body:
   br i1 %early, label %exit2, label %continue
 
 continue:
-  call void asm sideeffect "", "r"(ptr %delegate)
+  call void (...) @llvm.fake.use(ptr %delegate)
   br label %header
 
 exit1:
@@ -259,7 +263,7 @@ inner_header:
   br i1 %inner_cond, label %inner_body, label %inner_exit
 
 inner_body:
-  call void asm sideeffect "", "r"(ptr %delegate)
+  call void (...) @llvm.fake.use(ptr %delegate)
   br label %inner_header
 
 inner_exit:
