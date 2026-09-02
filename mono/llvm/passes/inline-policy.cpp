@@ -103,16 +103,33 @@ cl::opt<unsigned> PromotedColdPercent (
 	cl::desc ("Share of the entry count, as a percentage, a block must run to be "
 	          "more than cold in a promoted body"));
 
-/// Whether \p v is an object this compile allocated under a class it names.
+/// Whether \p v is an object this compile allocated under a class it names, or
+/// a merge whose every arm independently is.
 ///
 /// `store_object_vtable ()` stores the vtable into the object's first word right
 /// behind the allocation, and that store states the class in the IR. A class
 /// whose allocation can return a transparent proxy gets no such store, because
 /// the object returned then carries the proxy's vtable.
+///
+/// The arms of a merge do not have to name the *same* class. This only feeds
+/// a threshold estimate, and whatever answers the dispatch afterward checks
+/// the operand's real class again. \p depth bounds the recursion against a
+/// PHI that loops back on itself.
 bool
-allocated_under_a_named_class (const Value *v)
+allocated_under_a_named_class (const Value *v, unsigned depth = 4)
 {
 	const Value *object = v->stripPointerCasts ();
+
+	if (const auto *phi = dyn_cast<PHINode> (object)) {
+		if (depth == 0 || phi->getNumIncomingValues () == 0)
+			return false;
+
+		for (const Value *incoming : phi->incoming_values ())
+			if (!allocated_under_a_named_class (incoming, depth - 1))
+				return false;
+
+		return true;
+	}
 
 	if (!isa<CallBase> (object))
 		return false;
@@ -163,6 +180,21 @@ returns_a_named_class (const Function &f)
 	return false;
 }
 
+/// The base of the address \p object loads from, or null where \p object is
+/// not a load.
+Value *
+one_field_back (Value *object)
+{
+	auto *field = dyn_cast<LoadInst> (object);
+
+	if (field == nullptr)
+		return nullptr;
+
+	APInt at (64, 0);
+	return field->getPointerOperand ()->stripAndAccumulateConstantOffsets (
+		field->getModule ()->getDataLayout (), at, /*AllowNonInbounds=*/true);
+}
+
 /// Whether \p vtable is the vtable of \p dispatched_on, read rather than named.
 ///
 /// A vtable operand that is already a global is resolved, and folding a body in
@@ -173,13 +205,28 @@ reads_the_vtable_of (const Value *vtable, const Value *dispatched_on)
 	Value *object =
 		object_vtable_read (const_cast<Value *> (vtable->stripPointerCasts ()));
 
-	return object != nullptr && object->stripPointerCasts () == dispatched_on;
+	if (object == nullptr)
+		return false;
+
+	object = object->stripPointerCasts ();
+
+	if (object == dispatched_on)
+		return true;
+
+	// object_vtable_read () stops at the nearest memory operation, so a
+	// dispatch one field away (h.Inner.Area ()) names the load of h.Inner
+	// rather than h. That load's own base is one hop back to h.
+	Value *field = one_field_back (object);
+
+	return field != nullptr && field->stripPointerCasts () == dispatched_on;
 }
 
-/// Whether a site in \p f reads a dispatch table out of \p object.
+/// Whether a site in \p f reads a dispatch table out of \p object, or tests
+/// \p object's own class.
 ///
-/// Every dispatch is one of the three declarations, so this reads their users
-/// rather than walking the body.
+/// Every vtable read is one of three declarations, and a type test is two
+/// more. `folded_type_test ()` answers a test only once the class arrives, so
+/// until then it is exactly as opaque as a dispatch.
 bool
 dispatches_unresolved_on (const Value *object, const Function &f)
 {
@@ -199,6 +246,22 @@ dispatches_unresolved_on (const Value *object, const Function &f)
 			    || site->arg_size () < 1)
 				continue;
 			if (reads_the_vtable_of (site->getArgOperand (0), dispatched_on))
+				return true;
+		}
+	}
+
+	for (StringRef name : { cast_isinst_name, cast_castclass_name }) {
+		const Function *decl = m->getFunction (name);
+
+		if (decl == nullptr)
+			continue;
+
+		for (const User *user : decl->users ()) {
+			const auto *site = dyn_cast<CallBase> (user);
+
+			if (site != nullptr && site->getFunction () == &f
+			    && site->arg_size () >= 1
+			    && site->getArgOperand (0)->stripPointerCasts () == dispatched_on)
 				return true;
 		}
 	}
@@ -477,7 +540,13 @@ call_site_bonus (const CallBase &call, const Function &callee)
 		std::min<unsigned> (call.arg_size (), callee.arg_size ());
 
 	for (unsigned i = 0; i < shared; i++) {
-		if (!allocated_under_a_named_class (call.getArgOperand (i)))
+		Value *arg = call.getArgOperand (i);
+		bool named = allocated_under_a_named_class (arg);
+		auto [klass, exact] = stated_class (arg, *caller);
+
+		// An initonly static's own read states a class exactly too, the same
+		// as a fresh allocation, so it clears the gate on its own.
+		if (!named && !(klass != nullptr && exact))
 			continue;
 
 		const Argument *param = callee.getArg (i);
@@ -496,8 +565,12 @@ call_site_bonus (const CallBase &call, const Function &callee)
 		 * not keep an object in memory. A dereference of the argument compares
 		 * it against null first, and LLVM counts that comparison as a capture
 		 * of the address.
+		 *
+		 * Gated on `named` alone. A static's referent is reachable for as long
+		 * as the program runs, so it is never provably non-escaping the way a
+		 * fresh allocation can be.
 		 */
-		if (erasable_allocation (call.getArgOperand (i))
+		if (named && erasable_allocation (arg)
 		    && capturesNothing (PointerMayBeCaptured (
 			    param, /*ReturnCaptures=*/true, CaptureComponents::Provenance)))
 			bonus += ScalarizeArgumentBonus;

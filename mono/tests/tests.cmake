@@ -1016,6 +1016,13 @@ set(MONO_TESTS_TIER2_INLINE_POLICY_SRC
   tier2-inline-policy.cs
 )
 
+# The devirt-arg bonus's own two gates, too narrow for a caller-side shape
+# each. It runs twice, on the default and with the bonus zeroed, and reads the
+# variable to know which arm it is in.
+set(MONO_TESTS_TIER2_INLINE_ARG_SHAPES_SRC
+  tier2-inline-arg-shapes.cs
+)
+
 # The raising arm mono-inline-implicit-null-free leaves out of a callee's
 # cost. It runs twice, on the default and with the option off, and reads the
 # variable to know which arm it is in.
