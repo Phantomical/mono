@@ -48,8 +48,12 @@ if(MONO_UNITY_BUILD)
       OUTPUT_VARIABLE _llvm_system_libs OUTPUT_STRIP_TRAILING_WHITESPACE)
     separate_arguments(_llvm_system_libs NATIVE_COMMAND "${_llvm_system_libs}")
     set(_llvm_libs "${MONO_LLVM_STATIC}" ${_llvm_system_libs})
+    get_filename_component(_llvm_archives "${MONO_LLVM_STATIC}" NAME)
   elseif(TARGET LLVMCore)
     llvm_map_components_to_libnames(_llvm_libs ${_llvm_components})
+    foreach(_lib IN LISTS _llvm_libs)
+      list(APPEND _llvm_archives "lib${_lib}.a")
+    endforeach()
   else()
     message(FATAL_ERROR
       "MONO_UNITY_BUILD needs a static LLVM; ${LLVM_INSTALL_PREFIX} ships the "
@@ -60,6 +64,17 @@ elseif(TARGET LLVM)
 else()
   llvm_map_components_to_libnames(_llvm_libs ${_llvm_components})
 endif()
+
+# A static LLVM otherwise reaches the dynamic symbol table, because
+# --export-dynamic puts everything there: mono-sgen exported 45506 symbols
+# against 6322, 24130 of them llvm::.  --exclude-libs names the archives to
+# keep out rather than ALL.  The runtime links libmonosgen-2.0.a and
+# libmonogc.a as archives too, and managed code P/Invokes what those export.
+# One option per archive: the comma-separated form ld also takes cannot cross
+# -Wl,, which splits on commas.
+foreach(_archive IN LISTS _llvm_archives)
+  target_link_options(mono_llvm INTERFACE "-Wl,--exclude-libs,${_archive}")
+endforeach()
 
 target_include_directories(mono_llvm SYSTEM INTERFACE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(mono_llvm INTERFACE
