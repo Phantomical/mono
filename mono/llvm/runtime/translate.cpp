@@ -362,7 +362,10 @@ publish_body (const TranslationTarget &target, MonoMethod *method, MonoMethodHea
               CompiledMethod &compiled, MonoLLVMBreakpointSwitch *bp_switch,
               const SeqPointGraph &seq_points, MonoJitInfo **published)
 {
-	perf::dump_method (method, compiled);
+	if (target.dump_sink)
+		target.dump_sink->add (method, compiled);
+	else
+		perf::dump_method (method, compiled);
 
 	/* A filter body's entry goes into the published clauses. */
 	std::vector<std::pair<uint32_t, void *>> filters;

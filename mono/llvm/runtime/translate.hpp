@@ -21,6 +21,10 @@ namespace mono {
 
 class MonoDomainMethod;
 
+namespace perf {
+class BatchSink;
+} // namespace perf
+
 /// Where one method's code ended up. The jit-info record is null for a stand-in
 /// that only raises.
 struct Compiled {
@@ -74,6 +78,12 @@ struct TranslationTarget {
 	/// The counts a tier-2 body is laid out by. Empty for a method promoted
 	/// before it ran, and unread at tier 1.
 	llvm::ArrayRef<uint8_t> profile;
+
+	/// Where a batch compile collects every member's jitdump pieces, so they
+	/// publish as the batch's own object rather than one record apiece. Null
+	/// for a target compiled outside compile_bodies (), which dumps itself
+	/// as it publishes.
+	perf::BatchSink *dump_sink = nullptr;
 };
 
 /// Compile a method, whatever it takes: the marshal wrapper for an array

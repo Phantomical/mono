@@ -4,15 +4,22 @@
 perf resolves a sample against the range of the record holding the address, and
 the error a wrong range makes is invisible from the report: the names are real
 methods and the totals are plausible.  A tier-1 promotion links up to a batch's
-worth of methods into one object, which is where the neighbours are other
-methods.
+worth of methods into one object, and the dump writer publishes that whole
+object as the runs its layout actually has - so a batch neighbour with nothing
+between it and the next is described by the same record, under one of the
+batch's names, rather than by a record of its own.
 
-The rule is a partition: the ranges do not overlap, and none of them sits inside
-another.  A record's code_size is then the method's own code size, and no
-sample's name rests on the order two records were written in.
+The rule the ranges still owe is a partition: the ranges do not overlap, and
+none of them sits inside another.  A record's code_size then covers only code
+this run's compile actually placed there, and no sample's name rests on the
+order two records were written in.
 
-The fixture has to reach tier 1 for any of this to be measured, so the run also
-has to show that it did.
+A record's *name* is no longer one method's alone - the whole point of
+batching is that it is not - so what stands in for "the fixture's bodies
+reached tier 1" is the function count each record's own unwinding-info
+carries (one FDE per function described), summed over the records a fixture
+body leads. The fixture has to reach tier 1 for any of this to be measured, so
+the run also has to show that it did.
 """
 
 import argparse
@@ -22,11 +29,22 @@ import subprocess
 import sys
 
 JIT_CODE_LOAD = 0
+JIT_CODE_UNWINDING_INFO = 4
 
 # id, total size and timestamp, then pid, tid, vma, code address, code size and
 # code index (JitCodeLoadRecord, mono/mini/mini-runtime.c).
 RECORD_HEADER = 16
 LOAD_FIELDS = struct.Struct("<IIQQQQ")
+
+# unwinding_data_size, eh_frame_hdr_size and mapped_size
+# (mono::perf::unwinding_record, mono/llvm/debugging/perf/jitdump.cpp).
+UNWIND_FIELDS = struct.Struct("<QQQ")
+
+# eh_frame_hdr's own header - version, three encoding bytes, then the function
+# count (mono::perf::assemble, mono/llvm/debugging/perf/eh-frame.cpp). A
+# record with no describable function writes no unwinding-info record at all,
+# so this is never read for one that carries one.
+EH_FRAME_HDR_COUNT_OFFSET = 8
 
 # How many of the fixture's own bodies have to reach tier 1 before the run says
 # anything.  The batch size defaults to 32, so this is one full batch.
@@ -42,7 +60,11 @@ def die(message, *details):
 
 
 def records(path):
-    """Read every JIT_CODE_LOAD record as (address, size, name)."""
+    """Read every JIT_CODE_LOAD record as (address, size, name, functions),
+    functions being the count its immediately preceding JIT_CODE_UNWINDING_INFO
+    record describes, or 0 where the record has none (mono::perf::write ()
+    pairs the two, or writes the load alone where the object has nothing
+    describable at that address)."""
     with open(path, "rb") as handle:
         data = handle.read()
     if len(data) < 40:
@@ -50,15 +72,22 @@ def records(path):
 
     header_size = struct.unpack_from("<I", data, 8)[0]
     at = header_size
+    pending_functions = 0
     while at + RECORD_HEADER <= len(data):
         kind, total = struct.unpack_from("<II", data, at)
         if total < RECORD_HEADER or at + total > len(data):
             die(f"{path} ends inside a record at offset {at}")
-        if kind == JIT_CODE_LOAD:
-            body = data[at + RECORD_HEADER : at + total]
+        body = data[at + RECORD_HEADER : at + total]
+        if kind == JIT_CODE_UNWINDING_INFO:
+            unwind_size, ehdr_size, _mapped_size = UNWIND_FIELDS.unpack_from(body, 0)
+            hdr = body[UNWIND_FIELDS.size : UNWIND_FIELDS.size + unwind_size][-ehdr_size:]
+            pending_functions = struct.unpack_from(
+                "<I", hdr, EH_FRAME_HDR_COUNT_OFFSET)[0]
+        elif kind == JIT_CODE_LOAD:
             _, _, _, address, size, _ = LOAD_FIELDS.unpack_from(body, 0)
             name = body[LOAD_FIELDS.size : body.index(b"\0", LOAD_FIELDS.size)]
-            yield address, size, name.decode("utf-8", "replace")
+            yield address, size, name.decode("utf-8", "replace"), pending_functions
+            pending_functions = 0
         at += total
 
 
@@ -66,7 +95,7 @@ def partitioned(loaded):
     """Return one message for each break of the partition rule."""
     issues = []
     holder = None
-    for address, size, name in loaded:
+    for address, size, name, _functions in loaded:
         if holder is not None:
             at, end, whose = holder
             if address < end:
@@ -106,7 +135,8 @@ def main():
     if not loaded:
         die(f"{dump} holds no JIT_CODE_LOAD record")
 
-    compiled = sum(1 for _, _, name in loaded if name.startswith("Work`1<"))
+    compiled = sum(functions for _, _, name, functions in loaded
+                   if name.startswith("Work`1<"))
     if compiled < WANT_COMPILED:
         die(f"only {compiled} of the fixture's own bodies reached tier 1",
             f"The rule below is about a compile batch, which is {WANT_COMPILED}",
@@ -115,7 +145,7 @@ def main():
     issues = partitioned(loaded)
     for issue in issues:
         print(f"  FAIL {issue}")
-    print(f"{len(loaded)} records, {compiled} of them the fixture's own bodies, "
+    print(f"{len(loaded)} records, {compiled} of the fixture's own bodies described, "
           f"{len(issues)} failed")
     return 1 if issues else 0
 
