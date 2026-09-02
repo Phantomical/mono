@@ -22,7 +22,6 @@
 #include <llvm/IR/Module.h>
 
 #include "mini.h"
-#include "mini-runtime.h"
 
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
@@ -215,10 +214,9 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 			limit = costed_inline_il_limit ();
 	}
 
-	// A folded copy carries no sequence points of its own; see
-	// materialize_trivial_callees (). A rebuild is free, so only a method new
-	// to this root meets either budget below.
-	if (limit == 0 || mini_get_debug_options ()->gen_sdb_seq_points)
+	// A rebuild is free, so only a method new to this root meets either budget
+	// below.
+	if (limit == 0 || folding_off_for_seq_points ())
 		return nullptr;
 
 	if (!rebuild && scope_.budget.costed == 0) {

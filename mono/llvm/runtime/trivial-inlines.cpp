@@ -20,7 +20,6 @@
 #include <optional>
 
 #include "mini.h"
-#include "mini-runtime.h"
 
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
@@ -353,9 +352,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 {
 	uint32_t limit = trivial_inline_il_limit ();
 
-	// A breakpoint is armed on a method, and a folded copy carries none of the
-	// method's sequence points.
-	if (limit == 0 || mini_get_debug_options ()->gen_sdb_seq_points)
+	if (limit == 0 || folding_off_for_seq_points ())
 		return;
 
 	// A body the module now holds, and the method it belongs to. A body reached

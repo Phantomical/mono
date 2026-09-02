@@ -908,6 +908,22 @@ detour or an override on the record, and an override the *table* holds
 (`registered_override_for ()`), which is the one that catches a declared override before
 anything has asked for the method's record and installed it.
 
+**A host that starts the debugger agent turns every fold off.**
+`folding_off_for_seq_points ()` (`runtime/inline-scope.cpp`) is the gate both inliners
+read, and the agent sets `gen_sdb_seq_points` as it starts
+(`mono/mini/debugger-agent.c`). An embedding host starts it before it reads
+`MONO_ENV_OPTIONS`: a Unity player carrying `player-connection-debug=1` in its
+`boot.config` logs `Starting managed debugger on port …` and passes a
+`--debugger-agent=` of its own, and `~/KSP` is such an install. A capture taken there
+without an override measures a runtime with inlining fully off, and the only symptom is a
+trace with no folding line in it. `MONO_DEBUG=force-disable-seq-points` is the override
+that reaches it, because `force_disable_seq_points` keeps the flag false whatever sets it
+afterwards. `MONO_ENV_OPTIONS="--debug=force-disable-seq-points"` does not: the host's
+argv never reaches the parser `mono-sgen`'s own CLI goes through, and the runtime rejects
+it with `Unsupported command line option`. Under `MONO_LLVM_JIT_TRACE=1` the gate prints
+`inlining is disabled because sequence points are enabled` once, so a trace says which of
+the two a run is.
+
 **A folded body keeps a frame any walk that asks for it can see.** The compiler
 writes `.mono_inlines` beside the code, `jinfo.cpp` turns it into the rows
 `mono_jinfo_inline_frame ()` reads, and `mono_walk_stack_full ()` reports one

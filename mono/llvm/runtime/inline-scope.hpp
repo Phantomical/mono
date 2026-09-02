@@ -106,6 +106,13 @@ struct InlineScope {
 	Budget budget;
 };
 
+/// Whether sequence points are on. Both inliners refuse every fold while they
+/// are.
+///
+/// Traces that once, so a run whose host asked for sequence points says why it
+/// folded nothing.
+bool folding_off_for_seq_points ();
+
 /// Whether a callee can be folded into its caller without changing what the
 /// program does.
 ///

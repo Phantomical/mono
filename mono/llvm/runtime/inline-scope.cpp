@@ -5,6 +5,7 @@
 #include "domain-method.hpp"
 #include "method-override.hpp"
 #include "naming.hpp"
+#include "options.hpp"
 #include "passes/inline-copies.hpp"
 #include "timing.hpp"
 
@@ -18,6 +19,7 @@
 #include <algorithm>
 
 #include "mini.h"
+#include "mini-runtime.h"
 
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
@@ -92,6 +94,32 @@ wrapper_may_fold (MonoMethod *callee)
 	default:
 		return true;
 	}
+}
+
+bool
+folding_off_for_seq_points ()
+{
+	// A breakpoint is armed on a method, and a folded copy carries none of the
+	// method's sequence points.
+	if (!mini_get_debug_options ()->gen_sdb_seq_points)
+		return false;
+
+	// The debugger agent turns sequence points on when it starts, and an
+	// embedding host starts it before it reads MONO_ENV_OPTIONS. Without this
+	// line such a run would read as an inliner that found no candidate.
+	if (is_jit_trace_enabled ()) {
+		static std::once_flag traced;
+
+		std::call_once (traced, [] {
+			MONO_LOCK (jit_trace_mutex ())
+			{
+				fprintf (stderr, "[llvm-jit] inlining is disabled because"
+				                 " sequence points are enabled\n");
+			}
+		});
+	}
+
+	return true;
 }
 
 bool
