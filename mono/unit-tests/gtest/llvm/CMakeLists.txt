@@ -20,7 +20,7 @@ set(MONO_LLVM_TEST_SOURCES
     rgctx-fetch-tests.cpp rgctx-dedup-tests.cpp clamp-frame-align-tests.cpp
     array-address-tests.cpp array-shape-tests.cpp ir-dump-tests.cpp
     cast-func-tests.cpp fold-delegate-tests.cpp fold-cast-tests.cpp inline-heat-tests.cpp
-    inline-cost-dom-chain-tests.cpp
+    inline-cost-dom-chain-tests.cpp sink-keep-alive-tests.cpp
     gc-barrier-tests.cpp operand-class-tests.cpp dead-alloc-tests.cpp
     escape-tests.cpp promote-alloc-tests.cpp constant-values-tests.cpp
     one-file-vfs-tests.cpp hidden-return-tests.cpp inline-save-lmf-tests.cpp

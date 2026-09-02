@@ -21,6 +21,7 @@
 #include "passes/restore-tail-position.hpp"
 #include "passes/rgctx-dedup.hpp"
 #include "passes/rgctx-fetch.hpp"
+#include "passes/sink-keep-alive.hpp"
 #include "passes/tier-counter.hpp"
 #include "passes/top-down-inline.hpp"
 #include <llvm/IR/PassManager.h>
@@ -684,6 +685,15 @@ MonoPassBuilder::buildTier2Pipeline ()
 	 * optimize.
 	 */
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
+
+	/*
+	 * Behind both delegate-fold rounds, so a marker still here is one no
+	 * round could settle. In front of the optimization pipeline below: its
+	 * LoopVectorize refuses any loop that still holds a marker, because
+	 * inline asm is neither an intrinsic nor a function with a vector
+	 * variant.
+	 */
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::SinkKeepAlivePass ()));
 
 	/*
 	 * InstCombine sinks a load only into a block whose unique predecessor is
