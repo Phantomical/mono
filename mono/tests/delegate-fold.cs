@@ -176,6 +176,59 @@ class DelegateFold {
 		return f (x);
 	}
 
+	// A return wide enough that the site's own arity carries a hidden return
+	// pointer beside the delegate, which every shape above is invoked without.
+	struct Vec3 {
+		public float x, y, z;
+
+		public Vec3 (float v) { x = v; y = v; z = v; }
+	}
+
+	static void CheckVec (string what, Vec3 got, float want)
+	{
+		if (got.x != want || got.y != want || got.z != want) {
+			Console.WriteLine ("{0}: got ({1},{2},{3}), want ({4},{4},{4})",
+			                   what, got.x, got.y, got.z, want);
+			failures++;
+		}
+	}
+
+	static Vec3 TwiceV (int x) { calls++; return new Vec3 (x * 2); }
+	static Vec3 TripleV (int x) { calls++; return new Vec3 (x * 3); }
+
+	static Vec3 ApplyV (Func<int, Vec3> f, int x) { return f (x); }
+
+	static readonly Func<int, Vec3> SettledV = TwiceV;
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Vec3 UseSettledV (int x) { return SettledV (x); }
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Vec3 UseCachedGroupV (int x) { return ApplyV (TwiceV, x); }
+
+	class BoxV {
+		public float n;
+		public Vec3 Scale (int x) { calls++; return new Vec3 (x * n); }
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Vec3 UseBoundV (int x)
+	{
+		BoxV b = new BoxV ();
+		b.n = 5;
+		return ApplyV (b.Scale, x);
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Func<int, Vec3> OpaqueV (Func<int, Vec3> f) { return f; }
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Vec3 UseMixedV (bool fresh, int x)
+	{
+		Func<int, Vec3> f = fresh ? new Func<int, Vec3> (TwiceV) : OpaqueV (TripleV);
+		return f (x);
+	}
+
 	static void Values ()
 	{
 		Check ("settled", UseSettled (7), 14);
@@ -192,6 +245,11 @@ class DelegateFold {
 		Check ("field-copy-mixed-triple", UseFieldCopyMixed (false, 7), 21);
 		Expect ("field-copy-unset throws NullReferenceException",
 		        ThrowsNullReference (UseFieldCopyUnset), true);
+		CheckVec ("settled-struct", UseSettledV (7), 14);
+		CheckVec ("cached-group-struct", UseCachedGroupV (7), 14);
+		CheckVec ("bound-struct", UseBoundV (7), 35);
+		CheckVec ("mixed-struct-fresh", UseMixedV (true, 7), 14);
+		CheckVec ("mixed-struct-opaque", UseMixedV (false, 7), 21);
 	}
 
 	/// Whether calling \p run (7) throws NullReferenceException and nothing
@@ -226,25 +284,38 @@ class DelegateFold {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int CachedRoot (int x) { return Apply (Boom, x); }
 
-	/// Whether Boom's frame reports an offset into \p root, which says the fold
-	/// took its body into that method rather than leaving a call.
-	static bool FoldedInto (Exception e, string root)
+	// The struct-returning analogue of SettledRoot and CachedRoot, so the
+	// stack-trace proof below also covers a site whose arity carries a hidden
+	// return pointer.
+	static Vec3 BoomV (int x) { throw Bang; }
+
+	static readonly Func<int, Vec3> SettledBoomV = BoomV;
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Vec3 SettledRootV (int x) { return SettledBoomV (x); }
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Vec3 CachedRootV (int x) { return ApplyV (BoomV, x); }
+
+	/// Whether \p bang's frame reports an offset into \p root, which says the
+	/// fold took its body into that method rather than leaving a call.
+	static bool FoldedInto (Exception e, string bang, string root)
 	{
 		StackTrace trace = new StackTrace (e, false);
-		int in_boom = -1, in_root = -2;
+		int in_bang = -1, in_root = -2;
 
 		foreach (StackFrame frame in trace.GetFrames ()) {
 			MethodBase m = frame.GetMethod ();
 
 			if (m == null || m.DeclaringType != typeof (DelegateFold))
 				continue;
-			if (m.Name == "Boom")
-				in_boom = frame.GetNativeOffset ();
+			if (m.Name == bang)
+				in_bang = frame.GetNativeOffset ();
 			if (m.Name == root)
 				in_root = frame.GetNativeOffset ();
 		}
 
-		return in_boom >= 0 && in_boom == in_root;
+		return in_bang >= 0 && in_bang == in_root;
 	}
 
 	static bool Threw (Func<int, int> run, string root)
@@ -252,7 +323,21 @@ class DelegateFold {
 		try {
 			run (0);
 		} catch (InvalidOperationException e) {
-			return FoldedInto (e, root);
+			return FoldedInto (e, "Boom", root);
+		}
+
+
+		Console.WriteLine ("{0}: did not throw", root);
+		failures++;
+		return false;
+	}
+
+	static bool ThrewV (Func<int, Vec3> run, string root)
+	{
+		try {
+			run (0);
+		} catch (InvalidOperationException e) {
+			return FoldedInto (e, "BoomV", root);
 		}
 
 
@@ -293,6 +378,23 @@ class DelegateFold {
 			}
 
 			Expect (root + " folded at tier 2", Threw (run, root), folding);
+		}
+
+		foreach (string root in new [] { "SettledRootV", "CachedRootV" }) {
+			Func<int, Vec3> run = root == "SettledRootV"
+			                             ? new Func<int, Vec3> (SettledRootV)
+			                             : new Func<int, Vec3> (CachedRootV);
+
+			for (int i = 0; i < 200; i++)
+				ThrewV (run, root);
+
+			if (!Promote (root, tier1) || !Promote (root, tier2)) {
+				Console.WriteLine ("{0}: would not compile", root);
+				failures++;
+				continue;
+			}
+
+			Expect (root + " folded at tier 2", ThrewV (run, root), folding);
 		}
 
 		Values ();

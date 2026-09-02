@@ -14,6 +14,7 @@
 #include "analysis/strip-casts.hpp"
 #include "compile-state.hpp"
 #include "direct-call.hpp"
+#include "hidden-return.hpp"
 #include "runtime/naming.hpp"
 #include "runtime/options.hpp"
 
@@ -82,19 +83,29 @@ receiver_of (MonoMethod *target, unsigned invoke_params)
 
 /// Whether the site's own prototype is one the mapping below can rewrite.
 ///
-/// A hidden return pointer sits at the argument the site's arity puts it at, so
-/// dropping the delegate can move it. A key rides a slot of its own that the
-/// target does not have. Neither shape reaches a delegate built by a C#
-/// compiler, so both are refused rather than mapped.
+/// A key rides the IMT register, not an argument, so the mapping below has no
+/// slot to put it in. A hidden return pointer is an ordinary argument, and
+/// the mapping below relocates it.
 bool
 plainly_shaped (const CallBase &site)
 {
 	for (unsigned i = 0; i < site.arg_size (); ++i)
-		if (site.paramHasAttr (i, Attribute::StructRet)
-		    || site.paramHasAttr (i, Attribute::Nest))
+		if (site.paramHasAttr (i, Attribute::Nest))
 			return false;
 
 	return true;
+}
+
+/// The argument index of \p site's hidden return pointer, or nothing where its
+/// return travels in the return registers.
+std::optional<unsigned>
+hidden_return_argument (const CallBase &site)
+{
+	for (unsigned i = 0; i < site.arg_size (); ++i)
+		if (site.paramHasAttr (i, Attribute::StructRet))
+			return i;
+
+	return std::nullopt;
 }
 
 /// Loads the field at \p offset off \p delegate.
@@ -107,50 +118,90 @@ delegate_field (IRBuilderBase &b, Value *delegate, int offset, const Twine &name
 	                            Align (TARGET_SIZEOF_VOID_P), name);
 }
 
-/// The prototype \p target's entry is called with, given the site's.
+/// The prototype \p target's entry is called with, given the site's and where
+/// its hidden return pointer sits, if it has one.
 ///
-/// A bound instance target is called with the shape the site already had: its
-/// `this` takes the slot the delegate travelled in and Invoke declares the rest
-/// of the arguments exactly as the target does.
+/// A bound instance target keeps the site's own shape: `this` takes the
+/// delegate's slot, so the arity the pointer is positioned against does not
+/// change. A static target loses the delegate argument, so the returned shape
+/// puts the pointer where create_method_decl () computes it for the smaller
+/// arity.
 FunctionType *
-entry_shape (FunctionType *site, Receiver receiver)
+entry_shape (FunctionType *site, Receiver receiver, Type *hidden)
 {
 	if (receiver == Receiver::bound)
 		return site;
 
-	return FunctionType::get (site->getReturnType (), site->params ().drop_front (),
-	                          false);
+	FunctionType *natural = hidden != nullptr ? natural_prototype (site, hidden) : site;
+	FunctionType *dropped =
+		FunctionType::get (natural->getReturnType (), natural->params ().drop_front (),
+		                   false);
+
+	return hidden != nullptr ? hidden_return_prototype (dropped, hidden) : dropped;
 }
 
-/// The arguments the direct call is made with.
-void
-direct_arguments (IRBuilderBase &b, CallBase &site, Receiver receiver,
-                  SmallVectorImpl<Value *> &out)
-{
-	if (receiver == Receiver::bound)
-		out.push_back (delegate_field (b, site.getArgOperand (0),
-		                               MONO_STRUCT_OFFSET (MonoDelegate, target),
-		                               "delegate_target"));
-
-	out.append (site.arg_begin () + 1, site.arg_end ());
-}
-
-/// What the site said about its arguments, moved onto the direct call's.
+/// The arguments the direct call is made with, given where \p site's hidden
+/// return pointer sits, if it has one.
 ///
 /// The delegate's own slot never travels: it either goes away or is taken by a
-/// receiver this pass loaded, and what the site said about a delegate does not
-/// describe either.
-AttributeList
-direct_attributes (const CallBase &site, Receiver receiver)
+/// receiver this pass loaded. The hidden return pointer travels too, but the
+/// drop can move it: hidden_return_index () is asked again at the new arity,
+/// the same way entry_shape () placed it.
+void
+direct_arguments (IRBuilderBase &b, CallBase &site, Receiver receiver,
+                  std::optional<unsigned> hidden, SmallVectorImpl<Value *> &out)
 {
-	AttributeList was = site.getAttributes ();
-	SmallVector<AttributeSet, 8> params;
+	SmallVector<Value *, 8> natural;
 
 	if (receiver == Receiver::bound)
-		params.push_back (AttributeSet ());
+		natural.push_back (delegate_field (b, site.getArgOperand (0),
+		                                   MONO_STRUCT_OFFSET (MonoDelegate, target),
+		                                   "delegate_target"));
 
 	for (unsigned i = 1; i < site.arg_size (); ++i)
-		params.push_back (was.getParamAttrs (i));
+		if (i != hidden)
+			natural.push_back (site.getArgOperand (i));
+
+	if (!hidden) {
+		out.append (natural.begin (), natural.end ());
+		return;
+	}
+
+	auto at = natural.begin () + hidden_return_index (natural.size () + 1);
+
+	out.append (natural.begin (), at);
+	out.push_back (site.getArgOperand (*hidden));
+	out.append (at, natural.end ());
+}
+
+/// What the site said about its arguments, moved onto the direct call's, given
+/// where its hidden return pointer sits, if it has one.
+///
+/// Mirrors direct_arguments ()'s mapping, so the two line up position for
+/// position: the delegate's slot carries none of its own, and the hidden
+/// pointer's attributes move to the same new position.
+AttributeList
+direct_attributes (const CallBase &site, Receiver receiver, std::optional<unsigned> hidden)
+{
+	AttributeList was = site.getAttributes ();
+	SmallVector<AttributeSet, 8> natural;
+
+	if (receiver == Receiver::bound)
+		natural.push_back (AttributeSet ());
+
+	for (unsigned i = 1; i < site.arg_size (); ++i)
+		if (i != hidden)
+			natural.push_back (was.getParamAttrs (i));
+
+	if (!hidden)
+		return AttributeList::get (site.getContext (), was.getFnAttrs (),
+		                           was.getRetAttrs (), natural);
+
+	auto at = natural.begin () + hidden_return_index (natural.size () + 1);
+	SmallVector<AttributeSet, 8> params (natural.begin (), at);
+
+	params.push_back (was.getParamAttrs (*hidden));
+	params.append (at, natural.end ());
 
 	return AttributeList::get (site.getContext (), was.getFnAttrs (),
 	                           was.getRetAttrs (), params);
@@ -158,10 +209,11 @@ direct_attributes (const CallBase &site, Receiver receiver)
 
 /// Gives \p direct everything the site it stands for said about itself.
 void
-carry_site (const CallBase &site, CallBase &direct, Receiver receiver)
+carry_site (const CallBase &site, CallBase &direct, Receiver receiver,
+           std::optional<unsigned> hidden)
 {
 	direct.setCallingConv (site.getCallingConv ());
-	direct.setAttributes (direct_attributes (site, receiver));
+	direct.setAttributes (direct_attributes (site, receiver, hidden));
 	direct.setDebugLoc (site.getDebugLoc ());
 
 	if (const auto *was = dyn_cast<CallInst> (&site))
@@ -174,9 +226,10 @@ CallBase *
 call_entry (IRBuilderBase &b, CallBase &site, Function *entry, Receiver receiver,
             BasicBlock *normal)
 {
+	std::optional<unsigned> hidden = hidden_return_argument (site);
 	SmallVector<Value *, 8> args;
 
-	direct_arguments (b, site, receiver, args);
+	direct_arguments (b, site, receiver, hidden, args);
 
 	CallBase *direct;
 
@@ -185,7 +238,7 @@ call_entry (IRBuilderBase &b, CallBase &site, Function *entry, Receiver receiver
 	else
 		direct = b.CreateCall (entry, args);
 
-	carry_site (site, *direct, receiver);
+	carry_site (site, *direct, receiver, hidden);
 
 	return direct;
 }
@@ -210,15 +263,20 @@ entry_at (CallBase &site, MonoMethod *named, const CompileState &compile)
 	if (publishes_unbox_entry (target))
 		return std::nullopt;
 
-	// The delegate rides argument 0 and Invoke declares the rest, so the site
-	// states Invoke's parameter count without naming Invoke.
-	std::optional<Receiver> receiver = receiver_of (target, site.arg_size () - 1);
+	std::optional<unsigned> hidden_at = hidden_return_argument (site);
+
+	// The delegate rides argument 0, and a hidden return pointer rides one
+	// more where the site has one. What is left is Invoke's own parameter
+	// count, without naming Invoke.
+	unsigned invoke_params = site.arg_size () - 1 - (hidden_at ? 1 : 0);
+	std::optional<Receiver> receiver = receiver_of (target, invoke_params);
 
 	if (!receiver)
 		return std::nullopt;
 
+	Type *hidden = hidden_at ? site.getParamStructRetType (*hidden_at) : nullptr;
 	Function *entry = entry_for (*site.getModule (), target,
-	                             entry_shape (site.getFunctionType (), *receiver),
+	                             entry_shape (site.getFunctionType (), *receiver, hidden),
 	                             compile);
 
 	if (entry == nullptr)
