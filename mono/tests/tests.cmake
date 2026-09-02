@@ -1058,6 +1058,13 @@ set(MONO_TESTS_TIER2_INLINE_ALLOC_ELISION_SRC
   tier2-inline-alloc-elision.cs
 )
 
+# Whether the cost model specializes a concrete callee it reaches out of a
+# root that is itself compiled shared (task #345), with the genuinely open
+# callee from the same root as the negative control.
+set(MONO_TESTS_TIER2_INLINE_GENERIC_SCOPE_SRC
+  tier2-inline-generic-scope.cs
+)
+
 # The return-devirtualization bonus, on a callee that forwards a further
 # call's answer instead of allocating its own. It runs twice, on the default
 # and with the bonus zeroed, and reads the variable to know which arm it is

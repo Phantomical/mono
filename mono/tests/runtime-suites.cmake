@@ -737,6 +737,14 @@ _mono_exe_list(_tier2_inline_profile_context ${MONO_TESTS_TIER2_INLINE_PROFILE_C
 mono_runtime_suite(runtime-tier2-inline-profile-context TESTS ${_tier2_inline_profile_context}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
 
+# Whether the cost model specializes a concrete callee out of a root that is
+# itself shared (task #345). PromoteNow drives the compiles, so self-promotion
+# is off, and the trivial pre-pass is off so the fold the test reads is the
+# cost model's rather than that pass's.
+_mono_exe_list(_tier2_inline_generic_scope ${MONO_TESTS_TIER2_INLINE_GENERIC_SCOPE_SRC})
+mono_runtime_suite(runtime-tier2-inline-generic-scope TESTS ${_tier2_inline_generic_scope}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
+
 # A filter-bearing callee can never fold -- getInlineCost refuses its
 # llvm.localescape outright -- so both arms expect the same refusal.
 # PromoteNow drives the compiles the same way runtime-tier2-inline-clause does.
