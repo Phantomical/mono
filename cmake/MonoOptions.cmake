@@ -33,6 +33,23 @@ option(MONO_ENABLE_BOEHM  "Build the Boehm collector and mono-boehm" ON)
 set(MONO_LLVM_PREFIX "" CACHE PATH
     "Prefix of the LLVM install to build the tier-1 backend against (e.g. /usr/lib/llvm-18). Empty disables LLVM.")
 
+# How the runtime is linked when it ships inside a Unity player.  The player
+# defines the process's global operator new, so an allocation that binds there
+# reaches the engine's shared heap, and one lock covers it.  Compile threads
+# spend 38-46% of their samples inside that heap.
+#
+# LLVM as archives and a static libstdc++ put every allocation inside this
+# image, where -Bsymbolic binds it to the C++ runtime linked here.
+# MonoCompilerFlags.cmake already passes -Bsymbolic for every non-MSVC link,
+# so this option adds the other two.
+#
+# Linux only.  A Unity player on Windows has the same problem and none of
+# these flags has a link.exe spelling.
+option(MONO_UNITY_BUILD "Link the runtime the way a Unity player ships it" OFF)
+if(MONO_UNITY_BUILD AND NOT MONO_HOST_LINUX)
+  message(FATAL_ERROR "MONO_UNITY_BUILD is Linux-only")
+endif()
+
 # --- runtime pieces ---------------------------------------------------------
 option(MONO_ENABLE_INTERPRETER    "Build the IL interpreter"                ON)
 option(MONO_ENABLE_DEBUGGER_AGENT "Build the soft debugger agent"           ON)

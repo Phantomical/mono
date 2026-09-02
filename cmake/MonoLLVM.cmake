@@ -26,8 +26,15 @@ endif()
 # 18.x -> 1800, the way build_llvm_config.sh derived it.
 math(EXPR MONO_LLVM_API_VERSION "${LLVM_VERSION_MAJOR} * 100")
 
-# Prefer the single libLLVM dylib when the install has one.
-if(TARGET LLVM)
+# Prefer the single libLLVM dylib when the install has one.  A Unity build
+# takes the component archives instead, because an allocation inside the dylib
+# binds to the player's operator new.
+if(MONO_UNITY_BUILD AND NOT TARGET LLVMCore)
+  message(FATAL_ERROR
+    "MONO_UNITY_BUILD needs LLVM's component archives; ${LLVM_INSTALL_PREFIX} "
+    "ships the dylib alone")
+endif()
+if(TARGET LLVM AND NOT MONO_UNITY_BUILD)
   set(_llvm_libs LLVM)
 else()
   llvm_map_components_to_libnames(_llvm_libs
