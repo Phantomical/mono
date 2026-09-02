@@ -511,6 +511,20 @@ the same way as the tiering ones above:
   for a site answered cold, default 64. A cold site pays full translation for a body
   that hardly runs; the tighter limit is what keeps that bounded. 0 takes
   `-mono-inline-cost-il-limit`.
+- `--llvm-opt=-mono-inline-cold-elision-il-limit=<0|false|empty>`
+  (`passes/inline-policy.cpp`) — on by default. The IL limit bounds translation cost;
+  it is not meant to be the fold/decline answer itself, and a cold site is exactly
+  where that distinction matters most, because the elision bonus below is worth far
+  more than the cold cost budget (45) that would otherwise weigh the candidate once
+  translated. `carries_an_elision_candidate ()` reads the *caller's* own IR alone —
+  no need to translate the callee first — for an argument that is a fresh,
+  named-class allocation `alloc_elision_fate ()` has not already ruled out as an
+  escape, and a cold site carrying one translates its candidate under the ordinary
+  limit instead of the cold one. What the callee actually does with the argument —
+  capture it, dispatch on it — still decides the real fold, once this lets the
+  candidate translate at all. `mono/tests/tier2-inline-cold-elision.cs` gates it: an
+  unescaped and an escaping candidate of the same size at the same cold site settle
+  the question inside one run.
 - `--llvm-opt=-mono-inline-threshold=<n>` (`passes/inline-cost.cpp`) — the tier-2 cost
   model's base budget, default 225. `-mono-inlinedefault-threshold=<n>` sets the same
   field and is what wins when `-mono-inline-threshold` is not given explicitly.

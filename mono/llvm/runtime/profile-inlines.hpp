@@ -53,7 +53,8 @@ public:
 	}
 
 	llvm::Function *materialize (llvm::Function &decl, llvm::Module &into,
-	                             std::optional<SiteHeat> heat) override;
+	                             std::optional<SiteHeat> heat,
+	                             const llvm::CallBase &call) override;
 	llvm::ArrayRef<uint8_t> profile_for (llvm::Function &decl) override;
 	void folded (llvm::Function &caller, llvm::Function &callee,
 	            const llvm::InlineCost &cost, uint64_t count) override;

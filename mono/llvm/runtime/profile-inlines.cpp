@@ -10,6 +10,7 @@
 #include "naming.hpp"
 #include "options.hpp"
 #include "passes/inline-copies.hpp"
+#include "passes/inline-policy.hpp"
 #include "timing.hpp"
 #include "trivial-inlines.hpp"
 
@@ -164,7 +165,8 @@ trace_refusal (const InlineScope &scope, MonoMethod *callee, const char *why)
 }
 
 Function *
-ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHeat> heat)
+ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHeat> heat,
+                             const CallBase &call)
 {
 	MonoMethod *callee = marked_method (decl);
 
@@ -199,8 +201,19 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 
 	if (heat == SiteHeat::hot)
 		limit = costed_inline_il_limit_hot ();
-	else if (heat == SiteHeat::cold)
+	else if (heat == SiteHeat::cold) {
 		limit = costed_inline_il_limit_cold ();
+
+		// The IL limit bounds translation cost; it is not meant to be the
+		// fold/decline answer itself, and a cold site carrying an argument
+		// this compile can already tell, from the caller's own IR, is a live
+		// elision candidate is exactly the case where the cold limit would be
+		// making that call on a proxy. What the callee does with the
+		// argument - capture it, dispatch on it - still decides the actual
+		// fold, once this lets the candidate translate at all.
+		if (carries_an_elision_candidate (call))
+			limit = costed_inline_il_limit ();
+	}
 
 	// A folded copy carries no sequence points of its own; see
 	// materialize_trivial_callees (). A rebuild is free, so only a method new

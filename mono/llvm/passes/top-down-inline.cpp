@@ -110,7 +110,8 @@ struct ScratchAnalyses {
 Function *
 materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
                        ModulePassManager &prepare, ScratchAnalyses &scratch,
-                       OneFileFS &profile_fs, std::optional<SiteHeat> heat)
+                       OneFileFS &profile_fs, std::optional<SiteHeat> heat,
+                       const CallBase &call)
 {
 	std::string name = decl.getName ().str ();
 	auto into = std::make_unique<Module> (name, m.getContext ());
@@ -120,7 +121,7 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 	into->setDataLayout (m.getDataLayout ());
 	into->setTargetTriple (m.getTargetTriple ());
 
-	Function *made = candidates.materialize (decl, *into, heat);
+	Function *made = candidates.materialize (decl, *into, heat, call);
 
 	if (made == nullptr)
 		return nullptr;
@@ -461,7 +462,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 				callee = materialize_candidate (m, *callee, *candidates,
 				                                materialize_, scratch, *profile_fs_,
-				                                heat);
+				                                heat, *call);
 
 				if (callee == nullptr)
 					continue;

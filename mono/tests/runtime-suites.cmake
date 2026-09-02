@@ -811,6 +811,15 @@ mono_runtime_suite(runtime-tier2-inline-byte-budget-off TESTS ${_tier2_inline_by
                    ENV "MONO_INLINE_POLICY=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-byte-budget=1000000")
 
+# carries_an_elision_candidate (), on two ~113-byte constructors at cold
+# sites -- past the flat 64-byte cold default, under the 256-byte ordinary
+# one. One arm: an unescaped and an escaping candidate settle the question
+# inside the same run, the same reason tier2-inline-heat-il-limit's own
+# single arm suffices.
+_mono_exe_list(_tier2_inline_cold_elision ${MONO_TESTS_TIER2_INLINE_COLD_ELISION_SRC})
+mono_runtime_suite(runtime-tier2-inline-cold-elision TESTS ${_tier2_inline_cold_elision}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
+
 # The two alloc-elision bonuses, on a callee that only reads an uncaptured
 # argument's fields. The off arm leaves the other bonuses alone, because what
 # it separates is this pair from the fold tier2-inline-policy.cs's Measure ()

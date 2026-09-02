@@ -110,6 +110,12 @@ cl::opt<int> DevirtualizeDelegateArgumentBonus (
 	cl::desc ("Threshold bonus for a callee that invokes a parameter the site "
 	          "fills with a delegate whose target the compile can name"));
 
+cl::opt<bool> ColdElisionILLimit (
+	"mono-inline-cold-elision-il-limit", cl::Hidden, cl::init (true),
+	cl::desc ("Let a cold site carrying a fresh, unescaped allocation argument "
+	          "translate its candidate under the ordinary IL limit instead of "
+	          "the cold one"));
+
 cl::opt<int> SaveLmfPenalty (
 	"mono-inline-save-lmf-penalty", cl::Hidden, cl::init (100),
 	cl::desc ("Cost added for a callee whose front end pushes an LMF entry"));
@@ -739,6 +745,42 @@ noreturn_free_successor (const BranchInst &branch)
 		return second;
 
 	return nullptr;
+}
+
+/// Whether \p call passes an argument that is still a live elision candidate
+/// by the caller's own IR alone -- a fresh, named-class allocation
+/// alloc_elision_fate () has not already ruled out as an escape.
+///
+/// This is the caller-side half of what call_site_bonus () asks in full once
+/// the callee is available: whether folding could plausibly erase an
+/// allocation, not whether it will. The callee's own body still decides that
+/// -- does it capture the argument, does it dispatch on it -- and this
+/// answers nothing about either. What it answers is cheap enough to ask
+/// before translating a candidate at all, which is the question a size gate
+/// meant to bound cost, not make the fold, should not be answering on a
+/// proxy: an allocation this compile can prove keeps flowing toward erasure
+/// is worth the ordinary IL limit's extra translation at a site that would
+/// otherwise get the cold one.
+bool
+carries_an_elision_candidate (const CallBase &call)
+{
+	if (!ColdElisionILLimit)
+		return false;
+
+	for (const Use &arg_use : call.args ()) {
+		Value *arg = arg_use.get ();
+
+		if (!allocated_under_a_named_class (arg))
+			continue;
+
+		const CallBase *allocation = erasable_allocation (arg);
+
+		if (allocation != nullptr
+		    && alloc_elision_fate (*allocation, call) != AllocElisionFate::escapes)
+			return true;
+	}
+
+	return false;
 }
 
 int

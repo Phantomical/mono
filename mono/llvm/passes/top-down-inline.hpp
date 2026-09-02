@@ -16,6 +16,7 @@
 #include <utility>
 
 namespace llvm {
+class CallBase;
 class Function;
 class InlineCost;
 class TargetMachine;
@@ -53,9 +54,14 @@ public:
 	///
 	/// \p heat is what tier2_site_heat () says of the site asking, or nothing,
 	/// so the engine can size the translation it is willing to do by how hot
-	/// the site is rather than by one flat limit.
+	/// the site is rather than by one flat limit. \p call is that site itself,
+	/// so the engine can also ask what the caller's own IR already states about
+	/// an argument -- carries_an_elision_candidate () (`inline-policy.hpp`) is
+	/// what a cold site's limit reads it for -- without needing decl translated
+	/// first to answer.
 	virtual llvm::Function *materialize (llvm::Function &decl, llvm::Module &into,
-	                                     std::optional<SiteHeat> heat) = 0;
+	                                     std::optional<SiteHeat> heat,
+	                                     const llvm::CallBase &call) = 0;
 
 	/// The counts \p decl's own callee gathered on its own account, in the form
 	/// PGOInstrumentationUse reads back.

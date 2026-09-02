@@ -1053,6 +1053,14 @@ set(MONO_TESTS_TIER2_INLINE_BYTE_BUDGET_SRC
   tier2-inline-byte-budget.cs
 )
 
+# carries_an_elision_candidate () lets a cold site translate under the
+# ordinary IL limit when the caller's own IR already shows a fresh,
+# unescaped allocation. One run: an unescaped and an escaping candidate of
+# the same size at the same heat class settle the question inside it.
+set(MONO_TESTS_TIER2_INLINE_COLD_ELISION_SRC
+  tier2-inline-cold-elision.cs
+)
+
 # Whether the cost model folds a clause-bearing callee. It runs twice, on the
 # default and with the fold off, and reads MONO_FOLD_CLAUSES to know which arm
 # it is in.
