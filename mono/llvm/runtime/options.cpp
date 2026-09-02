@@ -544,6 +544,13 @@ tier0_enabled ()
  * makes the interpreter allocate an array, which calls that same wrapper, and
  * the thread runs out of stack. Boehm is where this shows, because SGen's
  * managed allocator keeps the hot path off the icall.
+ *
+ * A delegate-invoke wrapper is refused because a multicast delegate's Invoke
+ * reaches it through a class vtable slot, and that slot is not a thunk.
+ * common_call_trampoline () (`mono/mini/mini-trampolines.c`) patches it once,
+ * on the slot's first call, to whatever this answers, and never revisits it.
+ * A later compile through the shared body redirects this method's own thunk,
+ * but the slot never reads it, so tier 0 has no way out for it either.
  */
 static bool
 wrapper_runs_at_tier0 (MonoMethod *method)
@@ -566,7 +573,8 @@ wrapper_runs_at_tier0 (MonoMethod *method)
 
 	if (method->wrapper_type == MONO_WRAPPER_ALLOC
 	    || method->wrapper_type == MONO_WRAPPER_WRITE_BARRIER
-	    || method->wrapper_type == MONO_WRAPPER_MANAGED_TO_NATIVE)
+	    || method->wrapper_type == MONO_WRAPPER_MANAGED_TO_NATIVE
+	    || method->wrapper_type == MONO_WRAPPER_DELEGATE_INVOKE)
 		return false;
 
 	WrapperInfo *info = mono_marshal_get_wrapper_info (method);
