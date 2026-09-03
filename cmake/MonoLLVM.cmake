@@ -59,12 +59,6 @@ if(MONO_UNITY_BUILD)
       message(WARNING "no ld.lld; linking ${MONO_LLVM_STATIC} with the default "
                       "linker needs several GB per link")
     endif()
-
-    # Even so, one link at a time: Ninja otherwise starts as many as -j allows
-    # and the machine runs out of memory.  Raise the pool where there is
-    # headroom for it.
-    set_property(GLOBAL PROPERTY JOB_POOLS mono_link=1)
-    set(CMAKE_JOB_POOL_LINK mono_link)
   elseif(TARGET LLVMCore)
     llvm_map_components_to_libnames(_llvm_libs ${_llvm_components})
     foreach(_lib IN LISTS _llvm_libs)

@@ -87,6 +87,21 @@ option(MONO_ENABLE_CRASH_REPORTING "Build the structured crash reporter"
        ${_mono_crash_reporting_default})
 option(MONO_CRASH_PRIVACY         "Scrub private data from crash dumps"     ON)
 
+# Ninja runs a link per core, and a player build's links each want several GB
+# because of the LLVM archive in them.  Lower this where they do not all fit.
+include(ProcessorCount)
+ProcessorCount(_mono_nproc)
+if(_mono_nproc EQUAL 0)
+  set(_mono_nproc 1)
+endif()
+set(MONO_MAX_CONCURRENT_LINKS "${_mono_nproc}" CACHE STRING
+    "Most links to run at once")
+
+if(CMAKE_GENERATOR MATCHES "Ninja")
+  set_property(GLOBAL PROPERTY JOB_POOLS mono_link=${MONO_MAX_CONCURRENT_LINKS})
+  set(CMAKE_JOB_POOL_LINK mono_link)
+endif()
+
 # --- instrumentation --------------------------------------------------------
 option(MONO_ENABLE_COVERAGE "Instrument the whole native build for llvm-cov" OFF)
 
