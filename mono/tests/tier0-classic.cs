@@ -42,6 +42,11 @@ public class Tier0ClassicTest
 		return v;
 	}
 
+	static double RoundTripDouble (double v)
+	{
+		return v;
+	}
+
 	// Matched by the same filter substring as Tier0ClassicExercise, and called
 	// only from inside it. This is a classic body calling another classic
 	// body, not one calling out to an interpreted or LLVM-compiled one.
@@ -140,6 +145,52 @@ public class Tier0ClassicTest
 		}
 		r[i++] = caught;
 
+		// conv.ovf.i8/u8 from a float and from a double: the four opcodes
+		// with no arch codegen case, reachable only through the emulation
+		// table's registration. Each pairs an in-range value with one large
+		// enough to overflow all four. A codegen shortcut that answers wrong
+		// or fails to throw then shows up here, not only in the in-range
+		// half.
+		r[i++] = checked ((long) RoundTripFloat (123f));
+
+		int floatOvfI8 = 0;
+		try {
+			floatOvfI8 = (int) checked ((long) RoundTripFloat (3.4e38f));
+		} catch (OverflowException) {
+			floatOvfI8 = 1;
+		}
+		r[i++] = floatOvfI8;
+
+		r[i++] = (long) checked ((ulong) RoundTripFloat (456f));
+
+		int floatOvfU8 = 0;
+		try {
+			floatOvfU8 = (int) checked ((ulong) RoundTripFloat (3.4e38f));
+		} catch (OverflowException) {
+			floatOvfU8 = 1;
+		}
+		r[i++] = floatOvfU8;
+
+		r[i++] = checked ((long) RoundTripDouble (789.0));
+
+		int doubleOvfI8 = 0;
+		try {
+			doubleOvfI8 = (int) checked ((long) RoundTripDouble (1e300));
+		} catch (OverflowException) {
+			doubleOvfI8 = 1;
+		}
+		r[i++] = doubleOvfI8;
+
+		r[i++] = (long) checked ((ulong) RoundTripDouble (1011.0));
+
+		int doubleOvfU8 = 0;
+		try {
+			doubleOvfU8 = (int) checked ((ulong) RoundTripDouble (1e300));
+		} catch (OverflowException) {
+			doubleOvfU8 = 1;
+		}
+		r[i++] = doubleOvfU8;
+
 		return r;
 	}
 
@@ -152,6 +203,10 @@ public class Tier0ClassicTest
 		"float<-long conv", "double<-int conv",
 		"loop+switch acc", "array sum", "array alloc length",
 		"call", "virtual call", "classic callee", "string length", "catch",
+		"float ovf.i8 in range", "float ovf.i8 overflow",
+		"float ovf.u8 in range", "float ovf.u8 overflow",
+		"double ovf.i8 in range", "double ovf.i8 overflow",
+		"double ovf.u8 in range", "double ovf.u8 overflow",
 	};
 
 	static readonly long[] Want = {
@@ -163,6 +218,10 @@ public class Tier0ClassicTest
 		1000000000, 17,
 		14, 55, 6,
 		42, 4, 38, 12, 99,
+		123, 1,
+		456, 1,
+		789, 1,
+		1011, 1,
 	};
 
 	static int Check (long[] r)

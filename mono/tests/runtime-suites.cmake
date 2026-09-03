@@ -629,9 +629,13 @@ endif()
 
 # Tier0ClassicExercise and the callee it calls, run once interpreted and once
 # compiled by the classic compiler through mono-tier0-classic. Both arms have
-# to reach the same array of checks.
-mono_runtime_suite(runtime-tier0-classic-interp TESTS tier0-classic.exe)
-mono_runtime_suite(runtime-tier0-classic TESTS tier0-classic.exe
+# to reach the same array of checks. tier0-classic-fpconv.exe carries the one
+# shape C# cannot express (conv.u from a double) and is named to match the
+# same filter substring.
+mono_runtime_suite(runtime-tier0-classic-interp
+                   TESTS tier0-classic.exe tier0-classic-fpconv.exe)
+mono_runtime_suite(runtime-tier0-classic
+                   TESTS tier0-classic.exe tier0-classic-fpconv.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=ClassicExercise")
 
 # The tier-2 cost model. Its root has to gather counts at tier 1 and then be

@@ -717,6 +717,7 @@ set(MONO_TESTS_IL_SRC
   calliGenericTest.il
   ckfiniteTest.il
   interp-float-conv.il
+  tier0-classic-fpconv.il
   fault-handler.il
   locallocTest.il
   initblkTest.il

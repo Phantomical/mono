@@ -3426,11 +3426,36 @@ init_backend (MonoBackend *backend)
 #endif
 }
 
+// None of the five opcodes below has a case in the arch codegen, so
+// mono_decompose_opcode ()'s switch falls to its default of emulating each
+// of them. The table this registers into is their only path to code.
+static void
+register_opcode_emulations (void)
+{
+	mini_register_opcode_emulation (OP_FCONV_TO_OVF_I8, &mono_get_jit_icall_info ()->__emul_fconv_to_ovf_i8,
+		"__emul_fconv_to_ovf_i8", mono_icall_sig_long_double, (gpointer)mono_fconv_ovf_i8, "mono_fconv_ovf_i8", FALSE);
+	mini_register_opcode_emulation (OP_FCONV_TO_OVF_U8, &mono_get_jit_icall_info ()->__emul_fconv_to_ovf_u8,
+		"__emul_fconv_to_ovf_u8", mono_icall_sig_ulong_double, (gpointer)mono_fconv_ovf_u8, "mono_fconv_ovf_u8", FALSE);
+	mini_register_opcode_emulation (OP_RCONV_TO_OVF_I8, &mono_get_jit_icall_info ()->__emul_rconv_to_ovf_i8,
+		"__emul_rconv_to_ovf_i8", mono_icall_sig_long_float, (gpointer)mono_rconv_ovf_i8, "mono_rconv_ovf_i8", FALSE);
+	mini_register_opcode_emulation (OP_RCONV_TO_OVF_U8, &mono_get_jit_icall_info ()->__emul_rconv_to_ovf_u8,
+		"__emul_rconv_to_ovf_u8", mono_icall_sig_ulong_float, (gpointer)mono_rconv_ovf_u8, "mono_rconv_ovf_u8", FALSE);
+
+#if SIZEOF_REGISTER == 4
+	mini_register_opcode_emulation (OP_FCONV_TO_U, &mono_get_jit_icall_info ()->__emul_fconv_to_u,
+		"__emul_fconv_to_u", mono_icall_sig_uint32_double, (gpointer)mono_fconv_u4, "mono_fconv_u4", TRUE);
+#else
+	mini_register_opcode_emulation (OP_FCONV_TO_U, &mono_get_jit_icall_info ()->__emul_fconv_to_u,
+		"__emul_fconv_to_u", mono_icall_sig_ulong_double, (gpointer)mono_fconv_u8, "mono_fconv_u8", TRUE);
+#endif
+}
+
 void
 mono_tier0_init (void)
 {
 	current_backend = g_new0 (MonoBackend, 1);
 	init_backend (current_backend);
+	register_opcode_emulations ();
 }
 
 static gboolean
