@@ -33,6 +33,23 @@ option(MONO_ENABLE_BOEHM  "Build the Boehm collector and mono-boehm" ON)
 set(MONO_LLVM_PREFIX "" CACHE PATH
     "Prefix of the LLVM install to build the tier-1 backend against (e.g. /usr/lib/llvm-18). Empty disables LLVM.")
 
+# How the runtime is linked when it ships inside a Unity player.  The player
+# defines the process's global operator new, so an allocation that binds there
+# reaches the engine's shared heap, and one lock covers it.  Compile threads
+# spend 38-46% of their samples inside that heap.
+#
+# The option links LLVM as archives and compiles mono/mini/mono-shim.cpp, which
+# defines the operator new family on g_malloc.  MonoCompilerFlags.cmake already
+# passes -Bsymbolic for every non-MSVC link, which is what binds those
+# definitions locally.
+#
+# Linux only.  A Unity player on Windows has the same problem and none of
+# these flags has a link.exe spelling.
+option(MONO_UNITY_BUILD "Link the runtime the way a Unity player ships it" OFF)
+if(MONO_UNITY_BUILD AND NOT MONO_HOST_LINUX)
+  message(FATAL_ERROR "MONO_UNITY_BUILD is Linux-only")
+endif()
+
 # --- runtime pieces ---------------------------------------------------------
 option(MONO_ENABLE_INTERPRETER    "Build the IL interpreter"                ON)
 option(MONO_ENABLE_DEBUGGER_AGENT "Build the soft debugger agent"           ON)
@@ -46,7 +63,11 @@ option(MONO_ENABLE_LIBRARIES      "Build the shared runtime libraries"      ON)
 # into it resolves mono_* against the binary and one copy of the runtime is in
 # the process either way.  A PE module has to name the image each import comes
 # from, so the runtime has to be a DLL both the executable and the module link.
-if(MONO_HOST_WINDOWS)
+#
+# A player build links LLVM into the runtime, so linking the runtime into each
+# binary as well copies a gigabyte of archive into every one of them.  Off, the
+# binaries link the runtime library and only that library carries LLVM.
+if(MONO_HOST_WINDOWS OR MONO_UNITY_BUILD)
   set(_mono_static_mono_default OFF)
 else()
   set(_mono_static_mono_default ON)
@@ -65,6 +86,21 @@ endif()
 option(MONO_ENABLE_CRASH_REPORTING "Build the structured crash reporter"
        ${_mono_crash_reporting_default})
 option(MONO_CRASH_PRIVACY         "Scrub private data from crash dumps"     ON)
+
+# Ninja runs a link per core, and a player build's links each want several GB
+# because of the LLVM archive in them.  Lower this where they do not all fit.
+include(ProcessorCount)
+ProcessorCount(_mono_nproc)
+if(_mono_nproc EQUAL 0)
+  set(_mono_nproc 1)
+endif()
+set(MONO_MAX_CONCURRENT_LINKS "${_mono_nproc}" CACHE STRING
+    "Most links to run at once")
+
+if(CMAKE_GENERATOR MATCHES "Ninja")
+  set_property(GLOBAL PROPERTY JOB_POOLS mono_link=${MONO_MAX_CONCURRENT_LINKS})
+  set(CMAKE_JOB_POOL_LINK mono_link)
+endif()
 
 # --- instrumentation --------------------------------------------------------
 option(MONO_ENABLE_COVERAGE "Instrument the whole native build for llvm-cov" OFF)

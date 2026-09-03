@@ -26,13 +26,65 @@ endif()
 # 18.x -> 1800, the way build_llvm_config.sh derived it.
 math(EXPR MONO_LLVM_API_VERSION "${LLVM_VERSION_MAJOR} * 100")
 
-# Prefer the single libLLVM dylib when the install has one.
-if(TARGET LLVM)
+set(_llvm_components analysis core bitwriter linker passes orcjit x86codegen x86asmparser)
+
+# Prefer the single libLLVM dylib when the install has one.  A Unity build
+# takes a static LLVM instead, because an allocation inside the dylib binds to
+# the player's operator new.
+#
+# libLLVM.a comes before the component archives, because an install built with
+# LLVM_ENABLE_LTO leaves bitcode in those and ld answers "file format not
+# recognized".  Linking the bitcode instead runs a ThinLTO of the whole of LLVM
+# on every relink, so such an install wants that link done once and archived.
+# A raw path carries none of the dependencies an imported target would, which
+# is what llvm-config is asked for here.
+if(MONO_UNITY_BUILD)
+  find_library(MONO_LLVM_STATIC NAMES libLLVM.a
+               PATHS "${LLVM_LIBRARY_DIRS}" NO_DEFAULT_PATH
+               DOC "Static LLVM the Unity build links")
+  if(MONO_LLVM_STATIC)
+    execute_process(
+      COMMAND "${LLVM_TOOLS_BINARY_DIR}/llvm-config" --link-static --system-libs
+      OUTPUT_VARIABLE _llvm_system_libs OUTPUT_STRIP_TRAILING_WHITESPACE)
+    separate_arguments(_llvm_system_libs NATIVE_COMMAND "${_llvm_system_libs}")
+    set(_llvm_libs "${MONO_LLVM_STATIC}" ${_llvm_system_libs})
+    get_filename_component(_llvm_archives "${MONO_LLVM_STATIC}" NAME)
+
+    # This archive is over a gigabyte with debug info, and GNU ld wants it in
+    # memory all at once.  lld reads it in a fraction of the time and the space.
+    find_program(MONO_LLD NAMES ld.lld)
+    if(MONO_LLD)
+      add_link_options(-fuse-ld=lld)
+    else()
+      message(WARNING "no ld.lld; linking ${MONO_LLVM_STATIC} with the default "
+                      "linker needs several GB per link")
+    endif()
+  elseif(TARGET LLVMCore)
+    llvm_map_components_to_libnames(_llvm_libs ${_llvm_components})
+    foreach(_lib IN LISTS _llvm_libs)
+      list(APPEND _llvm_archives "lib${_lib}.a")
+    endforeach()
+  else()
+    message(FATAL_ERROR
+      "MONO_UNITY_BUILD needs a static LLVM; ${LLVM_INSTALL_PREFIX} ships the "
+      "dylib alone")
+  endif()
+elseif(TARGET LLVM)
   set(_llvm_libs LLVM)
 else()
-  llvm_map_components_to_libnames(_llvm_libs
-    analysis core bitwriter linker passes orcjit x86codegen x86asmparser)
+  llvm_map_components_to_libnames(_llvm_libs ${_llvm_components})
 endif()
+
+# A static LLVM otherwise reaches the dynamic symbol table, because
+# --export-dynamic puts everything there: mono-sgen exported 45506 symbols
+# against 6322, 24130 of them llvm::.  --exclude-libs names the archives to
+# keep out rather than ALL.  The runtime links libmonosgen-2.0.a and
+# libmonogc.a as archives too, and managed code P/Invokes what those export.
+# One option per archive: the comma-separated form ld also takes cannot cross
+# -Wl,, which splits on commas.
+foreach(_archive IN LISTS _llvm_archives)
+  target_link_options(mono_llvm INTERFACE "-Wl,--exclude-libs,${_archive}")
+endforeach()
 
 target_include_directories(mono_llvm SYSTEM INTERFACE ${LLVM_INCLUDE_DIRS})
 target_compile_definitions(mono_llvm INTERFACE
