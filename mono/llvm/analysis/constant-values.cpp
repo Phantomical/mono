@@ -11,6 +11,7 @@
 #include "strip-casts.hpp"
 
 #include <llvm/ADT/APInt.h>
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallPtrSet.h>
@@ -366,46 +367,54 @@ public:
 		// solve_key () below does not repeat that walk once per key it
 		// asks about. A store this walk cannot place is left out on
 		// purpose: walk_block_for_key () reads its absence as the barrier
-		// it is. A write neither a store nor a placeable address, settled
-		// here too: what it clobbers does not depend on which key is being
-		// solved, so asking once serves every key instead of one each.
+		// it is. block_events then narrows what that walk scans to just
+		// the loads, stores and writes that could answer some key,
+		// instead of every instruction in the block; a write neither a
+		// store nor a placeable address goes there too, because what it
+		// clobbers does not depend on which key is being solved.
 		DenseMap<Instruction *, AddrKey> keys;
-		DenseSet<Instruction *> barriers;
+		DenseMap<BasicBlock *, SmallVector<Instruction *, 4>> block_events;
 		SmallVector<AddrKey, 8> loaded_keys;
 		DenseSet<AddrKey> seen_loaded_keys;
 
 		for (Instruction &inst : instructions (f)) {
-			std::optional<AddrKey> key;
-			bool is_load = false;
-
 			if (auto *load = dyn_cast<LoadInst> (&inst)) {
 				if (!load->isSimple ())
 					continue;
-				is_load = true;
-				key = normalize_address (load->getPointerOperand (), dl);
-			} else if (auto *store = dyn_cast<StoreInst> (&inst)) {
-				if (!store->isSimple ())
+
+				auto key = normalize_address (load->getPointerOperand (), dl);
+				if (!key.has_value ())
 					continue;
-				key = normalize_address (store->getPointerOperand (), dl);
-			} else if (auto *call = dyn_cast<CallBase> (&inst)) {
-				if (may_clobber_tracked_memory (*call))
-					barriers.insert (&inst);
-				continue;
-			} else {
-				// A fence, an atomic RMW or cmpxchg, or anything else this
-				// walk does not otherwise recognize as a write.
-				if (inst.mayWriteToMemory ())
-					barriers.insert (&inst);
+
+				keys.try_emplace (&inst, *key);
+				block_events[inst.getParent ()].push_back (&inst);
+
+				if (seen_loaded_keys.insert (*key).second)
+					loaded_keys.push_back (*key);
+
 				continue;
 			}
 
-			if (!key.has_value ())
+			if (auto *store = dyn_cast<StoreInst> (&inst)) {
+				if (store->isSimple ()) {
+					if (auto key = normalize_address (store->getPointerOperand (), dl))
+						keys.try_emplace (&inst, *key);
+				}
+
+				block_events[inst.getParent ()].push_back (&inst);
 				continue;
+			}
 
-			keys.try_emplace (&inst, *key);
+			if (auto *call = dyn_cast<CallBase> (&inst)) {
+				if (may_clobber_tracked_memory (*call))
+					block_events[inst.getParent ()].push_back (&inst);
+				continue;
+			}
 
-			if (is_load && seen_loaded_keys.insert (*key).second)
-				loaded_keys.push_back (*key);
+			// A fence, an atomic RMW or cmpxchg, or anything else this
+			// walk does not otherwise recognize as a write.
+			if (inst.mayWriteToMemory ())
+				block_events[inst.getParent ()].push_back (&inst);
 		}
 
 		// A key nothing loads is nothing any consumer of this analysis
@@ -428,7 +437,7 @@ public:
 		for (const AddrKey &key : loaded_keys) {
 			block_in.clear ();
 			block_out.clear ();
-			solve_key (key, keys, barriers, sccs, block_in, block_out);
+			solve_key (key, keys, block_events, sccs, block_in, block_out);
 		}
 	}
 
@@ -499,19 +508,23 @@ public:
 	/// what each of the block's own loads of \p key read along the way
 	/// where \p settle asks for that.
 	///
+	/// \p events holds only the instructions gather_memory_deps () found
+	/// relevant to some key — a load with a resolved address, a store, or
+	/// a write this walk treats as a barrier — in the block's own order,
+	/// so this skips every instruction that cannot change any key's answer.
+	///
 	/// Run once per block during the fixed point below with \p settle
 	/// false, and once more after it converges with \p settle true: a load
 	/// visited before the point has converged would settle on a state this
 	/// walk has not finished growing.
-	void walk_block_for_key (BasicBlock &block, const AddrKey &key,
-	                         const DenseMap<Instruction *, AddrKey> &keys,
-	                         const DenseSet<Instruction *> &barriers, KeyState &state,
+	void walk_block_for_key (ArrayRef<Instruction *> events, const AddrKey &key,
+	                         const DenseMap<Instruction *, AddrKey> &keys, KeyState &state,
 	                         bool settle)
 	{
-		for (Instruction &inst : block) {
-			if (auto *load = dyn_cast<LoadInst> (&inst)) {
+		for (Instruction *inst : events) {
+			if (auto *load = dyn_cast<LoadInst> (inst)) {
 				if (settle) {
-					auto found = keys.find (&inst);
+					auto found = keys.find (inst);
 
 					if (found != keys.end () && found->second == key)
 						settle_load (*load, key, state);
@@ -519,8 +532,8 @@ public:
 				continue;
 			}
 
-			if (auto *store = dyn_cast<StoreInst> (&inst)) {
-				auto found = keys.find (&inst);
+			if (auto *store = dyn_cast<StoreInst> (inst)) {
+				auto found = keys.find (inst);
 
 				if (found == keys.end ()) {
 					// A non-simple store, or one an address the walk
@@ -537,8 +550,9 @@ public:
 				continue;
 			}
 
-			if (barriers.contains (&inst))
-				state.opaque = true;
+			// Neither a load nor a store, so gather_memory_deps () put it
+			// here only because it is a barrier.
+			state.opaque = true;
 		}
 	}
 
@@ -551,10 +565,15 @@ public:
 	/// reuses them for the next key, rather than paying for a fresh pair
 	/// per key.
 	void solve_key (const AddrKey &key, const DenseMap<Instruction *, AddrKey> &keys,
-	                const DenseSet<Instruction *> &barriers, const SmallVectorImpl<SCC> &sccs,
-	                DenseMap<BasicBlock *, KeyState> &block_in,
+	                const DenseMap<BasicBlock *, SmallVector<Instruction *, 4>> &block_events,
+	                const SmallVectorImpl<SCC> &sccs, DenseMap<BasicBlock *, KeyState> &block_in,
 	                DenseMap<BasicBlock *, KeyState> &block_out)
 	{
+		auto events_for = [&] (BasicBlock *block) -> ArrayRef<Instruction *> {
+			auto found = block_events.find (block);
+			return found == block_events.end () ? ArrayRef<Instruction *> () : found->second;
+		};
+
 		block_in.try_emplace (&f.getEntryBlock (),
 		                      KeyState { {}, 0, /*maybe_unwritten=*/true, false });
 
@@ -582,7 +601,7 @@ public:
 					merge_predecessors (*block, in);
 
 				KeyState out = in;
-				walk_block_for_key (*block, key, keys, barriers, out, /*settle=*/false);
+				walk_block_for_key (events_for (block), key, keys, out, /*settle=*/false);
 				block_out.try_emplace (block, std::move (out));
 				continue;
 			}
@@ -606,7 +625,7 @@ public:
 					continue;
 
 				KeyState out = in;
-				walk_block_for_key (*block, key, keys, barriers, out, /*settle=*/false);
+				walk_block_for_key (events_for (block), key, keys, out, /*settle=*/false);
 				block_out.find (block)->second = std::move (out);
 
 				for (BasicBlock *succ : successors (block)) {
@@ -620,7 +639,7 @@ public:
 		// them settles what its own loads of this key read without growing
 		// it any further.
 		for (auto &entry : block_in)
-			walk_block_for_key (*entry.first, key, keys, barriers, entry.second, /*settle=*/true);
+			walk_block_for_key (events_for (entry.first), key, keys, entry.second, /*settle=*/true);
 	}
 
 	bool visitLoadInst (LoadInst &load)
