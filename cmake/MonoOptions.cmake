@@ -38,10 +38,10 @@ set(MONO_LLVM_PREFIX "" CACHE PATH
 # reaches the engine's shared heap, and one lock covers it.  Compile threads
 # spend 38-46% of their samples inside that heap.
 #
-# LLVM as archives and a static libstdc++ put every allocation inside this
-# image, where -Bsymbolic binds it to the C++ runtime linked here.
-# MonoCompilerFlags.cmake already passes -Bsymbolic for every non-MSVC link,
-# so this option adds the other two.
+# The option links LLVM as archives and compiles mono/mini/mono-shim.cpp, which
+# defines the operator new family on g_malloc.  MonoCompilerFlags.cmake already
+# passes -Bsymbolic for every non-MSVC link, which is what binds those
+# definitions locally.
 #
 # Linux only.  A Unity player on Windows has the same problem and none of
 # these flags has a link.exe spelling.
@@ -63,7 +63,11 @@ option(MONO_ENABLE_LIBRARIES      "Build the shared runtime libraries"      ON)
 # into it resolves mono_* against the binary and one copy of the runtime is in
 # the process either way.  A PE module has to name the image each import comes
 # from, so the runtime has to be a DLL both the executable and the module link.
-if(MONO_HOST_WINDOWS)
+#
+# A player build links LLVM into the runtime, so linking the runtime into each
+# binary as well copies a gigabyte of archive into every one of them.  Off, the
+# binaries link the runtime library and only that library carries LLVM.
+if(MONO_HOST_WINDOWS OR MONO_UNITY_BUILD)
   set(_mono_static_mono_default OFF)
 else()
   set(_mono_static_mono_default ON)
