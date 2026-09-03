@@ -20,8 +20,10 @@
 #include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <cinttypes>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -175,19 +177,41 @@ dump_directory ()
 	return dir;
 }
 
+/// Measures a dump name up to the address suffix `dump_name ()` appends, or the
+/// whole of a name without one.
+size_t
+length_without_address (const char *name)
+{
+	size_t whole = strlen (name);
+	const char *at = strrchr (name, '@');
+
+	if (at == nullptr || at[1] != '0' || at[2] != 'x' || at[3] == '\0')
+		return whole;
+
+	for (const char *digit = at + 3; *digit != '\0'; digit++)
+		if (!isxdigit ((unsigned char) *digit))
+			return whole;
+
+	return (size_t) (at - name);
+}
+
 /// Turns a method's dump name into a file name.
 std::string
 file_stem (const char *name)
 {
+	// An address moves between runs, so keeping it in the stem would file a
+	// method's dumps under a different name each time.
+	//
 	// A method name holds characters a path cannot carry - `/` in a generic
 	// argument, and the spaces of a signature - so each run of them becomes one
 	// underscore. The cut leaves room for the extension and the uniquing
 	// suffix, against the 255 bytes a file name has here.
 	constexpr size_t max_stem = 200;
+	size_t length = std::min (length_without_address (name), max_stem);
 	std::string stem;
 	bool last_was_separator = false;
 
-	for (size_t i = 0; name[i] != '\0' && i < max_stem; i++) {
+	for (size_t i = 0; i < length; i++) {
 		char c = name[i];
 
 		if (isalnum ((unsigned char) c) || c == '.' || c == '-') {
@@ -198,6 +222,9 @@ file_stem (const char *name)
 			last_was_separator = true;
 		}
 	}
+
+	if (last_was_separator)
+		stem.pop_back ();
 
 	return stem.empty () ? std::string ("method") : stem;
 }
@@ -433,7 +460,9 @@ dump_name (MonoMethod *method)
 	char *full = mono_method_full_name (method, TRUE);
 	char address[32];
 
-	snprintf (address, sizeof (address), "@%p", (void *) method);
+	// file_stem () reads this suffix back off, so the format has to be ours rather
+	// than the host CRT's. MSVC's `%p` writes upper-case digits and no `0x`.
+	snprintf (address, sizeof (address), "@0x%" PRIxPTR, (uintptr_t) method);
 
 	std::string name = std::string (full) + address;
 
