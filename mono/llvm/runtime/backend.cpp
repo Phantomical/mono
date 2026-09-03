@@ -42,6 +42,9 @@
 #include "translate.hpp"
 #include "arch/arch.hpp"
 #include <optional>
+#ifdef MONO_ENABLE_TIER0_CLASSIC
+#include "tier0.h"
+#endif
 #include "mono/metadata/appdomain.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/domain-internals.h"
@@ -614,6 +617,48 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 	 */
 	if (llvm::Error invalid = verify_method (method))
 		return std::move (invalid);
+
+#ifdef MONO_ENABLE_TIER0_CLASSIC
+	if (runs_classic_at_tier0 (method)) {
+		gpointer code = nullptr;
+		MonoJitInfo *jinfo = nullptr;
+		ERROR_DECL (classic_error);
+
+		if (!mono_tier0_compile (method, domain.domain, &code, &jinfo, classic_error))
+			return runtime_error (classic_error);
+
+		if (!dm.publish (MonoTier::tier0, code)) {
+			/*
+			 * The body is left where it is, with no record entry of its own:
+			 * attaching it would report a tier-0 body as the current one while
+			 * the entry names whatever outranked it.
+			 */
+			MONO_PROFILER_RAISE (jit_failed, (method));
+			return Compiled { dm.thunk.code () };
+		}
+
+		dm.attach_body (MonoTier::tier0, code, jinfo);
+		raise_jit_done (method, jinfo);
+
+		if (mono_use_interpreter)
+			mini_get_interp_callbacks ()->method_compiled (domain.domain, method);
+
+		if (is_jit_trace_enabled ()) {
+			char *name = mono_method_full_name (method, TRUE);
+
+			MONO_LOCK (jit_trace_mutex ())
+			{
+				fprintf (stderr,
+				         "[llvm-jit] compiling %s at tier 0 with the classic "
+				         "compiler (for %s)\n",
+				         name, domain.domain->friendly_name);
+			}
+			g_free (name);
+		}
+
+		return Compiled { code };
+	}
+#endif
 
 	llvm::Expected<arch::InterpEntryPoint> ready = interp_entry (dm);
 

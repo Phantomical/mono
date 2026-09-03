@@ -47,12 +47,19 @@ mono_add_object_library(mono-llvm
         "${CMAKE_CURRENT_BINARY_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/../mini"
         "${CMAKE_CURRENT_BINARY_DIR}/../mini"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../mini/tier0"
         "${CMAKE_SOURCE_DIR}/external/bdwgc/include"
         "${CMAKE_SOURCE_DIR}/external/bdwgc/libatomic_ops/src"
     DEPENDS mono::eglib_headers mono::hidden mono::llvm
 )
 
 add_dependencies(mono-llvm mini)
+
+# backend.cpp calls mono_tier0_compile () behind this, declared in
+# mono/mini/tier0/tier0.h.
+if(MONO_ENABLE_TIER0_CLASSIC)
+  target_compile_definitions(mono-llvm PRIVATE MONO_ENABLE_TIER0_CLASSIC)
+endif()
 
 if(MONO_HOST_WINDOWS)
   # `include <name>.inc` in a .asm is resolved against ml64's include path, and

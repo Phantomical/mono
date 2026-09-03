@@ -10,11 +10,24 @@
 #define __MONO_MINI_TIER0_H__
 
 #include <glib.h>
+#include <mono/utils/mono-error.h>
+#include <mono/utils/mono-forward.h>
 
 G_BEGIN_DECLS
 
+typedef struct _MonoMethod MonoMethod;
+
 /* Fills in the backend description that every compile reads. */
 void mono_tier0_init (void);
+
+/// Compiles \p method with the classic compiler, for \p domain.
+///
+/// The jit info is in \p domain's table already when this returns, so the
+/// caller must not add it again. Nothing points at the code yet: publishing it
+/// is the caller's. Returns FALSE and sets \p error on a failed compile.
+gboolean mono_tier0_compile (MonoMethod *method, MonoDomain *domain,
+                             gpointer *out_code, MonoJitInfo **out_jinfo,
+                             MonoError *error);
 
 G_END_DECLS
 

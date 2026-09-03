@@ -627,6 +627,13 @@ if(MONO_ENABLE_INTERPRETER)
                      ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=InterpMe")
 endif()
 
+# One method, Tier0ClassicExercise, run once interpreted and once compiled by
+# the classic compiler through mono-tier0-classic. Both arms have to reach the
+# same array of checks.
+mono_runtime_suite(runtime-tier0-classic-interp TESTS tier0-classic.exe)
+mono_runtime_suite(runtime-tier0-classic TESTS tier0-classic.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=Tier0ClassicExercise")
+
 # The tier-2 cost model. Its root has to gather counts at tier 1 and then be
 # compiled at tier 2 once, on the thread that asks - so self-promotion is turned
 # off and the test drives the compile itself.

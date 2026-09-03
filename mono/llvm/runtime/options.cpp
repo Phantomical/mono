@@ -61,6 +61,21 @@ tier0_setting ()
 	return setting;
 }
 
+llvm::cl::opt<std::string> Tier0ClassicOpt (
+	"mono-tier0-classic", llvm::cl::Hidden, llvm::cl::init (""),
+	llvm::cl::desc ("Run methods whose full name contains this substring at "
+	                "tier 0 through the classic compiler instead of "
+	                "interpreting them"));
+
+const char *
+tier0_classic_filter ()
+{
+	static const char *filter =
+		Tier0ClassicOpt.empty () ? nullptr : Tier0ClassicOpt.c_str ();
+
+	return filter;
+}
+
 llvm::cl::opt<bool> FoldCastsOpt (
 	"mono-fold-casts", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Answer a type test the translator can settle without a probe"));
@@ -698,6 +713,21 @@ runs_at_tier0 (MonoMethod *method)
 
 	char *name = mono_method_full_name (method, TRUE);
 	bool selected = strstr (name, setting.substring) != nullptr;
+
+	g_free (name);
+	return selected;
+}
+
+bool
+runs_classic_at_tier0 (MonoMethod *method)
+{
+	const char *filter = tier0_classic_filter ();
+
+	if (filter == nullptr)
+		return false;
+
+	char *name = mono_method_full_name (method, TRUE);
+	bool selected = strstr (name, filter) != nullptr;
 
 	g_free (name);
 	return selected;

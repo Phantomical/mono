@@ -3452,14 +3452,9 @@ is_simd_supported (MonoCompile *cfg)
  * @flags: compilation flags
  * @parts: debug flag
  *
- * Returns: a MonoCompile* pointer. Caller must check the exception_type
- * field in the returned struct to see if compilation succeded.
- *
- * Returns NULL if JIT_FLAG_NO_LLVM_FALLBACK is set and the LLVM backend
- * declined the method: there is no classic fallback compile to describe, so
- * there is no MonoCompile to hand back. That is the only way this returns NULL
- * in a build with the JIT enabled - every other caller can dereference the
- * result unconditionally.
+ * Returns: a MonoCompile* pointer, never NULL. Caller must check the
+ * exception_type field in the returned struct to see if compilation
+ * succeded.
  */
 MonoCompile*
 mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFlags flags, int parts, int aot_method_index)
@@ -4251,6 +4246,69 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 		MONO_PROBE_METHOD_COMPILE_END (method, TRUE);
 
 	return cfg;
+}
+
+gboolean
+mono_tier0_compile (MonoMethod *method, MonoDomain *domain, gpointer *out_code,
+                    MonoJitInfo **out_jinfo, MonoError *error)
+{
+	MonoCompile *cfg;
+	MonoException *ex = NULL;
+
+	error_init (error);
+
+	cfg = mini_method_compile (method, MONO_OPT_FLOAT32 | MONO_OPT_GSHARED, domain,
+	                           JIT_FLAG_RUN_CCTORS, 0, -1);
+
+	switch (cfg->exception_type) {
+	case MONO_EXCEPTION_NONE:
+		break;
+	case MONO_EXCEPTION_TYPE_LOAD:
+	case MONO_EXCEPTION_MISSING_FIELD:
+	case MONO_EXCEPTION_MISSING_METHOD:
+	case MONO_EXCEPTION_FILE_NOT_FOUND:
+	case MONO_EXCEPTION_BAD_IMAGE:
+	case MONO_EXCEPTION_INVALID_PROGRAM:
+		if (cfg->exception_ptr) {
+			ex = mono_class_get_exception_for_failure ((MonoClass *) cfg->exception_ptr);
+		} else if (cfg->exception_type == MONO_EXCEPTION_MISSING_FIELD) {
+			ex = mono_exception_from_name_msg (mono_defaults.corlib, "System", "MissingFieldException", cfg->exception_message);
+		} else if (cfg->exception_type == MONO_EXCEPTION_MISSING_METHOD) {
+			ex = mono_exception_from_name_msg (mono_defaults.corlib, "System", "MissingMethodException", cfg->exception_message);
+		} else if (cfg->exception_type == MONO_EXCEPTION_TYPE_LOAD) {
+			ex = mono_exception_from_name_msg (mono_defaults.corlib, "System", "TypeLoadException", cfg->exception_message);
+		} else if (cfg->exception_type == MONO_EXCEPTION_FILE_NOT_FOUND) {
+			ex = mono_exception_from_name_msg (mono_defaults.corlib, "System.IO", "FileNotFoundException", cfg->exception_message);
+		} else if (cfg->exception_type == MONO_EXCEPTION_BAD_IMAGE) {
+			ex = mono_get_exception_bad_image_format (cfg->exception_message);
+		} else if (cfg->exception_type == MONO_EXCEPTION_INVALID_PROGRAM) {
+			ex = mono_exception_from_name_msg (mono_defaults.corlib, "System", "InvalidProgramException", cfg->exception_message);
+		} else {
+			g_assert_not_reached ();
+		}
+		break;
+	case MONO_EXCEPTION_MONO_ERROR:
+		g_assert (!is_ok (cfg->error));
+		ex = mono_error_convert_to_exception (cfg->error);
+		break;
+	default:
+		g_assert_not_reached ();
+	}
+
+	if (ex) {
+		/* mini_method_compile () raised jit_begin and raises no end of its own. */
+		MONO_PROFILER_RAISE (jit_failed, (method));
+
+		mono_destroy_compile (cfg);
+		mono_error_set_exception_instance (error, ex);
+		return FALSE;
+	}
+
+	*out_code = cfg->native_code;
+	*out_jinfo = cfg->jit_info;
+
+	mono_destroy_compile (cfg);
+	return TRUE;
 }
 
 gboolean

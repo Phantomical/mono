@@ -257,6 +257,7 @@ set(MONO_TESTS_CS_SRC
   thread-static-fast-path.cs
   pinvoke-narrow-arg.cs
   eh-stack-args.cs
+  tier0-classic.cs
   tbaa-aliasing.cs
   tbaa-explicit-overlap.cs
   typeload-field-memberref.cs

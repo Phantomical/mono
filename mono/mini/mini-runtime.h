@@ -38,8 +38,9 @@ typedef struct
 	GHashTable *delegate_trampoline_hash;
 	/* Maps methods to a RuntimeInvokeInfo structure, protected by the associated MonoDomain lock */
 	MonoConcurrentHashTable *runtime_invoke_hash;
-	/* Maps MonoMethod to a GPtrArray containing sequence point locations */
-	/* Protected by the domain lock */
+	/* Maps MonoMethod to a GSList of MonoSeqPointInfo, one per published body, */
+	/* oldest first. A body appends in place: the table owns its value, so */
+	/* reinserting the head frees the list. Protected by the domain lock. */
 	GHashTable *seq_points;
 	/* Debugger agent data */
 	gpointer agent_info;
