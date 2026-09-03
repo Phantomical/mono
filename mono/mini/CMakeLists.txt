@@ -82,6 +82,12 @@ if(MONO_ENABLE_LLVM)
   list(APPEND mini_sources llvm-runtime.cpp domain-method.cpp method-override.cpp thunk.cpp)
 endif()
 
+# Only a player build defines these: the operator new family and the
+# basic_string members that would otherwise allocate on the engine heap.
+if(MONO_UNITY_BUILD)
+  list(APPEND mini_sources mono-shim.cpp)
+endif()
+
 mono_add_object_library(mini
   SOURCES ${mini_sources}
   INCLUDES

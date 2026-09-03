@@ -265,11 +265,3 @@ else()
   # to itself instead of to whatever came earlier in the search order.
   add_link_options(-Wl,--export-dynamic -Wl,-Bsymbolic -Wl,-z,now)
 endif()
-
-if(MONO_UNITY_BUILD)
-  # A Unity player carries a static libstdc++ and exports it.  With a shared
-  # libstdc++ here, basic_string's out-of-line allocation runs in the player's
-  # copy and lands on the engine heap.  Linking libstdc++ in keeps that
-  # allocation local, where -Bsymbolic binds it.
-  add_link_options(-static-libstdc++)
-endif()
