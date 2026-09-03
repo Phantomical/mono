@@ -109,9 +109,8 @@ struct ScratchAnalyses {
 /// the site then keeps its call.
 Function *
 materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
-                       ModulePassManager &prepare, ScratchAnalyses &scratch,
-                       OneFileFS &profile_fs, std::optional<SiteHeat> heat,
-                       const CallBase &call)
+                       ModulePassManager &prepare, ScratchAnalyses &scratch, OneFileFS &profile_fs,
+                       std::optional<SiteHeat> heat, const CallBase &call)
 {
 	std::string name = decl.getName ().str ();
 	auto into = std::make_unique<Module> (name, m.getContext ());
@@ -161,8 +160,7 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 
 	made->removeFnAttr (inline_copy_attribute);
 
-	OneFileFS::CurrentFileGuard counts =
-		pushProfile (profile_fs, candidates.profile_for (decl));
+	OneFileFS::CurrentFileGuard counts = pushProfile (profile_fs, candidates.profile_for (decl));
 
 	prepare.run (*into, scratch.mam);
 	scratch.clear ();
@@ -292,7 +290,7 @@ constexpr StringRef clause_trial_tag = "mono.clause-trial";
 bool
 clause_survives_fold (CallBase &call, Function &callee, FunctionPassManager &simplify,
                       FunctionAnalysisManager &fam,
-                      function_ref<AssumptionCache & (Function &)> get_ac)
+                      function_ref<AssumptionCache &(Function &)> get_ac)
 {
 	MDNode *tag = MDNode::get (callee.getContext (), {});
 
@@ -385,157 +383,182 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			if (!foldable_site (*call))
 				return;
 
-			uint64_t count = get_bfi (*root)
-			                         .getBlockProfileCount (call->getParent ())
-			                         .value_or (0);
+			uint64_t count = get_bfi (*root).getBlockProfileCount (call->getParent ()).value_or (0);
 
-			queue.push_back (Site { call, count, depth });
+			queue.push_back (Site{call, count, depth});
 			std::push_heap (queue.begin (), queue.end (), Colder ());
 		};
 
+		/*
+		 * A site a fold exposed keeps the depth it was reached at, so the
+		 * queue is seeded with those before the root's own sites are read.
+		 * Everything else starts over at zero, and the set is what keeps a
+		 * site the walk below already holds from arriving twice.
+		 */
+		std::vector<Site> exposed;
+
 		auto read_sites = [&] () {
-			for (Instruction &i : instructions (*root))
-				if (auto *call = dyn_cast<CallBase> (&i))
-					push (call, 0);
-		};
+			SmallPtrSet<const Value *, 32> queued;
 
-		unsigned rounds = candidates->round_limit ();
-		bool took_one = false;
+			for (const Site &site : exposed) {
+				auto *call = dyn_cast_or_null<CallBase> (site.call);
 
-		read_sites ();
-
-		while (true) {
-			/*
-			 * A round ends when the queue runs out. What a fold buys is the
-			 * caller's arguments as constants inside the folded body and the
-			 * branches that kill, so simplification runs over what the round
-			 * took. Here rather than as a pipeline row behind the pass, so a
-			 * compile that folded nothing pays nothing.
-			 *
-			 * The sites are then read again. Those constants settle what a
-			 * dispatch below the fold reads, and the simplification answers it
-			 * with a direct call - a site nothing offered before. An interface
-			 * dispatch enters the root as a load rather than as a call of a
-			 * function, so this is the only way it becomes a site at all.
-			 *
-			 * A round that folded nothing has nothing to expose, so the loop
-			 * stops there. What bounds the work is the engine's budget, which
-			 * refuses a candidate once the compile has spent its translation.
-			 * The count is what stops a cycle.
-			 */
-			if (queue.empty ()) {
-				if (!took_one)
-					break;
-
-				PreservedAnalyses kept = simplify_.run (*root, fam);
-
-				fam.invalidate (*root, kept);
-				changed = true;
-
-				if (--rounds == 0)
-					break;
-
-				took_one = false;
-				read_sites ();
-				continue;
+				if (call != nullptr && queued.insert (call).second)
+					push (call, site.depth);
 			}
 
-			std::pop_heap (queue.begin (), queue.end (), Colder ());
-			Site site = queue.back ();
-			queue.pop_back ();
+			exposed.clear ();
 
-			auto *call = dyn_cast_or_null<CallBase> (site.call);
+			for (Instruction &i : instructions (*root))
+				if (auto *call = dyn_cast<CallBase> (&i))
+					if (queued.insert (call).second)
+						push (call, 0);
+		};
 
-			if (call == nullptr || site.depth >= candidates->depth_limit ()
-			    || !foldable_site (*call))
-				continue;
+		/// A candidate the gathering loop took, waiting for the folding one.
+		struct Accepted {
+			WeakTrackingVH call;
+			Function *callee;
+			InlineCost cost;
+			uint64_t count;
+			unsigned depth;
+		};
 
-			Function *callee = call->getCalledFunction ();
+		std::vector<Accepted> accepted;
 
-			/*
-			 * A body already beside the root is one an inliner put there, and
-			 * it is weighed like any other. Anything else is a declaration of
-			 * a published entry, which is what the engine translates from.
-			 */
-			if (callee->isDeclaration ()) {
-				std::optional<SiteHeat> heat = mono::tier2_site_heat (*call, &get_bfi (*root));
+		for (unsigned round = candidates->round_limit (); round > 0; --round) {
+			accepted.clear ();
+			queue.clear ();
+			read_sites ();
 
-				callee = materialize_candidate (m, *callee, *candidates,
-				                                materialize_, scratch, *profile_fs_,
-				                                heat, *call);
+			while (!queue.empty ()) {
+				std::pop_heap (queue.begin (), queue.end (), Colder ());
+				Site site = queue.back ();
+				queue.pop_back ();
 
-				if (callee == nullptr)
+				auto *call = dyn_cast_or_null<CallBase> (site.call);
+
+				if (call == nullptr || site.depth >= candidates->depth_limit ()
+				    || !foldable_site (*call))
 					continue;
 
+				Function *callee = call->getCalledFunction ();
+
 				/*
+				 * A body already beside the root is one an inliner put there, and
+				 * it is weighed like any other. Anything else is a declaration of
+				 * a published entry, which is what the engine translates from.
+				 */
+				if (callee->isDeclaration ()) {
+					std::optional<SiteHeat> heat = mono::tier2_site_heat (*call, &get_bfi (*root));
+
+					callee = materialize_candidate (m, *callee, *candidates, materialize_, scratch,
+					                                *profile_fs_, heat, *call);
+
+					if (callee == nullptr)
+						continue;
+
+					/*
 				 * The link defines a function the module already held a
 				 * declaration of, so the site still calls what it did. Read
 				 * it back all the same: a link that had to rename would leave
 				 * the site pointing at a declaration nothing defines.
 				 */
-				call = dyn_cast_or_null<CallBase> (site.call);
+					call = dyn_cast_or_null<CallBase> (site.call);
 
-				if (call == nullptr || call->getCalledFunction () != callee)
+					if (call == nullptr || call->getCalledFunction () != callee)
+						continue;
+				} else if (!callee->hasFnAttribute (inline_copy_attribute)) {
 					continue;
-			} else if (!callee->hasFnAttribute (inline_copy_attribute)) {
-				continue;
+				}
+
+				InlineCost cost = mono::getInlineCost (
+					*call, callee, params, fam.getResult<TargetIRAnalysis> (*callee), get_ac,
+					get_tli, get_bfi, &psi, /*ORE=*/nullptr, /*GetEphValuesCache=*/nullptr,
+					get_constants);
+
+				if (!cost) {
+					candidates->declined (*root, *callee, cost, site.count);
+					continue;
+				}
+
+				if (has_own_clause (*callee)
+				    && clause_survives_fold (*call, *callee, simplify_, fam, get_ac)
+				    && !mergeable_clause_kinds_only (*callee)) {
+					candidates->declined (
+						*root, *callee,
+						InlineCost::getNever ("its clause has nowhere to sit once folded"),
+						site.count);
+					continue;
+				}
+
+				/*
+				 * A surviving catch, finally or fault clause falls through to the
+				 * real fold below rather than being declined. eh-gather.cpp reads
+				 * such a clause's owner straight off its own marker, whichever
+				 * function's landing pad it ends up on after codegen, so nothing
+				 * here has to flag that a merge happened - the fold itself is
+				 * what makes one.
+				 */
+
+				accepted.push_back (Accepted{site.call, callee, cost, site.count, site.depth});
 			}
 
-			InlineCost cost = mono::getInlineCost (
-				*call, callee, params,
-				fam.getResult<TargetIRAnalysis> (*callee), get_ac, get_tli,
-				get_bfi, &psi, /*ORE=*/nullptr, /*GetEphValuesCache=*/nullptr,
-				get_constants);
+			if (accepted.empty ())
+				break;
 
-			if (!cost) {
-				candidates->declined (*root, *callee, cost, site.count);
-				continue;
-			}
+			for (const Accepted &take : accepted) {
+				/*
+				 * An earlier fold in this round can take a later site with it,
+				 * and the handle goes null when it does.
+				 */
+				auto *call = dyn_cast_or_null<CallBase> (take.call);
 
-			if (has_own_clause (*callee)
-			    && clause_survives_fold (*call, *callee, simplify_, fam, get_ac)
-			    && !mergeable_clause_kinds_only (*callee)) {
-				candidates->declined (
-					*root, *callee,
-					InlineCost::getNever ("its clause has nowhere to sit once folded"),
-					site.count);
-				continue;
+				if (call == nullptr || call->getCalledFunction () != take.callee)
+					continue;
+
+				/*
+				 * No BFI on either side, so InlineFunction () scales nothing: the
+				 * caller's is thrown away below, and the callee has no entry count
+				 * for the subtraction the flag also gates. What the cloned blocks
+				 * carry is the callee's own branch weights, which are ratios and
+				 * are already right.
+				 */
+				InlineFunctionInfo ifi (get_ac, &psi);
+
+				if (!InlineFunction (*call, ifi, /*MergeAttributes=*/true).isSuccess ())
+					continue;
+
+				candidates->folded (*root, *take.callee, take.cost, take.count);
+
+				for (CallBase *site : ifi.InlinedCallSites)
+					exposed.push_back (Site{site, 0, take.depth + 1});
 			}
 
 			/*
-			 * A surviving catch, finally or fault clause falls through to the
-			 * real fold below rather than being declined. eh-gather.cpp reads
-			 * such a clause's owner straight off its own marker, whichever
-			 * function's landing pad it ends up on after codegen, so nothing
-			 * here has to flag that a merge happened - the fold itself is
-			 * what makes one.
-			 */
-
-			/*
-			 * No BFI on either side, so InlineFunction () scales nothing: the
-			 * caller's is thrown away below, and the callee has no entry count
-			 * for the subtraction the flag also gates. What the cloned blocks
-			 * carry is the callee's own branch weights, which are ratios and
-			 * are already right.
-			 */
-			InlineFunctionInfo ifi (get_ac, &psi);
-
-			if (!InlineFunction (*call, ifi, /*MergeAttributes=*/true).isSuccess ())
-				continue;
-
-			/*
-			 * Everything cached for the root describes the body before the
-			 * fold, down to the dominator tree the next pass over it reads. The
+			 * Everything cached for the root describes the body the round began
+			 * with, down to the dominator tree the next pass over it reads. The
 			 * count a site is ranked by then comes from a BFI computed over the
 			 * blocks that are really there.
 			 */
 			fam.invalidate (*root, PreservedAnalyses::none ());
 
-			candidates->folded (*root, *callee, cost, site.count);
-			took_one = true;
+			/*
+			 * What a fold buys is the caller's arguments as constants inside the
+			 * folded body and the branches that kill, so simplification runs over
+			 * what the round took. Here rather than as a pipeline row behind the
+			 * pass, so a compile that folded nothing pays nothing.
+			 *
+			 * The next round reads the sites again. Those constants settle what a
+			 * dispatch below the fold reads, and the simplification answers it
+			 * with a direct call - a site nothing offered before. An interface
+			 * dispatch enters the root as a load rather than as a call of a
+			 * function, so this is the only way it becomes a site at all.
+			 */
+			PreservedAnalyses kept = simplify_.run (*root, fam);
 
-			for (CallBase *exposed : ifi.InlinedCallSites)
-				push (exposed, site.depth + 1);
+			fam.invalidate (*root, kept);
+			changed = true;
 		}
 	}
 
