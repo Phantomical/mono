@@ -40,12 +40,15 @@
 #include <llvm/Object/StackMapParser.h>
 #include <llvm/ADT/Any.h>
 #include <llvm/ADT/ScopeExit.h>
+#include <llvm/ADT/Statistic.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Passes/StandardInstrumentations.h>
 #include <llvm/ProfileData/InstrProf.h>
 #include <llvm/ProfileData/InstrProfWriter.h>
+#include <llvm/IR/PassTimingInfo.h>
 #include <llvm/Support/CommandLine.h>
 #include <llvm/Support/TargetSelect.h>
+#include <llvm/Support/Timer.h>
 #include <llvm/TargetParser/Host.h>
 
 #include <algorithm>
@@ -882,6 +885,23 @@ apply_options ()
 	if (!cl::ParseCommandLineOptions ((int) argv.size (), argv.data (), "", &errs ()))
 		return createStringError (inconvertibleErrorCode (),
 		                          "llvm rejected an option given with --llvm-opt");
+
+	/*
+	 * A thread the process exits under runs no destructor, so its pipelines
+	 * never reach the report in ~Tier. This catches what those still hold.
+	 * A thread that did retire printed and reset its own timers, so nothing
+	 * here counts twice.
+	 */
+	if (TimePassesIsEnabled)
+		std::atexit ([] () { TimerGroup::printAll (errs ()); });
+
+	/*
+	 * The same for `-stats`. LLVM prints these from llvm_shutdown (), which a
+	 * runtime that never tears the library down does not reach.
+	 */
+	if (AreStatisticsEnabled ())
+		std::atexit ([] () { PrintStatistics (errs ()); });
+
 	return Error::success ();
 }
 
@@ -1030,6 +1050,13 @@ ir_printing_enabled ()
 		"pass-remarks",
 		"pass-remarks-missed",
 		"pass-remarks-analysis",
+
+		/* Not a printer, and here for the worker count all the same: a
+		 * TimerGroup belongs to the thread whose pipelines hold it, so
+		 * several threads compiling means several reports to add up by
+		 * hand. */
+		"time-passes",
+		"time-passes-per-run",
 	};
 
 	std::lock_guard<std::mutex> lock (g_options_mutex);
@@ -1131,6 +1158,21 @@ struct ThreadPipelines {
 		                        /*VerifyEach=*/false)
 		{
 		}
+
+		/*
+		 * What `-time-passes` gathered, which nothing else prints: LLVM leaves
+		 * the report to whoever owns the handler, and a TimerGroup prints on
+		 * its own only where something asked it to print on exit.
+		 *
+		 * Here rather than at exit, because these pipelines belong to a compile
+		 * thread and the queue retires one after `-mono-worker-idle-ms`. A
+		 * report left for exit loses whatever a thread that already went home
+		 * had gathered. Printing resets the timers, so the sweep at exit does
+		 * not count this thread twice.
+		 *
+		 * Prints nothing unless `-time-passes` is on.
+		 */
+		~Tier () { instrumentations.getTimePasses ().print (); }
 
 		LoopAnalysisManager lam;
 		FunctionAnalysisManager fam;
