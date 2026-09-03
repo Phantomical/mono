@@ -167,11 +167,6 @@ private:
 
 	/// Which analysis below built this, so invalidate () asks about that one.
 	llvm::AnalysisKey *built_by = nullptr;
-
-	/// Whether the walk asked for MemorySSA, which it does only where the
-	/// function has a load to forward. Invalidating a dependency the manager
-	/// never cached asserts inside it.
-	bool read_memory = false;
 };
 
 /// An analysis that finds all potential sources for each instruction.
@@ -190,10 +185,11 @@ public:
 
 /// The same walk, with the stores that reach each load folded in.
 ///
-/// Reading a field costs MemorySSA and an alias query for every load, which is
-/// most of what the walk spends. Only a guarded fold pays that back, so only
-/// `GuardDispatchPass` and `FoldDelegateInvokesPass` ask for this, and both run
-/// at tier 2 alone. Everything else takes `MonoConstantValues`.
+/// A store forwards to a load only where both name the same (base, constant
+/// offset) pair, which trades the precision an alias query would answer for
+/// not asking one. `top-down-inline.cpp`, `fold-delegate.cpp` and
+/// `devirtualize.cpp` ask for this, and each runs at tier 2 alone.
+/// Everything else takes `MonoConstantValues`.
 class MonoMemoryValues : public llvm::AnalysisInfoMixin<MonoMemoryValues> {
 	friend llvm::AnalysisInfoMixin<MonoMemoryValues>;
 	static llvm::AnalysisKey Key;

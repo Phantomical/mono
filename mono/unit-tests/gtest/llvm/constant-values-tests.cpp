@@ -550,9 +550,13 @@ entry:
 	EXPECT_EQ (m.reached (), std::vector<std::string> { "null" });
 }
 
-/// Each allocation in the merge answers for itself: the zeroed arm still names
-/// its zero, and the arm that does not zero is what leaves the set incomplete.
-TEST (ConstantValuesTest, AFieldOfAMixedMergeTakesTheUnzeroedAnswer)
+/// Each arm's store is filed under that arm's own allocation as its base,
+/// never under the phi merging them, so the field's own key looks the same
+/// as AFieldNoStoreReachesIsTheAllocationsZero's: untouched. What answers
+/// differently is reached_unwritten (): it takes an untouched key at its
+/// word only where getUnderlyingObjects () also names one allocation, and
+/// crossing this phi names two, so the walk answers neither zero.
+TEST (ConstantValuesTest, AFieldOfAMergedAllocationIsIncomplete)
 {
 	Settled m (R"(
 define ptr @caller(i1 %c, ptr %p, i64 %n) {
@@ -577,12 +581,14 @@ merge:
 )");
 
 	EXPECT_FALSE (m.complete ());
-	EXPECT_EQ (m.reached (), (std::vector<std::string> { "null", "vtable_Bar" }));
+	EXPECT_TRUE (m.reached ().empty ());
 }
 
-/// The same merge with both allocations zeroing, which is the control the case
-/// above is read against.
-TEST (ConstantValuesTest, AFieldOfAZeroedMergeReadsTheZeroToo)
+/// The same merge with both allocations zeroing, so the two zero fills would
+/// agree. The answer is the same as above regardless: getUnderlyingObjects ()
+/// still names two allocations, and reached_unwritten () never gets far
+/// enough to ask whether they agree.
+TEST (ConstantValuesTest, AFieldOfAZeroedMergedAllocationIsIncompleteToo)
 {
 	Settled m (R"(
 define ptr @caller(i1 %c, ptr %p, i64 %n) {
@@ -606,8 +612,8 @@ merge:
 }
 )");
 
-	EXPECT_TRUE (m.complete ());
-	EXPECT_EQ (m.reached (), (std::vector<std::string> { "null", "vtable_Bar" }));
+	EXPECT_FALSE (m.complete ());
+	EXPECT_TRUE (m.reached ().empty ());
 }
 
 /// The read carries no `!invariant.load`. MemorySSA would put such a load in
@@ -770,7 +776,10 @@ merge:
 	EXPECT_FALSE (m.complete ());
 }
 
-TEST (ConstantValuesTest, AMemcpyElsewhereLeavesTheFieldAlone)
+/// A memcpy into a different field of the same allocation is still a write
+/// the walk cannot place at a key of its own, the same as one of unreadable
+/// length above: it answers for every key rather than one, `%f` included.
+TEST (ConstantValuesTest, AMemcpyElsewhereStillClearsTheField)
 {
 	Settled m (R"(
 define ptr @caller(i1 %c, ptr %p, i64 %n) {
@@ -785,7 +794,7 @@ entry:
 }
 )");
 
-	EXPECT_TRUE (m.complete ());
+	EXPECT_FALSE (m.complete ());
 	EXPECT_TRUE (is_contained (m.reached (), "vtable_Bar"));
 }
 
@@ -806,7 +815,11 @@ entry:
 	EXPECT_FALSE (m.complete ());
 }
 
-TEST (ConstantValuesTest, AValueCopyElsewhereLeavesTheFieldAlone)
+/// A constant length names a range the call cannot possibly reach `%f`
+/// through, same as the unreadable one below reads as unbounded, but the
+/// walk asks the write's declared effects for a key, not a range: it
+/// answers for every key rather than one, `%f` included.
+TEST (ConstantValuesTest, AValueCopyElsewhereStillClearsTheField)
 {
 	Settled m (R"(
 define ptr @caller(i1 %c, ptr %p, i64 %n) {
@@ -821,7 +834,7 @@ entry:
 }
 )");
 
-	EXPECT_TRUE (m.complete ());
+	EXPECT_FALSE (m.complete ());
 	EXPECT_TRUE (is_contained (m.reached (), "vtable_Bar"));
 }
 
@@ -843,7 +856,11 @@ entry:
 	EXPECT_FALSE (m.complete ());
 }
 
-TEST (ConstantValuesTest, AValueCopyReadingTheObjectIsNotAWrite)
+/// `%f` is the call's source argument here, read rather than written. The
+/// declaration states both arguments' effects together, so the walk cannot
+/// tell this apart from the destination argument above: it answers for
+/// every key rather than one, `%f` included.
+TEST (ConstantValuesTest, AValueCopyReadingTheObjectStillClearsTheField)
 {
 	Settled m (R"(
 define ptr @caller(i1 %c, ptr %p, i64 %n) {
@@ -857,7 +874,7 @@ entry:
 }
 )");
 
-	EXPECT_TRUE (m.complete ());
+	EXPECT_FALSE (m.complete ());
 	EXPECT_TRUE (is_contained (m.reached (), "vtable_Bar"));
 }
 

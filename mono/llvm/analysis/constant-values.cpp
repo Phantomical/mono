@@ -8,22 +8,19 @@
 #include "escape.hpp"
 #include "passes/alloc-func.hpp"
 #include "passes/gc-barrier.hpp"
+#include "strip-casts.hpp"
 
 #include <llvm/ADT/APInt.h>
-#include <llvm/ADT/BitVector.h>
-#include <llvm/ADT/PostOrderIterator.h>
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
-#include <llvm/ADT/StringRef.h>
 #include <llvm/ADT/SCCIterator.h>
-#include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/Analysis/ConstantFolding.h>
-#include <llvm/Analysis/MemoryLocation.h>
-#include <llvm/Analysis/MemorySSA.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/Argument.h>
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/CFG.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DataLayout.h>
 #include <llvm/IR/Function.h>
@@ -38,10 +35,10 @@
 #include <llvm/Support/ModRef.h>
 
 #include <cstdint>
-#include <functional>
 #include <optional>
 #include <queue>
 #include <utility>
+#include <vector>
 
 using namespace llvm;
 
@@ -63,32 +60,42 @@ is_zeroinit (const CallBase &alloc)
 	return (kind & AllocFnKind::Zeroed) != AllocFnKind::Unknown;
 }
 
-/// The range a value copy writes, or nothing where its width is not a constant.
+/// \p ptr as (base, byte offset), or nothing where a non-constant index
+/// leaves the offset unknowable.
 ///
-/// Alias analysis reads a memory intrinsic's length off the call itself. A value
-/// copy is an ordinary call, so its width is read here.
-std::optional<MemoryLocation>
-value_copy_target (const CallBase &call)
+/// Two pointers name the same address only where both halves agree, which is
+/// what lets a store reach a load with no alias query: the walk below reads
+/// this off each side and compares.
+std::optional<std::pair<Value *, int64_t>>
+normalize_address (Value *ptr, const DataLayout &dl)
 {
-	const Function *callee = call.getCalledFunction ();
+	ptr = const_cast<Value *> (strip_casts (ptr));
 
-	if (callee == nullptr || callee->getName () != gc_value_copy_name)
+	APInt offset (dl.getIndexTypeSizeInBits (ptr->getType ()), 0);
+	Value *base = ptr->stripAndAccumulateConstantOffsets (dl, offset,
+	                                                       /*AllowNonInbounds=*/true);
+
+	// A non-constant GEP index stops the peel with the GEP itself standing
+	// as the base, which is what says the offset did not fully settle.
+	if (isa<GEPOperator> (base))
 		return std::nullopt;
 
-	const auto *count = dyn_cast<ConstantInt> (call.getArgOperand (2));
-	const auto *width = dyn_cast<ConstantInt> (call.getArgOperand (3));
+	return std::make_pair (const_cast<Value *> (strip_casts (base)), offset.getSExtValue ());
+}
 
-	if (count == nullptr || width == nullptr)
-		return std::nullopt;
+/// Whether \p call may write to memory a normalized address could name.
+///
+/// An allocation writes only its own, not yet visible memory
+/// (`inaccessiblemem`), so it answers false: nothing already reachable
+/// through a pointer could alias what such a call touches.
+bool
+may_clobber_tracked_memory (const CallBase &call)
+{
+	MemoryEffects effects = call.getMemoryEffects ();
+	ModRefInfo elsewhere =
+		effects.getWithoutLoc (MemoryEffects::Location::InaccessibleMem).getModRef ();
 
-	bool overflowed = false;
-	APInt bytes = count->getValue ().zextOrTrunc (64).umul_ov (width->getValue ().zextOrTrunc (64),
-	                                                           overflowed);
-
-	if (overflowed)
-		return std::nullopt;
-
-	return MemoryLocation (call.getArgOperand (0), LocationSize::precise (bytes.getZExtValue ()));
+	return isModSet (elsewhere);
 }
 
 /// Returns \p held as a constant of type \p want, or null where no such
@@ -114,11 +121,6 @@ as_type (Constant *held, Type *want, const DataLayout &dl)
 class ConstantValuesSolver : public InstVisitor<ConstantValuesSolver, bool> {
 	Function &f;
 	const DataLayout &dl;
-	FunctionAnalysisManager &fam;
-
-	/// Null until gather_memory_deps () finds a load to forward. Building one
-	/// costs more than every other part of this walk together.
-	MemorySSA *mssa = nullptr;
 
 	/// The loads that read each stored value.
 	DenseMap<Value *, SmallPtrSet<Value *, 2>> dependents;
@@ -137,9 +139,72 @@ class ConstantValuesSolver : public InstVisitor<ConstantValuesSolver, bool> {
 
 	DenseMap<LoadInst *, MemoryDeps> memory_deps;
 
-	/// Built once for the pre-pass. BatchAAResults caches its queries, and one
-	/// per load discards that cache.
-	std::optional<BatchAAResults> aa;
+	/// A store's address, its own base with any constant GEP offsets folded
+	/// in. Two addresses name the same location only where both halves
+	/// match, which trades the precision an alias query would answer for
+	/// not asking one.
+	using AddrKey = std::pair<Value *, int64_t>;
+
+	/// What a block's own writes settle one key to, over every path this
+	/// walk has combined into it so far.
+	struct KeyState {
+		/// The values a store here might leave, merged the same way any
+		/// other value's sources are: past max_sources the walk gives up
+		/// on this key rather than keep growing it.
+		ValueSources sources;
+
+		/// The width \c sources was recorded at. A load of a different
+		/// width answers opaque instead of misreading a wider or narrower
+		/// store's bytes.
+		uint64_t width = 0;
+
+		/// Whether a path reaches here having never written this key, so
+		/// the allocation's own fill is one more value a load might read.
+		bool maybe_unwritten = false;
+
+		/// Whether a write neither a normalized address nor
+		/// may_clobber_tracked_memory () could rule out has reached here.
+		/// Left standing alongside \c sources rather than clearing them:
+		/// a load already folds an opaque flag and a known value together,
+		/// the same as it does for a merge of disagreeing arms.
+		bool opaque = false;
+
+		/// Folds \p other's answer for this key into this one.
+		///
+		/// \returns whether this changed anything.
+		bool merge (const KeyState &other)
+		{
+			bool changed = false;
+
+			if (other.opaque && !opaque) {
+				opaque = true;
+				changed = true;
+			}
+
+			if (other.maybe_unwritten && !maybe_unwritten) {
+				maybe_unwritten = true;
+				changed = true;
+			}
+
+			if (other.sources.is_empty () && !other.sources.is_widened ())
+				return changed;
+
+			if (sources.is_empty () && !sources.is_widened ())
+				width = other.width;
+
+			if (width == other.width) {
+				changed |= sources.insert (other.sources);
+			} else if (!opaque) {
+				// Two different widths landed at the same address: no
+				// width left to answer a load with, so the key is opaque
+				// from here rather than half of one value's bytes.
+				opaque = true;
+				changed = true;
+			}
+
+			return changed;
+		}
+	};
 
 	llvm::DenseMap<llvm::Value *, ValueSources> sources;
 
@@ -147,10 +212,8 @@ class ConstantValuesSolver : public InstVisitor<ConstantValuesSolver, bool> {
 	bool reads_memory;
 
 public:
-	ConstantValuesSolver (llvm::Function &f, llvm::FunctionAnalysisManager &fam,
-	                      bool reads_memory)
-		: f (f), dl (f.getParent ()->getDataLayout ()), fam (fam),
-		  reads_memory (reads_memory)
+	ConstantValuesSolver (llvm::Function &f, bool reads_memory)
+		: f (f), dl (f.getParent ()->getDataLayout ()), reads_memory (reads_memory)
 	{
 	}
 
@@ -248,7 +311,6 @@ public:
 		}
 
 		result.lookup = std::move (sources);
-		result.read_memory = mssa != nullptr;
 	}
 
 	bool visitPHINode (llvm::PHINode &phi)
@@ -300,138 +362,249 @@ public:
 		if (!reads_memory)
 			return;
 
-		SmallVector<LoadInst *, 16> loads;
+		// Every simple load or store's address, normalized once so
+		// solve_key () below does not repeat that walk once per key it
+		// asks about. A store this walk cannot place is left out on
+		// purpose: walk_block_for_key () reads its absence as the barrier
+		// it is.
+		DenseMap<Instruction *, AddrKey> keys;
+		SmallVector<AddrKey, 8> loaded_keys;
+		DenseSet<AddrKey> seen_loaded_keys;
 
-		for (Instruction &at : instructions (f)) {
-			auto *load = dyn_cast<LoadInst> (&at);
+		for (Instruction &inst : instructions (f)) {
+			std::optional<AddrKey> key;
+			bool is_load = false;
 
-			// An atomic or volatile load can change outside this function.
-			if (load != nullptr && load->isSimple ())
-				loads.push_back (load);
+			if (auto *load = dyn_cast<LoadInst> (&inst)) {
+				if (!load->isSimple ())
+					continue;
+				is_load = true;
+				key = normalize_address (load->getPointerOperand (), dl);
+			} else if (auto *store = dyn_cast<StoreInst> (&inst)) {
+				if (!store->isSimple ())
+					continue;
+				key = normalize_address (store->getPointerOperand (), dl);
+			} else {
+				continue;
+			}
+
+			if (!key.has_value ())
+				continue;
+
+			keys.try_emplace (&inst, *key);
+
+			if (is_load && seen_loaded_keys.insert (*key).second)
+				loaded_keys.push_back (*key);
 		}
 
-		if (loads.empty ())
+		// A key nothing loads is nothing any consumer of this analysis
+		// reads back, so settling it would cost this walk a solve for an
+		// answer nobody asks.
+		if (loaded_keys.empty ())
 			return;
 
-		mssa = &fam.getResult<MemorySSAAnalysis> (f).getMSSA ();
-		aa.emplace (mssa->getAA ());
+		SmallVector<SCC, 4> sccs;
 
-		for (LoadInst *load : loads) {
-			MemoryDeps deps = walk_memory (*load);
+		for (auto it = scc_begin (&f.getEntryBlock ()); it != scc_end (&f.getEntryBlock ()); ++it)
+			sccs.emplace_back (it);
 
-			for (Value *stored : deps.stored)
-				dependents[stored].insert (load);
-
-			memory_deps.try_emplace (load, std::move (deps));
-		}
+		for (const AddrKey &key : loaded_keys)
+			solve_key (key, keys, sccs);
 	}
 
-	/// Records what \p load reads where no store in this function reaches it.
-	void reached_unwritten (LoadInst &load, MemoryDeps &deps)
+	/// Records what \p load reads where \p key names no tracked store: the
+	/// allocation's zero fill where that is provably the whole story,
+	/// opaque otherwise.
+	///
+	/// A phi or select base lets some other key name the same runtime
+	/// address, so a store filed under that key leaves this one looking
+	/// untouched. getUnderlyingObjects () returning more than one object
+	/// marks that case, and only then does crossing it risk a store this
+	/// key's own tracking missed.
+	void reached_unwritten (LoadInst &load, const AddrKey &key, MemoryDeps &deps)
 	{
 		SmallVector<const Value *, 4> objects;
 
-		// The plural form crosses a phi, where getUnderlyingObject () stops.
 		getUnderlyingObjects (load.getPointerOperand (), objects);
 
-		for (const Value *object : objects) {
-			// Loading through a null pointer is UB.
-			if (isa<ConstantPointerNull> (object))
-				continue;
+		if (objects.size () != 1 || objects.front () != key.first) {
+			deps.opaque = true;
+			return;
+		}
 
-			CallBase *alloc = allocation_behind (const_cast<Value *> (object));
+		const Value *object = objects.front ();
 
-			if (alloc != nullptr && is_zeroinit (*alloc))
-				deps.zeroed = true;
+		// Loading through a null pointer is UB.
+		if (isa<ConstantPointerNull> (object))
+			return;
+
+		CallBase *alloc = allocation_behind (const_cast<Value *> (object));
+
+		if (alloc != nullptr && is_zeroinit (*alloc))
+			deps.zeroed = true;
+		else
+			deps.opaque = true;
+	}
+
+	/// Settles what \p load reads, from \p entry as \p key stands at the
+	/// load: a value a store settled it to, the allocation behind it where
+	/// a path reaches it unwritten, or otherwise nothing settled.
+	void settle_load (LoadInst &load, const AddrKey &key, const KeyState &entry)
+	{
+		MemoryDeps deps;
+		uint64_t width = dl.getTypeStoreSize (load.getType ());
+
+		if (entry.opaque)
+			deps.opaque = true;
+
+		if (entry.maybe_unwritten)
+			reached_unwritten (load, key, deps);
+
+		if (entry.sources.is_widened ())
+			deps.opaque = true;
+		else if (!entry.sources.is_empty ()) {
+			if (entry.width == width)
+				deps.stored.assign (entry.sources.sources.begin (), entry.sources.sources.end ());
 			else
 				deps.opaque = true;
+		}
+
+		for (Value *stored : deps.stored)
+			dependents[stored].insert (&load);
+
+		memory_deps.try_emplace (&load, std::move (deps));
+	}
+
+	/// Applies one block's own writes to \p key's state, in place, settling
+	/// what each of the block's own loads of \p key read along the way
+	/// where \p settle asks for that.
+	///
+	/// Run once per block during the fixed point below with \p settle
+	/// false, and once more after it converges with \p settle true: a load
+	/// visited before the point has converged would settle on a state this
+	/// walk has not finished growing.
+	void walk_block_for_key (BasicBlock &block, const AddrKey &key,
+	                         const DenseMap<Instruction *, AddrKey> &keys, KeyState &state,
+	                         bool settle)
+	{
+		for (Instruction &inst : block) {
+			if (auto *load = dyn_cast<LoadInst> (&inst)) {
+				if (settle) {
+					auto found = keys.find (&inst);
+
+					if (found != keys.end () && found->second == key)
+						settle_load (*load, key, state);
+				}
+				continue;
+			}
+
+			if (auto *store = dyn_cast<StoreInst> (&inst)) {
+				auto found = keys.find (&inst);
+
+				if (found == keys.end ()) {
+					// A non-simple store, or one an address the walk
+					// cannot place, could still land on this key.
+					state.opaque = true;
+					continue;
+				}
+
+				if (found->second == key)
+					state = KeyState { ValueSources (store->getValueOperand ()),
+					                   dl.getTypeStoreSize (
+						                   store->getValueOperand ()->getType ()),
+					                   /*maybe_unwritten=*/false, /*opaque=*/false };
+				continue;
+			}
+
+			if (auto *call = dyn_cast<CallBase> (&inst)) {
+				if (may_clobber_tracked_memory (*call))
+					state.opaque = true;
+				continue;
+			}
+
+			// A fence, an atomic RMW or cmpxchg, or anything else this walk
+			// does not otherwise recognize as a write.
+			if (inst.mayWriteToMemory ())
+				state.opaque = true;
 		}
 	}
 
-	/// The writes that reach \p load.
-	MemoryDeps walk_memory (LoadInst &load)
+	/// Settles \p key for every block, the same shape solve () below runs
+	/// at instruction level: a block outside a cycle settles in one pass
+	/// over its predecessors, one inside a cycle by a worklist, so a value
+	/// a loop carries across its back edge still converges.
+	void solve_key (const AddrKey &key, const DenseMap<Instruction *, AddrKey> &keys,
+	                const SmallVectorImpl<SCC> &sccs)
 	{
-		MemoryLocation where = MemoryLocation::get (&load);
-		MemorySSAWalker *walker = mssa->getWalker ();
+		DenseMap<BasicBlock *, KeyState> block_in;
+		DenseMap<BasicBlock *, KeyState> block_out;
 
-		SmallPtrSet<MemoryAccess *, 8> seen;
-		SmallVector<MemoryAccess *, 8> work{walker->getClobberingMemoryAccess (&load, *aa)};
-		MemoryDeps deps;
+		block_in.try_emplace (&f.getEntryBlock (),
+		                      KeyState { {}, 0, /*maybe_unwritten=*/true, false });
 
-		while (!work.empty ()) {
-			MemoryAccess *at = work.pop_back_val ();
+		auto merge_predecessors = [&] (BasicBlock &block, KeyState &in) {
+			bool changed = false;
 
-			if (!seen.insert (at).second)
-				continue;
+			for (BasicBlock *pred : predecessors (&block)) {
+				auto found = block_out.find (pred);
 
-			if (mssa->isLiveOnEntryDef (at)) {
-				reached_unwritten (load, deps);
+				if (found != block_out.end ())
+					changed |= in.merge (found->second);
+			}
+
+			return changed;
+		};
+
+		// scc_begin () enumerates in reverse topological order, entry block
+		// last.
+		for (const SCC &scc : reverse (sccs)) {
+			if (!scc.has_cycle) {
+				BasicBlock *block = *scc.blocks.begin ();
+				KeyState &in = block_in.try_emplace (block).first->second;
+
+				if (block != &f.getEntryBlock ())
+					merge_predecessors (*block, in);
+
+				KeyState out = in;
+				walk_block_for_key (*block, key, keys, out, /*settle=*/false);
+				block_out.try_emplace (block, std::move (out));
 				continue;
 			}
 
-			if (auto *merge = dyn_cast<MemoryPhi> (at)) {
-				for (Use &incoming : merge->incoming_values ()) {
-					auto *from = cast<MemoryAccess> (incoming.get ());
+			llvm::SmallVector<BasicBlock *, 8> worklist (scc.blocks.begin (), scc.blocks.end ());
+			llvm::SmallPtrSet<BasicBlock *, 8> queued (scc.blocks.begin (), scc.blocks.end ());
 
-					work.push_back (walker->getClobberingMemoryAccess (from, where, *aa));
-				}
-				continue;
+			for (BasicBlock *block : scc.blocks) {
+				block_in.try_emplace (block);
+				block_out.try_emplace (block);
 			}
 
-			auto step_past = [&] {
-				work.push_back (walker->getClobberingMemoryAccess (
-					cast<MemoryDef> (at)->getDefiningAccess (), where, *aa));
-			};
+			while (!worklist.empty ()) {
+				BasicBlock *block = worklist.pop_back_val ();
+				queued.erase (block);
 
-			Instruction *wrote = cast<MemoryUseOrDef> (at)->getMemoryInst ();
+				KeyState &in = block_in.find (block)->second;
+				bool changed = block == &f.getEntryBlock () ? false : merge_predecessors (*block, in);
 
-			if (auto *copy = dyn_cast<CallBase> (wrote)) {
-				std::optional<MemoryLocation> writes = value_copy_target (*copy);
-
-				if (writes.has_value () && aa->alias (*writes, where) == AliasResult::NoAlias) {
-					step_past ();
+				if (!changed)
 					continue;
+
+				KeyState out = in;
+				walk_block_for_key (*block, key, keys, out, /*settle=*/false);
+				block_out.find (block)->second = std::move (out);
+
+				for (BasicBlock *succ : successors (block)) {
+					if (scc.blocks.contains (succ) && queued.insert (succ).second)
+						worklist.push_back (succ);
 				}
 			}
-
-			auto *store = dyn_cast<StoreInst> (wrote);
-
-			// An unknown write. The walk goes on, because a store behind it
-			// can reach the load too.
-			if (store == nullptr) {
-				deps.opaque = true;
-				step_past ();
-				continue;
-			}
-
-			AliasResult alias = aa->alias (MemoryLocation::get (store), where);
-			if (alias == AliasResult::NoAlias) {
-				step_past ();
-				continue;
-			}
-
-			// This walk reads a whole store or nothing, so a store wider
-			// than the load names no value either.
-			if (store->isSimple ()
-			    && dl.getTypeStoreSize (store->getValueOperand ()->getType ())
-			           == dl.getTypeStoreSize (load.getType ()))
-				deps.stored.push_back (store->getValueOperand ());
-			else
-				deps.opaque = true;
-
-			// MustAlias means we stop walking backwards here.
-			if (alias == AliasResult::MustAlias)
-				continue;
-
-			step_past ();
 		}
 
-		// A cyclic MemoryPhi can end the walk before it records a store. An
-		// empty set here reads as a field with no values in it.
-		if (deps.stored.empty () && !deps.zeroed)
-			deps.opaque = true;
-
-		return deps;
+		// Every block's IN has converged now, so a second pass over each of
+		// them settles what its own loads of this key read without growing
+		// it any further.
+		for (auto &entry : block_in)
+			walk_block_for_key (*entry.first, key, keys, entry.second, /*settle=*/true);
 	}
 
 	bool visitLoadInst (LoadInst &load)
@@ -611,13 +784,10 @@ ConstantValues::value (llvm::Value *v) const
 }
 
 bool
-ConstantValues::invalidate (Function &f, const PreservedAnalyses &pa,
-                            FunctionAnalysisManager::Invalidator &inv)
+ConstantValues::invalidate (Function &, const PreservedAnalyses &pa,
+                            FunctionAnalysisManager::Invalidator &)
 {
-	if (!pa.getChecker (built_by).preserved ())
-		return true;
-
-	return read_memory && inv.invalidate<MemorySSAAnalysis> (f, pa);
+	return !pa.getChecker (built_by).preserved ();
 }
 
 AnalysisKey MonoConstantValues::Key;
@@ -626,11 +796,10 @@ AnalysisKey MonoMemoryValues::Key;
 namespace {
 
 ConstantValues
-settle (Function &f, FunctionAnalysisManager &fam, AnalysisKey *built_by,
-        bool reads_memory)
+settle (Function &f, AnalysisKey *built_by, bool reads_memory)
 {
 	ConstantValues values;
-	ConstantValuesSolver solver (f, fam, reads_memory);
+	ConstantValuesSolver solver (f, reads_memory);
 
 	solver.solve (values, built_by);
 
@@ -640,15 +809,15 @@ settle (Function &f, FunctionAnalysisManager &fam, AnalysisKey *built_by,
 } // namespace
 
 ConstantValues
-MonoConstantValues::run (Function &f, FunctionAnalysisManager &fam)
+MonoConstantValues::run (Function &f, FunctionAnalysisManager &)
 {
-	return settle (f, fam, ID (), /*reads_memory=*/false);
+	return settle (f, ID (), /*reads_memory=*/false);
 }
 
 ConstantValues
-MonoMemoryValues::run (Function &f, FunctionAnalysisManager &fam)
+MonoMemoryValues::run (Function &f, FunctionAnalysisManager &)
 {
-	return settle (f, fam, ID (), /*reads_memory=*/true);
+	return settle (f, ID (), /*reads_memory=*/true);
 }
 
 } // namespace mono

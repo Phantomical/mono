@@ -775,10 +775,11 @@ entry:
 	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
-/// Resolving the base through the phi to both allocations, and reading each
-/// one's own field store, is what `resolve_base_candidates ()` adds over a
-/// single allocation base.
-TEST (OperandClassTest, LoadThroughAPhiOfAllocationsAnswersTheClass)
+/// Each arm's field store is filed under that arm's own allocation as its
+/// base, never under the phi merging them, so the walk finds no store under
+/// the key this load asks about and answers no class rather than either
+/// arm's.
+TEST (OperandClassTest, LoadThroughAPhiOfAllocationsAnswersNoClass)
 {
 	mono::test::init_runtime ();
 
@@ -807,13 +808,13 @@ merge:
 )",
 	          mono_defaults.object_class);
 
-	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), nullptr);
 }
 
-/// One arm writes its allocation's address out to another object before the
-/// merge. Nothing downstream of either store can reach the field, so the
-/// answer is the one the arm above gives without that store.
-TEST (OperandClassTest, LoadThroughAPhiOfAllocationsAnswersTheClassWhereOneEscapes)
+/// The same shape, with one arm also naming its own allocation from
+/// somewhere else. That store answers for a different key too, so it
+/// changes nothing about what the field's own key settles to.
+TEST (OperandClassTest, LoadThroughAPhiOfAllocationsAnswersNoClassWhereOneEscapes)
 {
 	mono::test::init_runtime ();
 
@@ -843,7 +844,7 @@ merge:
 )",
 	          mono_defaults.object_class);
 
-	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), nullptr);
 }
 
 /// Agreeing on two different objects of the same class settles a merge;
@@ -910,12 +911,13 @@ entry:
 	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
 }
 
-/// The load's base is a phi that is itself part of the mutual cycle
-/// `ExactClassResolvesAMutualCycleThroughNull` above gates for a bare
-/// allocation. `resolve_base_candidates ()` must terminate on that cycle,
-/// the same way `walk_operand_class ()` does, rather than loop forever
-/// chasing the phi's own back edge.
-TEST (OperandClassTest, LoadThroughACyclicPhiBaseTerminatesAndAnswers)
+/// The load's base is a phi that is itself part of a cycle, the value-level
+/// shape ExactClassResolvesAMutualCycleThroughNull above gates. solve_key ()
+/// has to settle a fixed point over that cycle too, rather than loop forever
+/// chasing the phi's own back edge. Nothing stores under the base's own key
+/// either way, so the answer is no class, the same as an acyclic phi of
+/// allocations settles to.
+TEST (OperandClassTest, LoadThroughACyclicPhiBaseTerminatesWithNoClass)
 {
 	mono::test::init_runtime ();
 
@@ -948,7 +950,7 @@ exit:
 )",
 	          mono_defaults.object_class);
 
-	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), classX);
+	EXPECT_EQ (exact_class_of (&m.question (), *m.caller), nullptr);
 }
 
 } // namespace
