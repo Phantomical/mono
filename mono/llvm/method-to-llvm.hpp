@@ -16,6 +16,7 @@
 #include "il-line-table.hpp"
 #include "method-symbols.hpp"
 #include "mini.h"
+#include "runtime/minimal-compile.hpp"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-forward.h"
 #include <llvm/ADT/STLFunctionalExtras.h>
@@ -381,7 +382,7 @@ private:
 	llvm::Function *function;
 	llvm::IRBuilder<> builder;
 
-	MonoCompile *cfg;
+	TranslateInput *cfg;
 	MonoMethod *method;
 
 	/// Where this emitter reports the symbols it leaves unresolved, or null
@@ -618,7 +619,7 @@ public:
 	/// shared_types is the struct-type cache of the module. Emitters that write
 	/// into one module must be given one and the same cache. The emitter keeps
 	/// its own only when it has the module to itself.
-	MethodLLVMEmitter (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
+	MethodLLVMEmitter (llvm::Module *module, TranslateInput *cfg, MonoMethod *method,
 	                   std::vector<ExternalSymbol> *externals = nullptr,
 	                   IlDebugModule *il_debug = nullptr,
 	                   llvm::ArrayRef<MonoMethod *> siblings = {},
@@ -1453,7 +1454,7 @@ void *c_entry_of (MonoMethod *method);
 ///
 /// body_suffix goes on the end of the emitted function's name. Give it a value
 /// when the module already holds a body for method and this one is a copy.
-llvm::Expected<llvm::Function *> method_to_llvm (llvm::Module *module, MonoCompile *cfg,
+llvm::Expected<llvm::Function *> method_to_llvm (llvm::Module *module, TranslateInput *cfg,
                                                  MonoMethod *method,
                                                  std::vector<ExternalSymbol> *externals
                                                  = nullptr,

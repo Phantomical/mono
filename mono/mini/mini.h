@@ -360,18 +360,8 @@ enum {
 	MONO_OPT_LAST
 };
 
-/*
- * What the translator is handed for one method.  The classic compiler kept its
- * whole pipeline state here; the LLVM back end reads the method, its header,
- * the domain the code is being compiled for and the optimization set, and
- * nothing else.
- */
-typedef struct {
-	MonoMethod      *method;
-	MonoMethodHeader *header;
-	MonoDomain      *domain;
-	guint32          opt;
-} MonoCompile;
+/* Defined in full at mono/mini/tier0/compile.h. */
+typedef struct MonoCompile MonoCompile;
 typedef struct {
 	gint32 methods_compiled;
 	gint32 methods_aot;

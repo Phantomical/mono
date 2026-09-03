@@ -9,8 +9,15 @@
 
 namespace mono {
 
-/// The parts of a MonoCompile the translator reads. The rest belongs to the mini
-/// pipeline, which is not running here.
+/// What the translator reads about the method it compiles.
+struct TranslateInput {
+	MonoMethod *method;
+	MonoMethodHeader *header;
+	MonoDomain *domain;
+	guint32 opt;
+};
+
+/// A TranslateInput whose header is freed with it.
 class MinimalCompile {
 public:
 	MinimalCompile (MonoMethod *method, MonoDomain *domain, MonoError *error)
@@ -32,10 +39,10 @@ public:
 	MinimalCompile (const MinimalCompile &) = delete;
 	MinimalCompile &operator= (const MinimalCompile &) = delete;
 
-	MonoCompile *get () { return &cfg; }
+	TranslateInput *get () { return &cfg; }
 
 private:
-	MonoCompile cfg;
+	TranslateInput cfg;
 };
 
 } // namespace mono

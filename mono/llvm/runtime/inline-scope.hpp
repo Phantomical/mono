@@ -189,7 +189,7 @@ MonoMethod *il_call_target (MonoMethod *method, uint32_t token);
 /// collects what the new body names, so resolve them after this rather than
 /// before it.
 llvm::Function *materialize_inline_copy (llvm::Module &module, MonoDomain *domain,
-                                         MonoMethod *callee, MonoCompile *cfg,
+                                         MonoMethod *callee, TranslateInput *cfg,
                                          std::vector<ExternalSymbol> &externals,
                                          ModuleTypes &types, InlineScope &scope,
                                          Inliner who);

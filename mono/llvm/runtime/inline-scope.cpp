@@ -286,7 +286,7 @@ find_folded (InlineScope &scope, MonoMethod *callee)
 
 Function *
 materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
-                         MonoCompile *cfg, std::vector<ExternalSymbol> &externals,
+                         TranslateInput *cfg, std::vector<ExternalSymbol> &externals,
                          ModuleTypes &types, InlineScope &scope, Inliner who)
 {
 	// The root and the callee together name the copy. A module holds the

@@ -39,7 +39,7 @@ namespace test {
 namespace {
 
 /*
- * Everything a method_to_llvm () call needs out of the MonoCompile it is handed.
+ * Everything a method_to_llvm () call needs out of the TranslateInput it is handed.
  *
  * The translator reads the header - the IL, the locals signature and the clause
  * table - and it reads `opt`, which is what MONO_CLASS_IS_SIMD looks at. It is
@@ -63,10 +63,10 @@ public:
 	MinimalCompile (const MinimalCompile &) = delete;
 	MinimalCompile &operator= (const MinimalCompile &) = delete;
 
-	MonoCompile *get () { return &cfg; }
+	TranslateInput *get () { return &cfg; }
 
 private:
-	MonoCompile cfg;
+	TranslateInput cfg;
 };
 
 } // namespace

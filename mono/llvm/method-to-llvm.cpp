@@ -78,7 +78,7 @@ throw_corlib_exception_decl (llvm::Module *module)
 } // namespace
 
 llvm::Expected<llvm::Function *>
-method_to_llvm (llvm::Module *module, MonoCompile *cfg, MonoMethod *method,
+method_to_llvm (llvm::Module *module, TranslateInput *cfg, MonoMethod *method,
                 std::vector<ExternalSymbol> *externals,
                 MonoLLVMBreakpointSwitch **bp_switch, SeqPointGraph *seq_points,
                 llvm::ArrayRef<MonoMethod *> siblings, ModuleTypes *types,
