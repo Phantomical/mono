@@ -3610,7 +3610,6 @@ emit_get_rgctx_dele_tramp (MonoCompile *cfg, int context_used,
 	return emit_rgctx_fetch (cfg, rgctx, entry);
 }
 
-
 /*
  * Returns NULL and set the cfg exception on error.
  */
@@ -3624,14 +3623,11 @@ handle_delegate_ctor (MonoCompile *cfg, MonoClass *klass, MonoInst *target, Mono
 	MonoDomain *domain;
 	guint8 **code_slot;
 
-	if (virtual_ && !cfg->llvm_only) {
-		MonoMethod *invoke = mono_get_delegate_invoke_internal (klass);
-		g_assert (invoke);
-
-		//FIXME verify & fix any issue with removing invoke_context_used restriction
-		if (invoke_context_used || !mono_get_delegate_virtual_invoke_impl (mono_method_signature_internal (invoke), target_method_context_used ? NULL : method))
-			return NULL;
-	}
+	// mono_create_delegate_virtual_trampoline () says why there is no fast path
+	// for a virtual delegate. Declining leaves the ordinary constructor to set
+	// invoke_impl.
+	if (virtual_)
+		return NULL;
 
 	obj = handle_alloc (cfg, klass, FALSE, invoke_context_used);
 	if (!obj)

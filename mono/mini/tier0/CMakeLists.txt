@@ -17,7 +17,7 @@ add_custom_command(
   VERBATIM)
 add_custom_target(mono-tier0-cpu-desc DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/cpu-amd64.h")
 
-target_sources(mini PRIVATE
+set(MONO_TIER0_SOURCES
   abcremoval.c
   alias-analysis.c
   arch-stubs.c
@@ -38,14 +38,27 @@ target_sources(mini PRIVATE
   memory-access.c
   method-to-ir.c
   mini-codegen.c
+  native-types.c
   profiler-emit.c
   seq-points.c
   ssa.c
-  type-checking.c
+  type-checking.c)
+target_sources(mini PRIVATE
+  ${MONO_TIER0_SOURCES}
   "${CMAKE_CURRENT_BINARY_DIR}/cpu-amd64.h")
 target_include_directories(mini PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"
   "${CMAKE_CURRENT_BINARY_DIR}")
 # mini.c calls mono_tier0_init () behind this.
 target_compile_definitions(mini PRIVATE MONO_ENABLE_TIER0_CLASSIC)
+# simd-intrinsics.c is not in this tree, so tier0's intrinsic call sites have
+# nothing to call. DISABLE_SIMD is upstream mono's own knob for that, scoped
+# here to tier0/'s sources alone so the rest of mini keeps its intrinsics.
+#
+# A source-file property scopes down from the directory it is set in, never up.
+# mini is add_library()'d in the parent, so without DIRECTORY this reaches
+# nothing and the flag goes missing with no diagnostic.
+set_source_files_properties(${MONO_TIER0_SOURCES}
+  DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+  PROPERTIES COMPILE_DEFINITIONS DISABLE_SIMD)
 add_dependencies(mini mono-tier0-cpu-desc)
