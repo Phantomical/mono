@@ -81,6 +81,7 @@
 #include "mini-gc.h"
 #include "debugger-agent.h"
 #include "llvm-runtime.h"
+#include "../../llvm/runtime.h"
 #include "lldb.h"
 #include "aot-runtime.h"
 #include "mini-runtime.h"
@@ -2190,7 +2191,7 @@ mono_resolve_patch_target (MonoMethod *method, MonoDomain *domain, guint8 *code,
 		break;
 	}
 	case MONO_PATCH_INFO_METHOD_JUMP:
-		target = mono_create_jump_trampoline (domain, patch_info->data.method, FALSE, error);
+		target = mono_llvm_jit_stub_for (patch_info->data.method, domain, error);
 		if (!is_ok (error))
 			return NULL;
 		break;
@@ -2198,8 +2199,13 @@ mono_resolve_patch_target (MonoMethod *method, MonoDomain *domain, guint8 *code,
 		if (patch_info->data.method == method) {
 			target = code;
 		} else {
-			/* get the trampoline to the method from the domain */
-			target = mono_create_jit_trampoline (domain, patch_info->data.method, error);
+			// mono_create_jit_trampoline () reaches a MONO_WRAPPER_ALLOC or
+			// MONO_WRAPPER_WRITE_BARRIER callee through
+			// mono_jit_compile_method_with_opt (), which asserts a MonoJitInfo
+			// for the callee that mini_jit_info_table_find () excludes as a
+			// trampoline. mono_llvm_jit_stub_for () returns the callee's thunk
+			// directly, without running that assert.
+			target = mono_llvm_jit_stub_for (patch_info->data.method, domain, error);
 			if (!is_ok (error))
 				return NULL;
 		}
