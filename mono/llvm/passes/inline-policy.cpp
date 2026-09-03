@@ -821,11 +821,16 @@ call_site_bonus (const CallBase &call, const Function &callee,
 	unsigned shared =
 		std::min<unsigned> (call.arg_size (), callee.arg_size ());
 
-	// The walk is the same one FoldDelegateInvokesPass reads the site's own
-	// delegate through, and every shared argument below reads it off this
-	// same result.
-	ConstantValues *constants =
-		get_constants ? &get_constants (const_cast<Function &> (*caller)) : nullptr;
+	/*
+	 * Settling the caller runs a MemorySSA walk for each of its loads, and the
+	 * delegate bonus below is the only reader. The inliner settles it again
+	 * after every fold, against a caller the last fold grew. Asking for it up
+	 * here instead of at that bonus costs minutes on a root with many loads.
+	 */
+	auto caller_constants = [&] () -> ConstantValues * {
+		return get_constants ? &get_constants (const_cast<Function &> (*caller))
+		                     : nullptr;
+	};
 
 	for (unsigned i = 0; i < shared; i++) {
 		Value *arg = call.getArgOperand (i);
@@ -890,10 +895,13 @@ call_site_bonus (const CallBase &call, const Function &callee,
 		// above answers from a leaf read alone, so a field cache merging a
 		// stored delegate with a fresh one skips it and reaches here anyway:
 		// the walk `constants` reads is what settles a merge, not a leaf.
-		if (constants != nullptr
-		    && delegate_target_at (arg, *constants).method != nullptr
-		    && invokes_unresolved_on (param, callee))
-			bonus += DevirtualizeDelegateArgumentBonus;
+		if (invokes_unresolved_on (param, callee)) {
+			ConstantValues *constants = caller_constants ();
+
+			if (constants != nullptr
+			    && delegate_target_at (arg, *constants).method != nullptr)
+				bonus += DevirtualizeDelegateArgumentBonus;
+		}
 	}
 
 	return bonus;
