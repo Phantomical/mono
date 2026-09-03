@@ -65,15 +65,36 @@ llvm::cl::opt<std::string> Tier0ClassicOpt (
 	"mono-tier0-classic", llvm::cl::Hidden, llvm::cl::init (""),
 	llvm::cl::desc ("Run methods whose full name contains this substring at "
 	                "tier 0 through the classic compiler instead of "
-	                "interpreting them"));
+	                "interpreting them; 1 or true runs every tier-0 method "
+	                "through it"));
 
-const char *
-tier0_classic_filter ()
+bool
+is_select_all_sentinel (const char *value)
 {
-	static const char *filter =
-		Tier0ClassicOpt.empty () ? nullptr : Tier0ClassicOpt.c_str ();
+	llvm::StringRef set (value);
 
-	return filter;
+	return set == "1" || set.equals_insensitive ("true");
+}
+
+struct Tier0ClassicSetting {
+	bool enabled = false;
+	const char *substring = nullptr;
+};
+
+const Tier0ClassicSetting &
+tier0_classic_setting ()
+{
+	static Tier0ClassicSetting setting = [] () -> Tier0ClassicSetting {
+		if (Tier0ClassicOpt.empty ())
+			return {};
+
+		if (is_select_all_sentinel (Tier0ClassicOpt.c_str ()))
+			return { true, nullptr };
+
+		return { true, Tier0ClassicOpt.c_str () };
+	} ();
+
+	return setting;
 }
 
 llvm::cl::opt<bool> FoldCastsOpt (
@@ -721,13 +742,16 @@ runs_at_tier0 (MonoMethod *method)
 bool
 runs_classic_at_tier0 (MonoMethod *method)
 {
-	const char *filter = tier0_classic_filter ();
+	const Tier0ClassicSetting &setting = tier0_classic_setting ();
 
-	if (filter == nullptr)
+	if (!setting.enabled)
 		return false;
 
+	if (setting.substring == nullptr)
+		return true;
+
 	char *name = mono_method_full_name (method, TRUE);
-	bool selected = strstr (name, filter) != nullptr;
+	bool selected = strstr (name, setting.substring) != nullptr;
 
 	g_free (name);
 	return selected;

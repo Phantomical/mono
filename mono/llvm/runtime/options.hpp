@@ -316,9 +316,9 @@ bool runs_at_tier0 (MonoMethod *method);
 /// Whether a method that runs at tier 0 is compiled by the classic compiler
 /// there instead of being interpreted.
 ///
-/// Empty, the default, selects no method. Anything else is matched as a
-/// substring of the printed name, the same as runs_at_tier0 () matches its
-/// own filter.
+/// Empty, the default, selects no method. 1 or true selects every method.
+/// Anything else is matched as a substring of the printed name, the same as
+/// runs_at_tier0 () matches its own filter.
 bool runs_classic_at_tier0 (MonoMethod *method);
 
 } // namespace mono
