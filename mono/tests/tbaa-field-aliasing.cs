@@ -293,13 +293,13 @@ static class Program {
 	{
 		RunAll ("tier0");
 
-		// MonoTier::tier1 is 2 and tier2 is 3 (mono/mini/domain-method.hpp).
+		// MonoTier::tier1 is 3 and tier2 is 4 (mono/mini/domain-method.hpp).
 		foreach (string name in cases)
-			Promote (name, 2);
+			Promote (name, 3);
 		RunAll ("tier1");
 
 		foreach (string name in cases)
-			Promote (name, 3);
+			Promote (name, 4);
 		RunAll ("tier2");
 
 		Console.WriteLine (fails == 0 ? "OK" : fails + " failures");

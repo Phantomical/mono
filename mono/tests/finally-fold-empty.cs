@@ -84,8 +84,8 @@ static class EmptyFinally {
 }
 
 static class Program {
-	const int tier1 = 2;
-	const int tier2 = 3;
+	const int tier1 = 3;
+	const int tier2 = 4;
 
 	static int fails;
 

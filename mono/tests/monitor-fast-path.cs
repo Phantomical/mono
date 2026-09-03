@@ -296,7 +296,7 @@ static class Program {
 		 * interpreted callee without the runtime being asked for it, so a loop
 		 * alone leaves the methods where they started.
 		 */
-		if (!Promote (2))
+		if (!Promote (3))
 			return 1;
 
 		RunAll ("tier 1");
@@ -320,7 +320,7 @@ static class Program {
 			ExitInflated ();
 		}
 
-		if (!Promote (3))
+		if (!Promote (4))
 			return 1;
 
 		RunAll ("tier 2");

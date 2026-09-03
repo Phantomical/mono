@@ -60,7 +60,7 @@ class Reenter {
 			assemblyPath, "", "Reenter", "InterpMe_outer");
 	}
 
-	const int tier1 = 2;
+	const int tier1 = 3;
 
 	public static int Main ()
 	{

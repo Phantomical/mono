@@ -208,7 +208,7 @@ public class InvariantStatic {
 		Check ("empty array across a call", EmptyAcrossCall (), 0);
 	}
 
-	const int tier1 = 2; // MonoTier::tier1, as PromoteNow takes it.
+	const int tier1 = 3; // MonoTier::tier1, as PromoteNow takes it.
 
 	static void PromoteBeforeFirstTouch (string method)
 	{

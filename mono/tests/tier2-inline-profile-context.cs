@@ -102,7 +102,7 @@ static class ProfileContext {
 		MethodInfo loop = typeof (ProfileContext).GetMethod ("ThrowHelperLoop",
 			BindingFlags.Static | BindingFlags.NonPublic);
 
-		if (!Mono.Tiering.MonoTier.PromoteNow (hot.MethodHandle.Value, 2)) {
+		if (!Mono.Tiering.MonoTier.PromoteNow (hot.MethodHandle.Value, 3)) {
 			Console.WriteLine ("FAIL: HotWithColdThrow () would not compile at tier 1");
 			return 1;
 		}
@@ -113,7 +113,7 @@ static class ProfileContext {
 		for (int i = 0; i < 200000; ++i)
 			sum += HotWithColdThrow (i & 0x7fffffff);
 
-		if (!Mono.Tiering.MonoTier.PromoteNow (loop.MethodHandle.Value, 2)) {
+		if (!Mono.Tiering.MonoTier.PromoteNow (loop.MethodHandle.Value, 3)) {
 			Console.WriteLine ("FAIL: ThrowHelperLoop () would not compile at tier 1");
 			return 1;
 		}
@@ -122,7 +122,7 @@ static class ProfileContext {
 		// count HotWithColdThrow () carries in are both real.
 		sum += ThrowHelperLoop (30000, -1);
 
-		if (!Mono.Tiering.MonoTier.PromoteNow (loop.MethodHandle.Value, 3)) {
+		if (!Mono.Tiering.MonoTier.PromoteNow (loop.MethodHandle.Value, 4)) {
 			Console.WriteLine ("FAIL: ThrowHelperLoop () would not compile at tier 2");
 			return 1;
 		}

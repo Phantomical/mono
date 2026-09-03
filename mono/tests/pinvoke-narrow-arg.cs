@@ -29,7 +29,7 @@ using System.Runtime.InteropServices;
 
 static class Program {
 	/* MonoTier::tier2, as PromoteNow takes it. */
-	const int tier2 = 3;
+	const int tier2 = 4;
 
 	// The high half is what the callee must not see. The low half is 'C'.
 	const int seed = 0x7FFF0042;

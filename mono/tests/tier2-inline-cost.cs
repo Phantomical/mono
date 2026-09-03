@@ -230,7 +230,7 @@ static class Program {
 		 * asked for it, so a loop alone leaves Root () where it started and the
 		 * tier-2 compile below would have no counts to read.
 		 */
-		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, 2)) {
+		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, 3)) {
 			Console.WriteLine ("FAIL: Root () would not compile at tier 1");
 			return 1;
 		}
@@ -251,7 +251,7 @@ static class Program {
 		for (int i = 0; i < 20000; ++i)
 			Root (4, false);
 
-		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, 3)) {
+		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, 4)) {
 			Console.WriteLine ("FAIL: Root () would not compile at tier 2");
 			return 1;
 		}

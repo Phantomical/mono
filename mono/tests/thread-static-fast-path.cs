@@ -27,7 +27,7 @@ struct Pair {
 }
 
 class Program {
-	const int tier2 = 2;
+	const int tier2 = 4;
 
 	[ThreadStatic]
 	static int counter;

@@ -100,11 +100,11 @@ public static class Program {
 	{
 		CheckAll ("first call");
 
-		if (!PromoteAll (2))
+		if (!PromoteAll (3))
 			return 1;
 		CheckAll ("tier 1");
 
-		if (!PromoteAll (3))
+		if (!PromoteAll (4))
 			return 1;
 		CheckAll ("tier 2");
 

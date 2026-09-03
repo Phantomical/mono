@@ -264,7 +264,7 @@ static class Program {
 		MethodInfo root = typeof (Program).GetMethod ("Root",
 			BindingFlags.Static | BindingFlags.NonPublic);
 
-		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, 2)) {
+		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, 3)) {
 			Console.WriteLine ("FAIL: Root () would not compile at tier 1");
 			return 1;
 		}
@@ -284,7 +284,7 @@ static class Program {
 		for (int i = 0; i < 20000; ++i)
 			Root (i % 2 == 0, false);
 
-		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, 3)) {
+		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, 4)) {
 			Console.WriteLine ("FAIL: Root () would not compile at tier 2");
 			return 1;
 		}

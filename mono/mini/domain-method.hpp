@@ -47,8 +47,11 @@ enum class MonoTier : uint8_t {
 	/// Published, with no code yet: the thunk points at the lazy resolver.
 	none = 0,
 	interp = 1,
-	tier1 = 2,
-	tier2 = 3,
+	/// Native code from the classic compiler (mono/mini/tier0/), which runs a
+	/// method at tier 0 in place of the interpreter.
+	tier0 = 2,
+	tier1 = 3,
+	tier2 = 4,
 	/// Native code owns the entry. Nothing outranks this, and nothing takes it
 	/// back.
 	detoured = 0xFF,
@@ -61,6 +64,7 @@ next_tier (MonoTier tier)
 	switch (tier) {
 	case MonoTier::none:
 	case MonoTier::interp:
+	case MonoTier::tier0:
 		return MonoTier::tier1;
 	case MonoTier::tier1:
 		return MonoTier::tier2;

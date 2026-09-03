@@ -60,8 +60,8 @@ class DelegateFold {
 	}
 
 	/* MonoTier::tier1 and MonoTier::tier2, as PromoteNow takes them. */
-	const int tier1 = 2;
-	const int tier2 = 3;
+	const int tier1 = 3;
+	const int tier2 = 4;
 
 	static int calls;
 

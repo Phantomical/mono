@@ -43,7 +43,7 @@ namespace Mono.Tiering {
 
 static class Program {
 	/* MonoTier::tier1, as PromoteNow takes it. */
-	const int tier1 = 2;
+	const int tier1 = 3;
 
 	/* Turns of the loop in one call of each kernel. */
 	const int heavy = 100000;

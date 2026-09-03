@@ -26,7 +26,7 @@ class Test {
 	const uint PAGE_EXECUTE_READWRITE = 0x40;
 
 	/* MonoTier::tier1, as PromoteNow takes it. */
-	const int tier1 = 2;
+	const int tier1 = 3;
 
 	[DllImport ("libc", SetLastError = true)]
 	static extern int mprotect (IntPtr addr, ulong len, int prot);

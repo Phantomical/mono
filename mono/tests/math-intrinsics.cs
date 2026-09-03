@@ -456,7 +456,7 @@ static class Program {
 		 * interpreted callee without the runtime being asked for it, so a loop
 		 * alone leaves both methods where they started.
 		 */
-		if (!Promote (sample, 2, "Sample ()") || !Promote (pinned, 2, "CheckPinned ()"))
+		if (!Promote (sample, 3, "Sample ()") || !Promote (pinned, 3, "CheckPinned ()"))
 			return 1;
 
 		CompareWith ("tier 1", first, Sample ());
@@ -466,7 +466,7 @@ static class Program {
 		for (int i = 0; i < 200; i++)
 			Sample ();
 
-		if (!Promote (sample, 3, "Sample ()") || !Promote (pinned, 3, "CheckPinned ()"))
+		if (!Promote (sample, 4, "Sample ()") || !Promote (pinned, 4, "CheckPinned ()"))
 			return 1;
 
 		CompareWith ("tier 2", first, Sample ());

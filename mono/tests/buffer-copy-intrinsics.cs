@@ -226,7 +226,7 @@ static class Program {
 
 		CompareWith ("tier 0", want, Sample ());
 
-		if (!Promote (sample, 2, "Sample ()"))
+		if (!Promote (sample, 3, "Sample ()"))
 			return 1;
 
 		CompareWith ("tier 1", want, Sample ());
@@ -235,7 +235,7 @@ static class Program {
 		for (int i = 0; i < 200; i++)
 			Sample ();
 
-		if (!Promote (sample, 3, "Sample ()"))
+		if (!Promote (sample, 4, "Sample ()"))
 			return 1;
 
 		CompareWith ("tier 2", want, Sample ());

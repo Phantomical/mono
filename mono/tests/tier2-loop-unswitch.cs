@@ -63,7 +63,7 @@ sealed class Leaf : Node {
 
 static class Program {
 	/* MonoTier::tier2, as PromoteNow takes it. */
-	const int tier2 = 3;
+	const int tier2 = 4;
 
 	static int steps;
 

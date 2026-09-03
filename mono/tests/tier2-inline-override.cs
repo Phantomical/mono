@@ -95,13 +95,13 @@ public static class Program {
 		MethodInfo root = typeof (Program).GetMethod ("Root",
 			BindingFlags.Static | BindingFlags.NonPublic);
 
-		if (!Promote (root, 2, "Root ()"))
+		if (!Promote (root, 3, "Root ()"))
 			return 1;
 
 		for (int i = 0; i < 2000; ++i)
 			Root (7);
 
-		if (!Promote (root, 3, "Root ()"))
+		if (!Promote (root, 4, "Root ()"))
 			return 1;
 
 		Check ("the folded answer", Root (7), 8 + 9);

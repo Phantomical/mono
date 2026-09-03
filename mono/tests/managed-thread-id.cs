@@ -22,7 +22,7 @@ using System.Threading;
  */
 
 class Program {
-	const int tier2 = 2;
+	const int tier2 = 4;
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int Opaque (int value)

@@ -340,7 +340,7 @@ static class Program {
 	{
 		RunAll ("tier 0");
 
-		if (!Promote (2, "tier 1"))
+		if (!Promote (3, "tier 1"))
 			return 1;
 
 		RunAll ("tier 1");
@@ -348,7 +348,7 @@ static class Program {
 		for (int i = 0; i < 200; i++)
 			Warm ();
 
-		if (!Promote (3, "tier 2"))
+		if (!Promote (4, "tier 2"))
 			return 1;
 
 		RunAll ("tier 2");

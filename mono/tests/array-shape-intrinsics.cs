@@ -204,7 +204,7 @@ static class Program {
 		 * interpreted callee without the runtime being asked for it, so a loop
 		 * alone leaves both methods where they started.
 		 */
-		if (!PromoteAll (2))
+		if (!PromoteAll (3))
 			return 1;
 
 		CompareWith ("tier 1", first, Sample ());
@@ -216,7 +216,7 @@ static class Program {
 		for (int i = 0; i < 200; i++)
 			Sample ();
 
-		if (!PromoteAll (3))
+		if (!PromoteAll (4))
 			return 1;
 
 		CompareWith ("tier 2", first, Sample ());

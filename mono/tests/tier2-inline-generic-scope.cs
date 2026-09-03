@@ -126,8 +126,8 @@ class Program {
 		MethodInfo useConcrete = typeof (Box<object>).GetMethod ("UseConcrete");
 		MethodInfo useOpen = typeof (Box<object>).GetMethod ("UseOpen");
 
-		if (!Mono.Tiering.MonoTier.PromoteNow (useConcrete.MethodHandle.Value, 2)
-		    || !Mono.Tiering.MonoTier.PromoteNow (useOpen.MethodHandle.Value, 2)) {
+		if (!Mono.Tiering.MonoTier.PromoteNow (useConcrete.MethodHandle.Value, 3)
+		    || !Mono.Tiering.MonoTier.PromoteNow (useOpen.MethodHandle.Value, 3)) {
 			Console.WriteLine ("FAIL: the roots would not compile at tier 1");
 			return 1;
 		}
@@ -147,8 +147,8 @@ class Program {
 			Box<string>.UseOpen ("x", i, false);
 		}
 
-		if (!Mono.Tiering.MonoTier.PromoteNow (useConcrete.MethodHandle.Value, 3)
-		    || !Mono.Tiering.MonoTier.PromoteNow (useOpen.MethodHandle.Value, 3)) {
+		if (!Mono.Tiering.MonoTier.PromoteNow (useConcrete.MethodHandle.Value, 4)
+		    || !Mono.Tiering.MonoTier.PromoteNow (useOpen.MethodHandle.Value, 4)) {
 			Console.WriteLine ("FAIL: the roots would not compile at tier 2");
 			return 1;
 		}
