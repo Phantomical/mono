@@ -7,11 +7,10 @@
 
 #ifndef DISABLE_JIT
 
-#include "mini.h"
+#include "compile.h"
 #include "ir-emit.h"
 #include "mini-runtime.h"
 #include "llvmonly-runtime.h"
-#include "mini-llvm.h"
 #include "jit-icalls.h"
 #include <mono/metadata/abi-details.h>
 #include <mono/metadata/class-abi-details.h>

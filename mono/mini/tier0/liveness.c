@@ -15,7 +15,7 @@
 
 #ifndef DISABLE_JIT
 
-#include "mini.h"
+#include "compile.h"
 
 #define SPILL_COST_INCREMENT (1 << (bb->nesting << 1))
 

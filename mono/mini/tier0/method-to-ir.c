@@ -15,7 +15,7 @@
 #include <config.h>
 #include <glib.h>
 #include <mono/utils/mono-compiler.h>
-#include "mini.h"
+#include "compile.h"
 
 #ifndef DISABLE_JIT
 
@@ -81,7 +81,6 @@
 #include "jit.h"
 #include "debugger-agent.h"
 #include "seq-points.h"
-#include "mini-llvm.h"
 #include "mini-runtime.h"
 #include "llvmonly-runtime.h"
 #include "mono/utils/mono-tls-inline.h"

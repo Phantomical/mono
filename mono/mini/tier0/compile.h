@@ -1733,6 +1733,8 @@ void mono_cfg_add_try_hole (MonoCompile *cfg, MonoExceptionClause *clause, guint
 void mono_cfg_set_exception (MonoCompile *cfg, MonoExceptionType type);
 void mono_cfg_set_exception_invalid_program (MonoCompile *cfg, char *msg);
 void mono_update_jit_stats (MonoCompile *cfg);
+void mono_save_seq_point_info (MonoCompile *cfg, MonoJitInfo *jinfo);
+void mono_bb_deduplicate_op_il_seq_points (MonoCompile *cfg, MonoBasicBlock *bb);
 gboolean mini_gsharedvt_runtime_invoke_supported (MonoMethodSignature *sig);
 MonoCPUFeatures mini_get_cpu_features (MonoCompile* cfg);
 enum {

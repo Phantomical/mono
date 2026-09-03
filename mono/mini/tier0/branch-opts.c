@@ -14,7 +14,7 @@
 #include <mono/utils/mono-compiler.h>
 #ifndef DISABLE_JIT
 
-#include "mini.h"
+#include "compile.h"
 #include "mini-runtime.h"
 
 /*

@@ -102,6 +102,9 @@ mono_add_object_library(mini
   DEPENDS mono::hidden mono::eglib_headers mono::llvm)
 add_dependencies(mini mono-version)
 
+# Adds its sources to the mini object library, so it comes after that target.
+add_subdirectory(tier0)
+
 # The debugger agent: its own object library because it can be built as a
 # loadable module in configurations that disable it from the runtime proper.
 # The interpreter is the same shape and lives in mono/interp.

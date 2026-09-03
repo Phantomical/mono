@@ -11,7 +11,7 @@
 #ifndef __MONO_IR_EMIT_H__
 #define __MONO_IR_EMIT_H__
 
-#include "mini.h"
+#include "compile.h"
 
 static inline guint32
 alloc_ireg (MonoCompile *cfg)

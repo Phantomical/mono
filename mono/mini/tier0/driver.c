@@ -67,7 +67,8 @@
 #include <mono/utils/unlocked.h>
 #include <mono/utils/mono-time.h>
 
-#include "mini.h"
+#include "compile.h"
+#include "tier0.h"
 #include "seq-points.h"
 #include "tasklets.h"
 #include <string.h>
@@ -80,19 +81,11 @@
 #include "mini-gc.h"
 #include "debugger-agent.h"
 #include "llvm-runtime.h"
-#include "mini-llvm.h"
 #include "lldb.h"
 #include "aot-runtime.h"
 #include "mini-runtime.h"
 
 #include "mixed_callstack_plugin.h"
-
-MonoCallSpec *mono_jit_trace_calls;
-MonoMethodDesc *mono_inject_async_exc_method;
-int mono_inject_async_exc_pos;
-MonoMethodDesc *mono_break_at_bb_method;
-int mono_break_at_bb_bb_num;
-gboolean mono_do_x86_stack_align = TRUE;
 
 /* Counters */
 static guint32 jinfo_try_holes_size;
@@ -3077,6 +3070,13 @@ init_backend (MonoBackend *backend)
 #endif
 }
 
+void
+mono_tier0_init (void)
+{
+	current_backend = g_new0 (MonoBackend, 1);
+	init_backend (current_backend);
+}
+
 static gboolean
 is_simd_supported (MonoCompile *cfg)
 {
@@ -3489,16 +3489,11 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	 */
 	mono_compile_create_vars (cfg);
 
-	mono_cfg_dump_create_context (cfg);
-	mono_cfg_dump_begin_group (cfg);
-
 	MONO_TIME_TRACK (mono_jit_stats.jit_method_to_ir, i = mono_method_to_ir (cfg, method_to_compile, NULL, NULL, NULL, NULL, 0, FALSE));
-	mono_cfg_dump_ir (cfg, "method-to-ir");
 
 	if (cfg->gdump_ctx != NULL) {
 		/* workaround for graph visualization, as it doesn't handle empty basic blocks properly */
 		mono_insert_nop_in_empty_bb (cfg);
-		mono_cfg_dump_ir (cfg, "mono_insert_nop_in_empty_bb");
 	}
 
 	if (i < 0) {
@@ -3567,22 +3562,18 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	 * SSA will ignore variables marked VOLATILE.
 	 */
 	MONO_TIME_TRACK (mono_jit_stats.jit_liveness_handle_exception_clauses, mono_liveness_handle_exception_clauses (cfg));
-	mono_cfg_dump_ir (cfg, "liveness_handle_exception_clauses");
 
 	MONO_TIME_TRACK (mono_jit_stats.jit_handle_out_of_line_bblock, mono_handle_out_of_line_bblock (cfg));
-	mono_cfg_dump_ir (cfg, "handle_out_of_line_bblock");
 
 	/*g_print ("numblocks = %d\n", cfg->num_bblocks);*/
 
 	if (!COMPILE_LLVM (cfg)) {
 		MONO_TIME_TRACK (mono_jit_stats.jit_decompose_long_opts, mono_decompose_long_opts (cfg));
-		mono_cfg_dump_ir (cfg, "decompose_long_opts");
 	}
 
 	/* Should be done before branch opts */
 	if (cfg->opt & (MONO_OPT_CONSPROP | MONO_OPT_COPYPROP)) {
 		MONO_TIME_TRACK (mono_jit_stats.jit_local_cprop, mono_local_cprop (cfg));
-		mono_cfg_dump_ir (cfg, "local_cprop");
 	}
 
 	if (cfg->flags & MONO_CFG_HAS_TYPE_CHECK) {
@@ -3591,7 +3582,6 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 			/* workaround for graph visualization, as it doesn't handle empty basic blocks properly */
 			mono_insert_nop_in_empty_bb (cfg);
 		}
-		mono_cfg_dump_ir (cfg, "decompose_typechecks");
 	}
 
 	/*
@@ -3600,35 +3590,28 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	 */
 	if (cfg->has_emulated_ops) {
 		MONO_TIME_TRACK (mono_jit_stats.jit_local_emulate_ops, mono_local_emulate_ops (cfg));
-		mono_cfg_dump_ir (cfg, "local_emulate_ops");
 	}
 
 	if (cfg->opt & MONO_OPT_BRANCH) {
 		MONO_TIME_TRACK (mono_jit_stats.jit_optimize_branches, mono_optimize_branches (cfg));
-		mono_cfg_dump_ir (cfg, "optimize_branches");
 	}
 
 	/* This must be done _before_ global reg alloc and _after_ decompose */
 	MONO_TIME_TRACK (mono_jit_stats.jit_handle_global_vregs, mono_handle_global_vregs (cfg));
-	mono_cfg_dump_ir (cfg, "handle_global_vregs");
 	if (cfg->opt & MONO_OPT_DEADCE) {
 		MONO_TIME_TRACK (mono_jit_stats.jit_local_deadce, mono_local_deadce (cfg));
-		mono_cfg_dump_ir (cfg, "local_deadce");
 	}
 	if (cfg->opt & MONO_OPT_ALIAS_ANALYSIS) {
 		MONO_TIME_TRACK (mono_jit_stats.jit_local_alias_analysis, mono_local_alias_analysis (cfg));
-		mono_cfg_dump_ir (cfg, "local_alias_analysis");
 	}
 	/* Disable this for LLVM to make the IR easier to handle */
 	if (!COMPILE_LLVM (cfg)) {
 		MONO_TIME_TRACK (mono_jit_stats.jit_if_conversion, mono_if_conversion (cfg));
-		mono_cfg_dump_ir (cfg, "if_conversion");
 	}
 
 	mono_threads_safepoint ();
 
 	MONO_TIME_TRACK (mono_jit_stats.jit_bb_ordering, mono_bb_ordering (cfg));
-	mono_cfg_dump_ir (cfg, "bb_ordering");
 
 	if (((cfg->num_varinfo > 2000) || (cfg->num_bblocks > 1000)) && !cfg->compile_aot) {
 		/* 
@@ -3651,7 +3634,6 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 
 	if (mono_threads_are_safepoints_enabled ()) {
 		MONO_TIME_TRACK (mono_jit_stats.jit_insert_safepoints, insert_safepoints (cfg));
-		mono_cfg_dump_ir (cfg, "insert_safepoints");
 	}
 
 	/* after method_to_ir */
@@ -3682,7 +3664,6 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 		if (!(cfg->comp_done & MONO_COMP_SSA) && !cfg->disable_ssa) {
 #ifndef DISABLE_SSA
 			MONO_TIME_TRACK (mono_jit_stats.jit_ssa_compute, mono_ssa_compute (cfg));
-			mono_cfg_dump_ir (cfg, "ssa_compute");
 #endif
 
 			if (cfg->verbose_level >= 2) {
@@ -3703,7 +3684,6 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 		if (cfg->comp_done & MONO_COMP_SSA && !COMPILE_LLVM (cfg)) {
 #ifndef DISABLE_SSA
 			MONO_TIME_TRACK (mono_jit_stats.jit_ssa_cprop, mono_ssa_cprop (cfg));
-			mono_cfg_dump_ir (cfg, "ssa_cprop");
 #endif
 		}
 	}
@@ -3714,39 +3694,30 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 
 		if (cfg->opt & MONO_OPT_DEADCE) {
 			MONO_TIME_TRACK (mono_jit_stats.jit_ssa_deadce, mono_ssa_deadce (cfg));
-			mono_cfg_dump_ir (cfg, "ssa_deadce");
 		}
 
 		if ((cfg->flags & (MONO_CFG_HAS_LDELEMA|MONO_CFG_HAS_CHECK_THIS)) && (cfg->opt & MONO_OPT_ABCREM)) {
 			MONO_TIME_TRACK (mono_jit_stats.jit_perform_abc_removal, mono_perform_abc_removal (cfg));
-			mono_cfg_dump_ir (cfg, "perform_abc_removal");
 		}
 
 		MONO_TIME_TRACK (mono_jit_stats.jit_ssa_remove, mono_ssa_remove (cfg));
-		mono_cfg_dump_ir (cfg, "ssa_remove");
 		MONO_TIME_TRACK (mono_jit_stats.jit_local_cprop2, mono_local_cprop (cfg));
-		mono_cfg_dump_ir (cfg, "local_cprop2");
 		MONO_TIME_TRACK (mono_jit_stats.jit_handle_global_vregs2, mono_handle_global_vregs (cfg));
-		mono_cfg_dump_ir (cfg, "handle_global_vregs2");
 		if (cfg->opt & MONO_OPT_DEADCE) {
 			MONO_TIME_TRACK (mono_jit_stats.jit_local_deadce2, mono_local_deadce (cfg));
-			mono_cfg_dump_ir (cfg, "local_deadce2");
 		}
 
 		if (cfg->opt & MONO_OPT_BRANCH) {
 			MONO_TIME_TRACK (mono_jit_stats.jit_optimize_branches2, mono_optimize_branches (cfg));
-			mono_cfg_dump_ir (cfg, "optimize_branches2");
 		}
 	}
 #endif
 
 	if (cfg->comp_done & MONO_COMP_SSA && COMPILE_LLVM (cfg)) {
 		mono_ssa_loop_invariant_code_motion (cfg);
-		mono_cfg_dump_ir (cfg, "loop_invariant_code_motion");
 		/* This removes MONO_INST_FAULT flags too so perform it unconditionally */
 		if (cfg->opt & MONO_OPT_ABCREM) {
 			mono_perform_abc_removal (cfg);
-			mono_cfg_dump_ir (cfg, "abc_removal");
 		}
 	}
 
@@ -3767,7 +3738,6 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	MONO_TIME_TRACK (mono_jit_stats.jit_decompose_vtype_opts, mono_decompose_vtype_opts (cfg));
 	if (cfg->flags & MONO_CFG_NEEDS_DECOMPOSE) {
 		MONO_TIME_TRACK (mono_jit_stats.jit_decompose_array_access_opts, mono_decompose_array_access_opts (cfg));
-		mono_cfg_dump_ir (cfg, "decompose_array_access_opts");
 	}
 
 	if (cfg->got_var) {
@@ -3823,7 +3793,6 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 				}
 			}
 			MONO_TIME_TRACK (mono_jit_stats.jit_linear_scan, mono_linear_scan (cfg, vars, regs, &cfg->used_int_regs));
-			mono_cfg_dump_ir (cfg, "linear_scan");
 		}
 	}
 
@@ -3834,7 +3803,6 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	/* variables are allocated after decompose, since decompose could create temps */
 	if (!COMPILE_LLVM (cfg)) {
 		MONO_TIME_TRACK (mono_jit_stats.jit_arch_allocate_vars, mono_arch_allocate_vars (cfg));
-		mono_cfg_dump_ir (cfg, "arch_allocate_vars");
 		if (cfg->exception_type)
 			return cfg;
 	}
@@ -3845,21 +3813,18 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	if (!COMPILE_LLVM (cfg)) {
 		gboolean need_local_opts;
 		MONO_TIME_TRACK (mono_jit_stats.jit_spill_global_vars, mono_spill_global_vars (cfg, &need_local_opts));
-		mono_cfg_dump_ir (cfg, "spill_global_vars");
 
 		if (need_local_opts || cfg->compile_aot) {
 			/* To optimize code created by spill_global_vars */
 			MONO_TIME_TRACK (mono_jit_stats.jit_local_cprop3, mono_local_cprop (cfg));
 			if (cfg->opt & MONO_OPT_DEADCE)
 				MONO_TIME_TRACK (mono_jit_stats.jit_local_deadce3, mono_local_deadce (cfg));
-			mono_cfg_dump_ir (cfg, "needs_local_opts");
 		}
 	}
 
 	mono_insert_branches_between_bblocks (cfg);
 
 	MONO_TIME_TRACK (mono_jit_stats.jit_codegen, mono_codegen (cfg));
-	mono_cfg_dump_ir (cfg, "codegen");
 	if (cfg->exception_type)
 		return cfg;
 
@@ -3879,10 +3844,8 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	MONO_TIME_TRACK (mono_jit_stats.jit_gc_create_gc_map, mini_gc_create_gc_map (cfg));
 	MONO_TIME_TRACK (mono_jit_stats.jit_save_seq_point_info, mono_save_seq_point_info (cfg, cfg->jit_info));
 
-	if (!cfg->compile_aot) {
-		mono_lldb_save_method_info (cfg);
+	if (!cfg->compile_aot)
 		mixed_callstack_plugin_save_method_info (cfg);
-	}
 
 	if (cfg->verbose_level >= 2) {
 		char *id =  mono_method_full_name (cfg->method, TRUE);
@@ -3936,8 +3899,6 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 
 	if (MONO_METHOD_COMPILE_END_ENABLED ())
 		MONO_PROBE_METHOD_COMPILE_END (method, TRUE);
-
-	mono_cfg_dump_close_group (cfg);
 
 	return cfg;
 }
@@ -3997,21 +3958,6 @@ mono_cfg_set_exception_invalid_program (MonoCompile *cfg, char *msg)
 
 #endif /* DISABLE_JIT */
 
-gint64 mono_time_track_start ()
-{
-	return mono_100ns_ticks ();
-}
-
-/*
- * mono_time_track_end:
- *
- *   Uses UnlockedAddDouble () to update \param time.
- */
-void mono_time_track_end (gint64 *time, gint64 start)
-{
-	UnlockedAdd64 (time, mono_100ns_ticks () - start);
-}
-
 /*
  * mono_update_jit_stats:
  *
@@ -4032,89 +3978,6 @@ mono_update_jit_stats (MonoCompile *cfg)
 	mono_jit_stats.code_reallocs += cfg->stat_code_reallocs;
 }
 
-/*
- * mini_get_underlying_type:
- *
- *   Return the type the JIT will use during compilation.
- * Handles: byref, enums, native types, bool/char, ref types, generic sharing.
- * For gsharedvt types, it will return the original VAR/MVAR.
- */
-MonoType*
-mini_get_underlying_type (MonoType *type)
-{
-	return mini_type_get_underlying_type (type);
-}
-
-void
-mini_jit_init (void)
-{
-	mono_os_mutex_init_recursive (&jit_mutex);
-
-#ifndef DISABLE_JIT
-	mono_counters_register ("Try holes memory size", MONO_COUNTER_JIT | MONO_COUNTER_INT, &jinfo_try_holes_size);
-
-	mono_counters_register ("JIT/method_to_ir", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_method_to_ir);
-	mono_counters_register ("JIT/liveness_handle_exception_clauses", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_liveness_handle_exception_clauses);
-	mono_counters_register ("JIT/handle_out_of_line_bblock", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_handle_out_of_line_bblock);
-	mono_counters_register ("JIT/decompose_long_opts", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_decompose_long_opts);
-	mono_counters_register ("JIT/decompose_typechecks", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_decompose_typechecks);
-	mono_counters_register ("JIT/local_cprop", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_local_cprop);
-	mono_counters_register ("JIT/local_emulate_ops", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_local_emulate_ops);
-	mono_counters_register ("JIT/optimize_branches", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_optimize_branches);
-	mono_counters_register ("JIT/handle_global_vregs", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_handle_global_vregs);
-	mono_counters_register ("JIT/local_deadce", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_local_deadce);
-	mono_counters_register ("JIT/local_alias_analysis", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_local_alias_analysis);
-	mono_counters_register ("JIT/if_conversion", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_if_conversion);
-	mono_counters_register ("JIT/bb_ordering", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_bb_ordering);
-	mono_counters_register ("JIT/compile_dominator_info", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_compile_dominator_info);
-	mono_counters_register ("JIT/compute_natural_loops", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_compute_natural_loops);
-	mono_counters_register ("JIT/insert_safepoints", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_insert_safepoints);
-	mono_counters_register ("JIT/ssa_compute", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_ssa_compute);
-	mono_counters_register ("JIT/ssa_cprop", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_ssa_cprop);
-	mono_counters_register ("JIT/ssa_deadce", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_ssa_deadce);
-	mono_counters_register ("JIT/perform_abc_removal", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_perform_abc_removal);
-	mono_counters_register ("JIT/ssa_remove", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_ssa_remove);
-	mono_counters_register ("JIT/local_cprop2", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_local_cprop2);
-	mono_counters_register ("JIT/handle_global_vregs2", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_handle_global_vregs2);
-	mono_counters_register ("JIT/local_deadce2", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_local_deadce2);
-	mono_counters_register ("JIT/optimize_branches2", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_optimize_branches2);
-	mono_counters_register ("JIT/decompose_vtype_opts", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_decompose_vtype_opts);
-	mono_counters_register ("JIT/decompose_array_access_opts", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_decompose_array_access_opts);
-	mono_counters_register ("JIT/liveness_handle_exception_clauses2", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_liveness_handle_exception_clauses2);
-	mono_counters_register ("JIT/analyze_liveness", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_analyze_liveness);
-	mono_counters_register ("JIT/linear_scan", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_linear_scan);
-	mono_counters_register ("JIT/arch_allocate_vars", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_arch_allocate_vars);
-	mono_counters_register ("JIT/spill_global_var", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_spill_global_vars);
-	mono_counters_register ("JIT/local_cprop3", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_local_cprop3);
-	mono_counters_register ("JIT/local_deadce3", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_local_deadce3);
-	mono_counters_register ("JIT/codegen", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_codegen);
-	mono_counters_register ("JIT/create_jit_info", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_create_jit_info);
-	mono_counters_register ("JIT/gc_create_gc_map", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_gc_create_gc_map);
-	mono_counters_register ("JIT/save_seq_point_info", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_save_seq_point_info);
-	mono_counters_register ("Total time spent JITting", MONO_COUNTER_JIT | MONO_COUNTER_LONG | MONO_COUNTER_TIME, &mono_jit_stats.jit_time);
-	mono_counters_register ("Basic blocks", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.basic_blocks);
-	mono_counters_register ("Max basic blocks", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.max_basic_blocks);
-	mono_counters_register ("Allocated vars", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.allocate_var);
-	mono_counters_register ("Code reallocs", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.code_reallocs);
-	mono_counters_register ("Allocated code size", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.allocated_code_size);
-	mono_counters_register ("Allocated seq points size", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.allocated_seq_points_size);
-	mono_counters_register ("Inlineable methods", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.inlineable_methods);
-	mono_counters_register ("Inlined methods", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.inlined_methods);
-	mono_counters_register ("Regvars", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.regvars);
-	mono_counters_register ("Locals stack size", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.locals_stack_size);
-	mono_counters_register ("Method cache lookups", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.methods_lookups);
-	mono_counters_register ("Compiled CIL code size", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.cil_code_size);
-	mono_counters_register ("Native code size", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.native_code_size);
-	mono_counters_register ("Aliases found", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.alias_found);
-	mono_counters_register ("Aliases eliminated", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.alias_removed);
-	mono_counters_register ("Aliased loads eliminated", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.loads_eliminated);
-	mono_counters_register ("Aliased stores eliminated", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.stores_eliminated);
-	mono_counters_register ("Optimized immediate divisions", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.optimized_divisions);
-	current_backend = g_new0 (MonoBackend, 1);
-	init_backend (current_backend);
-#endif
-}
-
 void
 mini_jit_cleanup (void)
 {
@@ -4123,22 +3986,6 @@ mini_jit_cleanup (void)
 	g_free (emul_opcode_opcodes);
 #endif
 }
-
-#if !defined(ENABLE_LLVM_RUNTIME) && !defined(ENABLE_LLVM)
-
-void
-mono_llvm_cpp_throw_exception (void)
-{
-	g_assert_not_reached ();
-}
-
-void
-mono_llvm_cpp_catch_exception (MonoLLVMInvokeCallback cb, gpointer arg, gboolean *out_thrown)
-{
-	g_assert_not_reached ();
-}
-
-#endif
 
 #ifdef DISABLE_JIT
 
@@ -4183,25 +4030,6 @@ gboolean
 mini_class_is_system_array (MonoClass *klass)
 {
 	return m_class_get_parent (klass) == mono_defaults.array_class;
-}
-
-/*
- * mono_target_pagesize:
- *
- *   query pagesize used to determine if an implicit NRE can be used
- */
-int
-mono_target_pagesize (void)
-{
-	/* We could query the system's pagesize via mono_pagesize (), however there
-	 * are pitfalls: sysconf (3) is called on some posix like systems, and per
-	 * POSIX.1-2008 this function doesn't have to be async-safe. Since this
-	 * function can be called from a signal handler, we simplify things by
-	 * using 4k on all targets. Implicit null-checks with an offset larger than
-	 * 4k are _very_ uncommon, so we don't mind emitting an explicit null-check
-	 * for those cases.
-	 */
-	return 4 * 1024;
 }
 
 MonoCPUFeatures

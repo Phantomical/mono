@@ -10,7 +10,7 @@
  * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 
-#include "mini.h"
+#include "compile.h"
 #include "mini-runtime.h"
 #include "ir-emit.h"
 #include "jit-icalls.h"

@@ -10,7 +10,7 @@
  */
 #include <config.h>
 
-#include "mini.h"
+#include "compile.h"
 #include "ir-emit.h"
 
 /* What is this doing here?!?!? */

@@ -57,6 +57,13 @@ typedef struct
 	GHashTable *interp_method_pointer_hash;
 	/* The MonoDomainMethod record of every method this domain has published */
 	gpointer domain_methods;
+	/*
+	 * Populated only by mono/mini/tier0/ (MONO_ENABLE_TIER0_CLASSIC): a
+	 * dynamic method's MonoJitDynamicMethodInfo, and a delegate target's
+	 * code-slot pointer.
+	 */
+	GHashTable *dynamic_code_hash;
+	GHashTable *method_code_hash;
 } MonoJitDomainInfo;
 
 #define domain_jit_info(domain) ((MonoJitDomainInfo*)((domain)->runtime_info))

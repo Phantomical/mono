@@ -23,6 +23,9 @@
 #include "mini-runtime.h"
 #include "llvm-runtime.h"
 #include "trace.h"
+#ifdef MONO_ENABLE_TIER0_CLASSIC
+#include "tier0/tier0.h"
+#endif
 
 MonoCallSpec *mono_jit_trace_calls;
 MonoMethodDesc *mono_inject_async_exc_method;
@@ -63,6 +66,9 @@ void
 mini_jit_init (void)
 {
 	mono_counters_register ("Allocated seq points size", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.allocated_seq_points_size);
+#ifdef MONO_ENABLE_TIER0_CLASSIC
+	mono_tier0_init ();
+#endif
 }
 
 #if !defined(ENABLE_LLVM_RUNTIME) && !defined(ENABLE_LLVM)

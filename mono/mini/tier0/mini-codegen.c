@@ -20,7 +20,7 @@
 #include <mono/metadata/mempool-internals.h>
 #include <mono/utils/mono-math.h>
 
-#include "mini.h"
+#include "compile.h"
 #include "mini-runtime.h"
 #include "trace.h"
 #include "mini-arch.h"

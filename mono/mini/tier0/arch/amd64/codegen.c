@@ -16,7 +16,7 @@
  * Copyright 2011 Xamarin, Inc (http://www.xamarin.com)
  * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
-#include "mini.h"
+#include "../../compile.h"
 #include <string.h>
 #include <math.h>
 #include <assert.h>

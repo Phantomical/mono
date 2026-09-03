@@ -3923,6 +3923,8 @@ mini_free_jit_domain_info (MonoDomain *domain)
 	if (info->agent_info)
 		mini_get_dbg_callbacks ()->free_domain_info (domain);
 	g_hash_table_destroy (info->gsharedvt_arg_tramp_hash);
+	g_hash_table_destroy (info->dynamic_code_hash);
+	g_hash_table_destroy (info->method_code_hash);
 
 	/*
 	 * Before the engine's state for the domain goes: a record names stubs
@@ -4416,6 +4418,7 @@ register_icalls (void)
 
 	/* The stores the LLVM backend emits a direct call to. */
 	register_icall_no_wrapper (mono_gc_wbarrier_generic_store_internal, mono_icall_sig_void_ptr_object);
+	register_icall_no_wrapper (mono_gc_wbarrier_range_copy, mono_icall_sig_void_ptr_ptr_int);
 	register_icall_no_wrapper (mono_gc_wbarrier_value_copy_internal, mono_icall_sig_void_ptr_ptr_int_ptr);
 
 	register_icall (mono_object_castclass_with_cache, mono_icall_sig_object_object_ptr_ptr, FALSE);

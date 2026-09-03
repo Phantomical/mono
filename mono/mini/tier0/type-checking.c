@@ -7,7 +7,7 @@
 
 #ifndef DISABLE_JIT
 
-#include "mini.h"
+#include "compile.h"
 #include "ir-emit.h"
 #include <mono/metadata/abi-details.h>
 #include <mono/metadata/class-abi-details.h>
