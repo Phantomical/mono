@@ -366,8 +366,11 @@ public:
 		// solve_key () below does not repeat that walk once per key it
 		// asks about. A store this walk cannot place is left out on
 		// purpose: walk_block_for_key () reads its absence as the barrier
-		// it is.
+		// it is. A write neither a store nor a placeable address, settled
+		// here too: what it clobbers does not depend on which key is being
+		// solved, so asking once serves every key instead of one each.
 		DenseMap<Instruction *, AddrKey> keys;
+		DenseSet<Instruction *> barriers;
 		SmallVector<AddrKey, 8> loaded_keys;
 		DenseSet<AddrKey> seen_loaded_keys;
 
@@ -384,7 +387,15 @@ public:
 				if (!store->isSimple ())
 					continue;
 				key = normalize_address (store->getPointerOperand (), dl);
+			} else if (auto *call = dyn_cast<CallBase> (&inst)) {
+				if (may_clobber_tracked_memory (*call))
+					barriers.insert (&inst);
+				continue;
 			} else {
+				// A fence, an atomic RMW or cmpxchg, or anything else this
+				// walk does not otherwise recognize as a write.
+				if (inst.mayWriteToMemory ())
+					barriers.insert (&inst);
 				continue;
 			}
 
@@ -408,8 +419,17 @@ public:
 		for (auto it = scc_begin (&f.getEntryBlock ()); it != scc_end (&f.getEntryBlock ()); ++it)
 			sccs.emplace_back (it);
 
-		for (const AddrKey &key : loaded_keys)
-			solve_key (key, keys, sccs);
+		// Reused rather than rebuilt per key: a fresh DenseMap per key costs
+		// more, over as many keys as a large root can have, than the walk
+		// solving each key spends.
+		DenseMap<BasicBlock *, KeyState> block_in;
+		DenseMap<BasicBlock *, KeyState> block_out;
+
+		for (const AddrKey &key : loaded_keys) {
+			block_in.clear ();
+			block_out.clear ();
+			solve_key (key, keys, barriers, sccs, block_in, block_out);
+		}
 	}
 
 	/// Records what \p load reads where \p key names no tracked store: the
@@ -484,7 +504,8 @@ public:
 	/// visited before the point has converged would settle on a state this
 	/// walk has not finished growing.
 	void walk_block_for_key (BasicBlock &block, const AddrKey &key,
-	                         const DenseMap<Instruction *, AddrKey> &keys, KeyState &state,
+	                         const DenseMap<Instruction *, AddrKey> &keys,
+	                         const DenseSet<Instruction *> &barriers, KeyState &state,
 	                         bool settle)
 	{
 		for (Instruction &inst : block) {
@@ -516,15 +537,7 @@ public:
 				continue;
 			}
 
-			if (auto *call = dyn_cast<CallBase> (&inst)) {
-				if (may_clobber_tracked_memory (*call))
-					state.opaque = true;
-				continue;
-			}
-
-			// A fence, an atomic RMW or cmpxchg, or anything else this walk
-			// does not otherwise recognize as a write.
-			if (inst.mayWriteToMemory ())
+			if (barriers.contains (&inst))
 				state.opaque = true;
 		}
 	}
@@ -533,12 +546,15 @@ public:
 	/// at instruction level: a block outside a cycle settles in one pass
 	/// over its predecessors, one inside a cycle by a worklist, so a value
 	/// a loop carries across its back edge still converges.
+	///
+	/// \p block_in and \p block_out arrive empty. The caller clears and
+	/// reuses them for the next key, rather than paying for a fresh pair
+	/// per key.
 	void solve_key (const AddrKey &key, const DenseMap<Instruction *, AddrKey> &keys,
-	                const SmallVectorImpl<SCC> &sccs)
+	                const DenseSet<Instruction *> &barriers, const SmallVectorImpl<SCC> &sccs,
+	                DenseMap<BasicBlock *, KeyState> &block_in,
+	                DenseMap<BasicBlock *, KeyState> &block_out)
 	{
-		DenseMap<BasicBlock *, KeyState> block_in;
-		DenseMap<BasicBlock *, KeyState> block_out;
-
 		block_in.try_emplace (&f.getEntryBlock (),
 		                      KeyState { {}, 0, /*maybe_unwritten=*/true, false });
 
@@ -566,7 +582,7 @@ public:
 					merge_predecessors (*block, in);
 
 				KeyState out = in;
-				walk_block_for_key (*block, key, keys, out, /*settle=*/false);
+				walk_block_for_key (*block, key, keys, barriers, out, /*settle=*/false);
 				block_out.try_emplace (block, std::move (out));
 				continue;
 			}
@@ -590,7 +606,7 @@ public:
 					continue;
 
 				KeyState out = in;
-				walk_block_for_key (*block, key, keys, out, /*settle=*/false);
+				walk_block_for_key (*block, key, keys, barriers, out, /*settle=*/false);
 				block_out.find (block)->second = std::move (out);
 
 				for (BasicBlock *succ : successors (block)) {
@@ -604,7 +620,7 @@ public:
 		// them settles what its own loads of this key read without growing
 		// it any further.
 		for (auto &entry : block_in)
-			walk_block_for_key (*entry.first, key, keys, entry.second, /*settle=*/true);
+			walk_block_for_key (*entry.first, key, keys, barriers, entry.second, /*settle=*/true);
 	}
 
 	bool visitLoadInst (LoadInst &load)
