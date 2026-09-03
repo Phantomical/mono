@@ -612,7 +612,8 @@ TransformData::interp_transform_call (MonoMethod *method, MonoMethod *target_met
 			return TRUE;
 	}
 
-	if (check_visibility && target_method && !mono_method_can_access_method (method, target_method))
+	if (check_visibility && target_method && !mini_assembly_can_skip_verification (method)
+	    && !mono_method_can_access_method (method, target_method))
 		interp_generate_mae_throw (method, target_method);
 
 	/*
@@ -1172,7 +1173,8 @@ interp_field_from_token (MonoMethod *method, guint32 token, MonoClass **klass,
 		return_val_if_nok (error, NULL);
 	}
 
-	if (!method->skip_visibility && !mono_method_can_access_field (method, field)) {
+	if (!method->skip_visibility && !mini_assembly_can_skip_verification (method)
+	    && !mono_method_can_access_field (method, field)) {
 		char *method_fname = mono_method_full_name (method, TRUE);
 		char *field_fname = mono_field_full_name (field);
 		mono_error_set_generic_error (error, "System", "FieldAccessException",

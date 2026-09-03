@@ -3718,7 +3718,8 @@ TransformData::generate_code (MonoMethod *method, MonoMethodHeader *header,
 					}
 				}
 
-				if (!mono_method_can_access_method (method, m))
+				if (!mini_assembly_can_skip_verification (method)
+				    && !mono_method_can_access_method (method, m))
 					interp_generate_mae_throw (method, m);
 
 				/*

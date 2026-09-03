@@ -5,6 +5,7 @@
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/loader.h"
 #include "mono/metadata/metadata-internals.h"
+#include "mono/mini/mini.h"
 #include <llvm/IR/BasicBlock.h>
 
 #include <string>
@@ -168,7 +169,8 @@ MethodLLVMEmitter::unsupported_il (const llvm::Twine &what)
 }
 
 /**
- * Three kinds of methods skip the accessibility check.
+ * Whether this method's call sites and field accesses are held to the CLI's
+ * accessibility rules.
  *
  * A method marked skip_visibility got that permission from whoever emitted it.
  * Reflection.Emit hands it out, and the runtime's own marshalling builders take
@@ -188,7 +190,10 @@ MethodLLVMEmitter::checks_accessibility () const
 
 	MonoImage *image = m_class_get_image (method->klass);
 
-	return image->assembly == nullptr || !image->assembly->corlib_internal;
+	if (image->assembly != nullptr && image->assembly->corlib_internal)
+		return false;
+
+	return !mini_assembly_can_skip_verification (method);
 }
 
 /// Refuse a field this method cannot reach.

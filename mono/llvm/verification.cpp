@@ -16,6 +16,7 @@
 #include "mono/metadata/metadata-internals.h"
 #include "mono/metadata/object-internals.h"
 #include "mono/metadata/verify.h"
+#include "mono/mini/mini.h"
 #include "mono/utils/mono-error-internals.h"
 
 extern "C" {
@@ -37,24 +38,6 @@ verification_subject (MonoMethod *method)
 	while (method->is_inflated)
 		method = ((MonoMethodInflated *) method)->declaring;
 	return method;
-}
-
-/// Whether the SkipVerification attribute on method's assembly lets method
-/// skip verification.
-///
-/// The exclusion stops an assembly put into the GAC from claiming the attribute
-/// and getting its unverifiable IL accepted.
-bool
-assembly_can_skip_verification (MonoMethod *method)
-{
-	MonoAssembly *assembly = m_class_get_image (method->klass)->assembly;
-
-	if (method->wrapper_type != MONO_WRAPPER_NONE
-	    && method->wrapper_type != MONO_WRAPPER_DYNAMIC_METHOD)
-		return false;
-	if (assembly->in_gac || assembly->image == mono_defaults.corlib)
-		return false;
-	return mono_assembly_has_skip_verification (assembly) != FALSE;
 }
 
 void
@@ -120,7 +103,7 @@ verify_method (MonoMethod *method)
 	 * verdicts below are the exception - those bind whatever the trust level.
 	 */
 	bool full_trust = mono_verifier_is_method_full_trust (subject) != FALSE
-	                  || assembly_can_skip_verification (subject);
+	                  || mini_assembly_can_skip_verification (subject) != FALSE;
 
 	/*
 	 * skip_visibility on the method itself, which is what a DynamicMethod

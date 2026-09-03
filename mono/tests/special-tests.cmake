@@ -395,6 +395,30 @@ add_custom_command(
 list(APPEND _all_assemblies "${_bin}/ignoresaccesschecks-test.exe")
 list(APPEND MONO_TESTS_SPECIAL ignoresaccesschecks-test.exe)
 
+# --- SkipVerification --------------------------------------------------------
+# Built the way the IgnoresAccessChecksTo case above is. Both arms come out of
+# one command, because they share the library and a second command would race
+# it. -unsafe is what emits the permission, so the strict arm is the one
+# compiled without it.
+add_custom_command(
+  OUTPUT "${_bin}/skipverification-test.exe" "${_bin}/skipverification-strict-test.exe"
+  COMMAND ${_csc} -d:PERMISSIVE -t:library
+          "-out:${_bin}/skipverification-library.dll" "${_src}/skipverification-library.cs"
+  COMMAND ${_csc_unsafe} -warn:0 -d:WAIVED "-r:${_bin}/skipverification-library.dll"
+          "-out:${_bin}/skipverification-test.exe" "${_src}/skipverification-test.cs"
+  COMMAND ${_csc} -warn:0 "-r:${_bin}/skipverification-library.dll"
+          "-out:${_bin}/skipverification-strict-test.exe" "${_src}/skipverification-test.cs"
+  COMMAND ${_csc} -t:library
+          "-out:${_bin}/skipverification-library.dll" "${_src}/skipverification-library.cs"
+  DEPENDS "${_src}/skipverification-test.cs" "${_src}/skipverification-library.cs"
+          mono-test-toolchain
+  WORKING_DIRECTORY "${_bin}"
+  COMMENT "CSC skipverification-test.exe"
+  VERBATIM)
+list(APPEND _all_assemblies "${_bin}/skipverification-test.exe"
+                            "${_bin}/skipverification-strict-test.exe")
+list(APPEND MONO_TESTS_SPECIAL skipverification-test.exe skipverification-strict-test.exe)
+
 # --- misc --------------------------------------------------------------------
 _mono_special(async-exceptions.exe NO_DEFAULT_REFS SOURCES async-exceptions.cs)
 

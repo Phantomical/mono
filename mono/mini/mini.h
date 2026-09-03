@@ -515,6 +515,7 @@ void        mini_profiler_context_free_buffer (gpointer buffer);
 /* helper methods */
 
 gboolean  mini_should_insert_breakpoint (MonoMethod *method);
+gboolean  mini_assembly_can_skip_verification (MonoMethod *method);
 int mono_target_pagesize (void);
 
 void              mono_trampolines_init (void);

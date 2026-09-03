@@ -922,6 +922,15 @@ mono_runtime_suite(runtime-internalsvisibleto
 mono_runtime_suite(runtime-ignoresaccesschecks
   TESTS ignoresaccesschecks-test.exe)
 
+# The second arm turns tier 0 off so the same accesses reach the compiled
+# engine's checks. A refused access throws on its first call, so it never
+# promotes on its own.
+mono_runtime_suite(runtime-skipverification
+  TESTS skipverification-test.exe skipverification-strict-test.exe)
+mono_runtime_suite(runtime-skipverification-compiled
+  TESTS skipverification-test.exe skipverification-strict-test.exe
+  ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0")
+
 # valid-only, because corlib is not verifiable and never has been: it is full of
 # localloc and native pointers, and Roslyn no longer emits the verifiable
 # encodings of the rest. What the check is worth is that none of it is *invalid*.

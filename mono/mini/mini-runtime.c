@@ -29,6 +29,7 @@
 
 #include <mono/metadata/assembly.h>
 #include <mono/metadata/assembly-internals.h>
+#include <mono/metadata/metadata-internals.h>
 #include <mono/metadata/loader.h>
 #include <mono/metadata/tabledefs.h>
 #include <mono/metadata/class.h>
@@ -4833,6 +4834,29 @@ mini_should_insert_breakpoint (MonoMethod *method)
 		g_warning ("Incorrect value returned from break policy callback");
 		return FALSE;
 	}
+}
+
+/**
+ * Whether method's assembly asked for the SkipVerification permission.
+ *
+ * A C# compiler emits that permission for an assembly built /unsafe, so an
+ * assembly can carry it without naming it in source.
+ */
+gboolean
+mini_assembly_can_skip_verification (MonoMethod *method)
+{
+	MonoAssembly *assembly = m_class_get_image (method->klass)->assembly;
+
+	if (method->wrapper_type != MONO_WRAPPER_NONE && method->wrapper_type != MONO_WRAPPER_DYNAMIC_METHOD)
+		return FALSE;
+	if (assembly == NULL)
+		return FALSE;
+
+	/* Without this, an assembly copied into the GAC would be taken at its word. */
+	if (assembly->in_gac || assembly->image == mono_defaults.corlib)
+		return FALSE;
+
+	return mono_assembly_has_skip_verification (assembly);
 }
 
 // Custom handlers currently only implemented by Windows.
