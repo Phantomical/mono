@@ -894,6 +894,22 @@ collect_objects (gpointer key, gpointer value, gpointer user_data)
 	g_ptr_array_add (arr, key);
 }
 
+/*
+ * Whether o's finalizer has to run after the ordinary ones.
+ *
+ * The same rule sgen_client_object_has_critical_finalizer () applies, which is
+ * what puts an object on SGen's own critical queue.
+ */
+static gboolean
+has_critical_finalizer (MonoObject *o)
+{
+	if (!mono_defaults.critical_finalizer_object)
+		return FALSE;
+
+	return mono_class_has_parent_fast (mono_object_class (o),
+	                                   mono_defaults.critical_finalizer_object);
+}
+
 #endif
 
 /*
@@ -937,10 +953,27 @@ finalize_domain_objects (void)
 		g_hash_table_foreach (domain->finalizable_objects_hash, collect_objects, objs);
 		/* printf ("FINALIZING %d OBJECTS.\n", objs->len); */
 
-		for (i = 0; i < objs->len && !suspend_finalizers; ++i) {
-			MonoObject *o = (MonoObject*)g_ptr_array_index (objs, i);
-			/* FIXME: Avoid finalizing threads, etc */
-			mono_gc_run_finalize (o, 0);
+		/*
+		 * Ordinary finalizers first, then the critical ones. A critical
+		 * finalizer holds the handle an ordinary one reaches through it, so
+		 * running them in the order the hash happens to hand back closes a
+		 * SafeHandle that an ordinary finalizer below it still calls through.
+		 * The exception that raises is unhandled and takes the process with it.
+		 *
+		 * SGen keeps a queue of each and drains them in this order.
+		 * GC_REGISTER_FINALIZER_NO_ORDER is what every object registers under
+		 * here, so nothing on this side has the split until this pass makes it.
+		 */
+		for (int pass = 0; pass < 2 && !suspend_finalizers; ++pass) {
+			for (i = 0; i < objs->len && !suspend_finalizers; ++i) {
+				MonoObject *o = (MonoObject*)g_ptr_array_index (objs, i);
+
+				if (has_critical_finalizer (o) != (pass == 1))
+					continue;
+
+				/* FIXME: Avoid finalizing threads, etc */
+				mono_gc_run_finalize (o, 0);
+			}
 		}
 
 		g_ptr_array_free (objs, TRUE);
