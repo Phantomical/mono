@@ -61,9 +61,15 @@ struct ValueSources {
 		if (other.is_empty ())
 			return false;
 
+		// Over a copy, because \p other can be this same set. uses () looks
+		// both up in one map, and a load whose stored value is that load
+		// settles to one entry. The set holds one value inline, so the second
+		// insert moves it to the heap and leaves the walk on freed memory.
+		llvm::SmallVector<llvm::Value *, 4> reaching (other.sources.begin (),
+		                                              other.sources.end ());
 		bool modified = false;
 
-		for (llvm::Value *source : other.sources) {
+		for (llvm::Value *source : reaching) {
 			llvm::Value *held = transform (source);
 
 			if (held == nullptr)
