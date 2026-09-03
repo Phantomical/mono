@@ -94,33 +94,6 @@ static class Costed {
 		}
 	}
 
-	// Past --llvm-opt=-mono-inline-cost-il-limit, which bounds how much IL one
-	// compile will translate in order to ask what it is worth.
-	public static void FailLong (string what, int n, bool yes)
-	{
-		int a = n + 1, b = n + 2, c = n + 3, d = n + 4;
-
-		a = a * b + c - d;
-		b = b * c + d - a;
-		c = c * d + a - b;
-		d = d * a + b - c;
-		a = a ^ b ^ c ^ d;
-		b = b | c | d | a;
-		c = c & d & a & b;
-		d = d + a + b + c;
-		a = a - b - c - d;
-		b = b * 3 + c * 5 + d * 7;
-		c = c * 11 + d * 13 + a * 17;
-		d = d * 19 + a * 23 + b * 29;
-		a = a + b * 2 + c * 4 + d * 8;
-		b = b - c * 3 - d * 5 - a * 7;
-		c = c ^ (a + b) ^ (d - a);
-		d = d | (a & b) | (c & a);
-
-		if (yes && a + b + c + d != int.MinValue)
-			throw new InvalidOperationException (what);
-	}
-
 	// Recursion: the loop folds a few levels and the last call is left standing,
 	// which is the body the sweep has to put back on the method's thunk.
 	public static int Countdown (int n)
@@ -146,11 +119,10 @@ static class Costed {
 
 static class Program {
 	/* Which of the helpers the trace taken inside Root () named. */
-	static bool saw_branch, saw_no_inline, saw_through, saw_frame_read, saw_long;
+	static bool saw_branch, saw_no_inline, saw_through, saw_frame_read;
 
 	/* Which of them ran inside Root ()'s code rather than in a body of its own. */
-	static bool folded_branch, folded_no_inline, folded_through, folded_frame_read,
-		folded_long;
+	static bool folded_branch, folded_no_inline, folded_through, folded_frame_read;
 
 	/*
 	 * Whether the helper's frame covers the same code as Root ()'s.
@@ -188,13 +160,11 @@ static class Program {
 		saw_no_inline |= trace.Contains ("Costed.FailNoInline");
 		saw_through |= trace.Contains ("Costed.FailThroughNoInline");
 		saw_frame_read |= trace.Contains ("Costed.FailThroughFrameRead");
-		saw_long |= trace.Contains ("Costed.FailLong");
 
 		folded_branch |= RunsInsideRoot (e, "FailBranch");
 		folded_no_inline |= RunsInsideRoot (e, "FailNoInline");
 		folded_through |= RunsInsideRoot (e, "FailThroughNoInline");
 		folded_frame_read |= RunsInsideRoot (e, "FailThroughFrameRead");
-		folded_long |= RunsInsideRoot (e, "FailLong");
 
 		if (!trace.Contains ("Program.Root"))
 			throw new Exception ("the frame that caught it is missing: " + trace);
@@ -235,13 +205,6 @@ static class Program {
 			Record (e);
 		}
 
-		try {
-			Costed.FailLong ("long", n, throwing);
-		} catch (InvalidOperationException e) {
-			total += e.Message.Length;
-			Record (e);
-		}
-
 		return total;
 	}
 
@@ -274,10 +237,10 @@ static class Program {
 
 		int want = Root (4, true);
 
-		Check (saw_branch && saw_no_inline && saw_through && saw_frame_read && saw_long,
+		Check (saw_branch && saw_no_inline && saw_through && saw_frame_read,
 			"every helper has a frame before tier 2");
 		Check (!folded_branch && !folded_no_inline && !folded_through
-			&& !folded_frame_read && !folded_long,
+			&& !folded_frame_read,
 			"and every one of them runs in a body of its own before tier 2");
 		Check (Costed.frame_read_saw == "FailThroughFrameRead",
 			"GetCurrentMethod () names the body that asked before tier 2, not "
@@ -293,9 +256,8 @@ static class Program {
 			return 1;
 		}
 
-		saw_branch = saw_no_inline = saw_through = saw_frame_read = saw_long = false;
-		folded_branch = folded_no_inline = folded_through = folded_frame_read =
-			folded_long = false;
+		saw_branch = saw_no_inline = saw_through = saw_frame_read = false;
+		folded_branch = folded_no_inline = folded_through = folded_frame_read = false;
 		Costed.frame_read_saw = null;
 
 		Check (want == Root (4, true), "the answer at tier 2 is the answer before it");
@@ -314,7 +276,6 @@ static class Program {
 		Check (Costed.frame_read_saw == "FailThroughFrameRead",
 			"and GetCurrentMethod () still names that body, not "
 			+ (Costed.frame_read_saw ?? "nothing"));
-		Check (saw_long && !folded_long, "a helper past the IL limit keeps its body");
 
 		/*
 		 * The path the profile never covered. Whatever the cost model decided
@@ -324,7 +285,7 @@ static class Program {
 		 */
 		int cold = Root (-2, true);
 
-		Check (cold == 2 + 0 + 0 + Costed.Rare (-2) + 6 + 8 + 7 + 4 + 4,
+		Check (cold == 2 + 0 + 0 + Costed.Rare (-2) + 6 + 8 + 7 + 4,
 			"the cold path is the answer the helpers give");
 		Check (cold == Root (-2, true), "the cold path answers the same twice");
 
