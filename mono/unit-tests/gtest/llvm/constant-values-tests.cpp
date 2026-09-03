@@ -884,9 +884,9 @@ merge:
 	EXPECT_EQ (m.reached (), (std::vector<std::string> { "%a", "%b" }));
 }
 
-/// Nothing bounds the set, so a wide merge keeps every value it is reached by
-/// and stays complete.
-TEST (ConstantValuesTest, AWideMergeKeepsEveryValue)
+/// A merge wider than `max_sources` gives up rather than keeping every value it
+/// is reached by. The set is emptied, so a rule folding over it answers nothing.
+TEST (ConstantValuesTest, AWideMergeGivesUp)
 {
 	Settled m (R"(
 define i64 @caller(i1 %c, ptr %p, i64 %n) {
@@ -927,8 +927,8 @@ merge:
 )");
 
 	EXPECT_EQ (m.answer (), "-");
-	EXPECT_TRUE (m.complete ());
-	EXPECT_EQ (m.sources ().sources.size (), 10u);
+	EXPECT_TRUE (m.sources ().is_widened ());
+	EXPECT_TRUE (m.reached ().empty ());
 }
 
 } // namespace

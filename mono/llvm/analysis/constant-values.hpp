@@ -27,8 +27,18 @@ class ConstantValuesSolver;
 /// The values that can reach one value.
 ///
 /// A set holds the value itself where the walk did not settle all of its paths.
+///
+/// Past `max_sources` the walk gives up and empties the set. Every rule reading
+/// one needs its sources to agree, and a value this many reach rarely has them
+/// agree. Dropping only the ones past the limit would be wrong: a rule folding
+/// over what was left would find the agreement the dropped source denies.
+///
+/// Giving up latches, so the state moves one way and the walk settles.
 struct ValueSources {
-	llvm::SmallPtrSet<llvm::Value *, 1> sources;
+	llvm::SmallPtrSet<llvm::Value *, 4> sources;
+
+	/// Sources past which the walk gives up.
+	static constexpr unsigned max_sources = 4;
 
 	ValueSources () = default;
 
@@ -36,19 +46,44 @@ struct ValueSources {
 
 	bool is_empty () const { return sources.empty (); }
 
+	/// Whether the walk gave up on the owner rather than name what reaches it.
+	///
+	/// The set is empty either way, so a rule folding over it needs no such
+	/// question. This is what a test reads to tell the two apart.
+	bool is_widened () const { return widened; }
+
 	/// Insert a new value into the set.
 	///
 	/// \returns true if the value was not already contained in the set
-	bool insert (llvm::Value *value) { return sources.insert (value).second; }
+	bool insert (llvm::Value *value)
+	{
+		if (widened || !sources.insert (value).second)
+			return false;
+
+		widen_past_limit ();
+		return true;
+	}
+
 	bool insert (const ValueSources &other)
 	{
-		if (this == &other || other.is_empty ())
+		if (widened || this == &other)
+			return false;
+
+		if (other.widened)
+			return widen ();
+
+		if (other.is_empty ())
 			return false;
 
 		std::size_t isz = sources.size ();
 
 		sources.insert_range (other.sources);
-		return isz != sources.size ();
+
+		if (isz == sources.size ())
+			return false;
+
+		widen_past_limit ();
+		return true;
 	}
 
 	/// The same, with \p transform applied to each of \p other's sources.
@@ -58,6 +93,12 @@ struct ValueSources {
 	template<typename F>
 	bool insert (const ValueSources &other, llvm::Value *owner, F transform)
 	{
+		if (widened)
+			return false;
+
+		if (other.widened)
+			return widen ();
+
 		if (other.is_empty ())
 			return false;
 
@@ -74,8 +115,31 @@ struct ValueSources {
 			modified |= sources.insert (held).second;
 		}
 
+		if (modified)
+			widen_past_limit ();
+
 		return modified;
 	}
+
+private:
+	bool widen ()
+	{
+		if (widened)
+			return false;
+
+		widened = true;
+		sources.clear ();
+		return true;
+	}
+
+	void widen_past_limit ()
+	{
+		if (sources.size () > max_sources)
+			widen ();
+	}
+
+	/// Set once the walk gave up, so a later insert does not reopen the set.
+	bool widened = false;
 };
 
 /// Contains known constants for all values in the current function.
