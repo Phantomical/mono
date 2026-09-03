@@ -87,6 +87,16 @@ option(MONO_ENABLE_CRASH_REPORTING "Build the structured crash reporter"
        ${_mono_crash_reporting_default})
 option(MONO_CRASH_PRIVACY         "Scrub private data from crash dumps"     ON)
 
+# Which linker every link runs through, as -fuse-ld=<name>.  Empty leaves the
+# toolchain default.  MonoCompilerFlags.cmake rejects a name the toolchain
+# cannot link through, rather than leaving it to fail at the first link.
+#
+# lld is worth naming for a link that is large for any reason: a player build's
+# is over a gigabyte of LLVM archive, which GNU ld reads into memory whole.
+set(MONO_USE_LINKER "" CACHE STRING
+    "Linker to link through (lld, mold, gold, bfd); empty leaves the toolchain default")
+set_property(CACHE MONO_USE_LINKER PROPERTY STRINGS "" "lld" "mold" "gold" "bfd")
+
 # Ninja runs a link per core, and a player build's links each want several GB
 # because of the LLVM archive in them.  Lower this where they do not all fit.
 include(ProcessorCount)

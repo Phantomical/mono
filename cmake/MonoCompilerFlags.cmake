@@ -255,6 +255,25 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   endif()
 endif()
 
+if(MONO_USE_LINKER)
+  if(MSVC)
+    message(FATAL_ERROR "MONO_USE_LINKER has no link.exe spelling")
+  endif()
+
+  # Named per linker, so changing MONO_USE_LINKER re-probes rather than reusing
+  # the answer for the previous one.
+  include(CheckLinkerFlag)
+  set(_linker_probe MONO_LINKER_${MONO_USE_LINKER}_WORKS)
+  check_linker_flag(C "-fuse-ld=${MONO_USE_LINKER}" ${_linker_probe})
+  if(NOT ${_linker_probe})
+    message(FATAL_ERROR
+      "this toolchain cannot link through ${MONO_USE_LINKER}; install it "
+      "(ld.${MONO_USE_LINKER} has to be on PATH) or name another one")
+  endif()
+
+  add_link_options("-fuse-ld=${MONO_USE_LINKER}")
+endif()
+
 if(MSVC)
   # /DEBUG so the PDBs the compile wrote reach the image, and /OPT:REF,ICF
   # back, which naming /DEBUG otherwise turns off.

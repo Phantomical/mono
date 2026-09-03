@@ -49,16 +49,6 @@ if(MONO_UNITY_BUILD)
     separate_arguments(_llvm_system_libs NATIVE_COMMAND "${_llvm_system_libs}")
     set(_llvm_libs "${MONO_LLVM_STATIC}" ${_llvm_system_libs})
     get_filename_component(_llvm_archives "${MONO_LLVM_STATIC}" NAME)
-
-    # This archive is over a gigabyte with debug info, and GNU ld wants it in
-    # memory all at once.  lld reads it in a fraction of the time and the space.
-    find_program(MONO_LLD NAMES ld.lld)
-    if(MONO_LLD)
-      add_link_options(-fuse-ld=lld)
-    else()
-      message(WARNING "no ld.lld; linking ${MONO_LLVM_STATIC} with the default "
-                      "linker needs several GB per link")
-    endif()
   elseif(TARGET LLVMCore)
     llvm_map_components_to_libnames(_llvm_libs ${_llvm_components})
     foreach(_lib IN LISTS _llvm_libs)
