@@ -20,6 +20,12 @@ typedef struct _MonoMethod MonoMethod;
 /* Fills in the backend description that every compile reads. */
 void mono_tier0_init (void);
 
+/// Registers the classic compiler's opcode emulation icalls.
+///
+/// Call after mono_create_icall_signatures (): before that runs, the icall
+/// signatures this uses still hold a raw type count, not a parameter count.
+void mono_tier0_register_opcode_emulations (void);
+
 /// Compiles \p method with the classic compiler, for \p domain.
 ///
 /// The jit info is in \p domain's table already when this returns, so the

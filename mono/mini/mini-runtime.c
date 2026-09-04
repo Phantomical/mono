@@ -108,6 +108,9 @@
 #include "../llvm/debugging/perf/perf.h"
 #include "mono/metadata/icall-signatures.h"
 #include "mono/utils/mono-tls-inline.h"
+#ifdef MONO_ENABLE_TIER0_CLASSIC
+#include "tier0/tier0.h"
+#endif
 
 static guint32 default_opt = 0;
 static gboolean default_opt_set = FALSE;
@@ -4312,6 +4315,9 @@ register_icalls (void)
 				mono_runtime_cleanup_handlers);
 	mono_domain_method_register_icalls ();
 	mono_llvm_jit_register_icalls ();
+#ifdef MONO_ENABLE_TIER0_CLASSIC
+	mono_tier0_register_opcode_emulations ();
+#endif
 
 #if defined(HOST_ANDROID) || defined(TARGET_ANDROID)
 	mono_add_internal_call_internal ("System.Diagnostics.Debugger::Mono_UnhandledException_internal",
