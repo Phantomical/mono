@@ -212,7 +212,7 @@ mini_jit_info_is_gsharedvt (MonoJitInfo *ji)
  * @compiled_method:
  * @add_unbox_tramp: adds an unboxing trampoline
  *
- * Add gsharedvt_in/unbox trampolines to M/COMPILED_METHOD if needed.
+ * Add gsharedvt_in/unbox/static-rgctx trampolines to M/COMPILED_METHOD if needed.
  *
  * Returns the trampoline address, or COMPILED_METHOD if no trampoline
  * is needed.
@@ -293,6 +293,11 @@ mini_add_method_trampoline (MonoMethod *m, gpointer compiled_method, gboolean ad
 		if (mono_llvm_only)
 			g_assert_not_reached ();
 		//printf ("IN: %s\n", mono_method_full_name (m, TRUE));
+	} else if (mono_method_needs_static_rgctx_invoke (m, TRUE)) {
+		// ADDR reaches its caller as a bare function pointer, with no call
+		// site to load the rgctx register the compiled body reads on entry.
+		// Wrap it in a trampoline that loads it instead.
+		addr = mono_create_ftnptr_arg_trampoline (mini_method_get_rgctx (m), addr);
 	}
 
 	return addr;

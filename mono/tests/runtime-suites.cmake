@@ -647,6 +647,17 @@ mono_runtime_suite(runtime-tier0-classic-gsharedvt
                    TESTS tier0-classic-gsharedvt.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=GsharedShare")
 
+# StaticRgctxBox<T>'s cctor, which class init runs, and
+# StaticRgctxSharedStatic<T>, which MethodInfo.Invoke enters for the first
+# time: both static and shared, and neither reached through an ordinary call
+# site that would prime the rgctx register their compiled body reads on
+# entry.
+mono_runtime_suite(runtime-tier0-classic-static-rgctx-interp
+                   TESTS tier0-classic-static-rgctx.exe)
+mono_runtime_suite(runtime-tier0-classic-static-rgctx
+                   TESTS tier0-classic-static-rgctx.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=StaticRgctx")
+
 # The tier-2 cost model. Its root has to gather counts at tier 1 and then be
 # compiled at tier 2 once, on the thread that asks - so self-promotion is turned
 # off and the test drives the compile itself.
