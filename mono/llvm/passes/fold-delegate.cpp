@@ -606,20 +606,18 @@ delegate_target_at (Value *receiver, const ConstantValues &values)
 	return answer;
 }
 
-PreservedAnalyses
-FoldDelegateInvokesPass::run (Function &f, FunctionAnalysisManager &fam)
+bool
+fold_delegate_invokes (Function &f, BlockFrequencyInfo &counts, const ConstantValues &values)
 {
 	if (!can_name_methods ())
-		return PreservedAnalyses::all ();
+		return false;
 
 	SmallVector<CallBase *, 8> sites = invoke_sites (f);
 
 	if (sites.empty ())
-		return PreservedAnalyses::all ();
+		return false;
 
 	const CompileState &compile = current_compile ();
-	BlockFrequencyInfo &counts = fam.getResult<BlockFrequencyAnalysis> (f);
-	const ConstantValues &values = fam.getResult<MonoMemoryValues> (f);
 
 	/// A site to rewrite, with the weights its guard will carry. Null weights
 	/// are a settled target, which is entered without one.
@@ -678,7 +676,17 @@ FoldDelegateInvokesPass::run (Function &f, FunctionAnalysisManager &fam)
 		changed = true;
 	}
 
-	return changed ? PreservedAnalyses::none () : PreservedAnalyses::all ();
+	return changed;
+}
+
+PreservedAnalyses
+FoldDelegateInvokesPass::run (Function &f, FunctionAnalysisManager &fam)
+{
+	BlockFrequencyInfo &counts = fam.getResult<BlockFrequencyAnalysis> (f);
+	const ConstantValues &values = fam.getResult<MonoMemoryValues> (f);
+
+	return fold_delegate_invokes (f, counts, values) ? PreservedAnalyses::none ()
+	                                                 : PreservedAnalyses::all ();
 }
 
 } // namespace mono

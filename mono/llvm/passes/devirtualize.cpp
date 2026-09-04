@@ -761,8 +761,8 @@ guard_dispatch (const Guardable &at, Constant *vtable, Function *entry)
 
 } // namespace
 
-PreservedAnalyses
-GuardDispatchPass::run (Function &f, FunctionAnalysisManager &fam)
+bool
+guard_dispatch_sites (Function &f, BlockFrequencyInfo &counts, const ConstantValues &values)
 {
 	const CompileState &compile = current_compile ();
 
@@ -770,15 +770,13 @@ GuardDispatchPass::run (Function &f, FunctionAnalysisManager &fam)
 	// reads is a symbol resolved against this compile's domain.
 	if (compile.domain == nullptr || !compile.publish || !compile.vtable_of
 	    || !guard_array_dispatch ())
-		return PreservedAnalyses::all ();
+		return false;
 
 	if (builtin_sites (f, vtable_func_name).empty ()
 	    && builtin_sites (f, imt_func_name).empty ()
 	    && builtin_sites (f, vtable_gfunc_name).empty ())
-		return PreservedAnalyses::all ();
+		return false;
 
-	BlockFrequencyInfo &counts = fam.getResult<BlockFrequencyAnalysis> (f);
-	const ConstantValues &values = fam.getResult<MonoMemoryValues> (f);
 	SmallVector<Guardable, 4> pending;
 
 	// Every weight is read before the first split, because a block this pass
@@ -807,7 +805,17 @@ GuardDispatchPass::run (Function &f, FunctionAnalysisManager &fam)
 		changed = true;
 	}
 
-	return changed ? PreservedAnalyses::none () : PreservedAnalyses::all ();
+	return changed;
+}
+
+PreservedAnalyses
+GuardDispatchPass::run (Function &f, FunctionAnalysisManager &fam)
+{
+	BlockFrequencyInfo &counts = fam.getResult<BlockFrequencyAnalysis> (f);
+	const ConstantValues &values = fam.getResult<MonoMemoryValues> (f);
+
+	return guard_dispatch_sites (f, counts, values) ? PreservedAnalyses::none ()
+	                                                : PreservedAnalyses::all ();
 }
 
 } // namespace mono

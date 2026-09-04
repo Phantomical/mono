@@ -22,6 +22,7 @@
 #include <cstdint>
 
 namespace llvm {
+class BlockFrequencyInfo;
 class Function;
 }
 
@@ -63,6 +64,17 @@ bool fold_dispatch_sites (llvm::Function &f, llvm::FunctionAnalysisManager &fam)
 /// inliner's rounds, because a folded body brings dispatches on the caller's
 /// own array with it, and it marks each dispatch it has taken so that a later
 /// run leaves the arm the compare did not pick alone.
+///
+/// \p counts and \p values are read rather than fetched, so a caller running
+/// this beside another pass that reads the same two can solve them once.
+/// Says whether it changed anything.
+bool guard_dispatch_sites (llvm::Function &f, llvm::BlockFrequencyInfo &counts,
+                           const ConstantValues &values);
+
+/// GuardDispatchPass on its own: fetches \p counts and \p values through
+/// \p fam and calls guard_dispatch_sites (). FoldDelegateAndGuardDispatchPass
+/// (fold-delegate-and-guard-dispatch.hpp) is what the pipeline runs instead,
+/// because it never runs this without FoldDelegateInvokesPass beside it.
 class GuardDispatchPass : public llvm::PassInfoMixin<GuardDispatchPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);

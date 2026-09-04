@@ -20,6 +20,7 @@
 #include <llvm/IR/PassManager.h>
 
 namespace llvm {
+class BlockFrequencyInfo;
 class CallBase;
 class Function;
 class LoadInst;
@@ -94,6 +95,18 @@ bool reads_callee_off_delegate (const llvm::CallBase &site);
 /// only when its batch holds one method - so at tier 1 whether a site folds
 /// turns on how many methods promoted together rather than on the IR, and a
 /// tier 2 that folded where tier 1 could not loses the counts.
+///
+/// \p counts and \p values are read rather than fetched, so a caller running
+/// this beside another pass that reads the same two can solve them once.
+/// Says whether it changed anything.
+bool fold_delegate_invokes (llvm::Function &f, llvm::BlockFrequencyInfo &counts,
+                            const ConstantValues &values);
+
+/// FoldDelegateInvokesPass on its own: fetches \p counts and \p values
+/// through \p fam and calls fold_delegate_invokes ().
+/// FoldDelegateAndGuardDispatchPass (fold-delegate-and-guard-dispatch.hpp) is
+/// what the pipeline runs instead, because it never runs this without
+/// GuardDispatchPass beside it.
 class FoldDelegateInvokesPass : public llvm::PassInfoMixin<FoldDelegateInvokesPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);

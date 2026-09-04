@@ -10,9 +10,8 @@
 #include "passes/class-init-warm.hpp"
 #include "passes/static-const-fold.hpp"
 #include "passes/dead-alloc.hpp"
-#include "passes/devirtualize.hpp"
 #include "passes/dump-ir.hpp"
-#include "passes/fold-delegate.hpp"
+#include "passes/fold-delegate-and-guard-dispatch.hpp"
 #include "passes/fold-empty-finally.hpp"
 #include "passes/inline-copies.hpp"
 #include "passes/lower-keepalive.hpp"
@@ -252,6 +251,15 @@ MonoPipelineTuningOptions::forTier1 ()
 	options.LoopVectorization = false;
 	options.SLPVectorization = false;
 
+	// Off, against LLVM's own default: it blanket-clears every function
+	// analysis after each function-pass adaptor regardless of what the
+	// adaptor's own pipeline actually preserved. That caution is for a
+	// long-lived module; this one is thrown away whole once the compile
+	// finishes (Tier::forget_analyses ()), and off is what lets an
+	// analysis such as MemorySSA survive from one pass to the next
+	// instead of being rebuilt for it.
+	options.EagerlyInvalidateAnalyses = false;
+
 	return options;
 }
 
@@ -268,6 +276,9 @@ MonoPipelineTuningOptions::forTier2 ()
 
 	// leaving this as true causes link errors
 	options.CallGraphProfile = false;
+
+	// The same reason forTier1 () turns this off.
+	options.EagerlyInvalidateAnalyses = false;
 
 	return options;
 }
@@ -646,22 +657,19 @@ MonoPassBuilder::buildTier2Pipeline ()
 	 * or a dispatch, which it can do nothing with.
 	 */
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
-		mono::FoldDelegateInvokesPass ()));
-	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
-		mono::GuardDispatchPass ()));
+		mono::FoldDelegateAndGuardDispatchPass ()));
 
 	/*
-	 * Both passes run again between the inliner's rounds. Most of what they
+	 * Both folds run again between the inliner's rounds. Most of what they
 	 * find there is not in the caller's own code: it arrives with a fold.
 	 * An inlined `MoveNext` or `get_Current` carries its own delegate calls and
-	 * array dispatches into the caller. Neither pass reached those sites before
+	 * array dispatches into the caller. Neither reached those sites before
 	 * the inline happened. The round after each pass then reads what it named
 	 * as an ordinary call site.
 	 */
 	llvm::FunctionPassManager between;
 
-	between.addPass (mono::FoldDelegateInvokesPass ());
-	between.addPass (mono::GuardDispatchPass ());
+	between.addPass (mono::FoldDelegateAndGuardDispatchPass ());
 	between.addPass (buildTier2FunctionSimplificationPipeline ());
 
 	MPM.addPass (mono::TopDownInlinerPass (*TM, buildTier2MaterializePipeline (),
