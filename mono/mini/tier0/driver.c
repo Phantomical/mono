@@ -4285,11 +4285,27 @@ mono_tier0_compile (MonoMethod *method, MonoDomain *domain, gpointer *out_code,
 {
 	MonoCompile *cfg;
 	MonoException *ex = NULL;
+	JitFlags flags = JIT_FLAG_RUN_CCTORS;
 
 	error_init (error);
 
+	/*
+	 * A call site shared over reference types resolves its callee straight to
+	 * that callee's own shared form (method-to-ir.c's check_method_sharing ()),
+	 * because two reference-shared bodies need no rgctx between them - a
+	 * reference is one pointer whatever it points at. Such a method arrives
+	 * here still open (mono_method_check_context_used () != 0), and
+	 * mini_method_compile ()'s own try_generic_shared answers FALSE for it
+	 * unprompted ("a shared method is not sharable again"), so this is the one
+	 * place left to say so instead. mono::shared_form () in
+	 * mono/llvm/runtime/backend.cpp answers the same question the same way for
+	 * the tier-1/tier-2 front end's own use of this method.
+	 */
+	if (mono_method_check_context_used (method))
+		flags |= JIT_FLAG_METHOD_IS_GSHARED;
+
 	cfg = mini_method_compile (method, MONO_OPT_FLOAT32 | MONO_OPT_GSHARED, domain,
-	                           JIT_FLAG_RUN_CCTORS, 0, -1);
+	                           flags, 0, -1);
 
 	switch (cfg->exception_type) {
 	case MONO_EXCEPTION_NONE:

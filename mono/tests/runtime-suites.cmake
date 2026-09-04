@@ -638,6 +638,15 @@ mono_runtime_suite(runtime-tier0-classic
                    TESTS tier0-classic.exe tier0-classic-fpconv.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=ClassicExercise")
 
+# GsharedShareCaller<T> and the reference-sharable generic callee it calls
+# using its own still-open T, GsharedShareCallee<T> - the shape that crashed
+# classic tier0's "compile everything" mode on Unsafe.AsPointer<T>.
+mono_runtime_suite(runtime-tier0-classic-gsharedvt-interp
+                   TESTS tier0-classic-gsharedvt.exe)
+mono_runtime_suite(runtime-tier0-classic-gsharedvt
+                   TESTS tier0-classic-gsharedvt.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=GsharedShare")
+
 # The tier-2 cost model. Its root has to gather counts at tier 1 and then be
 # compiled at tier 2 once, on the thread that asks - so self-promotion is turned
 # off and the test drives the compile itself.
