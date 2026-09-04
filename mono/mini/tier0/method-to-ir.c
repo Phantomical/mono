@@ -7906,20 +7906,11 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 			inline_costs += CALL_COST * MIN(10, num_calls++);
 
 			/*
-			 * Synchronized wrappers.
-			 * Its hard to determine where to replace a method with its synchronized
-			 * wrapper without causing an infinite recursion. The current solution is
-			 * to add the synchronized wrapper in the trampolines, and to
-			 * change the called method to a dummy wrapper, and resolve that wrapper
-			 * to the real method in mono_jit_compile_method ().
+			 * A synchronized wrapper's call to the method it locks names that
+			 * method directly, with no dummy marker standing in for it.
+			 * mono_llvm_jit_stub_for () resolves a callee by identity alone, so
+			 * nothing here re-wraps it back into this method and recurses.
 			 */
-			if (cfg->method->wrapper_type == MONO_WRAPPER_SYNCHRONIZED) {
-				MonoMethod *orig = mono_marshal_method_from_wrapper (cfg->method);
-				if (cmethod == orig || (cmethod->is_inflated && mono_method_get_declaring_generic_method (cmethod) == orig)) {
-					// FIXME? Does this write to cmethod impact tailcall_supported? Probably not.
-					cmethod = mono_marshal_get_synchronized_inner_wrapper (cmethod);
-				}
-			}
 
 			/*
 			 * Making generic calls out of gsharedvt methods.
