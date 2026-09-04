@@ -4303,17 +4303,27 @@ mono_tier0_compile (MonoMethod *method, MonoDomain *domain, gpointer *out_code,
 	mono_tier0_arm_counter (method, domain);
 
 	/*
-	 * A call site shared over reference types resolves its callee straight to
-	 * that callee's own shared form (method-to-ir.c's check_method_sharing ()),
-	 * because two reference-shared bodies need no rgctx between them - a
-	 * reference is one pointer whatever it points at. Such a method arrives
-	 * here still open (mono_method_check_context_used () != 0), and
-	 * mini_method_compile ()'s own try_generic_shared answers FALSE for it
-	 * unprompted ("a shared method is not sharable again"), so this is the one
-	 * place left to say so instead. mono::shared_form () in
-	 * mono/llvm/runtime/backend.cpp answers the same question the same way for
-	 * the tier-1/tier-2 front end's own use of this method.
+	 * A call site resolves its callee against the caller's own context, so
+	 * method can arrive open with a type variable that names an enclosing
+	 * generic method's own parameter rather than one of its own class's -
+	 * an instance method whose declaring class was instantiated with that
+	 * outer parameter, for one. mono_method_check_context_used () cannot
+	 * tell that shape from method already being at its own class's shared
+	 * form, because both read as open. Reducing method and comparing
+	 * identity is what tells them apart. mini_method_compile ()'s own
+	 * try_generic_shared answers FALSE for an already-open method
+	 * unprompted ("a shared method is not sharable again"), so the
+	 * reduction happens here.
 	 */
+	if (mono_method_is_generic_sharable_full (method, TRUE, TRUE, FALSE)) {
+		ERROR_DECL (share_error);
+		MonoMethod *shared = mini_get_shared_method_full (method, SHARE_MODE_NONE, share_error);
+
+		mono_error_cleanup (share_error);
+		if (shared)
+			method = shared;
+	}
+
 	if (mono_method_check_context_used (method))
 		flags |= JIT_FLAG_METHOD_IS_GSHARED;
 
