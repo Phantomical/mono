@@ -60,6 +60,7 @@ public:
 	            const llvm::InlineCost &cost, uint64_t count) override;
 	void declined (llvm::Function &caller, llvm::Function &callee,
 	               const llvm::InlineCost &cost, uint64_t count) override;
+	bool exhausted () const override;
 	unsigned depth_limit () const override;
 	unsigned round_limit () const override;
 

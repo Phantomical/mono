@@ -30,6 +30,12 @@ using namespace llvm;
 
 namespace mono {
 
+bool
+ProfileInliner::exhausted () const
+{
+	return scope_.budget.costed == 0 || scope_.budget.costed_bytes == 0;
+}
+
 unsigned
 ProfileInliner::depth_limit () const
 {

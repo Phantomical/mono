@@ -91,6 +91,10 @@ public:
 	virtual void declined (llvm::Function &caller, llvm::Function &callee,
 	                       const llvm::InlineCost &cost, uint64_t count) = 0;
 
+	/// Whether the engine has spent everything it will ever fold into this
+	/// root, so every remaining site can be treated as already declined.
+	virtual bool exhausted () const = 0;
+
 	/// How many folds deep past the root a chain can go. Without a limit a call
 	/// graph with a cycle in it never runs out of sites.
 	virtual unsigned depth_limit () const = 0;

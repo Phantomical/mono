@@ -427,6 +427,16 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 		std::vector<Accepted> accepted;
 
 		for (unsigned round = candidates->round_limit (); round > 0; --round) {
+			// The last round's own simplify already ran, so every site
+			// read_sites () is about to find below is ranked against what it
+			// left standing. A root that is already out of budget declines
+			// each of those the same way. Checking here is what spares such
+			// a root the walk, a BFI query per site, and the round's own
+			// re-simplify at the end - paid otherwise whether or not
+			// anything left can fold.
+			if (candidates->exhausted ())
+				break;
+
 			accepted.clear ();
 			queue.clear ();
 			read_sites ();
