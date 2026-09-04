@@ -1071,6 +1071,31 @@ MonoBackend::answered_by_sharing (llvm::Expected<Compiled> &result)
 	return (bool) result || !result.errorIsA<SharingRefusal> ();
 }
 
+// Everything a compile does past this point is the same code for both tiers,
+// so a profiler's own call stack cannot otherwise tell a tier-1 sample from a
+// tier-2 one. noinline keeps each a frame of its own. The store below keeps
+// the two functions from reducing to one under identical-code folding, which
+// this build's -Os invites and noinline alone does not stop. It has to be
+// volatile: an ordinary store to a variable nothing reads is dead code, and
+// the two functions become identical again the moment it is optimized away.
+static volatile int tier_marker;
+
+MONO_NEVER_INLINE static std::vector<BatchResult>
+compile_tier1 (llvm::ArrayRef<const TranslationTarget *> targets,
+               llvm::ArrayRef<MonoMethod *> methods)
+{
+	tier_marker = 1;
+	return translate_and_compile_batch (targets, methods);
+}
+
+MONO_NEVER_INLINE static std::vector<BatchResult>
+compile_tier2 (llvm::ArrayRef<const TranslationTarget *> targets,
+               llvm::ArrayRef<MonoMethod *> methods)
+{
+	tier_marker = 2;
+	return translate_and_compile_batch (targets, methods);
+}
+
 std::vector<llvm::Expected<MonoBackend::Compiled>>
 MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMethod *> dms,
                              MonoTier tier, bool for_sharing)
@@ -1255,7 +1280,8 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 	std::vector<BatchResult> results = [&] {
 		timing::Scope timed (timing::Phase::compile);
 
-		return translate_and_compile_batch (handles, methods);
+		return pipeline == JitTier::tier2 ? compile_tier2 (handles, methods)
+		                                  : compile_tier1 (handles, methods);
 	}();
 
 	// Every member that published took its pieces into sink rather than
