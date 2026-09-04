@@ -121,6 +121,13 @@ public:
 	/// for as the next one. Zero means it never promotes.
 	std::atomic<int32_t> tier_calls{0};
 
+	/// Classic tier0's own live count of what remains before it asks for the
+	/// next tier: a call, or a loop's own back edge. Armed from tier_calls,
+	/// the same as the interpreter arms InterpMethod::tier_counter. That
+	/// counter lives on InterpMethod instead, since interp keeps a record of
+	/// its own for every method.
+	std::atomic<int32_t> tier0_counter{0};
+
 	/// Redirects the method's entry at \p code, but only when \p tier outranks
 	/// the tier already published. Returns whether it did.
 	///

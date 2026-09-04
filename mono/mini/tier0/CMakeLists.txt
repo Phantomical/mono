@@ -42,6 +42,7 @@ set(MONO_TIER0_SOURCES
   profiler-emit.c
   seq-points.c
   ssa.c
+  tier-counter.c
   type-checking.c)
 target_sources(mini PRIVATE
   ${MONO_TIER0_SOURCES}

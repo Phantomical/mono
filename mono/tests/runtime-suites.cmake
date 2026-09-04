@@ -658,6 +658,16 @@ mono_runtime_suite(runtime-tier0-classic-static-rgctx
                    TESTS tier0-classic-static-rgctx.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=StaticRgctx")
 
+# BackedgeCounterLoop (), called once. Its entry alone charges one call
+# against the default threshold of ten. Reaching tier 1 needs its loop's own
+# back edges to spend the rest - the shape a call count alone never reaches.
+# That is what closes #259 for the interpreter's own call-only counter. No
+# interp arm: under the interpreter this stays at tier 0 forever, so there
+# is no shared assertion for one to reach.
+mono_runtime_suite(runtime-tier0-classic-backedge
+                   TESTS tier0-classic-backedge.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=BackedgeCounter")
+
 # The tier-2 cost model. Its root has to gather counts at tier 1 and then be
 # compiled at tier 2 once, on the thread that asks - so self-promotion is turned
 # off and the test drives the compile itself.

@@ -26,6 +26,26 @@ typedef struct _MonoMethod MonoMethod;
 /// which is the caller's signal to count another threshold of calls.
 mono_bool mono_promote_method (MonoMethod *method, MonoDomain *domain);
 
+/// Arms method's own tier0-classic live counter from its tier_calls in
+/// domain. Call this once, before a compile emits code that reads it.
+void mono_tier0_arm_counter (MonoMethod *method, MonoDomain *domain);
+
+/// The address of method's own tier0-classic live counter in domain, or NULL
+/// while no record exists yet. Valid for as long as the record is.
+///
+/// Read it with a plain load, and call mono_tier0_count () only when it
+/// tests positive. That keeps the atomic decrement off every call and every
+/// loop turn once the count has run out.
+int32_t *mono_tier0_counter_address (MonoMethod *method, MonoDomain *domain);
+
+/// Counts one call or one loop back edge against method's own way to the
+/// next tier in domain. Asks for it once the count runs out.
+///
+/// Classic tier0's own equivalent of the interpreter's per-call-site
+/// counter, except a loop's own back edges count too, which a call count
+/// alone cannot see.
+void mono_tier0_count (MonoMethod *method, MonoDomain *domain);
+
 /// Hands the address a method is entered at to native code at \p target.
 ///
 /// Every caller that goes through the entry reaches \p target from here on. The

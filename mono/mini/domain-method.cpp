@@ -517,6 +517,58 @@ mono_promote_method (MonoMethod *method, MonoDomain *domain)
 
 namespace {
 
+/// Tier0-classic's mirror of imethod.cpp's arm_tier_counter (). A threshold
+/// of zero or less maps to a count that never runs out, rather than one that
+/// promotes on its first decrement.
+void
+arm_tier0_counter (mono::MonoDomainMethod *dm)
+{
+	int32_t calls = dm->tier_calls.load (std::memory_order_relaxed);
+	dm->tier0_counter.store (calls > 0 ? calls : -1, std::memory_order_relaxed);
+}
+
+} // namespace
+
+void
+mono_tier0_arm_counter (MonoMethod *method, MonoDomain *domain)
+{
+	if (mono::MonoDomainMethod *dm = mono::domain_method_find (domain, method))
+		arm_tier0_counter (dm);
+}
+
+int32_t *
+mono_tier0_counter_address (MonoMethod *method, MonoDomain *domain)
+{
+	mono::MonoDomainMethod *dm = mono::domain_method_find (domain, method);
+
+	// tier0_counter is lock-free, so this address is its underlying int32_t's.
+	// A compiled body's plain load and this function's own atomic decrement
+	// read the same object there.
+	return dm != nullptr ? reinterpret_cast<int32_t *> (&dm->tier0_counter) : nullptr;
+}
+
+void
+mono_tier0_count (MonoMethod *method, MonoDomain *domain)
+{
+	mono::MonoDomainMethod *dm = mono::domain_method_find (domain, method);
+
+	if (dm == nullptr)
+		return;
+
+	if (dm->tier0_counter.fetch_sub (1, std::memory_order_relaxed) > 1)
+		return;
+
+	if (dm->promote ())
+		return;
+
+	// A refused promotion spends the count for nothing, so this re-arms it.
+	// The loss then costs this method another threshold of calls, not the
+	// rest of the process.
+	arm_tier0_counter (dm);
+}
+
+namespace {
+
 /// Mono.Tiering.MonoTier::PromoteNow, which puts a method at a tier without
 /// waiting for a call count to run out.
 ///
@@ -535,6 +587,21 @@ ves_icall_promote_now (MonoMethod *method, int32_t tier)
 	return mono_llvm_jit_promote_now (method, mono_domain_get (), (uint8_t) tier);
 }
 
+/// Mono.Tiering.MonoTier::GetTier, which reads the tier a method's entry is
+/// published at without asking for a different one.
+///
+/// -1 means no record exists yet for method.
+int32_t
+ves_icall_get_tier (MonoMethod *method)
+{
+	if (method == nullptr)
+		return -1;
+
+	mono::MonoDomainMethod *dm = mono::domain_method_find (mono_domain_get (), method);
+
+	return dm != nullptr ? (int32_t) dm->tier () : -1;
+}
+
 } // namespace
 
 void
@@ -542,6 +609,8 @@ mono_domain_method_register_icalls (void)
 {
 	mono_add_internal_call_internal ("Mono.Tiering.MonoTier::PromoteNow",
 	                                 (const void *) ves_icall_promote_now);
+	mono_add_internal_call_internal ("Mono.Tiering.MonoTier::GetTier",
+	                                 (const void *) ves_icall_get_tier);
 }
 
 void

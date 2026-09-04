@@ -260,6 +260,7 @@ set(MONO_TESTS_CS_SRC
   tier0-classic.cs
   tier0-classic-gsharedvt.cs
   tier0-classic-static-rgctx.cs
+  tier0-classic-backedge.cs
   tbaa-aliasing.cs
   tbaa-explicit-overlap.cs
   typeload-field-memberref.cs
@@ -1320,6 +1321,10 @@ set(MONO_TESTS_INTERP_DISABLED
   ccw-class-iface.exe
   bug-60862.exe
   bug-48015.exe
+  # Asserts that a method called once still reaches tier 1, off its loop's
+  # own back edges. The interpreter's own counter is calls alone, so under
+  # the interpreter as the whole engine this stays at tier 0 forever.
+  tier0-classic-backedge.exe
 )
 
 # Additionally excluded at the default tier, where a method starts interpreted
@@ -1354,6 +1359,10 @@ set(MONO_TESTS_TIER0_DISABLED
   # the fault lands in unmanaged code where it cannot become a managed
   # exception. Not the engine-alternation path: identical with tier 1 disabled.
   bug-60862.exe
+  # The same reason as MONO_TESTS_INTERP_DISABLED: the method starts
+  # interpreted here too. Reaching classic tier0's own back edge count needs
+  # -mono-tier0-classic to name it, and this suite does not set that.
+  tier0-classic-backedge.exe
 )
 
 # Not tests: source files that another tailcall test links against.

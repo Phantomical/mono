@@ -70,6 +70,7 @@
 #include "compile.h"
 #include "tier0.h"
 #include "seq-points.h"
+#include <mono/mini/domain-method.h>
 #include "tasklets.h"
 #include <string.h>
 #include <ctype.h>
@@ -4288,6 +4289,11 @@ mono_tier0_compile (MonoMethod *method, MonoDomain *domain, gpointer *out_code,
 	JitFlags flags = JIT_FLAG_RUN_CCTORS;
 
 	error_init (error);
+
+	// Before mini_method_compile (), which emits the code that reads this. A
+	// counter still at its default of zero reads every entry and back edge
+	// as already spent, and never asks for tier 1.
+	mono_tier0_arm_counter (method, domain);
 
 	/*
 	 * A call site shared over reference types resolves its callee straight to

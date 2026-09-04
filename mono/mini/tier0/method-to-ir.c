@@ -559,8 +559,16 @@ add_widen_op (MonoCompile *cfg, MonoInst *ins, MonoInst **arg1_ref, MonoInst **a
 		*sp++ = mono_decompose_opcode (cfg, ins);	\
 	} while (0)
 
+/*
+ * target <= ip marks a backward branch: CIL has no other way to write a
+ * loop. Three shapes can be one - this macro, an unconditional br, and a
+ * brtrue/brfalse pair. Each counts its own back edge against classic
+ * tier0's own way to tier 1.
+ */
 #define ADD_BINCOND(next_block) do {	\
 		MonoInst *cmp;	\
+		if (target <= ip) \
+			mini_tier0_emit_counter_backedge (cfg); \
 		sp -= 2; \
 		MONO_INST_NEW(cfg, cmp, OP_COMPARE);	\
 		cmp->sreg1 = sp [0]->dreg;	\
@@ -8342,6 +8350,9 @@ calli_end:
 			inline_costs += BRANCH_COST;
 			break;
 		case MONO_CEE_BR:
+			if (target <= ip)
+				mini_tier0_emit_counter_backedge (cfg);
+
 			MONO_INST_NEW (cfg, ins, OP_BR);
 
 			GET_BBLOCK (cfg, tblock, target);
@@ -8364,6 +8375,9 @@ calli_end:
 		case MONO_CEE_BRTRUE: {
 			MonoInst *cmp;
 			gboolean is_true = il_op == MONO_CEE_BRTRUE_S || il_op == MONO_CEE_BRTRUE;
+
+			if (target <= ip)
+				mini_tier0_emit_counter_backedge (cfg);
 
 			if (sp [-1]->type == STACK_VTYPE || sp [-1]->type == STACK_R8)
 				UNVERIFIED;
@@ -11846,6 +11860,7 @@ mono_ldptr:
 	/* emit profiler enter code after a jit attach if there is one */
 	cfg->cbb = init_localsbb2;
 	mini_profiler_emit_enter (cfg);
+	mini_tier0_emit_counter_entry (cfg);
 	cfg->cbb = init_localsbb;
 
 	if (seq_points) {
