@@ -482,9 +482,15 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 					continue;
 				}
 
-				if (has_own_clause (*callee)
-				    && clause_survives_fold (*call, *callee, simplify_, fam, get_ac)
-				    && !mergeable_clause_kinds_only (*callee)) {
+				// mergeable_clause_kinds_only () decides first: it is a cheap
+				// read of callee's own clauses, and a filter is the only kind
+				// that can still make this decline. Its answer already
+				// settles the ordinary catch, finally and fault case.
+				// Short-circuiting past clause_survives_fold () there keeps
+				// its cost off every callee but the filter one it can still
+				// affect.
+				if (has_own_clause (*callee) && !mergeable_clause_kinds_only (*callee)
+				    && clause_survives_fold (*call, *callee, simplify_, fam, get_ac)) {
 					candidates->declined (
 						*root, *callee,
 						InlineCost::getNever ("its clause has nowhere to sit once folded"),
