@@ -101,7 +101,7 @@ mono_arch_get_unbox_trampoline (MonoMethod *m, gpointer addr)
  *   Create a trampoline which sets RGCTX_REG to ARG, then jumps to ADDR.
  */
 gpointer
-mono_arch_get_static_rgctx_trampoline (MonoMemoryManager *mem_manager, gpointer arg, gpointer addr)
+mono_arch_get_static_rgctx_trampoline (MonoMemoryManager *mem_manager, MonoMethod *method, gpointer arg, gpointer addr)
 {
 	guint8 *code, *start;
 	GSList *unwind_ops;
@@ -136,6 +136,7 @@ mono_arch_get_static_rgctx_trampoline (MonoMemoryManager *mem_manager, gpointer 
 	/* The buffer was reserved with MONO_TRAMPOLINE_UNWINDINFO_SIZE bytes
 	 * behind the code, which is where the Windows unwind table goes. */
 		info->has_unwind_table_slack = TRUE;
+		info->method = method;
 		mono_tramp_info_register (info, domain);
 	}
 
@@ -1297,7 +1298,7 @@ mono_arch_get_unbox_trampoline (MonoMethod *m, gpointer addr)
 }
 
 gpointer
-mono_arch_get_static_rgctx_trampoline (MonoMemoryManager *mem_manager, gpointer arg, gpointer addr)
+mono_arch_get_static_rgctx_trampoline (MonoMemoryManager *mem_manager, MonoMethod *method, gpointer arg, gpointer addr)
 {
 	g_assert_not_reached ();
 	return NULL;

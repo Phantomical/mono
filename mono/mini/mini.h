@@ -521,7 +521,7 @@ gpointer          mono_create_jit_trampoline_from_token (MonoImage *image, guint
 gpointer          mono_create_delegate_trampoline (MonoDomain *domain, MonoClass *klass);
 MonoDelegateTrampInfo* mono_create_delegate_trampoline_info (MonoDomain *domain, MonoClass *klass, MonoMethod *method);
 gpointer          mono_create_rgctx_lazy_fetch_trampoline (guint32 offset);
-gpointer          mono_create_ftnptr_arg_trampoline (gpointer arg, gpointer addr);
+gpointer          mono_create_ftnptr_arg_trampoline (MonoMethod *method, gpointer arg, gpointer addr);
 guint32           mono_find_rgctx_lazy_fetch_trampoline_by_addr (gconstpointer addr);
 gpointer          mono_magic_trampoline (host_mgreg_t *regs, guint8 *code, gpointer arg, guint8* tramp);
 #ifndef DISABLE_REMOTING
@@ -646,7 +646,7 @@ void     mono_arch_flush_register_windows       (void);
 gboolean mono_arch_is_int_overflow              (void *sigctx, void *info);
 void     mono_arch_register_lowlevel_calls      (void);
 gpointer mono_arch_get_unbox_trampoline         (MonoMethod *m, gpointer addr);
-gpointer mono_arch_get_static_rgctx_trampoline  (MonoMemoryManager *mem_manager, gpointer arg, gpointer addr);
+gpointer mono_arch_get_static_rgctx_trampoline  (MonoMemoryManager *mem_manager, MonoMethod *method, gpointer arg, gpointer addr);
 gpointer mono_arch_get_ftnptr_arg_trampoline    (MonoMemoryManager *mem_manager, gpointer arg, gpointer addr);
 gpointer mono_arch_get_gsharedvt_arg_trampoline (MonoDomain *domain, gpointer arg, gpointer addr);
 void     mono_arch_patch_callsite               (guint8 *method_start, guint8 *code, guint8 *addr);

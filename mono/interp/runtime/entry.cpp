@@ -649,7 +649,7 @@ interp_create_method_pointer (MonoMethod *method, gboolean compile, MonoError *e
 	 * argument, so we pass it in the rgctx register using a trampoline.
 	 */
 
-	addr = mono_create_ftnptr_arg_trampoline (ftndesc, entry_wrapper);
+	addr = mono_create_ftnptr_arg_trampoline (method, ftndesc, entry_wrapper);
 
 	register_method_pointer (domain, addr, imethod);
 

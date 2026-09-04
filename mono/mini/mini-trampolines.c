@@ -52,10 +52,11 @@ static mono_mutex_t trampolines_mutex;
  *
  *   Create a trampoline which passes ARG to ADDR in a register the callee reads
  * but the caller never writes. Where the rgctx register is scratch, that register
- * is the one, and the arch's rgctx trampoline is exactly the right shape.
+ * is the one, and the arch's rgctx trampoline is exactly the right shape. METHOD
+ * is what a reverse lookup on the trampoline's own address later resolves to.
  */
 gpointer
-mono_create_ftnptr_arg_trampoline (gpointer arg, gpointer addr)
+mono_create_ftnptr_arg_trampoline (MonoMethod *method, gpointer arg, gpointer addr)
 {
 	gpointer res;
 	MonoMemoryManager *mem_manager = mono_domain_ambient_memory_manager (mono_domain_get ());
@@ -69,7 +70,7 @@ mono_create_ftnptr_arg_trampoline (gpointer arg, gpointer addr)
 	if (mono_aot_only) {
 		res = mono_aot_get_static_rgctx_trampoline (arg, addr);
 	} else {
-		res = mono_arch_get_static_rgctx_trampoline (mem_manager, arg, addr);
+		res = mono_arch_get_static_rgctx_trampoline (mem_manager, method, arg, addr);
 	}
 #endif
 
@@ -297,7 +298,7 @@ mini_add_method_trampoline (MonoMethod *m, gpointer compiled_method, gboolean ad
 		// ADDR reaches its caller as a bare function pointer, with no call
 		// site to load the rgctx register the compiled body reads on entry.
 		// Wrap it in a trampoline that loads it instead.
-		addr = mono_create_ftnptr_arg_trampoline (mini_method_get_rgctx (m), addr);
+		addr = mono_create_ftnptr_arg_trampoline (m, mini_method_get_rgctx (m), addr);
 	}
 
 	return addr;
