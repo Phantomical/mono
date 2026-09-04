@@ -776,10 +776,7 @@ merge:
 	EXPECT_FALSE (m.complete ());
 }
 
-/// A memcpy into a different field of the same allocation is still a write
-/// the walk cannot place at a key of its own, the same as one of unreadable
-/// length above: it answers for every key rather than one, `%f` included.
-TEST (ConstantValuesTest, AMemcpyElsewhereStillClearsTheField)
+TEST (ConstantValuesTest, AMemcpyElsewhereLeavesTheFieldAlone)
 {
 	Settled m (R"(
 define ptr @caller(i1 %c, ptr %p, i64 %n) {
@@ -794,7 +791,7 @@ entry:
 }
 )");
 
-	EXPECT_FALSE (m.complete ());
+	EXPECT_TRUE (m.complete ());
 	EXPECT_TRUE (is_contained (m.reached (), "vtable_Bar"));
 }
 
@@ -815,11 +812,7 @@ entry:
 	EXPECT_FALSE (m.complete ());
 }
 
-/// A constant length names a range the call cannot possibly reach `%f`
-/// through, same as the unreadable one below reads as unbounded, but the
-/// walk asks the write's declared effects for a key, not a range: it
-/// answers for every key rather than one, `%f` included.
-TEST (ConstantValuesTest, AValueCopyElsewhereStillClearsTheField)
+TEST (ConstantValuesTest, AValueCopyElsewhereLeavesTheFieldAlone)
 {
 	Settled m (R"(
 define ptr @caller(i1 %c, ptr %p, i64 %n) {
@@ -834,7 +827,7 @@ entry:
 }
 )");
 
-	EXPECT_FALSE (m.complete ());
+	EXPECT_TRUE (m.complete ());
 	EXPECT_TRUE (is_contained (m.reached (), "vtable_Bar"));
 }
 
@@ -856,11 +849,7 @@ entry:
 	EXPECT_FALSE (m.complete ());
 }
 
-/// `%f` is the call's source argument here, read rather than written. The
-/// declaration states both arguments' effects together, so the walk cannot
-/// tell this apart from the destination argument above: it answers for
-/// every key rather than one, `%f` included.
-TEST (ConstantValuesTest, AValueCopyReadingTheObjectStillClearsTheField)
+TEST (ConstantValuesTest, AValueCopyReadingTheObjectIsNotAWrite)
 {
 	Settled m (R"(
 define ptr @caller(i1 %c, ptr %p, i64 %n) {
@@ -874,7 +863,7 @@ entry:
 }
 )");
 
-	EXPECT_FALSE (m.complete ());
+	EXPECT_TRUE (m.complete ());
 	EXPECT_TRUE (is_contained (m.reached (), "vtable_Bar"));
 }
 

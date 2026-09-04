@@ -167,6 +167,10 @@ private:
 
 	/// Which analysis below built this, so invalidate () asks about that one.
 	llvm::AnalysisKey *built_by = nullptr;
+
+	/// Whether this result also depends on MemorySSA, so invalidate () knows
+	/// to ask about that one too. Only MonoMemoryValues sets it.
+	bool read_memory = false;
 };
 
 /// An analysis that finds all potential sources for each instruction.
@@ -185,10 +189,18 @@ public:
 
 /// The same walk, with the stores that reach each load folded in.
 ///
-/// A store forwards to a load only where both name the same (base, constant
-/// offset) pair, which trades the precision an alias query would answer for
-/// not asking one. `top-down-inline.cpp`, `fold-delegate.cpp` and
-/// `devirtualize.cpp` ask for this, and each runs at tier 2 alone.
+/// One forward pass over the function's blocks in reverse postorder, with a
+/// single lattice that covers every tracked address at once rather than a
+/// separate pass per address. A back edge is dropped rather than iterated
+/// to a fixed point, so a store a loop carries into its own next iteration
+/// is not forwarded to a load earlier in the same loop. The pass reads
+/// MemorySSA's own per-block access list rather than scanning the block
+/// itself - already narrowed, by MemorySSAAnalysis's own construction, to
+/// the instructions that touch memory. A store forwards to a load only
+/// where both settle to the same (base, constant offset) pair, with no
+/// alias query anywhere: that is what trades the precision one would
+/// answer for not asking one. `top-down-inline.cpp`, `fold-delegate.cpp`
+/// and `devirtualize.cpp` ask for this, and each runs at tier 2 alone.
 /// Everything else takes `MonoConstantValues`.
 class MonoMemoryValues : public llvm::AnalysisInfoMixin<MonoMemoryValues> {
 	friend llvm::AnalysisInfoMixin<MonoMemoryValues>;
