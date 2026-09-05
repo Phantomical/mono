@@ -3,10 +3,9 @@ using System;
 // --llvm-opt=-mono-tier0-classic=OpenCallee names Main () and
 // OpenCalleeCall<T> and nothing else, so SharedBox<T>'s own methods are left
 // to whatever tier reaches them. Main () has to be classic for the filter to
-// answer for its callee at all: the interpreter reaches a callee itself
-// without asking the backend.
+// answer for its callee at all - tier0-classic-backedge.cs's header has why.
 //
-// OpenCalleeCall<T> compiles as its class-shared body, so the call sites in it
+// OpenCalleeCall<T> compiles as its own shared body, so the call sites in it
 // name SharedBox<T>'s methods with the caller's own still-open T as the
 // class's type argument. That is the identity the callee is then compiled
 // under, and each of the three below reads its own class's runtime generic
