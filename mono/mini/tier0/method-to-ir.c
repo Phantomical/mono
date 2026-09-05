@@ -71,6 +71,7 @@
 #include <mono/utils/mono-logger-internals.h>
 #include <mono/metadata/verify-internals.h>
 #include <mono/metadata/icall-decl.h>
+#include "mono/metadata/icall-internals.h"
 #include "mono/metadata/icall-signatures.h"
 
 #include "trace.h"
@@ -7322,6 +7323,7 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 			gboolean check_this; check_this = FALSE;
 			gboolean delegate_invoke; delegate_invoke = FALSE;
 			gboolean direct_icall; direct_icall = FALSE;
+			gconstpointer no_wrapper_icall; no_wrapper_icall = NULL;
 			gboolean tailcall_calli; tailcall_calli = FALSE;
 			gboolean noreturn; noreturn = FALSE;
 			gboolean needs_stack_walk; needs_stack_walk = FALSE;
@@ -7445,6 +7447,19 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 				array_rank = m_class_get_rank (cmethod->klass);
 			} else if ((cmethod->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) && direct_icalls_enabled (cfg, cmethod)) {
 				direct_icall = TRUE;
+			} else if (cmethod->iflags & METHOD_IMPL_ATTRIBUTE_INTERNAL_CALL) {
+				/*
+				 * An icall registered with no wrapper publishes the C function
+				 * itself as its entry, which is what a compiled caller names.
+				 * Through the patch every other callee takes, the runtime
+				 * would build the method a record and a thunk it is not meant
+				 * to have.
+				 */
+				guint32 icall_flags = 0;
+				gconstpointer entry = mono_lookup_internal_call_full_with_flags (cmethod, FALSE, &icall_flags);
+
+				if (entry && (icall_flags & MONO_ICALL_FLAGS_NO_WRAPPER))
+					no_wrapper_icall = entry;
 			} else if (fsig->pinvoke) {
 				if (cmethod->flags & METHOD_ATTRIBUTE_PINVOKE_IMPL) {
 					/*
@@ -8014,6 +8029,17 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 					ins = (MonoInst*)mini_emit_calli_full (cfg, fsig, sp, addr, imt_arg, vtable_arg, tailcall);
 					tailcall_remove_ret |= tailcall;
 				}
+				goto call_end;
+			}
+
+			if (no_wrapper_icall) {
+				/* The raw address rather than mini_emit_abs_call ()'s patch,
+				 * which the code generator takes as a near call, and an
+				 * embedder's function is not in reach of one. */
+				ins = mono_emit_native_call (cfg, no_wrapper_icall, fsig, sp);
+
+				if (inst_tailcall) // FIXME
+					mono_tailcall_print ("missed tailcall no_wrapper_icall %s -> %s\n", method->name, cmethod->name);
 				goto call_end;
 			}
 

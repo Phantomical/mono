@@ -630,7 +630,6 @@ mono_emit_method_call (MonoCompile *cfg, MonoMethod *method, MonoInst **args, Mo
 	return mini_emit_method_call_full (cfg, method, mono_method_signature_internal (method), FALSE, args, this_ins, NULL, NULL);
 }
 
-static
 MonoInst*
 mono_emit_native_call (MonoCompile *cfg, gconstpointer func, MonoMethodSignature *sig,
 					   MonoInst **args)

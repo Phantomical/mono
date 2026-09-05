@@ -1580,6 +1580,8 @@ MonoInst*         mini_emit_method_call_full (MonoCompile *cfg, MonoMethod *meth
 											  MonoInst **args, MonoInst *this_ins, MonoInst *imt_arg, MonoInst *rgctx_arg);
 MonoInst*         mini_emit_abs_call (MonoCompile *cfg, MonoJumpInfoType patch_type, gconstpointer data,
 									  MonoMethodSignature *sig, MonoInst **args);
+MonoInst*         mono_emit_native_call (MonoCompile *cfg, gconstpointer func, MonoMethodSignature *sig,
+										 MonoInst **args);
 MonoInst*         mini_emit_extra_arg_calli (MonoCompile *cfg, MonoMethodSignature *fsig, MonoInst **orig_args, int arg_reg, MonoInst *call_target);
 MonoInst*         mini_emit_llvmonly_calli (MonoCompile *cfg, MonoMethodSignature *fsig, MonoInst **args, MonoInst *addr);
 MonoInst*         mini_emit_llvmonly_virtual_call (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSignature *fsig, int context_used, MonoInst **sp);
