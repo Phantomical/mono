@@ -28,6 +28,7 @@
 #include <llvm/Transforms/Utils/Cloning.h>
 
 #include <algorithm>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -369,6 +370,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 	};
 
 	InlineParams params = mono::getInlineParams ();
+	uint32_t size_limit = candidates->size_limit ();
 	bool changed = false;
 
 	for (Function *root : roots) {
@@ -523,6 +525,21 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			if (accepted.empty ())
 				break;
 
+			// Cheapest first, so a size limit spends what room is left on
+			// however many small candidates fit rather than on whichever one
+			// the hottest-first order above happened to weigh first. An
+			// Always verdict carries no comparable cost, and sorts as the
+			// cheapest there is.
+			std::stable_sort (accepted.begin (), accepted.end (),
+			                  [] (const Accepted &a, const Accepted &b) {
+				auto estimate = [] (const InlineCost &cost) {
+					return cost.isVariable () ? cost.getCost ()
+					                          : std::numeric_limits<int>::min ();
+				};
+
+				return estimate (a.cost) < estimate (b.cost);
+			});
+
 			for (const Accepted &take : accepted) {
 				/*
 				 * An earlier fold in this round can take a later site with it,
@@ -549,6 +566,12 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 				for (CallBase *site : ifi.InlinedCallSites)
 					exposed.push_back (Site{site, 0, take.depth + 1});
+
+				// Past the limit, the rest of what this round selected waits
+				// for a later round rather than applying regardless of how
+				// large root has already grown.
+				if (size_limit != 0 && root->getInstructionCount () >= size_limit)
+					break;
 			}
 
 			/*
@@ -575,6 +598,14 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 			fam.invalidate (*root, kept);
 			changed = true;
+
+			// Catches a root the loop above did not already stop on.
+			// Simplification - constant folding, a forwarder collapsing -
+			// gets one chance to bring root back under the limit; a root
+			// still over it after that gets no further round at all, not
+			// just the one that pushed it over.
+			if (size_limit != 0 && root->getInstructionCount () >= size_limit)
+				break;
 		}
 	}
 

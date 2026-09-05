@@ -137,6 +137,11 @@ llvm::cl::opt<unsigned> CostedInlineByteBudgetOpt (
 	llvm::cl::desc ("Translated IL bytes the tier-2 cost model may still spend "
 	                "on one root, alongside the body count above"));
 
+llvm::cl::opt<unsigned> CostedInlineSizeLimitOpt (
+	"mono-inline-size-limit", llvm::cl::Hidden, llvm::cl::init (4096),
+	llvm::cl::desc ("IR instructions one root may grow to through tier-2 "
+	                "folding before the round loop stops; 0 turns it off"));
+
 llvm::cl::opt<unsigned> CostedInlineILLimitOpt (
 	"mono-inline-cost-il-limit", llvm::cl::Hidden, llvm::cl::init (256),
 	llvm::cl::desc ("Largest callee in IL bytes the tier-2 cost model will "
@@ -513,6 +518,16 @@ costed_inline_byte_budget ()
 	// behind them. This is the other half of the same bound, in the unit
 	// compile time is actually spent in.
 	return CostedInlineByteBudgetOpt;
+}
+
+uint32_t
+costed_inline_size_limit ()
+{
+	// The budgets above bound what the cost model translates and weighs, not
+	// what a root's own code grows to: a callee accepted once can still be
+	// duplicated at every site it is called from. This is the other question,
+	// asked of the root itself rather than of a candidate.
+	return CostedInlineSizeLimitOpt;
 }
 
 uint32_t
