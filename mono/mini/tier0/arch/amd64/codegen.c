@@ -2584,9 +2584,9 @@ emit_move_return_value (MonoCompile *cfg, MonoInst *ins, guint8 *code)
 		if (cinfo->ret.storage == ArgValuetypeInReg) {
 			MonoInst *loc = cfg->arch.vret_addr_loc;
 
-			/* The destination address goes in GP_SCRATCH_REG rather than in
-			 * an allocatable one: managed_return_regs (arch-amd64.c) is RAX,
-			 * RDX and RCX, all three of them holding the value being stored. */
+			/* GP_SCRATCH_REG holds the destination address here, not one of
+			 * managed_return_regs (arch-amd64.c): RAX, RDX and RCX already
+			 * hold the value being stored. */
 			g_assert (loc->opcode == OP_REGOFFSET);
 			amd64_mov_reg_membase (code, GP_SCRATCH_REG, loc->inst_basereg, loc->inst_offset, sizeof(gpointer));
 
