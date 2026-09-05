@@ -10,10 +10,6 @@ using System.Runtime.InteropServices;
 // file the bytes travel in. UnionAbiRegister is the shape that tells them
 // apart - System.Numerics.Register's own field set, where an unstable sort by
 // offset does not leave byte_0 in front of the double at the same offset.
-//
-// The seam is what measures it, so the tiers are driven by hand:
-// -mono-tier1-threshold=0 pins every body at tier 0 and PromoteNow moves the
-// one method each round is about.
 namespace Mono.Tiering {
 	static class MonoTier {
 		[System.Runtime.CompilerServices.MethodImpl (System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]

@@ -5,13 +5,12 @@ using System.Threading;
 // -mono-tier1-threshold=0 is the setting a test reaches for when it wants a
 // method pinned at tier 0, and this file is what says it holds for a classic
 // body. arm_tier0_counter () (mono/mini/domain-method.cpp) writes -1 for a
-// threshold of zero, and mono_tier0_count () reads any count at or below zero
-// as one that has just run out, so a body that reaches that icall at all asks
-// for tier 1 on its first call.
+// threshold of zero, and mono_tier0_count () treats any count at or below
+// zero as one that never runs out, so a classic body pinned this way never
+// asks for tier 1.
 //
-// Select-all rather than a filter: the counter this exercises is the one a
-// classic body carries, and every method here has to have one. The loop and
-// the calls both reach it - one at the entry and one at the back edge.
+// ThresholdZeroSpin () reaches the counter both ways: once at the entry,
+// and repeatedly at its loop's own back edge.
 namespace Mono.Tiering {
 	static class MonoTier {
 		[System.Runtime.CompilerServices.MethodImpl (System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]

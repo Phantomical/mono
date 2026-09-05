@@ -1596,9 +1596,9 @@ mono_arch_get_call_info (MonoMemPool *mp, MonoMethodSignature *sig)
 			/*
 			 * The managed convention can spend every parameter register on
 			 * the first argument, and the pointer then travels in a slot of
-			 * its own. A gsharedvt return never gets here with the file
-			 * spent: it goes behind a receiver or a reference, which is one
-			 * register.
+			 * its own. A gsharedvt return never gets here with the register
+			 * file spent: it goes behind a receiver or a reference, which is
+			 * one register.
 			 */
 			g_assert (ret_storage == ArgValuetypeAddrInIReg);
 			cinfo->ret.storage = ArgValuetypeAddrOnStack;

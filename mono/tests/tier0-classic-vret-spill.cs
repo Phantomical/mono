@@ -5,15 +5,11 @@ using System.Runtime.CompilerServices;
 // A value type of sixteen one-byte scalars takes a parameter register for each
 // of the first six and a stack slot for the rest, so one of them as the first
 // argument spends the whole integer file. The hidden return pointer goes behind
-// that first argument, which leaves it in a stack slot of its own - the one
-// placement mono_arch_get_call_info () could not reach before, because a value
-// type used to take at most two registers.
+// that first argument, which leaves it in a stack slot of its own.
 //
-// The seam is what tells the two engines' answers apart, so the tiers are
-// driven by hand: -mono-tier1-threshold=0 pins every body at tier 0 and
-// PromoteNow moves the one method each round is about. VretSpillCallerA is
-// compiled and its callee is not, and VretSpillCalleeB is compiled and its
-// caller is not, so each direction of the call is measured on its own.
+// VretSpillCallerA is promoted while its callee stays at tier 0, and
+// VretSpillCalleeB is promoted while its caller stays at tier 0, so each
+// direction of the call is measured on its own.
 namespace Mono.Tiering {
 	static class MonoTier {
 		[System.Runtime.CompilerServices.MethodImpl (System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]

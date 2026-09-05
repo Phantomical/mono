@@ -5695,8 +5695,8 @@ static int
 get_max_prolog_arg_size (MonoCompile *cfg, MonoMethodSignature *sig)
 {
 	CallInfo *cinfo = cfg->arch.cinfo;
-	/* The hidden return pointer, which is two moves where it arrives in a
-	 * stack slot of its own. */
+	/* The hidden return pointer costs two moves when it arrives in a stack
+	 * slot of its own. */
 	int size = 2 * MAX_LEAF_MOVE_SIZE;
 
 	for (int i = 0; i < sig->param_count + sig->hasthis; ++i) {
