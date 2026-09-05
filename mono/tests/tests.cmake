@@ -1168,9 +1168,9 @@ set(MONO_TESTS_TRIVIAL_INLINE_FANOUT_SRC
   trivial-inline-fanout.cs
 )
 
-# A SIMD value type has to be declared in one of the assemblies the loader
-# reads that way (mono_class_init_internal (), mono/metadata/class-init.c), so
-# these compile against two references the default set does not carry.
+# A SIMD value type is one the loader recognizes by name and assembly
+# (mono_class_create_from_typedef (), mono/metadata/class-init.c), so these
+# compile against the two references the default set does not carry.
 set(MONO_TESTS_SIMD_REF_SRC
   tier0-classic-simd-abi.cs
 )

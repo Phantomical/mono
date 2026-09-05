@@ -11,11 +11,8 @@ using Mono.Simd;
 // the eight floating-point parameter registers and so lands on the stack, and
 // a return of two of them at once.
 //
-// Each shape has an A and a B copy, so one direction of the call is promoted
-// while the other stays where it is.
-//
-// MONO_TIER0_CLASSIC_ALL says the run is the arm where every method is
-// classic's, which is what makes the tier a method is left at worth asserting.
+// Each shape has an A and a B copy, the same per-direction split
+// tier0-classic-vret-spill.cs uses.
 namespace Mono.Tiering {
 	static class MonoTier {
 		[System.Runtime.CompilerServices.MethodImpl (System.Runtime.CompilerServices.MethodImplOptions.InternalCall)]
@@ -225,6 +222,9 @@ public class Tier0ClassicSimdAbiTest
 		Check ("tier 0 both sides", SimdAbiCallerA (), want);
 		Check ("tier 0 both sides", SimdAbiCallerB (), want);
 
+		// CheckClassic only holds on the select-all suite arm
+		// (mono/tests/runtime-suites.cmake), where every method here compiles
+		// through classic.
 		if (Environment.GetEnvironmentVariable ("MONO_TIER0_CLASSIC_ALL") != null) {
 			CheckClassic ("SimdAbiFloatsA");
 			CheckClassic ("SimdAbiUintsA");
