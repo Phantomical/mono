@@ -3428,8 +3428,8 @@ init_backend (MonoBackend *backend)
 }
 
 // None of the opcodes below has a case in the arch codegen, so
-// mono_decompose_opcode ()'s switch falls to its default of emulating each
-// of them. The table this registers into is their only path to code.
+// mono_decompose_opcode () asks for each of them to be emulated. The table
+// this registers into is their only path to code.
 void
 mono_tier0_register_opcode_emulations (void)
 {
@@ -3453,6 +3453,10 @@ mono_tier0_register_opcode_emulations (void)
 		"__emul_fconv_to_u8", mono_icall_sig_ulong_double, (gpointer)mono_fconv_u8_2, "mono_fconv_u8_2", FALSE);
 	mini_register_opcode_emulation (OP_RCONV_TO_U8, &mono_get_jit_icall_info ()->__emul_rconv_to_u8,
 		"__emul_rconv_to_u8", mono_icall_sig_ulong_float, (gpointer)mono_rconv_u8, "mono_rconv_u8", FALSE);
+#ifdef MONO_ARCH_EMULATE_CONV_R8_UN
+	mini_register_opcode_emulation (OP_ICONV_TO_R_UN, &mono_get_jit_icall_info ()->__emul_iconv_to_r_un,
+		"__emul_iconv_to_r_un", mono_icall_sig_double_int32, (gpointer)mono_conv_to_r8_un, "mono_conv_to_r8_un", FALSE);
+#endif
 	mini_register_opcode_emulation (OP_FREM, &mono_get_jit_icall_info ()->__emul_frem,
 		"__emul_frem", mono_icall_sig_double_double_double, (gpointer)mono_fmod, "mono_fmod", FALSE);
 	mini_register_opcode_emulation (OP_RREM, &mono_get_jit_icall_info ()->__emul_rrem,
