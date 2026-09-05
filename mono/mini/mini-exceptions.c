@@ -302,6 +302,18 @@ mono_jinfo_get_il_offset (MonoDomain *domain, MonoJitInfo *ji, guint32 native_of
 	if (ji->is_interp)
 		return mini_get_interp_callbacks ()->il_offset_from_native_offset (domain, jinfo_get_method (ji), native_offset);
 
+	/*
+	 * A classic tier-0 body. mono_save_seq_point_info () hangs its sequence
+	 * points off the body's own jit info, so this map is per body the way the
+	 * LLVM one above is, and it is not the debug table the comment above
+	 * warns about.
+	 */
+	MonoSeqPointInfo *seq_points = (MonoSeqPointInfo *) ji->seq_points;
+	SeqPoint sp;
+
+	if (seq_points && mono_seq_point_find_prev_by_native_offset (seq_points, native_offset, &sp))
+		return sp.il_offset;
+
 	return -1;
 }
 
