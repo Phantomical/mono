@@ -655,8 +655,8 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 		 * thunk. Compiled against its own instantiation instead, the body
 		 * counts on a record nothing calls and never promotes.
 		 *
-		 * An open method - a shared caller's callee, named with the caller's
-		 * own type parameter - has no context of its own for the stub to
+		 * An open method is a shared caller's callee, named with the caller's
+		 * own type parameter. It has no context of its own for the stub to
 		 * write, so it takes the compile below, which reduces it and leaves
 		 * the caller's context in the register.
 		 */

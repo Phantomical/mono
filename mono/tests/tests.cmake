@@ -1314,9 +1314,10 @@ set(MONO_TESTS_DISABLED
 
 # Additionally excluded when running under the interpreter.
 set(MONO_TESTS_INTERP_DISABLED
-  # The two below are the same interpreter defects MONO_TESTS_TIER0_DISABLED
-  # names, and the reasons are written there. They fail here for the same
-  # reason: the engine is the interpreter either way.
+  # The two below are the same interpreter defects
+  # MONO_TESTS_INTERP_TIER0_DISABLED names, and the reasons are written there.
+  # They fail here for the same reason: the engine is the interpreter either
+  # way.
   interp-threadstatic-cctor.exe
   interp-array-set-typecheck.exe
   # A patch over a method's entry reaches the callers that go through it. Those

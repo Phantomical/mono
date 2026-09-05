@@ -178,10 +178,7 @@ endif()
 # The corpus directory joins MONO_PATH because the child domain resolves the
 # program by assembly name rather than by the path it was started from.
 mono_path_join(_xdomain_path "${_class_dir}" "${CMAKE_CURRENT_BINARY_DIR}")
-# The remembered-set check for the same reason the tier-0 corpus carries it:
-# this program is the one that found classic bodies storing references with no
-# barrier, at a hundred cross-domain calls, and it found them as a crash in the
-# unload.
+# The remembered-set check for the same reason the tier-0 corpus carries it.
 add_test(NAME "mini-regression/xdomain"
          COMMAND "${CMAKE_COMMAND}" -E env
                  "MONO_PATH=${_xdomain_path}"

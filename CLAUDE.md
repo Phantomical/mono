@@ -150,7 +150,7 @@ cmake --build build --target check       # fast: unit tests, mini regression, on
 cmake --build build --target check-all   # everything but slow/stress/acceptance; ask first
 
 ctest --test-dir build -L regression -j"$(nproc)"   # the mini corpora, one test each
-ctest --test-dir build -L tier0      -j"$(nproc)"   # the runtime corpus at the default tier
+ctest --test-dir build -L 'tier0$' -j"$(nproc)"     # the runtime corpus at the default tier
 ctest --test-dir build -R test-llvm  -j"$(nproc)"   # the LLVM backend unit tests
 ctest --test-dir build -N                           # list without running
 ```
