@@ -149,6 +149,10 @@ get_arg_slots (ArgInfo *ainfo, int **out_slots, gboolean is_source_argument)
 		src [0] = map_reg (sreg);
 		break;
 	case ArgValuetypeInReg:
+		/* One slot per register is the whole of this format, so a value whose
+		 * scalars do not sit one per eightbyte in a register has no spelling
+		 * in it and fill_pair_view () (arch-amd64.c) leaves nregs at 0. */
+		g_assert (ainfo->nregs == ainfo->nleaves);
 		nsrc = ainfo->nregs;
 		src = g_malloc (nsrc * sizeof (int));
 		for (i = 0; i < ainfo->nregs; ++i)
