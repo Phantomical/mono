@@ -400,9 +400,9 @@ unplaceable_valuetype (const ArgInfo *ainfo)
  * is asked of a call this method makes as well as of the method's own entry,
  * because the convention is the call's rather than the method's.
  *
- * The body is still built, wrong in those bytes and thrown away. Stopping
- * here instead would leave the rest of the compile reading vars this had not
- * created.
+ * The body is still built, wrong in those bytes, and thrown away: bailing out
+ * here instead would leave the rest of the compile reading variables it
+ * never created.
  */
 static void
 refuse_unplaceable_signature (MonoCompile *cfg, MonoMethodSignature *sig, CallInfo *cinfo)
@@ -824,9 +824,10 @@ arg_storage_to_load_membase (ArgStorage storage)
 }
 
 /*
- * The load that moves a leaf out of the value it belongs to. Only the bytes
- * the leaf carries move: the rest of the register it lands in is undefined,
- * and a wider load would reach a neighbouring leaf's bytes.
+ * Chooses the load that moves a leaf's own bytes out of the value it belongs
+ * to. Only the bytes the leaf carries move: the rest of the register it
+ * lands in is undefined, and a wider load would reach a neighbouring leaf's
+ * bytes.
  */
 static int
 leaf_load_opcode (const ArgLeaf *leaf)
@@ -2511,7 +2512,10 @@ emit_store_leaf (guint8 *code, const ArgLeaf *leaf, int basereg, int offset)
 	return code;
 }
 
-/* The other direction: the value's own bytes back into the leaf's register. */
+/*
+ * Loads a leaf's own bytes back out of the value, the reverse of
+ * emit_store_leaf ().
+ */
 static guint8*
 emit_load_leaf (guint8 *code, const ArgLeaf *leaf, int basereg, int offset)
 {

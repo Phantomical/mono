@@ -682,7 +682,7 @@ typedef struct {
 	guint8 vector; /* a SIMD value, which reaches more return registers than a scalar */
 } ManagedLeaf;
 
-/* rax, rdx and rcx, which is what LLVM's return lowering spreads scalars over. */
+/* What LLVM's return lowering spreads an integer return across. */
 static const AMD64_Reg_No managed_return_regs [] = { AMD64_RAX, AMD64_RDX, AMD64_RCX };
 
 #define MANAGED_RETURN_REGS 3
@@ -714,8 +714,8 @@ add_padding_leaves (GArray *leaves, int offset, int bytes)
 }
 
 /*
- * The width primitive_type_to_llvm_type () (signature.cpp) gives type, or 0
- * for a type it has none for.
+ * Returns the width primitive_type_to_llvm_type () (signature.cpp) gives
+ * type, or 0 for a type it has none for.
  */
 static int
 managed_primitive_size (int type)
@@ -811,10 +811,11 @@ sort_managed_fields (GArray *fields)
 }
 
 /*
- * The tail of a value type that no field reaches. fill_tail () repeats the
- * last field where it is a scalar the classifier can tell apart. A `fixed`
- * buffer is one field of the element type inside a class sized for the whole
- * array, and repeating it keeps a float buffer on the SSE file.
+ * Fills the tail of a value type that no field reaches, repeating the last
+ * field the way fill_tail () does where it is a scalar the classifier can
+ * tell apart. A `fixed` buffer is one field of the element type inside a
+ * class sized for the whole array, and repeating it keeps a float buffer on
+ * the SSE file.
  */
 static void
 fill_managed_tail (GArray *leaves, int offset, const ManagedField *last, int at, int size)
@@ -955,7 +956,7 @@ collect_managed_leaves (MonoType *type, int offset, GArray *leaves)
 }
 
 /*
- * The eightbyte view mono_arch_get_gsharedvt_call_info () reads. It is filled
+ * Fills the eightbyte view mono_arch_get_gsharedvt_call_info () reads, but
  * only where the scalars are one per eightbyte in a register, which is all
  * that view can state. A value of any other shape is left with none, and
  * nregs counts what pair_regs holds so that no reader walks past the end.
@@ -1070,6 +1071,7 @@ add_managed_valuetype (ArgInfo *ainfo, MonoType *type, gboolean is_return,
 			out->storage = ArgInIReg;
 			out->reg = param_regs [(*gr)++];
 		} else {
+			/* A spilled SIMD leaf keeps its 16-byte alignment on the stack. */
 			int slot = leaf->vector ? 16 : 8;
 
 			*stack_size = ALIGN_TO (*stack_size, slot);
@@ -1086,9 +1088,8 @@ add_managed_valuetype (ArgInfo *ainfo, MonoType *type, gboolean is_return,
 #endif /* !TARGET_WIN32 */
 
 /*
- * The eightbytes a native signature's value type is placed as, restated as
- * scalars, so that the code generator reads one shape whichever convention
- * placed the value.
+ * Restates a native signature's value-type placement as scalars, so the code
+ * generator reads one shape whichever convention placed the value.
  */
 static void
 fill_leaves_from_pairs (ArgInfo *ainfo, ArgLeaf **pool, int size)
@@ -1121,9 +1122,9 @@ fill_leaves_from_pairs (ArgInfo *ainfo, ArgLeaf **pool, int size)
 }
 
 /*
- * An upper bound on the scalars sig's value types are placed as, which is
- * what the CallInfo reserves room for. A managed value type has one scalar
- * per byte at worst. A native one has two eightbytes.
+ * Returns an upper bound on the scalars sig's value types are placed as,
+ * which is what the CallInfo reserves room for. A managed value type has one
+ * scalar per byte at worst. A native one has two eightbytes.
  */
 static int
 arg_leaf_bound_for (MonoMethodSignature *sig, MonoType *t)

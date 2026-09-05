@@ -48,8 +48,8 @@ public struct S4 {
 	public bool Ok (int seed) { return a == seed; }
 }
 
-// Sixteen bytes of references: the size class a return either comes back in
-// two registers or through a hidden pointer for.
+// Sixteen bytes of references: the size class where a return either comes
+// back in two registers or falls back to a hidden pointer.
 public struct S16 {
 	public string s;
 	public object o;
@@ -165,7 +165,7 @@ public class StructAbiClassic {
 		return v;
 	}
 
-	// Reflection enters this one, which compiles it; every call it makes then
+	// Reflection enters this one, which compiles it. Every call it makes then
 	// compiles its callee the same way. That is what puts a classic body
 	// under each of the names above before anything else reaches them.
 	public static int Warm ()
@@ -651,10 +651,9 @@ public class Tier0ClassicStructAbiTest {
 		if (!promoted)
 			return 1;
 
-		// Warm () calls every other classic method, which compiles each of
-		// them the same way its own entry was compiled. That is what puts an
-		// interpreted caller on the jit-call path into them below rather than
-		// interpreting them too.
+		// Runs Warm () before the sweeps below, so every Take/Make method it
+		// calls already has a classic body: an interpreted caller reaches
+		// them through the jit-call path instead of interpreting them too.
 		enter_classic ("Warm");
 
 		StructAbiCheck.SweepClassic ();

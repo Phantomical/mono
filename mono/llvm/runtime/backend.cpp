@@ -632,9 +632,9 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 		void *entry = code;
 
 		if (needs_context) {
-			// The body rather than dm's thunk. The thunk is published to
-			// point at this stub, so a stub that jumped to the thunk would
-			// loop.
+			// code, not dm.thunk.code (): the thunk is about to be
+			// redirected to this stub, and pointing the stub at the
+			// thunk instead would loop.
 			llvm::Expected<void *> keyed = context_stub (domain, dm, code);
 
 			if (!keyed)
