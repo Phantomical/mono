@@ -800,14 +800,6 @@ _mono_exe_list(_trivial_inline_fanout ${MONO_TESTS_TRIVIAL_INLINE_FANOUT_SRC})
 mono_runtime_suite(runtime-trivial-inline-fanout TESTS ${_trivial_inline_fanout}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-trivial-fanout-limit=6 --llvm-opt=-mono-inline-trivial-instance-budget=10")
 
-# mono-inline-size-limit, tight enough that the file's cheapest three
-# candidates fold and its priciest one does not. -hot/-cold pinned to 0 and
-# the cost-benefit switch off hold the four candidates' costs comparable, the
-# same isolation tier2-inline-casts's own suite needs.
-_mono_exe_list(_tier2_inline_size_limit ${MONO_TESTS_TIER2_INLINE_SIZE_LIMIT_SRC})
-mono_runtime_suite(runtime-tier2-inline-size-limit TESTS ${_tier2_inline_size_limit}
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inline-enable-cost-benefit-analysis=0 --llvm-opt=-mono-inline-cost-il-limit=2048 --llvm-opt=-mono-inline-size-limit=100")
-
 # mono-inline-cost-byte-budget, on two 113-byte candidates the count budget
 # alone would let both through. 150 admits one and leaves too little for the
 # other; re-measure both if this starts failing:

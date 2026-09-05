@@ -63,7 +63,6 @@ public:
 	bool exhausted () const override;
 	unsigned depth_limit () const override;
 	unsigned round_limit () const override;
-	uint32_t size_limit () const override;
 
 private:
 	const TranslationTarget &target_;

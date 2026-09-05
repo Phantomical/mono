@@ -48,12 +48,6 @@ ProfileInliner::round_limit () const
 	return inline_round_limit ();
 }
 
-uint32_t
-ProfileInliner::size_limit () const
-{
-	return costed_inline_size_limit ();
-}
-
 void
 ProfileInliner::folded (Function &caller, Function &callee, const InlineCost &cost,
                         uint64_t count)

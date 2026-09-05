@@ -224,17 +224,6 @@ uint32_t costed_inline_budget ();
 /// paid either way.
 uint32_t costed_inline_byte_budget ();
 
-/// How large, in IR instructions, the tier-2 cost model lets one root grow
-/// through folding before it stops.
-///
-/// Checked twice a round: after every accepted fold, which stops the round
-/// from applying the rest of what it selected, and again after the round's
-/// own simplification, which stops the loop from taking up another round at
-/// all. Simplification runs between the two, so a round that goes over gets
-/// one chance to fold back under before folding stops for good. Zero turns
-/// the check off.
-uint32_t costed_inline_size_limit ();
-
 /// The largest callee, in IL bytes, the tier-2 cost model will translate in
 /// order to weigh it.
 ///

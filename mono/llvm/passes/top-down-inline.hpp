@@ -106,10 +106,6 @@ public:
 	/// not there when the root's sites were first read, so a pass that reads
 	/// them once never offers it.
 	virtual unsigned round_limit () const = 0;
-
-	/// How large, in IR instructions, root can grow through folding before the
-	/// pass stops. Zero turns the check off.
-	virtual uint32_t size_limit () const = 0;
 };
 
 /// Says which engine the inliner is to ask about the module it is running over.

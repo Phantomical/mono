@@ -1154,15 +1154,6 @@ set(MONO_TESTS_TRIVIAL_INLINE_FANOUT_SRC
   trivial-inline-fanout.cs
 )
 
-# The tier-2 cost model's total size limit on one root, and the cheapest-first
-# order it applies an accepted round in. Pins -hot/-cold and the cost-benefit
-# switch off for the same reason tier2-inline-casts.cs's own suite does:
-# a flat -mono-inline-cost-il-limit is what keeps the four candidates' costs
-# comparable at all.
-set(MONO_TESTS_TIER2_INLINE_SIZE_LIMIT_SRC
-  tier2-inline-size-limit.cs
-)
-
 # The tailcall suite, including the corpus imported from coreclr.
 set(MONO_TESTS_TAILCALL_CS_SRC
   tailcall/coreclr/JIT/CodeGenBringUpTests/RecursiveTailCall.cs
