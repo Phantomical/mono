@@ -1146,6 +1146,14 @@ set(MONO_TESTS_TIER2_INLINE_WRAPPER_SRC
   tier2-inline-wrapper.cs
 )
 
+# The shape-test pre-pass's fanout limit and instance budget, on callees whose
+# own sizes and shapes are otherwise identical -- only how many call sites in
+# Root () name each of them differs. One run at tier 1 settles both, the way
+# tier2-inline-heat-il-limit.cs's own single arm does.
+set(MONO_TESTS_TRIVIAL_INLINE_FANOUT_SRC
+  trivial-inline-fanout.cs
+)
+
 # The tailcall suite, including the corpus imported from coreclr.
 set(MONO_TESTS_TAILCALL_CS_SRC
   tailcall/coreclr/JIT/CodeGenBringUpTests/RecursiveTailCall.cs

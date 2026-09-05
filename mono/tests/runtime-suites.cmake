@@ -793,6 +793,13 @@ _mono_exe_list(_tier2_inline_heat_il_limit ${MONO_TESTS_TIER2_INLINE_HEAT_IL_LIM
 mono_runtime_suite(runtime-tier2-inline-heat-il-limit TESTS ${_tier2_inline_heat_il_limit}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit-hot=500 --llvm-opt=-mono-inline-cost-il-limit-cold=100")
 
+# mono-inline-trivial-fanout-limit and mono-inline-trivial-instance-budget,
+# each tight enough that the file's four callees settle both in one run: the
+# file's own comment says which callee each limit is the one that catches.
+_mono_exe_list(_trivial_inline_fanout ${MONO_TESTS_TRIVIAL_INLINE_FANOUT_SRC})
+mono_runtime_suite(runtime-trivial-inline-fanout TESTS ${_trivial_inline_fanout}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-inline-trivial-fanout-limit=6 --llvm-opt=-mono-inline-trivial-instance-budget=10")
+
 # mono-inline-cost-byte-budget, on two 113-byte candidates the count budget
 # alone would let both through. 150 admits one and leaves too little for the
 # other; re-measure both if this starts failing:

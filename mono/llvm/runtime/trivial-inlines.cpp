@@ -9,7 +9,7 @@
 #include "naming.hpp"
 #include "options.hpp"
 
-#include <llvm/ADT/STLExtras.h>
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Function.h>
@@ -382,21 +382,41 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 	 * that runs out drops the deepest candidates rather than whichever chain
 	 * the walk happened to go down.
 	 */
+	uint32_t fanout_limit = trivial_inline_fanout_limit ();
+
+	// instances_left tracks what instance_budget bounds: the sites spent
+	// building a fresh copy so far, summed across every callee this root
+	// has built one for rather than per callee the way fanout_limit is. A
+	// site that redirects onto a copy that already stands costs nothing
+	// further, so it is not counted here again.
+	uint32_t instance_budget = trivial_inline_instance_budget ();
+	uint32_t instances_left = instance_budget;
+
 	for (size_t next = 0; next < pending.size (); ++next) {
 		auto [into, caller, depth] = pending[next];
+
+		// called keeps the order caller's own instructions name each
+		// declaration in, so a budget that runs out drops the same
+		// candidates on every compile of this body rather than whichever
+		// ones a hash happens to visit first.
 		SmallVector<Function *, 8> called;
+		SmallDenseMap<Function *, unsigned, 8> sites_of;
 
 		for (Instruction &i : instructions (*caller)) {
 			auto *site = dyn_cast<CallBase> (&i);
 			Function *decl =
 				site != nullptr ? site->getCalledFunction () : nullptr;
 
-			if (decl != nullptr && decl->isDeclaration ()
-			    && !is_contained (called, decl))
+			if (decl == nullptr || !decl->isDeclaration ())
+				continue;
+			if (sites_of[decl]++ == 0)
 				called.push_back (decl);
 		}
 
 		for (Function *decl : called) {
+			// How many of caller's own sites call decl, which is how many
+			// times AlwaysInlinerPass duplicates a copy folded in for it.
+			unsigned sites = sites_of[decl];
 			MonoMethod *callee = marked_method (*decl);
 
 			if (callee == nullptr || unresolved.contains (callee))
@@ -445,6 +465,17 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			// A rebuild is free, so a spent budget stops the new methods
 			// below it rather than the whole scan.
 			if (!rebuild && scope.budget.trivial == 0)
+				continue;
+
+			// A rebuild onto a copy that stands redirects and returns above,
+			// spending nothing further. Reaching here always means a fresh
+			// copy is about to be built and its sites duplicated, whether or
+			// not this callee was folded once already, so both limits below
+			// gate every one of these rather than only a first-time fold.
+			if (fanout_limit != 0 && sites > fanout_limit)
+				continue;
+
+			if (instance_budget != 0 && sites > instances_left)
 				continue;
 
 			if (!may_fold (domain, callee))
@@ -505,6 +536,9 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			g_assert (copy->getFunctionType () == decl->getFunctionType ());
 
 			redirect_calls (*caller, *decl, *copy);
+
+			if (instance_budget != 0)
+				instances_left -= sites;
 
 			// These shapes have nothing to weigh, so the pipeline folds them
 			// rather than a cost model.

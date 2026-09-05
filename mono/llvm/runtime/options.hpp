@@ -270,6 +270,29 @@ uint32_t inline_round_limit ();
 /// count left over goes rather than what the first folds are.
 uint32_t trivial_inline_depth_limit ();
 
+/// How many call sites within one caller a single trivial fold can cover.
+///
+/// A trivial fold shares one copy across every site that calls it, and
+/// AlwaysInlinerPass then duplicates that copy at each of them: a helper with
+/// call sites past this count is left calling its published entry rather
+/// than folded, so translating it once does not turn into duplicating it
+/// past this many times. Zero turns the check off.
+uint32_t trivial_inline_fanout_limit ();
+
+/// How many call sites the shape-test pre-pass may spend building a fresh
+/// copy for, summed across every callee it builds one for in one root.
+///
+/// trivial_inline_budget () bounds how many distinct bodies the pre-pass
+/// takes in. A root that takes in that many, each covering several sites,
+/// still multiplies out to more code than either bound alone describes. This
+/// is the other half of the same question, in the unit AlwaysInlinerPass
+/// actually duplicates. A site that redirects onto a copy that already
+/// stands costs nothing further; only building a copy spends this, so once
+/// building one would spend more of it than is left, the pre-pass leaves
+/// that callee calling its published entry instead. Zero turns the check
+/// off.
+uint32_t trivial_inline_instance_budget ();
+
 /// How many calls a method takes at tier 0 before it is asked for as tier 1.
 ///
 /// Zero for a method that does not run at tier 0 at all. That also tells a

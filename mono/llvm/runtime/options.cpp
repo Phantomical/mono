@@ -175,6 +175,18 @@ llvm::cl::opt<unsigned> TrivialInlineDepthLimitOpt (
 	"mono-inline-prepass-depth", llvm::cl::Hidden, llvm::cl::init (8),
 	llvm::cl::desc ("Folds deep past root the shape-test pre-pass may go"));
 
+llvm::cl::opt<unsigned> TrivialInlineFanoutLimitOpt (
+	"mono-inline-trivial-fanout-limit", llvm::cl::Hidden, llvm::cl::init (32),
+	llvm::cl::desc ("Call sites within one caller a single trivial fold may cover "
+	                "before the pre-pass leaves that callee calling its published "
+	                "entry rather than folded; 0 turns this off"));
+
+llvm::cl::opt<unsigned> TrivialInlineInstanceBudgetOpt (
+	"mono-inline-trivial-instance-budget", llvm::cl::Hidden, llvm::cl::init (32),
+	llvm::cl::desc ("Call sites the shape-test pre-pass may spend building a "
+	                "fresh copy for, summed across every callee it builds one "
+	                "for in one root; 0 turns this off"));
+
 } // namespace
 
 bool
@@ -546,6 +558,18 @@ trivial_inline_depth_limit ()
 	 * the translation is the budget, in materialize_trivial_callees ().
 	 */
 	return TrivialInlineDepthLimitOpt;
+}
+
+uint32_t
+trivial_inline_fanout_limit ()
+{
+	return TrivialInlineFanoutLimitOpt;
+}
+
+uint32_t
+trivial_inline_instance_budget ()
+{
+	return TrivialInlineInstanceBudgetOpt;
 }
 
 int32_t
