@@ -5643,6 +5643,28 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 
 #ifndef DISABLE_JIT
 
+#define MAX_LEAF_MOVE_SIZE 16
+
+/// Bounds the code one value's leaf moves can take.
+static int
+get_max_leaf_moves_size (const ArgInfo *ainfo)
+{
+	int size = 0;
+
+	for (int i = 0; i < ainfo->nleaves; ++i) {
+		const ArgLeaf *leaf = &ainfo->leaves [i];
+
+		/* A scalar the caller left on the stack is copied a word at a
+		 * time through RAX, which is two moves per word. */
+		if (leaf->storage == ArgOnStack)
+			size += ((leaf->size + 7) / 8) * 2 * MAX_LEAF_MOVE_SIZE;
+		else
+			size += MAX_LEAF_MOVE_SIZE;
+	}
+
+	return size;
+}
+
 static int
 get_max_epilog_size (MonoCompile *cfg)
 {
@@ -5653,7 +5675,29 @@ get_max_epilog_size (MonoCompile *cfg)
 
 	max_epilog_size += (AMD64_NREG * 2);
 
+	if (cfg->arch.cinfo->ret.storage == ArgValuetypeInReg)
+		max_epilog_size += get_max_leaf_moves_size (&cfg->arch.cinfo->ret);
+
 	return max_epilog_size;
+}
+
+/// Bounds the code the argument saves at the end of the prologue can take.
+static int
+get_max_prolog_arg_size (MonoCompile *cfg, MonoMethodSignature *sig)
+{
+	CallInfo *cinfo = cfg->arch.cinfo;
+	int size = MAX_LEAF_MOVE_SIZE;
+
+	for (int i = 0; i < sig->param_count + sig->hasthis; ++i) {
+		ArgInfo *ainfo = cinfo->args + i;
+
+		if (ainfo->storage == ArgValuetypeInReg)
+			size += get_max_leaf_moves_size (ainfo);
+		else
+			size += MAX_LEAF_MOVE_SIZE;
+	}
+
+	return size;
 }
 
 /*
@@ -5972,6 +6016,12 @@ MONO_RESTORE_WARNING
 	pos = 0;
 
 	cinfo = cfg->arch.cinfo;
+
+	/* cfg->code_size is set from the method's IL length, which says nothing
+	 * about how wide the signature is. A short body taking many value types
+	 * overruns the buffer here. */
+	set_code_cursor (cfg, code);
+	code = realloc_code (cfg, get_max_prolog_arg_size (cfg, sig));
 
 	if (sig->ret->type != MONO_TYPE_VOID) {
 		/* Save volatile arguments to the stack */

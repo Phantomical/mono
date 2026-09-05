@@ -688,6 +688,13 @@ mono_runtime_suite(runtime-tier0-classic-conv-r-un
                    TESTS tier0-classic-conv-r-un.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=ConvRUn")
 
+# A signature wide enough that the moves saving its arguments outgrow a code
+# buffer sized from the method's IL, and a return the eightbyte view cannot
+# hold.
+mono_runtime_suite(runtime-tier0-classic-wide-args
+                   TESTS tier0-classic-wide-args.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=WideArgs")
+
 # The tier-2 cost model. Its root has to gather counts at tier 1 and then be
 # compiled at tier 2 once, on the thread that asks - so self-promotion is turned
 # off and the test drives the compile itself.
