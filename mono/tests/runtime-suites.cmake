@@ -702,6 +702,15 @@ mono_runtime_suite(runtime-tier0-classic-unsafe-mov-all
                    TESTS tier0-classic-unsafe-mov.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1")
 
+# A class initializer that only tier 0 can run, reached through a static call,
+# through an AggressiveInlining callee and through a static field.
+mono_runtime_suite(runtime-tier0-classic-class-init
+                   TESTS tier0-classic-class-init.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=ClassInit")
+mono_runtime_suite(runtime-tier0-classic-class-init-all
+                   TESTS tier0-classic-class-init.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1")
+
 # The tier-2 cost model. Its root has to gather counts at tier 1 and then be
 # compiled at tier 2 once, on the thread that asks - so self-promotion is turned
 # off and the test drives the compile itself.

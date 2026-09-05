@@ -625,6 +625,25 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 		gboolean needs_context = FALSE;
 		ERROR_DECL (classic_error);
 
+		/*
+		 * Classic emits no class-init check of its own, and a call to a
+		 * static method carries none, so the method's class is initialized
+		 * here. The interpreter, the other tier-0 engine, runs the
+		 * initializer as it transforms (mono_interp_transform_method ()).
+		 *
+		 * An open class has no runtime vtable, and a caller reaches its
+		 * shared body through an instantiation whose own entry ran the
+		 * initializer.
+		 */
+		if (!mono_class_is_open_constructed_type (m_class_get_byval_arg (method->klass))) {
+			MonoVTable *vtable = mono_class_vtable_checked (domain.domain, method->klass,
+			                                                classic_error);
+
+			if (vtable == nullptr
+			    || !mono_runtime_class_init_full (vtable, classic_error))
+				return runtime_error (classic_error);
+		}
+
 		if (!mono_tier0_compile (method, domain.domain, &code, &jinfo,
 		                         &needs_context, classic_error))
 			return runtime_error (classic_error);
