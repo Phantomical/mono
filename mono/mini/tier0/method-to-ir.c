@@ -7412,6 +7412,23 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 			if (mono_security_core_clr_enabled ())
 				ensure_method_is_allowed_to_call_method (cfg, method, cil_method);
 
+			/*
+			 * The callee's one published entry is in the C convention, so a
+			 * call in this engine's convention lands its arguments in the
+			 * wrong places. Refused the way emit_method_access_failure ()
+			 * refuses: the throw runs in the instruction's place, and the
+			 * call below still shapes the stack. A wrapper is exempt because
+			 * the native-to-managed wrapper is the transition itself.
+			 */
+			if (method->wrapper_type == MONO_WRAPPER_NONE
+			    && mono_method_has_unmanaged_callers_only_attribute (cmethod)) {
+				MonoInst *iargs [2];
+
+				EMIT_NEW_METHODCONST (cfg, iargs [0], method);
+				EMIT_NEW_METHODCONST (cfg, iargs [1], cmethod);
+				mono_emit_jit_icall (cfg, mono_throw_unmanaged_callers_only, iargs);
+			}
+
 			if (cfg->llvm_only && cmethod && method_needs_stack_walk (cfg, cmethod))
 				needs_stack_walk = TRUE;
 
