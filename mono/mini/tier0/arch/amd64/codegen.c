@@ -561,6 +561,7 @@ mono_arch_allocate_vars (MonoCompile *cfg)
 			cfg->ret->dreg = cinfo->ret.reg;
 			break;
 		case ArgValuetypeAddrInIReg:
+		case ArgValuetypeAddrOnStack:
 		case ArgGsharedvtVariableInReg:
 			/* The register is volatile */
 			cfg->vret_addr->opcode = OP_REGOFFSET;
@@ -734,7 +735,9 @@ mono_arch_create_vars (MonoCompile *cfg)
 	if (cinfo->ret.storage == ArgValuetypeInReg)
 		cfg->ret_var_is_local = TRUE;
 
-	if (cinfo->ret.storage == ArgValuetypeAddrInIReg || cinfo->ret.storage == ArgGsharedvtVariableInReg) {
+	if (cinfo->ret.storage == ArgValuetypeAddrInIReg
+	    || cinfo->ret.storage == ArgValuetypeAddrOnStack
+	    || cinfo->ret.storage == ArgGsharedvtVariableInReg) {
 		cfg->vret_addr = mono_compile_create_var (cfg, mono_get_int_type (), OP_ARG);
 		if (G_UNLIKELY (cfg->verbose_level > 1)) {
 			printf ("vret_addr = ");
@@ -1207,6 +1210,10 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 		mono_call_inst_add_outarg_reg (cfg, call, vtarg->dreg, cinfo->ret.reg, FALSE);
 		break;
 	}
+	case ArgValuetypeAddrOnStack:
+		MONO_EMIT_NEW_STORE_MEMBASE (cfg, OP_STORE_MEMBASE_REG, AMD64_RSP, cinfo->ret.offset,
+		                             call->vret_var->dreg);
+		break;
 	default:
 		break;
 	}
@@ -5688,7 +5695,9 @@ static int
 get_max_prolog_arg_size (MonoCompile *cfg, MonoMethodSignature *sig)
 {
 	CallInfo *cinfo = cfg->arch.cinfo;
-	int size = MAX_LEAF_MOVE_SIZE;
+	/* The hidden return pointer, which is two moves where it arrives in a
+	 * stack slot of its own. */
+	int size = 2 * MAX_LEAF_MOVE_SIZE;
 
 	for (int i = 0; i < sig->param_count + sig->hasthis; ++i) {
 		ArgInfo *ainfo = cinfo->args + i;
@@ -6026,8 +6035,20 @@ MONO_RESTORE_WARNING
 
 	if (sig->ret->type != MONO_TYPE_VOID) {
 		/* Save volatile arguments to the stack */
-		if (cfg->vret_addr && (cfg->vret_addr->opcode != OP_REGVAR))
-			amd64_mov_membase_reg (code, cfg->vret_addr->inst_basereg, cfg->vret_addr->inst_offset, cinfo->ret.reg, 8);
+		if (cfg->vret_addr && (cfg->vret_addr->opcode != OP_REGVAR)) {
+			// AMD64_RAX carries no argument, so it is free to carry the
+			// pointer across from the slot the caller left it in.
+			if (cinfo->ret.storage == ArgValuetypeAddrOnStack)
+				amd64_mov_reg_membase (code, AMD64_RAX, cfg->frame_reg,
+				                       ARGS_OFFSET + cinfo->ret.offset, 8);
+
+			amd64_mov_membase_reg (code, cfg->vret_addr->inst_basereg,
+			                       cfg->vret_addr->inst_offset,
+			                       cinfo->ret.storage == ArgValuetypeAddrOnStack
+			                               ? AMD64_RAX
+			                               : cinfo->ret.reg,
+			                       8);
+		}
 	}
 
 	/* Keep this in sync with emit_load_volatile_arguments */

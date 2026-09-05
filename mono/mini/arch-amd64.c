@@ -1592,7 +1592,19 @@ mono_arch_get_call_info (MonoMemPool *mp, MonoMethodSignature *sig)
 			pstart = 1;
 		}
 		add_general (&gr, &stack_size, &cinfo->ret);
-		cinfo->ret.storage = ret_storage;
+		if (cinfo->ret.storage == ArgOnStack) {
+			/*
+			 * The managed convention can spend every parameter register on
+			 * the first argument, and the pointer then travels in a slot of
+			 * its own. A gsharedvt return never gets here with the file
+			 * spent: it goes behind a receiver or a reference, which is one
+			 * register.
+			 */
+			g_assert (ret_storage == ArgValuetypeAddrInIReg);
+			cinfo->ret.storage = ArgValuetypeAddrOnStack;
+		} else {
+			cinfo->ret.storage = ret_storage;
+		}
 		cinfo->vret_arg_index = 1;
 	} else {
 		/* this */

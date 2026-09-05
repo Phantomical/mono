@@ -721,6 +721,17 @@ mono_runtime_suite(runtime-tier0-classic-threshold-zero
                    TESTS tier0-classic-threshold-zero.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1 --llvm-opt=-mono-tier1-threshold=0")
 
+# A value type whose scalars spend the whole integer parameter file, so the
+# hidden return pointer behind the first argument lands in a stack slot. Each
+# arm drives the tiers itself, which is what puts one engine on each side of a
+# call rather than leaving it to a threshold.
+mono_runtime_suite(runtime-tier0-classic-vret-spill
+                   TESTS tier0-classic-vret-spill.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=VretSpill --llvm-opt=-mono-tier1-threshold=0")
+mono_runtime_suite(runtime-tier0-classic-vret-spill-all
+                   TESTS tier0-classic-vret-spill.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1 --llvm-opt=-mono-tier1-threshold=0")
+
 # A class initializer that only tier 0 can run, reached through a static call,
 # through an AggressiveInlining callee and through a static field.
 mono_runtime_suite(runtime-tier0-classic-class-init
