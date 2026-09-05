@@ -267,6 +267,7 @@ set(MONO_TESTS_CS_SRC
   tier0-classic-ret-regs.cs
   tier0-classic-unsafe-mov.cs
   tier0-classic-class-init.cs
+  tier0-classic-threshold-zero.cs
   tbaa-aliasing.cs
   tbaa-explicit-overlap.cs
   typeload-field-memberref.cs
@@ -1233,6 +1234,11 @@ set(MONO_TESTS_TAILCALL_IL_SRC
 # Known-failing or not-applicable tests, excluded from every suite.
 # automake accumulated this from three lists that overlapped; deduplicated.
 set(MONO_TESTS_DISABLED
+  # Asserts the tier a classic body is left at, which needs both a classic
+  # body and a threshold of zero. Its own suite is where it gets them; no
+  # general suite sets either. Named directly there, so this only keeps it
+  # out of the suites built from the corpus.
+  tier0-classic-threshold-zero.exe
   delegate-async-exception.exe
   bug-348522.2.exe
   bug-459094.exe

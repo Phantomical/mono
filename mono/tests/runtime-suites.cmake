@@ -713,6 +713,14 @@ mono_runtime_suite(runtime-tier0-classic-unsafe-mov-all
                    TESTS tier0-classic-unsafe-mov.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1")
 
+# ThresholdZeroSpin (), called a thousand times with a loop of its own, under
+# the threshold every other suite here reaches for when it wants a method
+# pinned at tier 0. Select-all rather than a filter: the counter this is about
+# is the one a classic body carries.
+mono_runtime_suite(runtime-tier0-classic-threshold-zero
+                   TESTS tier0-classic-threshold-zero.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1 --llvm-opt=-mono-tier1-threshold=0")
+
 # A class initializer that only tier 0 can run, reached through a static call,
 # through an AggressiveInlining callee and through a static field.
 mono_runtime_suite(runtime-tier0-classic-class-init
