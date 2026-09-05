@@ -695,6 +695,13 @@ mono_runtime_suite(runtime-tier0-classic-wide-args
                    TESTS tier0-classic-wide-args.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=WideArgs")
 
+# Array.UnsafeMov, whose caller is in corlib. Select-all rather than a filter:
+# the interpreter reaches a callee itself without asking the backend, so a
+# filter naming that caller answers for nothing.
+mono_runtime_suite(runtime-tier0-classic-unsafe-mov-all
+                   TESTS tier0-classic-unsafe-mov.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1")
+
 # The tier-2 cost model. Its root has to gather counts at tier 1 and then be
 # compiled at tier 2 once, on the thread that asks - so self-promotion is turned
 # off and the test drives the compile itself.
