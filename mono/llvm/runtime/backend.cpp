@@ -869,12 +869,17 @@ shared_form (MonoMethod *method)
 	if (implemented_outside_il (method))
 		return nullptr;
 
-	// The shared method is itself open, and asking it for its own shared form
-	// again is how this would recurse.
-	if (mono_method_check_context_used (method) != 0)
-		return nullptr;
-
-	if (!mono_method_is_generic_sharable_full (method, FALSE, FALSE, FALSE))
+	/*
+	 * Type variables count as reference types here, because a method can
+	 * arrive open without being at its own shared form: a call site resolves
+	 * its callee against the caller's context, so a shared caller names an
+	 * instance method whose declaring class is instantiated with the caller's
+	 * own type parameter. Its rgctx templates then name that parameter, which
+	 * the receiver's class context cannot substitute, and every one of them
+	 * fills as an open type. Reducing settles both shapes: a method already at
+	 * its shared form reduces to itself, which is what stops the recursion.
+	 */
+	if (!mono_method_is_generic_sharable_full (method, TRUE, FALSE, FALSE))
 		return nullptr;
 
 	ERROR_DECL (share_error);
@@ -894,8 +899,9 @@ shared_form (MonoMethod *method)
  * it, which is work the second of them need not do.
  *
  * A wait for a claim cannot cycle, because no thread that holds one comes to
- * want a second. The holder compiles the shared method, which is open, and
- * shared_form () refuses an open method, so that nested compile takes no claim.
+ * want a second. The holder compiles the shared method, which reduces to
+ * itself, so shared_form () answers null and that nested compile takes no
+ * claim.
  *
  * It can still wait behind a runtime lock. A compile takes the loader lock, and
  * a mutator that arrives here can already hold it, so a waiter and a holder can
@@ -1212,8 +1218,8 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 		 * a detour on the shared form moves all of them - so it must not
 		 * depend on how far a method happens to have promoted.
 		 *
-		 * The shared method is open, and shared_form () refuses an open
-		 * method, so the compile enter_shared_body () asks for arrives here
+		 * The shared method reduces to itself, so shared_form () answers
+		 * null and the compile enter_shared_body () asks for arrives here
 		 * and stops.
 		 */
 		MonoMethod *shared = shared_form (dm->method);

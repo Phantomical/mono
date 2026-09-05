@@ -762,6 +762,19 @@ mono_runtime_suite(runtime-tier0-classic-class-init-all
                    TESTS tier0-classic-class-init.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1")
 
+# A shared classic caller naming its own open type argument as the type
+# argument of the class its callee is declared in. The filter arm is the one
+# that reaches it: it leaves the callee to tier 1, which is the engine that has
+# to reduce that identity to a shared body of its own. The select-all arm
+# instead gives the callee to classic, which reduces it on its own, so the two
+# arms cover the two engines that answer the same call.
+mono_runtime_suite(runtime-tier0-classic-open-callee
+                   TESTS tier0-classic-open-callee.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=OpenCallee")
+mono_runtime_suite(runtime-tier0-classic-open-callee-all
+                   TESTS tier0-classic-open-callee.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1")
+
 # The tier-2 cost model. Its root has to gather counts at tier 1 and then be
 # compiled at tier 2 once, on the thread that asks - so self-promotion is turned
 # off and the test drives the compile itself.
