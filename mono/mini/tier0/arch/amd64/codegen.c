@@ -175,6 +175,17 @@ mono_arch_get_argument_info (MonoMethodSignature *csig, int param_count, MonoJit
 	return args_size;
 }
 
+/*
+ * Whether a value type comes back whole in the first return register. That is
+ * the one shape a caller reads back with no slot of its own to gather it in.
+ */
+static gboolean
+returns_in_one_register (const ArgInfo *ainfo)
+{
+	return ainfo->nleaves == 1 && ainfo->leaves [0].storage == ArgInIReg
+	       && ainfo->leaves [0].offset == 0;
+}
+
 #ifndef DISABLE_JIT
 gboolean
 mono_arch_tailcall_supported (MonoCompile *cfg, MonoMethodSignature *caller_sig, MonoMethodSignature *callee_sig, gboolean virtual_)
@@ -183,6 +194,11 @@ mono_arch_tailcall_supported (MonoCompile *cfg, MonoMethodSignature *caller_sig,
 	CallInfo *callee_info = mono_arch_get_call_info (NULL, callee_sig);
 	gboolean res = IS_SUPPORTED_TAILCALL (callee_info->stack_usage <= caller_info->stack_usage)
                     && IS_SUPPORTED_TAILCALL (callee_info->ret.storage == caller_info->ret.storage);
+
+	/* A value type spread over several return registers is gathered into a
+	 * slot of this frame after the call, and a jump leaves no frame. */
+	res &= IS_SUPPORTED_TAILCALL (callee_info->ret.storage != ArgValuetypeInReg
+	                              || returns_in_one_register (&callee_info->ret));
 
 	// Limit stack_usage to 1G. Assume 32bit limits when we move parameters.
 	res &= IS_SUPPORTED_TAILCALL (callee_info->stack_usage < (1 << 30));
@@ -285,11 +301,22 @@ mono_arch_compute_omit_fp (MonoCompile *cfg)
 		ArgInfo *ainfo = &cinfo->args [i];
 
 		if (ainfo->storage == ArgOnStack || ainfo->storage == ArgValuetypeAddrInIReg || ainfo->storage == ArgValuetypeAddrOnStack) {
-			/* 
+			/*
 			 * The stack offset can only be determined when the frame
 			 * size is known.
 			 */
 			cfg->arch.omit_fp = FALSE;
+		}
+
+		/* A value type whose scalars outlasted the argument registers has
+		 * the rest of them on the stack, and reaching those needs a frame
+		 * pointer the same way. */
+		if (ainfo->storage == ArgValuetypeInReg) {
+			int leaf;
+
+			for (leaf = 0; leaf < ainfo->nleaves; ++leaf)
+				if (ainfo->leaves [leaf].storage == ArgOnStack)
+					cfg->arch.omit_fp = FALSE;
 		}
 	}
 
@@ -345,6 +372,53 @@ mono_arch_regalloc_cost (MonoCompile *cfg, MonoMethodVar *vmv)
 	else
 		/* push+pop */
 		return (ins->opcode == OP_ARG) ? 1 : 2;
+}
+
+/*
+ * Whether a value type carries a scalar this compiler cannot place. The
+ * managed convention gives a whole SIMD value one SSE register, and tier 0's
+ * own sources are built with DISABLE_SIMD (mono/mini/tier0/CMakeLists.txt),
+ * so no opcode that moves sixteen bytes at once is compiled into them.
+ */
+static gboolean
+unplaceable_valuetype (const ArgInfo *ainfo)
+{
+	int i;
+
+	if (ainfo->storage != ArgValuetypeInReg)
+		return FALSE;
+
+	for (i = 0; i < ainfo->nleaves; ++i)
+		if (ainfo->leaves [i].size > 8)
+			return TRUE;
+
+	return FALSE;
+}
+
+/*
+ * Marks the compile as one not to publish where sig carries such a value. It
+ * is asked of a call this method makes as well as of the method's own entry,
+ * because the convention is the call's rather than the method's.
+ *
+ * The body is still built, wrong in those bytes and thrown away. Stopping
+ * here instead would leave the rest of the compile reading vars this had not
+ * created.
+ */
+static void
+refuse_unplaceable_signature (MonoCompile *cfg, MonoMethodSignature *sig, CallInfo *cinfo)
+{
+	int i;
+
+	if (unplaceable_valuetype (&cinfo->ret)) {
+		cfg->refused_signature = TRUE;
+		return;
+	}
+
+	for (i = 0; i < sig->param_count + sig->hasthis; ++i)
+		if (unplaceable_valuetype (&cinfo->args [i])) {
+			cfg->refused_signature = TRUE;
+			return;
+		}
 }
 
 /*
@@ -509,9 +583,9 @@ mono_arch_allocate_vars (MonoCompile *cfg)
 			cfg->ret->inst_basereg = cfg->frame_reg;
 			if (cfg->arch.omit_fp) {
 				cfg->ret->inst_offset = offset;
-				offset += cinfo->ret.pair_storage [1] == ArgNone ? 8 : 16;
+				offset += cinfo->ret.arg_size;
 			} else {
-				offset += cinfo->ret.pair_storage [1] == ArgNone ? 8 : 16;
+				offset += cinfo->ret.arg_size;
 				cfg->ret->inst_offset = - offset;
 			}
 			break;
@@ -628,11 +702,11 @@ mono_arch_allocate_vars (MonoCompile *cfg)
 				offset = ALIGN_TO (offset, sizeof (target_mgreg_t));
 				if (cfg->arch.omit_fp) {
 					ins->inst_offset = offset;
-					offset += (ainfo->storage == ArgValuetypeInReg) ? ainfo->nregs * sizeof (target_mgreg_t) : sizeof (target_mgreg_t);
+					offset += (ainfo->storage == ArgValuetypeInReg) ? ainfo->arg_size : sizeof (target_mgreg_t);
 					// Arguments are yet supported by the stack map creation code
 					//cfg->locals_max_stack_offset = MAX (cfg->locals_max_stack_offset, offset);
 				} else {
-					offset += (ainfo->storage == ArgValuetypeInReg) ? ainfo->nregs * sizeof (target_mgreg_t) : sizeof (target_mgreg_t);
+					offset += (ainfo->storage == ArgValuetypeInReg) ? ainfo->arg_size : sizeof (target_mgreg_t);
 					ins->inst_offset = - offset;
 					//cfg->locals_min_stack_offset = MIN (cfg->locals_min_stack_offset, offset);
 				}
@@ -654,6 +728,8 @@ mono_arch_create_vars (MonoCompile *cfg)
 	if (!cfg->arch.cinfo)
 		cfg->arch.cinfo = mono_arch_get_call_info (cfg->mempool, sig);
 	cinfo = cfg->arch.cinfo;
+
+	refuse_unplaceable_signature (cfg, sig, cinfo);
 
 	if (cinfo->ret.storage == ArgValuetypeInReg)
 		cfg->ret_var_is_local = TRUE;
@@ -745,6 +821,35 @@ arg_storage_to_load_membase (ArgStorage storage)
 	}
 
 	return -1;
+}
+
+/*
+ * The load that moves a leaf out of the value it belongs to. Only the bytes
+ * the leaf carries move: the rest of the register it lands in is undefined,
+ * and a wider load would reach a neighbouring leaf's bytes.
+ */
+static int
+leaf_load_opcode (const ArgLeaf *leaf)
+{
+	switch (leaf->storage) {
+	case ArgInDoubleSSEReg:
+		return OP_LOADR8_MEMBASE;
+	case ArgInFloatSSEReg:
+		return OP_LOADR4_MEMBASE;
+	default:
+		break;
+	}
+
+	switch (leaf->size) {
+	case 1:
+		return OP_LOADU1_MEMBASE;
+	case 2:
+		return OP_LOADU2_MEMBASE;
+	case 4:
+		return OP_LOADU4_MEMBASE;
+	default:
+		return OP_LOAD_MEMBASE;
+	}
 }
 
 static void
@@ -929,7 +1034,9 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 		return;
 	}
 
-	/* 
+	refuse_unplaceable_signature (cfg, sig, cinfo);
+
+	/*
 	 * Emit all arguments which are passed on the stack to prevent register
 	 * allocation problems.
 	 */
@@ -1058,7 +1165,7 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 
 	switch (cinfo->ret.storage) {
 	case ArgValuetypeInReg:
-		if (cinfo->ret.pair_storage [0] == ArgInIReg && cinfo->ret.pair_storage [1] == ArgNone) {
+		if (returns_in_one_register (&cinfo->ret)) {
 			/*
 			 * Tell the JIT to use a more efficient calling convention: call using
 			 * OP_CALL, compute the result location after the call, and save the
@@ -1124,20 +1231,27 @@ mono_arch_emit_outarg_vt (MonoCompile *cfg, MonoInst *ins, MonoInst *src)
 		MonoInst *load;
 		int part;
 
-		for (part = 0; part < 2; ++part) {
-			if (ainfo->pair_storage [part] == ArgNone)
+		for (part = 0; part < ainfo->nleaves; ++part) {
+			const ArgLeaf *leaf = &ainfo->leaves [part];
+
+			/* A scalar that outlasted the argument registers travels in
+			 * a slot of its own. */
+			if (leaf->storage == ArgOnStack) {
+				mini_emit_memcpy (cfg, AMD64_RSP, leaf->at, src->dreg,
+								  leaf->offset, leaf->size, TARGET_SIZEOF_VOID_P);
 				continue;
+			}
 
 			if (ainfo->pass_empty_struct) {
 				//Pass empty struct value as 0 on platforms representing empty structs as 1 byte.
 				NEW_ICONST (cfg, load, 0);
 			}
 			else {
-				MONO_INST_NEW (cfg, load, arg_storage_to_load_membase (ainfo->pair_storage [part]));
+				MONO_INST_NEW (cfg, load, leaf_load_opcode (leaf));
 				load->inst_basereg = src->dreg;
-				load->inst_offset = part * sizeof (target_mgreg_t);
+				load->inst_offset = leaf->offset;
 
-				switch (ainfo->pair_storage [part]) {
+				switch (leaf->storage) {
 				case ArgInIReg:
 					load->dreg = mono_alloc_ireg (cfg);
 					break;
@@ -1152,7 +1266,7 @@ mono_arch_emit_outarg_vt (MonoCompile *cfg, MonoInst *ins, MonoInst *src)
 
 			MONO_ADD_INS (cfg->cbb, load);
 
-			add_outarg_reg (cfg, call, ainfo->pair_storage [part], ainfo->pair_regs [part], load);
+			add_outarg_reg (cfg, call, leaf->storage, leaf->reg, load);
 		}
 		break;
 	}
@@ -2370,6 +2484,56 @@ mono_emit_stack_alloc (MonoCompile *cfg, guchar *code, MonoInst* tree)
 	return code;
 }
 
+/*
+ * Writes the register a leaf arrived in into the value it belongs to, at
+ * basereg + offset. Only the leaf's own bytes are written: the ones beside it
+ * belong to a leaf of their own.
+ */
+static guint8*
+emit_store_leaf (guint8 *code, const ArgLeaf *leaf, int basereg, int offset)
+{
+	int at = offset + leaf->offset;
+
+	switch (leaf->storage) {
+	case ArgInIReg:
+		amd64_mov_membase_reg (code, basereg, at, leaf->reg, leaf->size);
+		break;
+	case ArgInFloatSSEReg:
+		amd64_movss_membase_reg (code, basereg, at, leaf->reg);
+		break;
+	case ArgInDoubleSSEReg:
+		amd64_movsd_membase_reg (code, basereg, at, leaf->reg);
+		break;
+	default:
+		g_assert_not_reached ();
+	}
+
+	return code;
+}
+
+/* The other direction: the value's own bytes back into the leaf's register. */
+static guint8*
+emit_load_leaf (guint8 *code, const ArgLeaf *leaf, int basereg, int offset)
+{
+	int at = offset + leaf->offset;
+
+	switch (leaf->storage) {
+	case ArgInIReg:
+		amd64_mov_reg_membase (code, leaf->reg, basereg, at, leaf->size);
+		break;
+	case ArgInFloatSSEReg:
+		amd64_movss_reg_membase (code, leaf->reg, basereg, at);
+		break;
+	case ArgInDoubleSSEReg:
+		amd64_movsd_reg_membase (code, leaf->reg, basereg, at);
+		break;
+	default:
+		g_assert_not_reached ();
+	}
+
+	return code;
+}
+
 static guint8*
 emit_move_return_value (MonoCompile *cfg, MonoInst *ins, guint8 *code)
 {
@@ -2420,23 +2584,8 @@ emit_move_return_value (MonoCompile *cfg, MonoInst *ins, guint8 *code)
 			g_assert (loc->opcode == OP_REGOFFSET);
 			amd64_mov_reg_membase (code, AMD64_RCX, loc->inst_basereg, loc->inst_offset, sizeof(gpointer));
 
-			for (quad = 0; quad < 2; quad ++) {
-				switch (cinfo->ret.pair_storage [quad]) {
-				case ArgInIReg:
-					amd64_mov_membase_reg (code, AMD64_RCX, (quad * sizeof (target_mgreg_t)), cinfo->ret.pair_regs [quad], sizeof (target_mgreg_t));
-					break;
-				case ArgInFloatSSEReg:
-					amd64_movss_membase_reg (code, AMD64_RCX, (quad * 8), cinfo->ret.pair_regs [quad]);
-					break;
-				case ArgInDoubleSSEReg:
-					amd64_movsd_membase_reg (code, AMD64_RCX, (quad * 8), cinfo->ret.pair_regs [quad]);
-					break;
-				case ArgNone:
-					break;
-				default:
-					NOT_IMPLEMENTED;
-				}
-			}
+			for (quad = 0; quad < (guint32) cinfo->ret.nleaves; quad ++)
+				code = emit_store_leaf (code, &cinfo->ret.leaves [quad], AMD64_RCX, 0);
 		}
 		break;
 	}
@@ -5873,22 +6022,29 @@ MONO_RESTORE_WARNING
 				amd64_movsd_membase_reg (code, ins->inst_basereg, ins->inst_offset, ainfo->reg);
 				break;
 			case ArgValuetypeInReg:
-				for (quad = 0; quad < 2; quad ++) {
-					switch (ainfo->pair_storage [quad]) {
-					case ArgInIReg:
-						amd64_mov_membase_reg (code, ins->inst_basereg, ins->inst_offset + (quad * sizeof (target_mgreg_t)), ainfo->pair_regs [quad], sizeof (target_mgreg_t));
-						break;
-					case ArgInFloatSSEReg:
-						amd64_movss_membase_reg (code, ins->inst_basereg, ins->inst_offset + (quad * sizeof (target_mgreg_t)), ainfo->pair_regs [quad]);
-						break;
-					case ArgInDoubleSSEReg:
-						amd64_movsd_membase_reg (code, ins->inst_basereg, ins->inst_offset + (quad * sizeof (target_mgreg_t)), ainfo->pair_regs [quad]);
-						break;
-					case ArgNone:
-						break;
-					default:
-						g_assert_not_reached ();
+				for (quad = 0; quad < (guint32) ainfo->nleaves; quad ++) {
+					const ArgLeaf *leaf = &ainfo->leaves [quad];
+
+					/* A scalar the caller had no register left for
+					 * arrived in a slot of its own. AMD64_RAX carries no
+					 * argument, so it is free to carry each word across. */
+					if (leaf->storage == ArgOnStack) {
+						int moved;
+
+						for (moved = 0; moved < leaf->size; moved += 8) {
+							int width = MIN (8, leaf->size - moved);
+
+							amd64_mov_reg_membase (code, AMD64_RAX, cfg->frame_reg,
+												   ARGS_OFFSET + leaf->at + moved, width);
+							amd64_mov_membase_reg (code, ins->inst_basereg,
+												   ins->inst_offset + leaf->offset + moved,
+												   AMD64_RAX, width);
+						}
+						continue;
 					}
+
+					code = emit_store_leaf (code, leaf, ins->inst_basereg,
+											ins->inst_offset);
 				}
 				break;
 			case ArgValuetypeAddrInIReg:
@@ -6098,23 +6254,9 @@ mono_arch_emit_epilog (MonoCompile *cfg)
 		ArgInfo *ainfo = &cinfo->ret;
 		MonoInst *inst = cfg->ret;
 
-		for (quad = 0; quad < 2; quad ++) {
-			switch (ainfo->pair_storage [quad]) {
-			case ArgInIReg:
-				amd64_mov_reg_membase (code, ainfo->pair_regs [quad], inst->inst_basereg, inst->inst_offset + (quad * sizeof (target_mgreg_t)), ainfo->pair_size [quad]);
-				break;
-			case ArgInFloatSSEReg:
-				amd64_movss_reg_membase (code, ainfo->pair_regs [quad], inst->inst_basereg, inst->inst_offset + (quad * sizeof (target_mgreg_t)));
-				break;
-			case ArgInDoubleSSEReg:
-				amd64_movsd_reg_membase (code, ainfo->pair_regs [quad], inst->inst_basereg, inst->inst_offset + (quad * sizeof (target_mgreg_t)));
-				break;
-			case ArgNone:
-				break;
-			default:
-				g_assert_not_reached ();
-			}
-		}
+		for (quad = 0; quad < (guint32) ainfo->nleaves; quad ++)
+			code = emit_load_leaf (code, &ainfo->leaves [quad], inst->inst_basereg,
+								   inst->inst_offset);
 	}
 
 	if (cfg->arch.omit_fp) {

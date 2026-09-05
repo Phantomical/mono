@@ -668,6 +668,20 @@ mono_runtime_suite(runtime-tier0-classic-backedge
                    TESTS tier0-classic-backedge.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=BackedgeCounter")
 
+# A managed value type of each size class crossing every boundary between the
+# engines: interpreted, classic tier 0, tier 1, and a delegate's invoke
+# wrapper. The filter arm puts classic on one side of each of those calls, and
+# the select-all arm puts it on every side the interpreter would otherwise
+# have taken. The default arm the whole-corpus run already gives this file is
+# the third: no classic body anywhere, which is what says a failure here is
+# classic's own.
+mono_runtime_suite(runtime-tier0-classic-struct-abi
+                   TESTS tier0-classic-struct-abi.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=StructAbiClassic")
+mono_runtime_suite(runtime-tier0-classic-struct-abi-all
+                   TESTS tier0-classic-struct-abi.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1")
+
 # The tier-2 cost model. Its root has to gather counts at tier 1 and then be
 # compiled at tier 2 once, on the thread that asks - so self-promotion is turned
 # off and the test drives the compile itself.

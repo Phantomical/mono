@@ -198,6 +198,21 @@ typedef enum {
 	ArgNone /* only in pair_storage */
 } ArgStorage;
 
+/*
+ * One scalar of a managed value type, and where the convention puts it. See
+ * collect_managed_leaves () in arch-amd64.c for what the scalars are.
+ */
+typedef struct {
+	/* ArgInIReg, ArgInFloatSSEReg, ArgInDoubleSSEReg or ArgOnStack */
+	ArgStorage storage;
+	gint8 reg;
+	/* The outgoing stack offset, when storage is ArgOnStack */
+	int at;
+	/* Where the scalar sits inside the value, and how many bytes it is */
+	int offset;
+	int size;
+} ArgLeaf;
+
 typedef struct {
 	gint16 offset;
 	gint8  reg;
@@ -209,6 +224,13 @@ typedef struct {
 	/* The size of each pair (bytes) */
 	int pair_size [2];
 	int nregs;
+	/*
+	 * Only if storage == ArgValuetypeInReg: the scalars the convention
+	 * places, one entry each. This is the whole description. pair_storage
+	 * above is empty wherever the eightbyte view cannot state the value.
+	 */
+	ArgLeaf *leaves;
+	int nleaves;
 	/* Only if storage == ArgOnStack */
 	int arg_size; // Bytes, will always be rounded up/aligned to 8 byte boundary
 	// Size in bytes for small arguments

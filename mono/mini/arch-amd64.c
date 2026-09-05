@@ -647,13 +647,519 @@ add_valuetype_win64 (MonoMethodSignature *signature, ArgInfo *arg_info, MonoType
 
 #endif /* TARGET_WIN32 */
 
+#ifndef TARGET_WIN32
+
+/*
+ * The managed calling convention for a value type.
+ *
+ * A managed struct does not travel as the psABI's one or two eightbytes. It
+ * travels as the scalars it is made of, each placed on its own, because the
+ * JIT hands LLVM a first-class struct and LLVM's argument lowering flattens
+ * it. So `struct { int a, b; }` is two integer registers rather than one, a
+ * pair of floats is two SSE registers, and a 32-byte struct of references is
+ * four integer registers rather than a stack copy. A struct whose scalars
+ * outlast the argument registers is split, with the rest in one 8-byte stack
+ * slot each.
+ *
+ * The scalars are the flattening of the packed struct the translator builds
+ * for the class - convert_vtype (), packed_body () and fill_tail () in
+ * mono/llvm/method-to-llvm/signature.cpp. That is why layout no field claims
+ * is a scalar here too: it becomes an array of bytes in that struct, and LLVM
+ * gives each of those bytes a register of its own.
+ *
+ * The walk below is that flattening over the metadata rather than over the
+ * IR. The two have to agree, because the interpreter's entry and dyn-call
+ * thunks read the same one (mono/llvm/arch/amd64/leaf-layout.cpp).
+ *
+ * Only a managed signature travels this way. A pinvoke signature is the real
+ * System V classification, which add_valuetype () below still implements.
+ */
+
+typedef struct {
+	int offset;
+	int size;
+	guint8 sse;    /* rides the SSE file rather than the integer one */
+	guint8 vector; /* a SIMD value, which reaches more return registers than a scalar */
+} ManagedLeaf;
+
+/* rax, rdx and rcx, which is what LLVM's return lowering spreads scalars over. */
+static const AMD64_Reg_No managed_return_regs [] = { AMD64_RAX, AMD64_RDX, AMD64_RCX };
+
+#define MANAGED_RETURN_REGS 3
+/* RetCC_X86_64_C gives a scalar only XMM0 and XMM1. The four are for a vector. */
+#define MANAGED_RETURN_SCALAR_FREGS 2
+#define MANAGED_RETURN_VECTOR_FREGS 4
+
+static void collect_managed_leaves (MonoType *type, int offset, GArray *leaves);
+
+static void
+add_managed_leaf (GArray *leaves, int offset, int size, gboolean sse, gboolean vector)
+{
+	ManagedLeaf leaf;
+
+	leaf.offset = offset;
+	leaf.size = size;
+	leaf.sse = sse ? 1 : 0;
+	leaf.vector = vector ? 1 : 0;
+	g_array_append_val (leaves, leaf);
+}
+
+static void
+add_padding_leaves (GArray *leaves, int offset, int bytes)
+{
+	int i;
+
+	for (i = 0; i < bytes; ++i)
+		add_managed_leaf (leaves, offset + i, 1, FALSE, FALSE);
+}
+
+/*
+ * The width primitive_type_to_llvm_type () (signature.cpp) gives type, or 0
+ * for a type it has none for.
+ */
+static int
+managed_primitive_size (int type)
+{
+	switch (type) {
+	case MONO_TYPE_BOOLEAN:
+	case MONO_TYPE_I1:
+	case MONO_TYPE_U1:
+		return 1;
+	case MONO_TYPE_CHAR:
+	case MONO_TYPE_I2:
+	case MONO_TYPE_U2:
+		return 2;
+	case MONO_TYPE_I4:
+	case MONO_TYPE_U4:
+	case MONO_TYPE_R4:
+		return 4;
+	case MONO_TYPE_I8:
+	case MONO_TYPE_U8:
+	case MONO_TYPE_R8:
+		return 8;
+	case MONO_TYPE_I:
+	case MONO_TYPE_U:
+		return TARGET_SIZEOF_VOID_P;
+	default:
+		return 0;
+	}
+}
+
+/*
+ * Whether klass converts to a vector rather than to a struct, and how wide
+ * that vector is. simd_class_to_llvm_type () (signature.cpp) is the rule. The
+ * width is the vector's rather than the class's, because the three
+ * System.Numerics types share one four-float register.
+ */
+static gboolean
+managed_simd_size (MonoClass *klass, int *size)
+{
+	const char *name;
+
+	if (!m_class_is_simd_type (klass))
+		return FALSE;
+
+	if (mono_class_is_ginst (klass)) {
+		MonoType *etype = mono_class_get_generic_class (klass)->context.class_inst->type_argv [0];
+		int esize = managed_primitive_size (etype->type);
+		int value_size = mono_class_value_size (klass, NULL);
+
+		if (esize == 0 || value_size == 0 || (value_size % esize) != 0)
+			return FALSE;
+		*size = value_size;
+		return TRUE;
+	}
+
+	name = m_class_get_name (klass);
+	if (!strcmp (name, "Vector2d") || !strcmp (name, "Vector2l")
+	    || !strcmp (name, "Vector2ul") || !strcmp (name, "Vector4i")
+	    || !strcmp (name, "Vector4ui") || !strcmp (name, "Vector8s")
+	    || !strcmp (name, "Vector8us") || !strcmp (name, "Vector16sb")
+	    || !strcmp (name, "Vector16b") || !strcmp (name, "Vector4f")
+	    || !strcmp (name, "Vector2") || !strcmp (name, "Vector3")
+	    || !strcmp (name, "Vector4")) {
+		*size = 16;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+typedef struct {
+	MonoType *type;
+	int offset;
+	int size;
+} ManagedField;
+
+/*
+ * Orders fields by offset, keeping two at one offset in declaration order.
+ * That order is what decides which field of an overlap keeps its slot.
+ */
+static void
+sort_managed_fields (GArray *fields)
+{
+	ManagedField *data = (ManagedField *) fields->data;
+	guint i, j;
+
+	for (i = 1; i < fields->len; ++i) {
+		ManagedField key = data [i];
+
+		for (j = i; j > 0 && data [j - 1].offset > key.offset; --j)
+			data [j] = data [j - 1];
+		data [j] = key;
+	}
+}
+
+/*
+ * The tail of a value type that no field reaches. fill_tail () repeats the
+ * last field where it is a scalar the classifier can tell apart. A `fixed`
+ * buffer is one field of the element type inside a class sized for the whole
+ * array, and repeating it keeps a float buffer on the SSE file.
+ */
+static void
+fill_managed_tail (GArray *leaves, int offset, const ManagedField *last, int at, int size)
+{
+	int gap = size - at;
+	int width, count, i;
+
+	if (last == NULL) {
+		add_padding_leaves (leaves, offset + at, gap);
+		return;
+	}
+
+	width = managed_primitive_size (mini_get_underlying_type (last->type)->type);
+	if (width > 0 && last->size == width) {
+		count = gap / width;
+		for (i = 0; i < count; ++i)
+			collect_managed_leaves (last->type, offset + at + (i * width), leaves);
+		at += count * width;
+		gap -= count * width;
+	}
+
+	if (gap > 0)
+		add_padding_leaves (leaves, offset + at, gap);
+}
+
+static void
+collect_managed_class_leaves (MonoClass *klass, int offset, GArray *leaves)
+{
+	int size = mono_class_value_size (klass, NULL);
+	int simd_size, at = 0;
+	guint entry = leaves->len;
+	gboolean expressible = TRUE;
+	GArray *fields;
+	const ManagedField *last = NULL;
+	gpointer iter;
+	MonoClassField *field;
+	guint i;
+
+	if (managed_simd_size (klass, &simd_size)) {
+		add_managed_leaf (leaves, offset, simd_size, TRUE, TRUE);
+		return;
+	}
+
+	if (m_class_is_enumtype (klass)) {
+		collect_managed_leaves (mono_class_enum_basetype_internal (klass), offset, leaves);
+		return;
+	}
+
+	fields = g_array_new (FALSE, TRUE, sizeof (ManagedField));
+
+	iter = NULL;
+	while ((field = mono_class_get_fields_internal (klass, &iter))) {
+		ManagedField f;
+		int align;
+
+		if (field->type->attrs & FIELD_ATTRIBUTE_STATIC)
+			continue;
+
+		f.type = field->type;
+		f.offset = field->offset - MONO_ABI_SIZEOF (MonoObject);
+		f.size = mono_type_size (field->type, &align);
+		g_array_append_val (fields, f);
+	}
+
+	sort_managed_fields (fields);
+
+	for (i = 0; i < fields->len; ++i) {
+		const ManagedField *f = &g_array_index (fields, ManagedField, i);
+
+		/* An explicit layout can overlap. The first field at an offset
+		 * keeps it, and the rest of the overlap becomes layout no field
+		 * claims. */
+		if (f->offset < at)
+			continue;
+		if (f->offset > at)
+			add_padding_leaves (leaves, offset + at, f->offset - at);
+		if (f->offset + f->size > size) {
+			expressible = FALSE;
+			break;
+		}
+		collect_managed_leaves (f->type, offset + f->offset, leaves);
+		at = f->offset + f->size;
+		last = f;
+	}
+
+	if (!expressible) {
+		/* A layout the walk cannot restate keeps its size, opaquely. */
+		g_array_set_size (leaves, entry);
+		add_padding_leaves (leaves, offset, size);
+	} else if (at < size) {
+		fill_managed_tail (leaves, offset, last, at, size);
+	}
+
+	g_array_free (fields, TRUE);
+}
+
+static void
+collect_managed_leaves (MonoType *type, int offset, GArray *leaves)
+{
+	MonoType *t;
+	int width;
+
+	if (type->byref) {
+		add_managed_leaf (leaves, offset, TARGET_SIZEOF_VOID_P, FALSE, FALSE);
+		return;
+	}
+
+	t = mini_get_underlying_type (type);
+	width = managed_primitive_size (t->type);
+	if (width > 0) {
+		gboolean sse = t->type == MONO_TYPE_R4 || t->type == MONO_TYPE_R8;
+
+		add_managed_leaf (leaves, offset, width, sse, FALSE);
+		return;
+	}
+
+	switch (t->type) {
+	case MONO_TYPE_GENERICINST:
+		if (mono_type_generic_inst_is_valuetype (t))
+			break;
+		/* fall through */
+	case MONO_TYPE_OBJECT:
+	case MONO_TYPE_STRING:
+	case MONO_TYPE_CLASS:
+	case MONO_TYPE_ARRAY:
+	case MONO_TYPE_SZARRAY:
+	case MONO_TYPE_PTR:
+	case MONO_TYPE_FNPTR:
+	case MONO_TYPE_VAR:
+	case MONO_TYPE_MVAR:
+		add_managed_leaf (leaves, offset, TARGET_SIZEOF_VOID_P, FALSE, FALSE);
+		return;
+	default:
+		break;
+	}
+
+	collect_managed_class_leaves (mono_class_from_mono_type_internal (t), offset, leaves);
+}
+
+/*
+ * The eightbyte view mono_arch_get_gsharedvt_call_info () reads. It is filled
+ * only where the scalars are one per eightbyte in a register, which is all
+ * that view can state. A value of any other shape is left with none, and
+ * nregs counts what pair_regs holds so that no reader walks past the end.
+ */
+static void
+fill_pair_view (ArgInfo *ainfo)
+{
+	int i;
+
+	ainfo->nregs = 0;
+	if (ainfo->nleaves > 2)
+		return;
+
+	for (i = 0; i < ainfo->nleaves; ++i)
+		if (ainfo->leaves [i].storage == ArgOnStack
+		    || ainfo->leaves [i].offset != i * 8)
+			return;
+
+	for (i = 0; i < ainfo->nleaves; ++i) {
+		ainfo->pair_storage [i] = ainfo->leaves [i].storage;
+		ainfo->pair_regs [i] = ainfo->leaves [i].reg;
+		ainfo->pair_size [i] = ainfo->leaves [i].size;
+		ainfo->nregs++;
+	}
+}
+
+/*
+ * Places type's scalars, which is the whole of the managed convention for a
+ * value type. They come out of the block mono_arch_get_call_info () reserved,
+ * and pool is where that block has got to.
+ */
+static void
+add_managed_valuetype (ArgInfo *ainfo, MonoType *type, gboolean is_return,
+					   guint32 *gr, guint32 *fr, guint32 *stack_size,
+					   ArgLeaf **pool)
+{
+	MonoClass *klass = mono_class_from_mono_type_internal (type);
+	GArray *leaves = g_array_new (FALSE, TRUE, sizeof (ManagedLeaf));
+	int size = mono_class_value_size (klass, NULL);
+	int extent = size;
+	guint i;
+
+	collect_managed_leaves (type, 0, leaves);
+
+	for (i = 0; i < leaves->len; ++i) {
+		const ManagedLeaf *leaf = &g_array_index (leaves, ManagedLeaf, i);
+
+		extent = MAX (extent, leaf->offset + leaf->size);
+	}
+
+	ainfo->storage = ArgValuetypeInReg;
+	ainfo->pair_storage [0] = ainfo->pair_storage [1] = ArgNone;
+	ainfo->leaves = *pool;
+	ainfo->nleaves = leaves->len;
+	ainfo->arg_size = ALIGN_TO (extent, 8);
+	*pool += leaves->len;
+
+	if (is_return) {
+		guint32 gregs = 0, fregs = 0;
+
+		for (i = 0; i < leaves->len; ++i) {
+			const ManagedLeaf *leaf = &g_array_index (leaves, ManagedLeaf, i);
+			ArgLeaf *out = &ainfo->leaves [i];
+
+			out->offset = leaf->offset;
+			out->size = leaf->size;
+			out->at = 0;
+
+			if (leaf->sse) {
+				guint32 available = leaf->vector ? MANAGED_RETURN_VECTOR_FREGS
+				                                 : MANAGED_RETURN_SCALAR_FREGS;
+
+				if (fregs >= available)
+					break;
+				out->storage = leaf->size <= 4 ? ArgInFloatSSEReg : ArgInDoubleSSEReg;
+				out->reg = fregs++;
+			} else {
+				if (gregs >= MANAGED_RETURN_REGS)
+					break;
+				out->storage = ArgInIReg;
+				out->reg = managed_return_regs [gregs++];
+			}
+		}
+
+		/* A value whose scalars outlast the return registers comes back
+		 * through a pointer the caller passes instead. */
+		if (i < leaves->len) {
+			ainfo->storage = ArgValuetypeAddrInIReg;
+			ainfo->leaves = NULL;
+			ainfo->nleaves = 0;
+		} else {
+			fill_pair_view (ainfo);
+		}
+
+		g_array_free (leaves, TRUE);
+		return;
+	}
+
+	for (i = 0; i < leaves->len; ++i) {
+		const ManagedLeaf *leaf = &g_array_index (leaves, ManagedLeaf, i);
+		ArgLeaf *out = &ainfo->leaves [i];
+
+		out->offset = leaf->offset;
+		out->size = leaf->size;
+		out->at = 0;
+		out->reg = 0;
+
+		if (leaf->sse && *fr < FLOAT_PARAM_REGS) {
+			out->storage = leaf->size <= 4 ? ArgInFloatSSEReg : ArgInDoubleSSEReg;
+			out->reg = (*fr)++;
+		} else if (!leaf->sse && *gr < PARAM_REGS) {
+			out->storage = ArgInIReg;
+			out->reg = param_regs [(*gr)++];
+		} else {
+			int slot = leaf->vector ? 16 : 8;
+
+			*stack_size = ALIGN_TO (*stack_size, slot);
+			out->storage = ArgOnStack;
+			out->at = *stack_size;
+			*stack_size += slot;
+		}
+	}
+
+	fill_pair_view (ainfo);
+	g_array_free (leaves, TRUE);
+}
+
+#endif /* !TARGET_WIN32 */
+
+/*
+ * The eightbytes a native signature's value type is placed as, restated as
+ * scalars, so that the code generator reads one shape whichever convention
+ * placed the value.
+ */
+static void
+fill_leaves_from_pairs (ArgInfo *ainfo, ArgLeaf **pool, int size)
+{
+	int quad;
+
+	if (ainfo->storage != ArgValuetypeInReg)
+		return;
+
+	ainfo->leaves = *pool;
+	ainfo->nleaves = 0;
+	ainfo->arg_size = ALIGN_TO (size, 8);
+
+	for (quad = 0; quad < 2; ++quad) {
+		ArgLeaf *leaf;
+
+		if (ainfo->pair_storage [quad] == ArgNone)
+			continue;
+
+		leaf = (*pool)++;
+		leaf->storage = ainfo->pair_storage [quad];
+		leaf->reg = ainfo->pair_regs [quad];
+		leaf->at = 0;
+		leaf->offset = quad * 8;
+		/* An integer eightbyte moves whole: the psABI leaves the bytes past
+		 * the value undefined. */
+		leaf->size = leaf->storage == ArgInIReg ? 8 : ainfo->pair_size [quad];
+		ainfo->nleaves++;
+	}
+}
+
+/*
+ * An upper bound on the scalars sig's value types are placed as, which is
+ * what the CallInfo reserves room for. A managed value type has one scalar
+ * per byte at worst. A native one has two eightbytes.
+ */
+static int
+arg_leaf_bound_for (MonoMethodSignature *sig, MonoType *t)
+{
+	/* A gsharedvt value type travels by address rather than as scalars, and
+	 * has no size here to bound them by. */
+	if (mini_is_gsharedvt_variable_type (t))
+		return 0;
+	if (!MONO_TYPE_ISSTRUCT (t) && t->type != MONO_TYPE_TYPEDBYREF)
+		return 0;
+	if (sig->pinvoke)
+		return 2;
+	return mono_class_value_size (mono_class_from_mono_type_internal (t), NULL);
+}
+
+static int
+arg_leaf_bound (MonoMethodSignature *sig)
+{
+	int bound = arg_leaf_bound_for (sig, mini_get_underlying_type (sig->ret));
+	int i;
+
+	for (i = 0; i < sig->param_count; ++i)
+		bound += arg_leaf_bound_for (sig, mini_get_underlying_type (sig->params [i]));
+
+	return bound;
+}
+
 static void
 add_valuetype (MonoMethodSignature *sig, ArgInfo *ainfo, MonoType *type,
 			   gboolean is_return,
-			   guint32 *gr, guint32 *fr, guint32 *stack_size)
+			   guint32 *gr, guint32 *fr, guint32 *stack_size, ArgLeaf **pool)
 {
 #ifdef TARGET_WIN32
 	add_valuetype_win64 (sig, ainfo, type, is_return, gr, fr, stack_size);
+	fill_leaves_from_pairs (ainfo, pool,
+	                        mono_class_value_size (mono_class_from_mono_type_internal (type), NULL));
 #else
 	guint32 size, quad, nquads, i, nfields;
 	/* Keep track of the size used in each quad so we can */
@@ -665,25 +1171,26 @@ add_valuetype (MonoMethodSignature *sig, ArgInfo *ainfo, MonoType *type,
 	MonoClass *klass;
 	gboolean pass_on_stack = FALSE;
 	int struct_size;
+	MonoMarshalType *info;
+
+	/* A managed signature travels its own convention, stated above. What is
+	 * left here is the psABI classification a native signature asks for. */
+	if (!sig->pinvoke) {
+		add_managed_valuetype (ainfo, type, is_return, gr, fr, stack_size, pool);
+		return;
+	}
 
 	klass = mono_class_from_mono_type_internal (type);
-	size = mini_type_stack_size_full (m_class_get_byval_arg (klass), NULL, sig->pinvoke);
+	size = mini_type_stack_size_full (m_class_get_byval_arg (klass), NULL, TRUE);
 
-	if (!sig->pinvoke && ((is_return && (size == 8)) || (!is_return && (size <= 16)))) {
-		/* We pass and return vtypes of size 8 in a register */
-	} else if (!sig->pinvoke || (size == 0) || (size > 16)) {
+	if ((size == 0) || (size > 16))
 		pass_on_stack = TRUE;
-	}
 
 	/* If this struct can't be split up naturally into 8-byte */
 	/* chunks (registers), pass it on the stack.              */
-	if (sig->pinvoke) {
-		MonoMarshalType *info = mono_marshal_load_type_info (klass);
-		g_assert (info);
-		struct_size = info->native_size;
-	} else {
-		struct_size = mono_class_value_size (klass, NULL);
-	}
+	info = mono_marshal_load_type_info (klass);
+	g_assert (info);
+	struct_size = info->native_size;
 	/*
 	 * Collect field information recursively to be able to
 	 * handle nested structures.
@@ -723,75 +1230,54 @@ add_valuetype (MonoMethodSignature *sig, ArgInfo *ainfo, MonoType *type,
 	else
 		nquads = 1;
 
-	if (!sig->pinvoke) {
-		int n = mono_class_value_size (klass, NULL);
+	/*
+	 * Implement the algorithm from section 3.2.3 of the X86_64 ABI.
+	 * The X87 and SSEUP stuff is left out since there are no such types in
+	 * the CLR.
+	 */
+	if (!nfields) {
+		ainfo->storage = ArgValuetypeInReg;
+		ainfo->pair_storage [0] = ainfo->pair_storage [1] = ArgNone;
+		g_array_free (fields_array, TRUE);
+		return;
+	}
 
-		quadsize [0] = n >= 8 ? 8 : n;
-		quadsize [1] = n >= 8 ? MAX (n - 8, 8) : 0;
+	if (struct_size > 16) {
+		ainfo->offset = *stack_size;
+		*stack_size += ALIGN_TO (struct_size, 8);
+		ainfo->storage = is_return ? ArgValuetypeAddrInIReg : ArgOnStack;
+		if (!is_return)
+			ainfo->arg_size = ALIGN_TO (struct_size, 8);
 
-		/* Always pass in 1 or 2 integer registers */
-		args [0] = ARG_CLASS_INTEGER;
-		args [1] = ARG_CLASS_INTEGER;
-		/* Only the simplest cases are supported */
-		if (is_return && nquads != 1) {
-			args [0] = ARG_CLASS_MEMORY;
-			args [1] = ARG_CLASS_MEMORY;
-		}
-	} else {
-		/*
-		 * Implement the algorithm from section 3.2.3 of the X86_64 ABI.
-		 * The X87 and SSEUP stuff is left out since there are no such types in
-		 * the CLR.
-		 */
-		if (!nfields) {
-			ainfo->storage = ArgValuetypeInReg;
-			ainfo->pair_storage [0] = ainfo->pair_storage [1] = ArgNone;
-			return;
-		}
+		g_array_free (fields_array, TRUE);
+		return;
+	}
 
-		if (struct_size > 16) {
-			ainfo->offset = *stack_size;
-			*stack_size += ALIGN_TO (struct_size, 8);
-			ainfo->storage = is_return ? ArgValuetypeAddrInIReg : ArgOnStack;
-			if (!is_return)
-				ainfo->arg_size = ALIGN_TO (struct_size, 8);
+	args [0] = ARG_CLASS_NO_CLASS;
+	args [1] = ARG_CLASS_NO_CLASS;
+	for (quad = 0; quad < nquads; ++quad) {
+		ArgumentClass class1 = ARG_CLASS_NO_CLASS;
 
-			g_array_free (fields_array, TRUE);
-			return;
-		}
-
-		args [0] = ARG_CLASS_NO_CLASS;
-		args [1] = ARG_CLASS_NO_CLASS;
-		for (quad = 0; quad < nquads; ++quad) {
-			ArgumentClass class1;
-
-			if (nfields == 0)
-				class1 = ARG_CLASS_MEMORY;
-			else
-				class1 = ARG_CLASS_NO_CLASS;
-			for (i = 0; i < nfields; ++i) {
-				if ((fields [i].offset < 8) && (fields [i].offset + fields [i].size) > 8) {
-					/* Unaligned field */
-					NOT_IMPLEMENTED;
-				}
-
-				/* Skip fields in other quad */
-				if ((quad == 0) && (fields [i].offset >= 8))
-					continue;
-				if ((quad == 1) && (fields [i].offset < 8))
-					continue;
-
-				/* How far into this quad this data extends.*/
-				/* (8 is size of quad) */
-				quadsize [quad] = fields [i].offset + fields [i].size - (quad * 8);
-
-				class1 = merge_argument_class_from_type (fields [i].type, class1);
+		for (i = 0; i < nfields; ++i) {
+			if ((fields [i].offset < 8) && (fields [i].offset + fields [i].size) > 8) {
+				/* Unaligned field */
+				NOT_IMPLEMENTED;
 			}
-			/* Empty structs have a nonzero size, causing this assert to be hit */
-			if (sig->pinvoke)
-				g_assert (class1 != ARG_CLASS_NO_CLASS);
-			args [quad] = class1;
+
+			/* Skip fields in other quad */
+			if ((quad == 0) && (fields [i].offset >= 8))
+				continue;
+			if ((quad == 1) && (fields [i].offset < 8))
+				continue;
+
+			/* How far into this quad this data extends.*/
+			/* (8 is size of quad) */
+			quadsize [quad] = fields [i].offset + fields [i].size - (quad * 8);
+
+			class1 = merge_argument_class_from_type (fields [i].type, class1);
 		}
+		g_assert (class1 != ARG_CLASS_NO_CLASS);
+		args [quad] = class1;
 	}
 
 	g_array_free (fields_array, TRUE);
@@ -858,17 +1344,117 @@ add_valuetype (MonoMethodSignature *sig, ArgInfo *ainfo, MonoType *type,
 			*fr = orig_fr;
 
 			ainfo->offset = *stack_size;
-			if (sig->pinvoke)
-				arg_size = ALIGN_TO (struct_size, 8);
-			else
-				arg_size = nquads * sizeof (target_mgreg_t);
+			arg_size = ALIGN_TO (struct_size, 8);
 			*stack_size += arg_size;
 			ainfo->storage = is_return ? ArgValuetypeAddrInIReg : ArgOnStack;
 			if (!is_return)
 				ainfo->arg_size = arg_size;
 		}
 	}
+
+	fill_leaves_from_pairs (ainfo, pool, struct_size);
 #endif /* !TARGET_WIN32 */
+}
+
+/* Places sig's parameter i. */
+static void
+add_parameter (MonoMethodSignature *sig, CallInfo *cinfo, int i, guint32 *gr,
+			   guint32 *fr, guint32 *stack_size, ArgLeaf **pool)
+{
+	ArgInfo *ainfo = &cinfo->args [sig->hasthis + i];
+	MonoType *ptype;
+
+#ifdef TARGET_WIN32
+	/* The float param registers and other param registers must be the same index on Windows x64.*/
+	if (*gr > *fr)
+		*fr = *gr;
+	else if (*fr > *gr)
+		*gr = *fr;
+#endif
+
+	if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG) && (i == sig->sentinelpos)) {
+		/* We allways pass the sig cookie on the stack for simplicity */
+		/*
+		 * Prevent implicit arguments + the sig cookie from being passed
+		 * in registers.
+		 */
+		*gr = PARAM_REGS;
+		*fr = FLOAT_PARAM_REGS;
+
+		/* Emit the signature cookie just before the implicit arguments */
+		add_general (gr, stack_size, &cinfo->sig_cookie);
+	}
+
+	ptype = mini_get_underlying_type (sig->params [i]);
+	switch (ptype->type) {
+	case MONO_TYPE_I1:
+		ainfo->is_signed = 1;
+	case MONO_TYPE_U1:
+		add_general (gr, stack_size, ainfo);
+		ainfo->byte_arg_size = 1;
+		break;
+	case MONO_TYPE_I2:
+		ainfo->is_signed = 1;
+	case MONO_TYPE_U2:
+		add_general (gr, stack_size, ainfo);
+		ainfo->byte_arg_size = 2;
+		break;
+	case MONO_TYPE_I4:
+		ainfo->is_signed = 1;
+	case MONO_TYPE_U4:
+		add_general (gr, stack_size, ainfo);
+		ainfo->byte_arg_size = 4;
+		break;
+	case MONO_TYPE_I:
+	case MONO_TYPE_U:
+	case MONO_TYPE_PTR:
+	case MONO_TYPE_FNPTR:
+	case MONO_TYPE_OBJECT:
+		add_general (gr, stack_size, ainfo);
+		break;
+	case MONO_TYPE_GENERICINST:
+		if (!mono_type_generic_inst_is_valuetype (ptype)) {
+			add_general (gr, stack_size, ainfo);
+			break;
+		}
+		if (mini_is_gsharedvt_variable_type (ptype)) {
+			/* gsharedvt arguments are passed by ref */
+			add_general (gr, stack_size, ainfo);
+			if (ainfo->storage == ArgInIReg)
+				ainfo->storage = ArgGSharedVtInReg;
+			else
+				ainfo->storage = ArgGSharedVtOnStack;
+			break;
+		}
+		/* fall through */
+	case MONO_TYPE_VALUETYPE:
+	case MONO_TYPE_TYPEDBYREF:
+		add_valuetype (sig, ainfo, ptype, FALSE, gr, fr, stack_size, pool);
+		break;
+	case MONO_TYPE_U8:
+
+	case MONO_TYPE_I8:
+		add_general (gr, stack_size, ainfo);
+		break;
+	case MONO_TYPE_R4:
+		add_float (fr, stack_size, ainfo, FALSE);
+		break;
+	case MONO_TYPE_R8:
+		add_float (fr, stack_size, ainfo, TRUE);
+		break;
+	case MONO_TYPE_VAR:
+	case MONO_TYPE_MVAR:
+		/* gsharedvt arguments are passed by ref */
+		g_assert (mini_is_gsharedvt_type (ptype));
+		add_general (gr, stack_size, ainfo);
+		if (ainfo->storage == ArgInIReg)
+			ainfo->storage = ArgGSharedVtInReg;
+		else
+			ainfo->storage = ArgGSharedVtOnStack;
+		break;
+	default:
+		g_assert_not_reached ();
+	}
 }
 
 /*
@@ -889,11 +1475,18 @@ mono_arch_get_call_info (MonoMemPool *mp, MonoMethodSignature *sig)
 	guint32 stack_size = 0;
 	CallInfo *cinfo;
 	gboolean is_pinvoke = sig->pinvoke;
+	ArgLeaf *pool;
+	size_t args_end = sizeof (CallInfo) + (sizeof (ArgInfo) * n);
+	int leaf_bound = arg_leaf_bound (sig);
 
+	/* The scalars a value type is placed as live behind the arguments, in
+	 * one allocation. A caller frees a CallInfo with g_free (), so a block
+	 * of its own would leak. */
 	if (mp)
-		cinfo = (CallInfo *)mono_mempool_alloc0 (mp, sizeof (CallInfo) + (sizeof (ArgInfo) * n));
+		cinfo = (CallInfo *)mono_mempool_alloc0 (mp, args_end + (sizeof (ArgLeaf) * leaf_bound));
 	else
-		cinfo = (CallInfo *)g_malloc0 (sizeof (CallInfo) + (sizeof (ArgInfo) * n));
+		cinfo = (CallInfo *)g_malloc0 (args_end + (sizeof (ArgLeaf) * leaf_bound));
+	pool = (ArgLeaf *)((char *)cinfo + args_end);
 
 	cinfo->nargs = n;
 	cinfo->gsharedvt = mini_is_gsharedvt_variable_signature (sig);
@@ -951,7 +1544,7 @@ mono_arch_get_call_info (MonoMemPool *mp, MonoMethodSignature *sig)
 	case MONO_TYPE_TYPEDBYREF: {
 		guint32 tmp_gr = 0, tmp_fr = 0, tmp_stacksize = 0;
 
-		add_valuetype (sig, &cinfo->ret, ret_type, TRUE, &tmp_gr, &tmp_fr, &tmp_stacksize);
+		add_valuetype (sig, &cinfo->ret, ret_type, TRUE, &tmp_gr, &tmp_fr, &tmp_stacksize, &pool);
 		g_assert (cinfo->ret.storage != ArgInIReg);
 		break;
 	}
@@ -970,16 +1563,31 @@ mono_arch_get_call_info (MonoMemPool *mp, MonoMethodSignature *sig)
 	/*
 	 * To simplify get_this_arg_reg () and LLVM integration, emit the vret arg after
 	 * the first argument, allowing 'this' to be always passed in the first arg reg.
-	 * Also do this if the first argument is a reference type, since virtual calls
-	 * are sometimes made using calli without sig->hasthis set, like in the delegate
-	 * invoke wrappers.
+	 *
+	 * The managed convention places it behind whatever the first argument is,
+	 * whether or not that is a receiver and whatever its type. Only a
+	 * signature with no argument at all leaves the pointer in front. See
+	 * hidden_return_index () (mono/llvm/hidden-return.hpp), which counts
+	 * arguments rather than reading the signature.
+	 *
+	 * A gsharedvt return is not that convention, and keeps the rule it had:
+	 * behind a receiver, or behind a first argument that is a reference,
+	 * since virtual calls are sometimes made using calli without sig->hasthis
+	 * set, like in the delegate invoke wrappers.
 	 */
 	ArgStorage ret_storage = cinfo->ret.storage;
-	if ((ret_storage == ArgValuetypeAddrInIReg || ret_storage == ArgGsharedvtVariableInReg) && !is_pinvoke && (sig->hasthis || (sig->param_count > 0 && MONO_TYPE_IS_REFERENCE (mini_get_underlying_type (sig->params [0]))))) {
+	gboolean behind_first_arg = !is_pinvoke
+		&& ((ret_storage == ArgValuetypeAddrInIReg && n > 0)
+		    || (ret_storage == ArgGsharedvtVariableInReg
+		        && (sig->hasthis
+		            || (sig->param_count > 0
+		                && MONO_TYPE_IS_REFERENCE (mini_get_underlying_type (sig->params [0]))))));
+
+	if (behind_first_arg) {
 		if (sig->hasthis) {
 			add_general (&gr, &stack_size, cinfo->args + 0);
 		} else {
-			add_general (&gr, &stack_size, &cinfo->args [sig->hasthis + 0]);
+			add_parameter (sig, cinfo, 0, &gr, &fr, &stack_size, &pool);
 			pstart = 1;
 		}
 		add_general (&gr, &stack_size, &cinfo->ret);
@@ -1004,102 +1612,8 @@ mono_arch_get_call_info (MonoMemPool *mp, MonoMethodSignature *sig)
 		add_general (&gr, &stack_size, &cinfo->sig_cookie);
 	}
 
-	for (i = pstart; i < sig->param_count; ++i) {
-		ArgInfo *ainfo = &cinfo->args [sig->hasthis + i];
-		MonoType *ptype;
-
-#ifdef TARGET_WIN32
-		/* The float param registers and other param registers must be the same index on Windows x64.*/
-		if (gr > fr)
-			fr = gr;
-		else if (fr > gr)
-			gr = fr;
-#endif
-
-		if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG) && (i == sig->sentinelpos)) {
-			/* We allways pass the sig cookie on the stack for simplicity */
-			/* 
-			 * Prevent implicit arguments + the sig cookie from being passed 
-			 * in registers.
-			 */
-			gr = PARAM_REGS;
-			fr = FLOAT_PARAM_REGS;
-
-			/* Emit the signature cookie just before the implicit arguments */
-			add_general (&gr, &stack_size, &cinfo->sig_cookie);
-		}
-
-		ptype = mini_get_underlying_type (sig->params [i]);
-		switch (ptype->type) {
-		case MONO_TYPE_I1:
-			ainfo->is_signed = 1;
-		case MONO_TYPE_U1:
-			add_general (&gr, &stack_size, ainfo);
-			ainfo->byte_arg_size = 1;
-			break;
-		case MONO_TYPE_I2:
-			ainfo->is_signed = 1;
-		case MONO_TYPE_U2:
-			add_general (&gr, &stack_size, ainfo);
-			ainfo->byte_arg_size = 2;
-			break;
-		case MONO_TYPE_I4:
-			ainfo->is_signed = 1;
-		case MONO_TYPE_U4:
-			add_general (&gr, &stack_size, ainfo);
-			ainfo->byte_arg_size = 4;
-			break;
-		case MONO_TYPE_I:
-		case MONO_TYPE_U:
-		case MONO_TYPE_PTR:
-		case MONO_TYPE_FNPTR:
-		case MONO_TYPE_OBJECT:
-			add_general (&gr, &stack_size, ainfo);
-			break;
-		case MONO_TYPE_GENERICINST:
-			if (!mono_type_generic_inst_is_valuetype (ptype)) {
-				add_general (&gr, &stack_size, ainfo);
-				break;
-			}
-			if (mini_is_gsharedvt_variable_type (ptype)) {
-				/* gsharedvt arguments are passed by ref */
-				add_general (&gr, &stack_size, ainfo);
-				if (ainfo->storage == ArgInIReg)
-					ainfo->storage = ArgGSharedVtInReg;
-				else
-					ainfo->storage = ArgGSharedVtOnStack;
-				break;
-			}
-			/* fall through */
-		case MONO_TYPE_VALUETYPE:
-		case MONO_TYPE_TYPEDBYREF:
-			add_valuetype (sig, ainfo, ptype, FALSE, &gr, &fr, &stack_size);
-			break;
-		case MONO_TYPE_U8:
-
-		case MONO_TYPE_I8:
-			add_general (&gr, &stack_size, ainfo);
-			break;
-		case MONO_TYPE_R4:
-			add_float (&fr, &stack_size, ainfo, FALSE);
-			break;
-		case MONO_TYPE_R8:
-			add_float (&fr, &stack_size, ainfo, TRUE);
-			break;
-		case MONO_TYPE_VAR:
-		case MONO_TYPE_MVAR:
-			/* gsharedvt arguments are passed by ref */
-			g_assert (mini_is_gsharedvt_type (ptype));
-			add_general (&gr, &stack_size, ainfo);
-			if (ainfo->storage == ArgInIReg)
-				ainfo->storage = ArgGSharedVtInReg;
-			else
-				ainfo->storage = ArgGSharedVtOnStack;
-			break;
-		default:
-			g_assert_not_reached ();
-		}
-	}
+	for (i = pstart; i < sig->param_count; ++i)
+		add_parameter (sig, cinfo, i, &gr, &fr, &stack_size, &pool);
 
 	if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG) && (n > 0) && (sig->sentinelpos == sig->param_count)) {
 		gr = PARAM_REGS;

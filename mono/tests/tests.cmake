@@ -261,6 +261,7 @@ set(MONO_TESTS_CS_SRC
   tier0-classic-gsharedvt.cs
   tier0-classic-static-rgctx.cs
   tier0-classic-backedge.cs
+  tier0-classic-struct-abi.cs
   tbaa-aliasing.cs
   tbaa-explicit-overlap.cs
   typeload-field-memberref.cs
