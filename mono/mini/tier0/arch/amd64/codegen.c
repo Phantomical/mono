@@ -6017,9 +6017,8 @@ MONO_RESTORE_WARNING
 
 	cinfo = cfg->arch.cinfo;
 
-	/* cfg->code_size is set from the method's IL length, which says nothing
-	 * about how wide the signature is. A short body taking many value types
-	 * overruns the buffer here. */
+	/* cfg->code_size is sized from the method's IL length, not the
+	 * signature, so a signature with many value types can overrun it. */
 	set_code_cursor (cfg, code);
 	code = realloc_code (cfg, get_max_prolog_arg_size (cfg, sig));
 

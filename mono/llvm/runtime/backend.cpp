@@ -626,10 +626,11 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 		ERROR_DECL (classic_error);
 
 		/*
-		 * Classic emits no class-init check of its own, and a call to a
-		 * static method carries none, so the method's class is initialized
-		 * here. The interpreter, the other tier-0 engine, runs the
-		 * initializer as it transforms (mono_interp_transform_method ()).
+		 * Classic's own class-init checks cover a field access, a newobj
+		 * and a shared generic callee, not a call to a static method, so
+		 * the class is initialized here. The interpreter, the other
+		 * tier-0 engine, runs the initializer as it transforms
+		 * (mono_interp_transform_method ()).
 		 *
 		 * An open class has no runtime vtable, and a caller reaches its
 		 * shared body through an instantiation whose own entry ran the
