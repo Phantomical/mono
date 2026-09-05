@@ -264,6 +264,7 @@ set(MONO_TESTS_CS_SRC
   tier0-classic-struct-abi.cs
   tier0-classic-conv-r-un.cs
   tier0-classic-wide-args.cs
+  tier0-classic-ret-regs.cs
   tier0-classic-unsafe-mov.cs
   tier0-classic-class-init.cs
   tbaa-aliasing.cs

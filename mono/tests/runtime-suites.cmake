@@ -695,6 +695,17 @@ mono_runtime_suite(runtime-tier0-classic-wide-args
                    TESTS tier0-classic-wide-args.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=WideArgs")
 
+# A value-type return gathered out of registers by a classic caller, one
+# struct per shape of the placement. The filter arm names a substring both the
+# callees and their caller carry, so the two sides of each call are classic;
+# the select-all arm is the same file with no interpreted frame anywhere.
+mono_runtime_suite(runtime-tier0-classic-ret-regs
+                   TESTS tier0-classic-ret-regs.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=RetRegs")
+mono_runtime_suite(runtime-tier0-classic-ret-regs-all
+                   TESTS tier0-classic-ret-regs.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1")
+
 # Array.UnsafeMov, whose caller is in corlib. Select-all rather than a filter:
 # the interpreter reaches a callee itself without asking the backend, so a
 # filter naming that caller answers for nothing.

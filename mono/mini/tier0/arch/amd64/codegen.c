@@ -2584,12 +2584,14 @@ emit_move_return_value (MonoCompile *cfg, MonoInst *ins, guint8 *code)
 		if (cinfo->ret.storage == ArgValuetypeInReg) {
 			MonoInst *loc = cfg->arch.vret_addr_loc;
 
-			/* Load the destination address */
+			/* The destination address goes in GP_SCRATCH_REG rather than in
+			 * an allocatable one: managed_return_regs (arch-amd64.c) is RAX,
+			 * RDX and RCX, all three of them holding the value being stored. */
 			g_assert (loc->opcode == OP_REGOFFSET);
-			amd64_mov_reg_membase (code, AMD64_RCX, loc->inst_basereg, loc->inst_offset, sizeof(gpointer));
+			amd64_mov_reg_membase (code, GP_SCRATCH_REG, loc->inst_basereg, loc->inst_offset, sizeof(gpointer));
 
 			for (quad = 0; quad < (guint32) cinfo->ret.nleaves; quad ++)
-				code = emit_store_leaf (code, &cinfo->ret.leaves [quad], AMD64_RCX, 0);
+				code = emit_store_leaf (code, &cinfo->ret.leaves [quad], GP_SCRATCH_REG, 0);
 		}
 		break;
 	}
