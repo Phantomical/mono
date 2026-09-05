@@ -1168,6 +1168,13 @@ set(MONO_TESTS_TRIVIAL_INLINE_FANOUT_SRC
   trivial-inline-fanout.cs
 )
 
+# A SIMD value type has to be declared in one of the assemblies the loader
+# reads that way (mono_class_init_internal (), mono/metadata/class-init.c), so
+# these compile against two references the default set does not carry.
+set(MONO_TESTS_SIMD_REF_SRC
+  tier0-classic-simd-abi.cs
+)
+
 # The tailcall suite, including the corpus imported from coreclr.
 set(MONO_TESTS_TAILCALL_CS_SRC
   tailcall/coreclr/JIT/CodeGenBringUpTests/RecursiveTailCall.cs

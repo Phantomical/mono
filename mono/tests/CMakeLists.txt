@@ -369,6 +369,12 @@ foreach(_s IN LISTS MONO_TESTS_CS_SRC MONO_TESTS_BENCH_SRC MONO_TESTS_GSHARED_SR
   endif()
 endforeach()
 
+foreach(_s IN LISTS MONO_TESTS_SIMD_REF_SRC)
+  string(REGEX REPLACE "\\.cs$" ".exe" _exe "${_s}")
+  mono_test_assembly("${_exe}" SOURCES "${_s}"
+                     REFS "${_class}/Mono.Simd.dll" "${_class}/System.Numerics.dll")
+endforeach()
+
 # One source, two assembly names: override-copies.cs loads both and expects the
 # override to have replaced the target in each.  A target is matched by name in
 # every loaded image rather than by type identity, and this is what tells that

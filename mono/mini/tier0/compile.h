@@ -940,15 +940,6 @@ typedef struct MonoCompile {
 	guint            disable_aot : 1;
 	guint            disable_ssa : 1;
 	guint            disable_llvm : 1;
-	/*
-	 * The back end met a signature it cannot express. mono_tier0_compile ()
-	 * reads this and leaves the method to the tier above.
-	 *
-	 * Not cfg->exception_type: a failed inline attempt clears that and
-	 * cfg->error as it unwinds (clear_cfg_error (), method-to-ir.c), and the
-	 * refusal is the whole compile's rather than one inlined body's.
-	 */
-	guint            refused_signature : 1;
 	guint            enable_extended_bblocks : 1;
 	guint            run_cctors : 1;
 	guint            need_lmf_area : 1;

@@ -4341,16 +4341,6 @@ mono_tier0_compile (MonoMethod *method, MonoDomain *domain, gpointer *out_code,
 	cfg = mini_method_compile (method, MONO_OPT_FLOAT32 | MONO_OPT_GSHARED, domain,
 	                           flags, 0, -1);
 
-	/* A body built for a signature the back end refused is dropped here
-	 * rather than published. */
-	if (cfg->refused_signature) {
-		MONO_PROFILER_RAISE (jit_failed, (method));
-		mono_destroy_compile (cfg);
-		mono_error_set_execution_engine (
-			error, "the classic compiler cannot place a value type this signature carries");
-		return FALSE;
-	}
-
 	switch (cfg->exception_type) {
 	case MONO_EXCEPTION_NONE:
 		break;

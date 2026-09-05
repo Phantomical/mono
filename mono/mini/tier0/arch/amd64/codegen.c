@@ -375,53 +375,6 @@ mono_arch_regalloc_cost (MonoCompile *cfg, MonoMethodVar *vmv)
 }
 
 /*
- * Whether a value type carries a scalar this compiler cannot place. The
- * managed convention gives a whole SIMD value one SSE register, and tier 0's
- * own sources are built with DISABLE_SIMD (mono/mini/tier0/CMakeLists.txt),
- * so no opcode that moves sixteen bytes at once is compiled into them.
- */
-static gboolean
-unplaceable_valuetype (const ArgInfo *ainfo)
-{
-	int i;
-
-	if (ainfo->storage != ArgValuetypeInReg)
-		return FALSE;
-
-	for (i = 0; i < ainfo->nleaves; ++i)
-		if (ainfo->leaves [i].size > 8)
-			return TRUE;
-
-	return FALSE;
-}
-
-/*
- * Marks the compile as one not to publish where sig carries such a value. It
- * is asked of a call this method makes as well as of the method's own entry,
- * because the convention is the call's rather than the method's.
- *
- * The body is still built, wrong in those bytes, and thrown away: bailing out
- * here instead would leave the rest of the compile reading variables it
- * never created.
- */
-static void
-refuse_unplaceable_signature (MonoCompile *cfg, MonoMethodSignature *sig, CallInfo *cinfo)
-{
-	int i;
-
-	if (unplaceable_valuetype (&cinfo->ret)) {
-		cfg->refused_signature = TRUE;
-		return;
-	}
-
-	for (i = 0; i < sig->param_count + sig->hasthis; ++i)
-		if (unplaceable_valuetype (&cinfo->args [i])) {
-			cfg->refused_signature = TRUE;
-			return;
-		}
-}
-
-/*
  * mono_arch_fill_argument_info:
  *
  *   Populate cfg->args, cfg->ret and cfg->vret_addr with information about the arguments
@@ -730,8 +683,6 @@ mono_arch_create_vars (MonoCompile *cfg)
 		cfg->arch.cinfo = mono_arch_get_call_info (cfg->mempool, sig);
 	cinfo = cfg->arch.cinfo;
 
-	refuse_unplaceable_signature (cfg, sig, cinfo);
-
 	if (cinfo->ret.storage == ArgValuetypeInReg)
 		cfg->ret_var_is_local = TRUE;
 
@@ -805,6 +756,24 @@ add_outarg_reg (MonoCompile *cfg, MonoCallInst *call, ArgStorage storage, int re
 	}
 }
 
+/*
+ * Hands a whole SIMD value to the call in reg. The vreg belongs to the SIMD
+ * register bank rather than the floating-point one, because the two banks
+ * spill and reload different widths of the SSE register they share.
+ */
+static void
+add_outarg_xreg (MonoCompile *cfg, MonoCallInst *call, int reg, MonoInst *tree)
+{
+	MonoInst *ins;
+
+	MONO_INST_NEW (cfg, ins, OP_XMOVE);
+	ins->dreg = alloc_xreg (cfg);
+	ins->sreg1 = tree->dreg;
+	MONO_ADD_INS (cfg->cbb, ins);
+
+	mono_call_inst_add_outarg_reg (cfg, call, ins->dreg, reg, MONO_REG_SIMD);
+}
+
 static int
 arg_storage_to_load_membase (ArgStorage storage)
 {
@@ -827,6 +796,17 @@ arg_storage_to_load_membase (ArgStorage storage)
 }
 
 /*
+ * Whether the leaf is a whole SIMD value, which fills its SSE register rather
+ * than the low half of one. No other scalar the managed convention places is
+ * wider than a machine word.
+ */
+static gboolean
+leaf_is_vector (const ArgLeaf *leaf)
+{
+	return leaf->size > 8;
+}
+
+/*
  * Chooses the load that moves a leaf's own bytes out of the value it belongs
  * to. Only the bytes the leaf carries move: the rest of the register it
  * lands in is undefined, and a wider load would reach a neighbouring leaf's
@@ -837,7 +817,7 @@ leaf_load_opcode (const ArgLeaf *leaf)
 {
 	switch (leaf->storage) {
 	case ArgInDoubleSSEReg:
-		return OP_LOADR8_MEMBASE;
+		return leaf_is_vector (leaf) ? OP_LOADX_MEMBASE : OP_LOADR8_MEMBASE;
 	case ArgInFloatSSEReg:
 		return OP_LOADR4_MEMBASE;
 	default:
@@ -1037,8 +1017,6 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 		cfg->disable_llvm = TRUE;
 		return;
 	}
-
-	refuse_unplaceable_signature (cfg, sig, cinfo);
 
 	/*
 	 * Emit all arguments which are passed on the stack to prevent register
@@ -1265,7 +1243,8 @@ mono_arch_emit_outarg_vt (MonoCompile *cfg, MonoInst *ins, MonoInst *src)
 					break;
 				case ArgInDoubleSSEReg:
 				case ArgInFloatSSEReg:
-					load->dreg = mono_alloc_freg (cfg);
+					load->dreg = leaf_is_vector (leaf) ? alloc_xreg (cfg)
+					                                   : mono_alloc_freg (cfg);
 					break;
 				default:
 					g_assert_not_reached ();
@@ -1274,7 +1253,10 @@ mono_arch_emit_outarg_vt (MonoCompile *cfg, MonoInst *ins, MonoInst *src)
 
 			MONO_ADD_INS (cfg->cbb, load);
 
-			add_outarg_reg (cfg, call, leaf->storage, leaf->reg, load);
+			if (leaf_is_vector (leaf))
+				add_outarg_xreg (cfg, call, leaf->reg, load);
+			else
+				add_outarg_reg (cfg, call, leaf->storage, leaf->reg, load);
 		}
 		break;
 	}
@@ -2510,7 +2492,10 @@ emit_store_leaf (guint8 *code, const ArgLeaf *leaf, int basereg, int offset)
 		amd64_movss_membase_reg (code, basereg, at, leaf->reg);
 		break;
 	case ArgInDoubleSSEReg:
-		amd64_movsd_membase_reg (code, basereg, at, leaf->reg);
+		if (leaf_is_vector (leaf))
+			amd64_sse_movups_membase_reg (code, basereg, at, leaf->reg);
+		else
+			amd64_movsd_membase_reg (code, basereg, at, leaf->reg);
 		break;
 	default:
 		g_assert_not_reached ();
@@ -2536,7 +2521,10 @@ emit_load_leaf (guint8 *code, const ArgLeaf *leaf, int basereg, int offset)
 		amd64_movss_reg_membase (code, leaf->reg, basereg, at);
 		break;
 	case ArgInDoubleSSEReg:
-		amd64_movsd_reg_membase (code, leaf->reg, basereg, at);
+		if (leaf_is_vector (leaf))
+			amd64_sse_movups_reg_membase (code, leaf->reg, basereg, at);
+		else
+			amd64_movsd_reg_membase (code, leaf->reg, basereg, at);
 		break;
 	default:
 		g_assert_not_reached ();
@@ -4947,6 +4935,20 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 				x86_patch (br, code);
 			break;
 		}
+		/* A whole SSE register moves, spills and reloads through these,
+		 * which the SIMD register bank needs whether or not the intrinsics
+		 * below are compiled in. */
+		case OP_XMOVE:
+			if (ins->dreg != ins->sreg1)
+				amd64_sse_movaps_reg_reg (code, ins->dreg, ins->sreg1);
+			break;
+		case OP_STOREX_MEMBASE_REG:
+		case OP_STOREX_MEMBASE:
+			amd64_sse_movups_membase_reg (code, ins->dreg, ins->inst_offset, ins->sreg1);
+			break;
+		case OP_LOADX_MEMBASE:
+			amd64_sse_movups_reg_membase (code, ins->dreg, ins->sreg1, ins->inst_offset);
+			break;
 #ifdef MONO_ARCH_SIMD_INTRINSICS
 		/* TODO: Some of these IR opcodes are marked as no clobber when they indeed do. */
 		case OP_ADDPS:
@@ -5489,13 +5491,6 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			else
 				amd64_sse_movsd_reg_reg (code, ins->dreg, ins->sreg2);
 			break;
-		case OP_STOREX_MEMBASE_REG:
-		case OP_STOREX_MEMBASE:
-			amd64_sse_movups_membase_reg (code, ins->dreg, ins->inst_offset, ins->sreg1);
-			break;
-		case OP_LOADX_MEMBASE:
-			amd64_sse_movups_reg_membase (code, ins->dreg, ins->sreg1, ins->inst_offset);
-			break;
 		case OP_LOADX_ALIGNED_MEMBASE:
 			amd64_sse_movaps_reg_membase (code, ins->dreg, ins->sreg1, ins->inst_offset);
 			break;
@@ -5509,11 +5504,6 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			amd64_sse_prefetch_reg_membase (code, ins->backend.arg_info, ins->sreg1, ins->inst_offset);
 			break;
 
-		case OP_XMOVE:
-			/*FIXME the peephole pass should have killed this*/
-			if (ins->dreg != ins->sreg1)
-				amd64_sse_movaps_reg_reg (code, ins->dreg, ins->sreg1);
-			break;		
 		case OP_XZERO:
 			amd64_sse_pxor_reg_reg (code, ins->dreg, ins->dreg);
 			break;

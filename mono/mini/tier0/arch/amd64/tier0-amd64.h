@@ -10,10 +10,14 @@
 
 #include "mini-amd64.h"
 
-#ifndef DISABLE_SIMD
+/*
+ * The managed convention gives a whole SIMD value one SSE register, so a
+ * signature carrying one needs a vreg that spills and reloads sixteen bytes.
+ * That is the SIMD bank, and it is needed whether or not the SIMD intrinsics
+ * DISABLE_SIMD turns off are compiled in.
+ */
 #define MONO_ARCH_NEED_SIMD_BANK 1
 #define MONO_ARCH_USE_SHARED_FP_SIMD_BANK 1
-#endif
 
 #define MONO_ARCH_CPU_SPEC mono_amd64_desc
 

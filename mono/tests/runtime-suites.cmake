@@ -741,6 +741,18 @@ mono_runtime_suite(runtime-tier0-classic-union-abi-all
                    TESTS tier0-classic-union-abi.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1 --llvm-opt=-mono-tier1-threshold=0")
 
+# A whole SIMD value in one SSE register, five shapes of it, with the tiers
+# driven per method so one engine sits on each side of a call. Select-all
+# rather than a filter, because the tier the file asserts is only classic's
+# where Main () is classic too; the interp arm is the same checks with no
+# classic anywhere, which is what says a wrong answer is classic's own.
+mono_runtime_suite(runtime-tier0-classic-simd-abi-interp
+                   TESTS tier0-classic-simd-abi.exe)
+mono_runtime_suite(runtime-tier0-classic-simd-abi
+                   TESTS tier0-classic-simd-abi.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1 --llvm-opt=-mono-tier1-threshold=0"
+                       "MONO_TIER0_CLASSIC_ALL=1")
+
 # A class initializer that only tier 0 can run, reached through a static call,
 # through an AggressiveInlining callee and through a static field.
 mono_runtime_suite(runtime-tier0-classic-class-init

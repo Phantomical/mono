@@ -972,6 +972,7 @@ fill_pair_view (ArgInfo *ainfo)
 
 	for (i = 0; i < ainfo->nleaves; ++i)
 		if (ainfo->leaves [i].storage == ArgOnStack
+		    || ainfo->leaves [i].size > 8
 		    || ainfo->leaves [i].offset != i * 8)
 			return;
 
