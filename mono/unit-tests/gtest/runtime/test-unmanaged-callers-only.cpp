@@ -91,13 +91,22 @@ protected:
 
 	/// The name of the class of the exception invoking method raises, or an
 	/// empty string when it returns.
+	///
+	/// A refusal of the whole method arrives on the error rather than as a
+	/// thrown object: a compiled tier refuses at compile time, and the invoke
+	/// reports that compile's failure. The interpreter raises the same
+	/// exception on entry instead. Both count as raised here.
 	static std::string raised_by (MonoMethod *method, void **args)
 	{
 		ERROR_DECL (error);
 		MonoObject *thrown = nullptr;
 
 		mono_runtime_try_invoke (method, nullptr, args, &thrown, error);
-		mono_error_assert_ok (error);
+
+		if (!is_ok (error)) {
+			EXPECT_EQ (nullptr, thrown);
+			thrown = (MonoObject *) mono_error_convert_to_exception (error);
+		}
 
 		if (thrown == nullptr)
 			return {};

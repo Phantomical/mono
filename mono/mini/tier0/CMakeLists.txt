@@ -1,4 +1,4 @@
-option(MONO_ENABLE_TIER0_CLASSIC "Compile mono/mini/tier0/, the restored classic compiler" OFF)
+option(MONO_ENABLE_TIER0_CLASSIC "Compile mono/mini/tier0/, the classic compiler that is tier 0" ON)
 
 if(NOT MONO_ENABLE_TIER0_CLASSIC)
   return()

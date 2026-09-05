@@ -724,6 +724,15 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 	}
 #endif
 
+	/*
+	 * Only a method the policy sends to the interpreter reaches this arm, and
+	 * the interpreter is started only where the policy does so. A build with
+	 * no interpreter is the one way past that.
+	 */
+	if (!mono_use_interpreter)
+		return llvm::createStringError (llvm::inconvertibleErrorCode (),
+		                                "the interpreter is not running");
+
 	llvm::Expected<arch::InterpEntryPoint> ready = interp_entry (dm);
 
 	if (!ready)

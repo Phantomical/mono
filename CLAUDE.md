@@ -150,12 +150,16 @@ cmake --build build --target check       # fast: unit tests, mini regression, on
 cmake --build build --target check-all   # everything but slow/stress/acceptance; ask first
 
 ctest --test-dir build -L regression -j"$(nproc)"   # the mini corpora, one test each
+ctest --test-dir build -L tier0      -j"$(nproc)"   # the runtime corpus at the default tier
 ctest --test-dir build -R test-llvm  -j"$(nproc)"   # the LLVM backend unit tests
 ctest --test-dir build -N                           # list without running
 ```
 
-Labels: `regression`, `llvm`, `runtime`, `gshared`, `sgen`, `interp`, `bcl`,
-`bcl-xunit`, `compiler`, `tools`, `benchmark`, `slow`, `stress`, `acceptance`.
+Labels: `regression`, `llvm`, `runtime`, `tier0`, `tier0-unit`, `gshared`, `sgen`,
+`interp`, `bcl`, `bcl-xunit`, `compiler`, `tools`, `benchmark`, `slow`, `stress`,
+`acceptance`. `runtime` is the corpus with tier 0 off, so every method goes through the
+backend; `tier0` is the same corpus at the default tier, where every method starts in the
+classic compiler; `interp` is the interpreter, whole-engine and as tier 0.
 `ctest --print-labels` is authoritative for the configuration you built. `check` is a
 few hundred tests and seconds. Corpora are built by the regular build, not by ctest, so
 build before you run `ctest` directly.
@@ -240,8 +244,8 @@ and `ninf` are left out, because ECMA-335 I.12.1.3 makes a NaN and the two infin
 the answer an ordinary operation gives. Off by default, and off is the conforming
 setting — task #234 and `.claude/handoff/float-strictness/` hold why no flag can be a
 default. Three things follow from asking for it, and each is visible in one run:
-- The interpreter relaxes nothing, so a method's answer changes when it promotes out
-  of tier 0.
+- Tier 0 relaxes nothing, whichever engine runs it, so a method's answer changes when
+  it promotes out of tier 0.
 - Tier 1 selects with FastISel, which does not fuse, so a multiply-add contracts at
   tier 2 and not before.
 - The arithmetic this backend writes to lower an opcode keeps strict semantics,
@@ -278,8 +282,10 @@ the stages and one filter selects the methods:
 What each point prints:
 - `il` — the method's CIL, inside the class and signature it is declared with. It prints
   once for each method, from whichever engine reached it first.
-- `mint` — the bytecode the interpreter runs, after the transform has compacted it.
-  `MONO_VERBOSE_METHOD` still prints the same dump and the transform's tracing with it.
+- `mint` — the bytecode the interpreter runs, after the transform has compacted it, so
+  it prints only for a method the interpreter is tier 0 for (`-mono-tier0-classic=0` or
+  a filter). `MONO_VERBOSE_METHOD` still prints the same dump and the transform's tracing
+  with it, and it is also what prints a classic tier-0 body's IR and code.
 - `unopt-ir` — the IR the translator wrote, before any pipeline. A body the pre-pass
   folded in is still a function of its own here, so it prints after the caller.
 - `tier1-ir` / `tier2-ir` — that IR after its tier's pipeline.
@@ -349,12 +355,21 @@ and each is registered `cl::Hidden`, so `--llvm-opt=-help-hidden` is what lists 
 a built binary. A test drives one through `MONO_ENV_OPTIONS`, which `mono-sgen` and
 `mono-boehm` read before they parse their own argv — a bare gtest binary has no such
 argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same variable's
-`--llvm-opt=` tokens into the same registration by hand:
+`--llvm-opt=` tokens into the same registration by hand, and
+`mono/unit-tests/gtest/runtime/harness.cpp` hands the whole variable to
+`mono_jit_parse_options ()`:
+- `--llvm-opt=-mono-tier0-classic=<1|0|substr>` (`runtime/options.cpp`) — which engine
+  is tier 0. `1`, the default, compiles every tier-0 method with the classic compiler
+  and never starts the interpreter. `0`, `false` or empty interprets every one, which
+  separates a classic defect from a tiering one. A substring compiles the methods whose
+  full name contains it and interprets the rest, which gets a classic caller and an
+  interpreted callee into one process. The interpreter starts only when this setting
+  sends it something, so `mono_use_interpreter` reads false under the default.
 - `--llvm-opt=-mono-tier0-filter=<substr|0>` (`runtime/options.cpp`) — narrow tier 0,
-  which is otherwise every method the interpreter accepts. A false value compiles
-  everything, which separates a tier-0 bug from a backend one. A substring gets a
-  compiled caller and an interpreted callee into one process, which no threshold
-  produces, because a callee is called at least as often as its caller.
+  which is otherwise every method with IL of its own. A false value compiles everything
+  through the backend, which separates a tier-0 bug from a backend one. A substring gets
+  a compiled caller and a tier-0 callee into one process, which no threshold produces,
+  because a callee is called at least as often as its caller.
 - `--llvm-opt=-mono-tier1-threshold=<n>` (`runtime/options.cpp`) — calls at tier 0
   before a method is asked for as tier 1, default 10. Zero never promotes, which
   separates a tier-0 entry bug from a promotion bug. One promotes on the first call,
@@ -720,27 +735,63 @@ all target-neutral and code-relative:
 routine a landing pad names is never called, because mono's own unwinder re-enters
 frames through the pads.
 
-### Tier 0: the interpreter
+### Tier 0: the classic compiler
 
-**A method starts in the interpreter.** The interpreter is started beside the JIT in
-`mini_init ()`, and every method it accepts is entered by interpreting its bytecode.
-`runs_at_tier0 ()` refuses the methods that would be wrong there rather than merely
-slow: no IL of its own, a wrapper, or a body this backend writes itself (`is_intrinsic
-()`, which is `ByReference<T>`, whose IL only throws). A `MONO_WRAPPER_DYNAMIC_METHOD`
-is the one wrapper it accepts, because it carries IL of its own from Reflection.Emit
-and `create_delegate_method_ptr ()` otherwise compiles it on the thread that makes the
-delegate over it. `--interpreter` is a different thing and still means the interpreter
-as the whole engine, with no tier to leave for.
+**A method starts at tier 0, compiled by the classic mini compiler under
+`mono/mini/tier0/`.** `tier0_entry ()` (`runtime/backend.cpp`) compiles it on the thread
+that first calls it, through `mono_tier0_compile ()` (`tier0/driver.c`), under a fixed
+optimization mask of `MONO_OPT_FLOAT32 | MONO_OPT_GSHARED` — the two bits that decide
+correctness rather than speed: an R4's width on the evaluation stack, and whether a
+shared generic body can be built at all. `runs_at_tier0 ()` refuses the methods that
+would be wrong there rather than merely slow: no IL of its own, most wrappers, or a body
+this backend writes itself (`is_intrinsic ()`, which is `ByReference<T>`, whose IL only
+throws). A `MONO_WRAPPER_DYNAMIC_METHOD` is the one wrapper it accepts, because it
+carries IL of its own from Reflection.Emit and `create_delegate_method_ptr ()`
+otherwise compiles it on the thread that makes the delegate over it. A method tier 0
+refuses, or fails to compile, goes to the backend at tier 1. Nothing falls back to the
+interpreter.
 
-A tier-0 method leaves for tier 1 by being called. The counter is a word on
-`InterpMethod`, set from the method's record when the `InterpMethod` is built, then
-decremented at the three places a call arrives: the interpreter's `call:` and
-`tailcall:` labels and `interp_entry ()`. A counter that runs out calls
-`mono_promote_method ()`, which is engine-neutral. It takes the decision on the
+A reference instantiation of a generic enters the shared form's record, the way the
+compiled tiers do (`enter_shared_body ()`): the shared body is compiled once, the
+counter it spends is the shared form's, and a promotion or a detour of the shared form
+reaches every instantiation through that record's thunk. Compiled against its own
+instantiation instead, a shared body counts on a record nothing calls and never
+promotes. `mono/unit-tests/gtest/runtime/test-detour.cpp` holds the cases.
+
+A classic body carries SGen's write barriers because `mini_gc_init_cfg ()`
+(`tier0/gc-maps.c`) asks for them, and nothing else does. `mini-regression-tier0` runs
+under `MONO_GC_DEBUG=check-remset-consistency`, which turns a store compiled without its
+barrier into an abort at the store rather than a crash in a later collection. No GC maps
+are built: `mini_gc_init ()` sets no precise mark function, so stacks are scanned
+conservatively.
+
+A tier-0 method leaves for tier 1 by being called, and by looping.
+`mono_tier0_arm_counter ()` arms a counter on the method's record before the body is
+emitted; the body's entry charges it one call through `mono_tier0_count ()`, and a
+backward branch charges it one turn behind a guard that skips the call once the count
+is spent (`tier0/tier-counter.c`). A counter that runs out calls
+`MonoDomainMethod::promote ()`, which is engine-neutral. It takes the decision on the
 `MonoDomainMethod`, so however many counters run out at once, only one request reaches
 the compile queue. A promotion that cannot be taken, such as one into a domain on its
-way out, does not happen. The method stays where it is and the caller that was
-refused counts another threshold of calls.
+way out, does not happen. The method stays where it is and counts another threshold.
+
+A stack trace and the debugger read a classic body through the runtime's own tables:
+`mono_jinfo_get_il_offset ()` answers from the sequence points
+`mono_save_seq_point_info ()` hangs off the body's jit info, and a breakpoint goes
+through `mono_arch_set_breakpoint ()`'s patchable-site arm.
+
+**The interpreter is the other tier-0 engine, and it runs nothing unless asked.**
+`-mono-tier0-classic=0` makes it tier 0 for every method, and a substring for the
+methods the substring does not name; `mini_init ()` starts it only then
+(`mono_llvm_jit_interp_tier0_enabled ()`). It is not a fallback: nothing classic tier 0
+refuses reaches it. `--interpreter` is a different thing and still means the interpreter
+as the whole engine, with no tier to leave for. The rest of this section describes the
+interpreter as tier 0.
+
+Under the interpreter the counter is a word on `InterpMethod`, set from the method's
+record when the `InterpMethod` is built, then decremented at the three places a call
+arrives: the interpreter's `call:` and `tailcall:` labels and `interp_entry ()`. A
+counter that runs out calls `mono_promote_method ()`, the same decision as above.
 
 The counter has to sit where the interpreter reaches it rather than in a wrapper in
 front of the method. Such a wrapper sees only calls arriving through the method's

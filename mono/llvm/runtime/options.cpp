@@ -62,11 +62,11 @@ tier0_setting ()
 }
 
 llvm::cl::opt<std::string> Tier0ClassicOpt (
-	"mono-tier0-classic", llvm::cl::Hidden, llvm::cl::init (""),
-	llvm::cl::desc ("Run methods whose full name contains this substring at "
-	                "tier 0 through the classic compiler instead of "
-	                "interpreting them; 1 or true runs every tier-0 method "
-	                "through it"));
+	"mono-tier0-classic", llvm::cl::Hidden, llvm::cl::init ("1"),
+	llvm::cl::desc ("Compile a tier-0 method whose full name contains this "
+	                "substring with the classic compiler and interpret the "
+	                "rest; 1 or true, the default, compiles every one, and 0, "
+	                "false or empty interprets every one"));
 
 bool
 is_select_all_sentinel (const char *value)
@@ -85,13 +85,17 @@ const Tier0ClassicSetting &
 tier0_classic_setting ()
 {
 	static Tier0ClassicSetting setting = [] () -> Tier0ClassicSetting {
-		if (Tier0ClassicOpt.empty ())
+#ifndef MONO_ENABLE_TIER0_CLASSIC
+		return {};
+#else
+		if (!is_truthy_env_var (Tier0ClassicOpt.c_str ()))
 			return {};
 
 		if (is_select_all_sentinel (Tier0ClassicOpt.c_str ()))
 			return { true, nullptr };
 
 		return { true, Tier0ClassicOpt.c_str () };
+#endif
 	} ();
 
 	return setting;
@@ -623,6 +627,14 @@ tier0_enabled ()
 	return tier0_setting ().enabled;
 }
 
+bool
+interp_tier0_enabled ()
+{
+	const Tier0ClassicSetting &classic = tier0_classic_setting ();
+
+	return tier0_enabled () && !(classic.enabled && classic.substring == nullptr);
+}
+
 /*
  * Whether a wrapper of this kind can run at tier 0.
  *
@@ -719,8 +731,7 @@ runs_at_tier0 (MonoMethod *method)
 {
 	const Tier0Setting &setting = tier0_setting ();
 
-	if (!setting.enabled || !mono_use_interpreter
-	    || mono_ee_features.force_use_interpreter)
+	if (!setting.enabled || mono_ee_features.force_use_interpreter)
 		return false;
 
 	if (implemented_outside_il (method) || is_intrinsic (method))

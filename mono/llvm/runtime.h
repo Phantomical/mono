@@ -109,9 +109,13 @@ void *mono_llvm_jit_unbox_entry (MonoMethod *method);
 /// backend's startup.
 void mono_llvm_jit_add_option (const char *opt);
 
-/// Whether any method runs at tier 0, which is what decides whether the
-/// interpreter starts at all.
+/// Whether any method runs at tier 0.
 mono_bool mono_llvm_jit_tier0_enabled (void);
+
+/// Whether the interpreter is one of the tier-0 engines, which is what decides
+/// whether it starts at all. False under the default, where the classic
+/// compiler takes every tier-0 method.
+mono_bool mono_llvm_jit_interp_tier0_enabled (void);
 
 /// How many calls a method takes at tier 0 before it is asked for as tier 1,
 /// or zero if it never promotes.

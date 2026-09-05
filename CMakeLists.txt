@@ -209,9 +209,11 @@ if(MONO_NPROC EQUAL 0)
 endif()
 
 if(BUILD_TESTING)
+  # `tier0$` and not `tier0`: the corpus at the default tier is as large as
+  # `runtime` and goes with it, while `tier0-unit` is seconds and stays in.
   add_custom_target(check
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-            -LE "runtime|gshared|sgen|interp|bcl|bcl-xunit|compiler|tools|eglib|slow|stress|acceptance"
+            -LE "runtime|tier0$|gshared|sgen|interp|bcl|bcl-xunit|compiler|tools|eglib|slow|stress|acceptance"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)

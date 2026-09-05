@@ -299,26 +299,31 @@ uint32_t trivial_inline_instance_budget ();
 /// caller that counting its calls settles nothing.
 int32_t tier0_calls (MonoMethod *method);
 
-/// Whether any method at all is entered by interpreting it.
+/// Whether any method at all starts at tier 0.
 ///
-/// Answers before there is a method to ask about, which is what the decision to
-/// start the interpreter needs.
+/// Answers before there is a method to ask about.
 bool tier0_enabled ();
 
-/// Whether a method is entered by interpreting its bytecode rather than by
-/// compiling it.
+/// Whether the interpreter is one of the tier-0 engines, which is what the
+/// decision to start it needs. False under the default, where the classic
+/// compiler takes every tier-0 method.
+bool interp_tier0_enabled ();
+
+/// Whether a method starts at tier 0 rather than being compiled by the
+/// backend on its first call.
 ///
-/// Every method the interpreter can run starts there. A debug filter narrows
-/// that: a false value keeps every method out of tier 0, and anything else is
+/// Every method with IL of its own starts there. A debug filter narrows that:
+/// a false value keeps every method out of tier 0, and anything else is
 /// matched as a substring of the printed name.
 bool runs_at_tier0 (MonoMethod *method);
 
 /// Whether a method that runs at tier 0 is compiled by the classic compiler
 /// there instead of being interpreted.
 ///
-/// Empty, the default, selects no method. 1 or true selects every method.
-/// Anything else is matched as a substring of the printed name, the same as
-/// runs_at_tier0 () matches its own filter.
+/// 1 or true, the default, selects every method. 0, false or empty selects
+/// none. Anything else is matched as a substring of the printed name, the same
+/// as runs_at_tier0 () matches its own filter. Always false in a build without
+/// MONO_ENABLE_TIER0_CLASSIC.
 bool runs_classic_at_tier0 (MonoMethod *method);
 
 } // namespace mono

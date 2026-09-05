@@ -1244,10 +1244,10 @@ set(MONO_TESTS_TAILCALL_IL_SRC
 # Known-failing or not-applicable tests, excluded from every suite.
 # automake accumulated this from three lists that overlapped; deduplicated.
 set(MONO_TESTS_DISABLED
-  # Asserts the tier a classic body is left at, which needs both a classic
-  # body and a threshold of zero. Its own suite is where it gets them; no
-  # general suite sets either. Named directly there, so this only keeps it
-  # out of the suites built from the corpus.
+  # Asserts the tier a classic body is left at, which needs a threshold of
+  # zero. Its own suite is where it gets one; no general suite sets it. Named
+  # directly there, so this only keeps it out of the suites built from the
+  # corpus.
   tier0-classic-threshold-zero.exe
   delegate-async-exception.exe
   bug-348522.2.exe
@@ -1349,15 +1349,23 @@ set(MONO_TESTS_INTERP_DISABLED
   tier0-classic-backedge.exe
 )
 
-# Additionally excluded at the default tier, where a method starts interpreted
-# and is compiled underneath its callers once it is hot.
+# Additionally excluded at the default tier, where a method starts in the
+# classic compiler and is compiled by the backend underneath its callers once it
+# is hot. Each entry has to say what classic tier 0 cannot do that the backend
+# can, because this is the tier every program starts in.
+set(MONO_TESTS_CLASSIC_TIER0_DISABLED
+)
+
+# Additionally excluded with the interpreter as tier 0
+# (-mono-tier0-classic=0), where a method starts interpreted and is compiled
+# underneath its callers once it is hot.
 #
 # Each of these passes with everything compiled and fails both here and under
 # --interpreter, so what they are missing is something the interpreter does not
 # do rather than anything about the tier seam. Say which, per entry: the point
 # of this list being separate from MONO_TESTS_INTERP_DISABLED is that "tier 0
 # cannot do this" and "the pure interpreter could not" are different claims.
-set(MONO_TESTS_TIER0_DISABLED
+set(MONO_TESTS_INTERP_TIER0_DISABLED
   # A COM-visible call reaches Object::Equals through a remoting-invoke wrapper,
   # which answers "The method or operation is not implemented".
   cominterop.exe
@@ -1382,8 +1390,7 @@ set(MONO_TESTS_TIER0_DISABLED
   # exception. Not the engine-alternation path: identical with tier 1 disabled.
   bug-60862.exe
   # The same reason as MONO_TESTS_INTERP_DISABLED: the method starts
-  # interpreted here too. Reaching classic tier0's own back edge count needs
-  # -mono-tier0-classic to name it, and this suite does not set that.
+  # interpreted here too, and only a classic body counts its back edges.
   tier0-classic-backedge.exe
 )
 

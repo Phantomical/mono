@@ -154,18 +154,23 @@ TEST_F (FunctionPointer, SurvivesPromotion)
 	mono_error_assert_ok (error);
 	ASSERT_NE (nullptr, before);
 
-	/* No body yet is what makes this a promotion rather than a second look. */
-	ASSERT_EQ (nullptr, mono_llvm_jit_find_body (domain, method));
+	/*
+	 * What tier 0 left: no body under the interpreter, the classic body under
+	 * the classic compiler. A promotion has to replace it either way, which is
+	 * what makes this a promotion rather than a second look.
+	 */
+	void *tier0_body = mono_llvm_jit_find_body (domain, method);
 	ASSERT_TRUE (mono_promote_method (method, domain));
 
 	/* The request returns before the compile does, so wait for the body. */
-	void *body = nullptr;
-	for (int waited = 0; body == nullptr && waited < 10000; ++waited) {
+	void *body = tier0_body;
+	for (int waited = 0; body == tier0_body && waited < 10000; ++waited) {
 		body = mono_llvm_jit_find_body (domain, method);
-		if (body == nullptr)
+		if (body == tier0_body)
 			g_usleep (1000);
 	}
-	ASSERT_NE (nullptr, body) << "the promotion never produced a body";
+	ASSERT_NE (tier0_body, body) << "the promotion never produced a body";
+	ASSERT_NE (nullptr, body);
 
 	void *after = mono_compile_method_checked (method, error);
 	mono_error_assert_ok (error);

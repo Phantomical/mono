@@ -4015,8 +4015,10 @@ mini_init (const char *filename, const char *runtime_version)
 
 	mono_interp_stub_init ();
 #if !defined (DISABLE_INTERPRETER) && defined (MONO_ARCH_INTERPRETER_SUPPORTED) && !defined (MONO_CROSS_COMPILE)
-	/* Tier 0 is the entry tier, so the interpreter runs beside the JIT. */
-	if (mono_llvm_jit_tier0_enabled ())
+	/* Only while the tier-0 policy sends methods to it. Started otherwise, it
+	 * would refuse tasklets and take the delegate and GC callbacks for frames
+	 * it never runs. */
+	if (mono_llvm_jit_interp_tier0_enabled ())
 		mono_use_interpreter = TRUE;
 #endif
 #ifndef DISABLE_INTERPRETER

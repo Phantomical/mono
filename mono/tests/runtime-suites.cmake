@@ -260,10 +260,10 @@ list(REMOVE_ITEM _tailcall
 #     spent waiting rather than running -- 171s to 247s measured, which is not
 #     margin enough to leave at 300s.
 #
-# Tier 0 is off, so every method here is compiled. Most of these programs run
-# their body once, which is too few calls to spend a counter, so at the default
-# tier they would test the interpreter instead of the backend -- the tier-0 arm
-# below is where that configuration is covered.
+# Tier 0 is off, so every method here goes through the backend. Most of these
+# programs run their body once, which is too few calls to spend a counter, so at
+# the default tier they would test classic tier 0 instead of the backend -- the
+# tier-0 arm below is where that configuration is covered.
 mono_runtime_suite(runtime TESTS ${_regular}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0"
                    SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
@@ -306,13 +306,47 @@ mono_runtime_suite(runtime-value-copy TESTS value-copy.exe GC sgen
                        "MONO_GC_DEBUG=check-remset-consistency")
 
 # Continuations, whose two outcomes want naming rather than accepting either.
-# With everything compiled and a collector that keeps the saved stack out of the
-# heap, they work. Boehm is the collector that does not, and the tier-0 arm
-# further down is the engine that does not.
+# With a collector that keeps the saved stack out of the heap they work, at the
+# default tier as well as with everything compiled: a classic frame is a native
+# frame like any other. Boehm is the collector that does not, and the
+# interpreter, further down, is the engine that does not.
 mono_runtime_suite(runtime-tasklets TESTS tasklets.exe GC sgen
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0" "MONO_TEST_TASKLETS=run")
 mono_runtime_suite(runtime-tasklets-boehm TESTS tasklets.exe GC boehm
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0" "MONO_TEST_TASKLETS=refuse")
+mono_runtime_suite(runtime-tasklets-tier0 LABEL tier0 TESTS tasklets.exe GC sgen
+                   ENV "MONO_TEST_TASKLETS=run")
+
+# The whole corpus at the default tier: each method starts in the classic
+# compiler and the hot ones are compiled by the backend underneath it, so the
+# two engines are in one process and a method can change engine while its
+# callers are running. This is the tier every program starts in, so it gets a
+# label of its own rather than sitting in `runtime`, and anything that cannot
+# run here belongs in MONO_TESTS_CLASSIC_TIER0_DISABLED, with the reason.
+#
+# check-remset-consistency for the reason mini-regression-tier0 carries it: a
+# store compiled without its write barrier is caught at the store instead of
+# corrupting some later collection.
+set(_tier0 ${_regular})
+list(REMOVE_ITEM _tier0 ${MONO_TESTS_CLASSIC_TIER0_DISABLED})
+mono_runtime_suite(runtime-tier0 LABEL tier0 TESTS ${_tier0}
+                   ENV "MONO_GC_DEBUG=check-remset-consistency"
+                   SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
+                   LONG appdomain-threadpool-unload.exe
+                        dynamic-method-churn.exe
+                        appdomain-unload.exe
+                        bug-18026.exe)
+
+# The tailcall corpus at the default tier, where a tail site is the classic
+# compiler's rather than the backend's. Both engines have to honour the same
+# shapes, and a program that alternates between them has to hop without growing
+# the stack.
+mono_runtime_suite(runtime-tailcall-tier0 LABEL tier0 TESTS ${_tailcall})
+
+# The wrappers the test calls start at tier 0 instead of compiling on the
+# thread that needed them.
+mono_runtime_suite(runtime-tier0-jit-call-wrappers LABEL tier0
+                   TESTS interp-jit-call-wrappers.exe)
 
 if(MONO_ENABLE_INTERPRETER)
   set(_interp ${_regular})
@@ -329,30 +363,30 @@ if(MONO_ENABLE_INTERPRETER)
                      LONG appdomain-threadpool-unload.exe
                           bug-18026.exe)
 
-  # The whole corpus at the default tier, which is neither of the two above:
-  # each method starts interpreted and the hot ones are compiled underneath it,
-  # so the two engines are in one process and a method can change engine while
-  # its callers are running.
-  #
+  # The interpreter as tier 0, which -mono-tier0-classic=0 selects: each
+  # method starts interpreted and the hot ones are compiled underneath it. The
+  # suites below all run that way, and each one names the interpreter in its
+  # environment because nothing starts it otherwise.
+  set(_interp_tier0 "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0")
+
   # Built from the full corpus rather than from the interpreter's set, because a
   # program the pure interpreter cannot run may be perfectly fine once its hot
-  # methods compile. This is the tier real users get, so it is the one that
-  # can least afford to inherit somebody else's refusals. Anything that genuinely
-  # cannot run here belongs in MONO_TESTS_TIER0_DISABLED, with the reason.
-  set(_tier0 ${_regular})
-  list(REMOVE_ITEM _tier0 ${MONO_TESTS_TIER0_DISABLED})
-  mono_runtime_suite(runtime-tier0 LABEL interp TESTS ${_tier0}
+  # methods compile. Anything that genuinely cannot run here belongs in
+  # MONO_TESTS_INTERP_TIER0_DISABLED, with the reason.
+  set(_interp_tier0_tests ${_regular})
+  list(REMOVE_ITEM _interp_tier0_tests ${MONO_TESTS_INTERP_TIER0_DISABLED})
+  mono_runtime_suite(runtime-interp-tier0 LABEL interp TESTS ${_interp_tier0_tests}
+                     ENV "${_interp_tier0}"
                      SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
                      LONG appdomain-threadpool-unload.exe
                           dynamic-method-churn.exe
                           appdomain-unload.exe
                           bug-18026.exe)
 
-  # The tailcall corpus at the default tier, where a tail site is the
-  # interpreter's rather than the backend's. Both engines have to honour the
-  # same shapes, and a program that alternates between them has to hop without
-  # growing the stack.
-  mono_runtime_suite(runtime-tailcall-tier0 LABEL interp TESTS ${_tailcall})
+  # The tailcall corpus with a tail site the interpreter's rather than the
+  # backend's.
+  mono_runtime_suite(runtime-tailcall-interp-tier0 LABEL interp TESTS ${_tailcall}
+                     ENV "${_interp_tier0}")
 
   # Both engines in one process, which neither of the suites above covers:
   # Callee's methods interpret while its caller compiles, so every call in it
@@ -361,7 +395,7 @@ if(MONO_ENABLE_INTERPRETER)
   # values rather than crashing - so it wants a test that reads them back.
   mono_runtime_suite(runtime-interp-entries LABEL interp
                      TESTS interp-entries.exe
-                     ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=Callee")
+                     ENV "${_interp_tier0} --llvm-opt=-mono-tier0-filter=Callee")
 
   # The other direction: Interpreted's methods run in the interpreter while
   # their callees compile, so every call in Run () leaves the interpreter for
@@ -370,7 +404,7 @@ if(MONO_ENABLE_INTERPRETER)
   # interpreted too.
   mono_runtime_suite(runtime-interp-calls-compiled LABEL interp
                      TESTS interp-calls-compiled.exe
-                     ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=Interpreted")
+                     ENV "${_interp_tier0} --llvm-opt=-mono-tier0-filter=Interpreted")
 
   # The same crossing into a wrapper. A dynamic method is the shape it is
   # written for: tier 0 accepts that kind, so a compiled one used to be entered
@@ -379,18 +413,18 @@ if(MONO_ENABLE_INTERPRETER)
   # its callees compile.
   mono_runtime_suite(runtime-interp-jit-call-wrappers LABEL interp
                      TESTS interp-jit-call-wrappers.exe
-                     ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=Interpreted")
+                     ENV "${_interp_tier0} --llvm-opt=-mono-tier0-filter=Interpreted")
 
-  # And at the default tier, where the wrappers the test calls start in the
-  # interpreter instead of compiling on the thread that needed them.
-  mono_runtime_suite(runtime-tier0-jit-call-wrappers LABEL interp
-                     TESTS interp-jit-call-wrappers.exe)
+  # And with every wrapper the test calls starting in the interpreter.
+  mono_runtime_suite(runtime-interp-tier0-jit-call-wrappers LABEL interp
+                     TESTS interp-jit-call-wrappers.exe
+                     ENV "${_interp_tier0}")
 
-  # Continuations at the default tier, where the frame that marked one is
+  # Continuations under the interpreter, where the frame that marked one is
   # interpreted and so has no native stack for Store () to copy. Mark () has to
   # say so rather than walk a stack it cannot describe.
-  mono_runtime_suite(runtime-tasklets-tier0 LABEL interp TESTS tasklets.exe
-                     ENV "MONO_TEST_TASKLETS=refuse")
+  mono_runtime_suite(runtime-tasklets-interp-tier0 LABEL interp TESTS tasklets.exe
+                     ENV "${_interp_tier0}" "MONO_TEST_TASKLETS=refuse")
 
   # `--interp=jit=<class>` compiles the named class and interprets the rest,
   # which is the only way today to get a compiled frame and an interpreted one
@@ -624,16 +658,19 @@ if(MONO_ENABLE_INTERPRETER)
   _mono_exe_list(_tier_pinned ${MONO_TESTS_TIER_PINNED_SRC}
                               ${MONO_TESTS_TIER_PINNED_IL_SRC})
   mono_runtime_suite(runtime-tier-pinned LABEL interp TESTS ${_tier_pinned}
-                     ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=InterpMe")
+                     ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0 --llvm-opt=-mono-tier0-filter=InterpMe")
 endif()
 
 # Tier0ClassicExercise and the callee it calls, run once interpreted and once
-# compiled by the classic compiler through mono-tier0-classic. Both arms have
-# to reach the same array of checks. tier0-classic-fpconv.exe carries the one
-# shape C# cannot express (conv.u from a double) and is named to match the
-# same filter substring.
+# compiled by the classic compiler through mono-tier0-classic, with the rest of
+# the program interpreted around it. Both arms have to reach the same array of
+# checks. tier0-classic-fpconv.exe carries the one shape C# cannot express
+# (conv.u from a double) and is named to match the same filter substring. The
+# select-all default is the third arm, and the whole-corpus tier-0 run is where
+# this file gets it.
 mono_runtime_suite(runtime-tier0-classic-interp
-                   TESTS tier0-classic.exe tier0-classic-fpconv.exe)
+                   TESTS tier0-classic.exe tier0-classic-fpconv.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0")
 mono_runtime_suite(runtime-tier0-classic
                    TESTS tier0-classic.exe tier0-classic-fpconv.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=ClassicExercise")
@@ -642,7 +679,8 @@ mono_runtime_suite(runtime-tier0-classic
 # using its own still-open T, GsharedShareCallee<T> - the shape that crashed
 # classic tier0's "compile everything" mode on Unsafe.AsPointer<T>.
 mono_runtime_suite(runtime-tier0-classic-gsharedvt-interp
-                   TESTS tier0-classic-gsharedvt.exe)
+                   TESTS tier0-classic-gsharedvt.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0")
 mono_runtime_suite(runtime-tier0-classic-gsharedvt
                    TESTS tier0-classic-gsharedvt.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=GsharedShare")
@@ -653,7 +691,8 @@ mono_runtime_suite(runtime-tier0-classic-gsharedvt
 # site that would prime the rgctx register their compiled body reads on
 # entry.
 mono_runtime_suite(runtime-tier0-classic-static-rgctx-interp
-                   TESTS tier0-classic-static-rgctx.exe)
+                   TESTS tier0-classic-static-rgctx.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0")
 mono_runtime_suite(runtime-tier0-classic-static-rgctx
                    TESTS tier0-classic-static-rgctx.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=StaticRgctx")
@@ -672,9 +711,8 @@ mono_runtime_suite(runtime-tier0-classic-backedge
 # engines: interpreted, classic tier 0, tier 1, and a delegate's invoke
 # wrapper. The filter arm puts classic on one side of each of those calls, and
 # the select-all arm puts it on every side the interpreter would otherwise
-# have taken. The default arm the whole-corpus run already gives this file is
-# the third: no classic body anywhere, which is what says a failure here is
-# classic's own.
+# have taken. The whole-corpus interpreter run gives this file the third arm:
+# no classic body anywhere, which is what says a failure here is classic's own.
 mono_runtime_suite(runtime-tier0-classic-struct-abi
                    TESTS tier0-classic-struct-abi.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=StructAbiClassic")
@@ -747,7 +785,8 @@ mono_runtime_suite(runtime-tier0-classic-union-abi-all
 # classic engine in the process, so a wrong answer there is not classic's
 # doing.
 mono_runtime_suite(runtime-tier0-classic-simd-abi-interp
-                   TESTS tier0-classic-simd-abi.exe)
+                   TESTS tier0-classic-simd-abi.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0")
 mono_runtime_suite(runtime-tier0-classic-simd-abi
                    TESTS tier0-classic-simd-abi.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1 --llvm-opt=-mono-tier1-threshold=0"
@@ -1103,9 +1142,12 @@ mono_runtime_check(runtime-pedump NATIVE
 # Some tier-0 arms name the invalid method rather than taking every method. That
 # keeps its caller compiled, so the call goes through the stub the backend
 # published and the backend is what answers for the callee. The unrestricted
-# arms below are the ones that matter more: with nothing named, the caller is
-# interpreted too and reaches its callee without the backend ever being asked,
-# so the verdict has to come from the interpreter's own path.
+# interpreter arm below is the one that matters more: with nothing named, the
+# caller is interpreted too and reaches its callee without the backend ever
+# being asked, so the verdict has to come from the interpreter's own path. A
+# classic caller has no such path - every call it makes goes through the
+# callee's thunk - so its unrestricted arm checks the same verdict without the
+# worry.
 function(_mono_verification_check name expect)
   cmake_parse_arguments(ARG "" "PROGRAM" "ARGS;ENV;REJECT" ${ARGN})
   if(NOT ARG_PROGRAM)
@@ -1132,8 +1174,12 @@ _mono_verification_check(runtime-verification-validil
                          ARGS --security=validil
                          ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0" REJECT "ran 42")
 _mono_verification_check(runtime-verification-tier0
-                         "interpreting Probe:Unverifiable"
+                         "compiling Probe:Unverifiable"
                          ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=Probe:Unverifiable"
+                         REJECT "rejected")
+_mono_verification_check(runtime-verification-interp-tier0
+                         "interpreting Probe:Unverifiable"
+                         ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0 --llvm-opt=-mono-tier0-filter=Probe:Unverifiable"
                          REJECT "rejected")
 # Rejecting without ever printing the routing line is the placement itself: the
 # verdict is reached before the tier is chosen.
@@ -1141,20 +1187,32 @@ _mono_verification_check(runtime-verification-validil-tier0
                          "rejected System.InvalidProgramException"
                          ARGS --security=validil
                          ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=Probe:Unverifiable"
+                         REJECT "ran 42|compiling Probe:Unverifiable")
+_mono_verification_check(runtime-verification-validil-interp-tier0
+                         "rejected System.InvalidProgramException"
+                         ARGS --security=validil
+                         ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0 --llvm-opt=-mono-tier0-filter=Probe:Unverifiable"
                          REJECT "ran 42|interpreting Probe:Unverifiable")
 
-# Tier 0 unrestricted, so the caller is interpreted as well and reaches the
-# callee without the backend being asked for it. The verdict has to come from
-# the interpreter transforming the callee.
+# Tier 0 unrestricted, once for each engine. Under the interpreter the caller
+# is interpreted as well and reaches the callee without the backend being asked
+# for it, so the verdict has to come from the interpreter transforming the
+# callee.
+_mono_verification_check(runtime-verification-validil-classic
+                         "rejected System.InvalidProgramException"
+                         ARGS --security=validil
+                         REJECT "ran 42")
 _mono_verification_check(runtime-verification-validil-interpreted
                          "rejected System.InvalidProgramException"
                          ARGS --security=validil
+                         ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0"
                          REJECT "ran 42")
 
 # The same, for a callee small enough to be inlined. An inlined body never gets
 # a transform of its own, so it is checked where the interpreter decides to
 # inline it - a body that does not verify is not inlined, and is then verified
-# as an ordinary callee.
+# as an ordinary callee. Classic tier 0 folds nothing, so its arm reaches the
+# callee as an ordinary call and has to come to the same verdict.
 _mono_verification_check(runtime-verification-inlined
                          "rejected System.Security.VerificationException"
                          PROGRAM verification-inlined-il.exe
@@ -1162,4 +1220,14 @@ _mono_verification_check(runtime-verification-inlined
                          REJECT "ran 42")
 _mono_verification_check(runtime-verification-inlined-off "ran 42"
                          PROGRAM verification-inlined-il.exe
+                         REJECT "rejected")
+_mono_verification_check(runtime-verification-inlined-interp
+                         "rejected System.Security.VerificationException"
+                         PROGRAM verification-inlined-il.exe
+                         ARGS --verify-all
+                         ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0"
+                         REJECT "ran 42")
+_mono_verification_check(runtime-verification-inlined-interp-off "ran 42"
+                         PROGRAM verification-inlined-il.exe
+                         ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0"
                          REJECT "rejected")
