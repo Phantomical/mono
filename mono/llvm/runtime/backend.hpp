@@ -165,7 +165,8 @@ private:
 	                                    bool allow_tier0 = true);
 
 	/// Points \p dm's entry at the body \p shared compiles to, compiling that
-	/// body if this domain has not yet.
+	/// body if this domain has not yet. \p tier is the least tier that body may
+	/// be at; MonoTier::tier0 offers it to the classic compiler first.
 	///
 	/// Fails with a SharingRefusal when the shared body cannot be built, and
 	/// with that body's own failure when it fails verification. \p dm is left

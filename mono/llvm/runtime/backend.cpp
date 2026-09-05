@@ -585,6 +585,8 @@ MonoBackend::attach_interop (MonoDomainMethod &dm)
 	return llvm::Error::success ();
 }
 
+static MonoMethod *shared_form (MonoMethod *method);
+
 llvm::Expected<MonoBackend::Compiled>
 MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 {
@@ -643,6 +645,32 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 			if (vtable == nullptr
 			    || !mono_runtime_class_init_full (vtable, classic_error))
 				return runtime_error (classic_error);
+		}
+
+		/*
+		 * A reference instantiation enters the shared form's record, as it
+		 * does at the compiled tiers: the body is compiled once, the counter
+		 * it spends is the shared form's, and a promotion or a detour of the
+		 * shared form reaches every instantiation through that record's
+		 * thunk. Compiled against its own instantiation instead, the body
+		 * counts on a record nothing calls and never promotes.
+		 *
+		 * An open method - a shared caller's callee, named with the caller's
+		 * own type parameter - has no context of its own for the stub to
+		 * write, so it takes the compile below, which reduces it and leaves
+		 * the caller's context in the register.
+		 */
+		MonoMethod *shared =
+			mono_method_check_context_used (method) == 0 ? shared_form (method) : nullptr;
+
+		if (shared != nullptr) {
+			llvm::Expected<Compiled> body =
+				enter_shared_body (domain, dm, shared, MonoTier::tier0);
+
+			if (answered_by_sharing (body))
+				return body;
+
+			llvm::consumeError (body.takeError ());
 		}
 
 		if (!mono_tier0_compile (method, domain.domain, &code, &jinfo,
@@ -1004,9 +1032,15 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 		if (ready && ready->tier >= tier)
 			break;
 
+		/*
+		 * A tier-0 request offers the shared form to the classic compiler
+		 * first and takes tier 1 where it refuses, the order entry_point ()
+		 * takes for a method of its own.
+		 */
+		bool at_tier0 = tier == MonoTier::tier0;
 		llvm::Expected<Compiled> built =
-			compile_body (domain, **owner, /*allow_tier0=*/false, tier,
-		                      /*for_sharing=*/true);
+			compile_body (domain, **owner, /*allow_tier0=*/at_tier0,
+		                      at_tier0 ? MonoTier::tier1 : tier, /*for_sharing=*/true);
 
 		if (!built)
 			return built.takeError ();
