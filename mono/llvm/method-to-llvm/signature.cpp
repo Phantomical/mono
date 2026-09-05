@@ -233,16 +233,21 @@ fill_tail (llvm::LLVMContext &ctx, std::vector<llvm::Type *> &body,
 std::vector<llvm::Type *>
 packed_body (llvm::LLVMContext &ctx, unsigned size, std::vector<LayoutField> &fields)
 {
-	std::sort (fields.begin (), fields.end (),
-	           [] (const LayoutField &a, const LayoutField &b) {
-		           return a.offset < b.offset;
-	           });
+	std::stable_sort (fields.begin (), fields.end (),
+	                  [] (const LayoutField &a, const LayoutField &b) {
+		                  return a.offset < b.offset;
+	                  });
 
 	/*
 	 * An explicit layout can overlap fields, and a struct cannot express an
 	 * overlap. Whichever field comes first keeps its slot, and the rest of
 	 * the union becomes padding. This only loses the overlapped fields' say
 	 * in the native classification - the bytes are all still there.
+	 *
+	 * The sort has to be stable for "first" to mean declaration order, which
+	 * is what sort_managed_fields () (mono/mini/arch-amd64.c) picks for the
+	 * same union. The two answers place a value's scalars, so an engine that
+	 * kept a different field of an overlap passes it in different registers.
 	 */
 	std::vector<llvm::Type *> body;
 	const LayoutField *last = nullptr;

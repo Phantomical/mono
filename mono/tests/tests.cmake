@@ -269,6 +269,7 @@ set(MONO_TESTS_CS_SRC
   tier0-classic-class-init.cs
   tier0-classic-threshold-zero.cs
   tier0-classic-vret-spill.cs
+  tier0-classic-union-abi.cs
   tbaa-aliasing.cs
   tbaa-explicit-overlap.cs
   typeload-field-memberref.cs

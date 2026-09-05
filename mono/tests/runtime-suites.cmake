@@ -732,6 +732,15 @@ mono_runtime_suite(runtime-tier0-classic-vret-spill-all
                    TESTS tier0-classic-vret-spill.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1 --llvm-opt=-mono-tier1-threshold=0")
 
+# An explicit layout whose overlapping fields the two engines have to resolve
+# the same way, passed across the seam both bare and behind a field of its own.
+mono_runtime_suite(runtime-tier0-classic-union-abi
+                   TESTS tier0-classic-union-abi.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=UnionAbi --llvm-opt=-mono-tier1-threshold=0")
+mono_runtime_suite(runtime-tier0-classic-union-abi-all
+                   TESTS tier0-classic-union-abi.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1 --llvm-opt=-mono-tier1-threshold=0")
+
 # A class initializer that only tier 0 can run, reached through a static call,
 # through an AggressiveInlining callee and through a static field.
 mono_runtime_suite(runtime-tier0-classic-class-init
