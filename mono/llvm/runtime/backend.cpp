@@ -622,12 +622,28 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 	if (runs_classic_at_tier0 (method)) {
 		gpointer code = nullptr;
 		MonoJitInfo *jinfo = nullptr;
+		gboolean needs_context = FALSE;
 		ERROR_DECL (classic_error);
 
-		if (!mono_tier0_compile (method, domain.domain, &code, &jinfo, classic_error))
+		if (!mono_tier0_compile (method, domain.domain, &code, &jinfo,
+		                         &needs_context, classic_error))
 			return runtime_error (classic_error);
 
-		if (!dm.publish (MonoTier::tier0, code)) {
+		void *entry = code;
+
+		if (needs_context) {
+			// The body rather than dm's thunk. The thunk is published to
+			// point at this stub, so a stub that jumped to the thunk would
+			// loop.
+			llvm::Expected<void *> keyed = context_stub (domain, dm, code);
+
+			if (!keyed)
+				return keyed.takeError ();
+
+			entry = *keyed;
+		}
+
+		if (!dm.publish (MonoTier::tier0, entry)) {
 			/*
 			 * The body is left where it is, with no record entry of its own:
 			 * attaching it would report a tier-0 body as the current one while
@@ -637,7 +653,7 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 			return Compiled { dm.thunk.code () };
 		}
 
-		dm.attach_body (MonoTier::tier0, code, jinfo);
+		dm.attach_body (MonoTier::tier0, entry, jinfo);
 		raise_jit_done (method, jinfo);
 
 		if (mono_use_interpreter)
@@ -656,7 +672,7 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 			g_free (name);
 		}
 
-		return Compiled { code };
+		return Compiled { entry };
 	}
 #endif
 

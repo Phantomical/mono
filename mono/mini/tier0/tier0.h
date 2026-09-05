@@ -31,9 +31,14 @@ void mono_tier0_register_opcode_emulations (void);
 /// The jit info is in \p domain's table already when this returns, so the
 /// caller must not add it again. Nothing points at the code yet: publishing it
 /// is the caller's. Returns FALSE and sets \p error on a failed compile.
+///
+/// \p out_needs_context comes back TRUE when the body was compiled for
+/// \p method's shared form and is entered with the generic context in
+/// MONO_ARCH_RGCTX_REG. The entry published for \p method has to write that
+/// register in front of the body.
 gboolean mono_tier0_compile (MonoMethod *method, MonoDomain *domain,
                              gpointer *out_code, MonoJitInfo **out_jinfo,
-                             MonoError *error);
+                             gboolean *out_needs_context, MonoError *error);
 
 G_END_DECLS
 

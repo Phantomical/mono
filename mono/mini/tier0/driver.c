@@ -4289,13 +4289,16 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 
 gboolean
 mono_tier0_compile (MonoMethod *method, MonoDomain *domain, gpointer *out_code,
-                    MonoJitInfo **out_jinfo, MonoError *error)
+                    MonoJitInfo **out_jinfo, gboolean *out_needs_context,
+                    MonoError *error)
 {
 	MonoCompile *cfg;
 	MonoException *ex = NULL;
 	JitFlags flags = JIT_FLAG_RUN_CCTORS;
+	gboolean reduced = FALSE;
 
 	error_init (error);
+	*out_needs_context = FALSE;
 
 	// Before mini_method_compile (), which emits the code that reads this. A
 	// counter still at its default of zero reads every entry and back edge
@@ -4320,8 +4323,12 @@ mono_tier0_compile (MonoMethod *method, MonoDomain *domain, gpointer *out_code,
 		MonoMethod *shared = mini_get_shared_method_full (method, SHARE_MODE_NONE, share_error);
 
 		mono_error_cleanup (share_error);
-		if (shared)
+		if (shared && shared != method) {
+			// mini_method_get_rgctx () asserts on an open method, so an
+			// entry that writes the context cannot be built for one.
+			reduced = mono_method_check_context_used (method) == 0;
 			method = shared;
+		}
 	}
 
 	if (mono_method_check_context_used (method))
@@ -4376,6 +4383,7 @@ mono_tier0_compile (MonoMethod *method, MonoDomain *domain, gpointer *out_code,
 
 	*out_code = cfg->native_code;
 	*out_jinfo = cfg->jit_info;
+	*out_needs_context = reduced && cfg->rgctx_var != NULL;
 
 	mono_destroy_compile (cfg);
 	return TRUE;
