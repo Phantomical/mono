@@ -9933,7 +9933,12 @@ calli_end:
 					inline_costs += costs;
 				} else {
 					ins = mono_emit_method_call (cfg, wrapper, iargs, NULL);
-					*sp++ = ins;
+					/*
+					 * The wrapper is compiled by the backend, which returns a
+					 * bool or a short in the low bits of the register and
+					 * leaves the rest of it alone.
+					 */
+					*sp++ = mono_emit_widen_call_res (cfg, ins, mono_method_signature_internal (wrapper));
 				}
 			} else 
 #endif
