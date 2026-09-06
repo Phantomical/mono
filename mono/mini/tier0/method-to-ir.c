@@ -5615,6 +5615,31 @@ mono_is_not_supported_tailcall_helper (gboolean value, const char *svalue, MonoM
 
 #define IS_NOT_SUPPORTED_TAILCALL(x) (mono_is_not_supported_tailcall_helper((x), #x, method, cmethod))
 
+/*
+ * Whether the tail. prefix on the instruction at ip applies to it.
+ *
+ * III.2.4 puts a ret right behind the prefix and puts neither outside a
+ * protected region. Both are shapes the emission needs rather than shapes it
+ * checks: skip_ret folds that ret into the call, and OP_TAILCALL gives the
+ * frame away before the callee runs, so a clause over the site would never be
+ * dispatched into. IL that says otherwise gets an ordinary call here, the same
+ * as it gets from the translator's should_tail_call ()
+ * (mono/llvm/method-to-llvm/call.cpp).
+ */
+static gboolean
+tail_prefix_applies (MonoMethodHeader *header, const guint8 *ip, const guint8 *next_ip, const guint8 *end)
+{
+	if (next_ip >= end || next_ip [0] != CEE_RET)
+		return FALSE;
+
+	for (guint i = 0; i < header->num_clauses; ++i) {
+		if (MONO_OFFSET_IN_CLAUSE (&header->clauses [i], (guint32)(ip - header->code)))
+			return FALSE;
+	}
+
+	return TRUE;
+}
+
 static gboolean
 is_supported_tailcall (MonoCompile *cfg, const guint8 *ip, MonoMethod *method, MonoMethod *cmethod, MonoMethodSignature *fsig,
 	gboolean virtual_, gboolean extra_arg, gboolean *ptailcall_calli)
@@ -7224,9 +7249,9 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 			common_call = TRUE; // i.e. skip_ret/push_res/seq_point logic
 			cmethod = NULL;
 
-			gboolean const inst_tailcall = G_UNLIKELY (debug_tailcall_try_all
-							? (next_ip < end && next_ip [0] == CEE_RET)
-							: ((ins_flag & MONO_INST_TAILCALL) != 0));
+			gboolean const inst_tailcall = G_UNLIKELY ((debug_tailcall_try_all
+							|| (ins_flag & MONO_INST_TAILCALL) != 0)
+							&& tail_prefix_applies (header, ip, next_ip, end));
 			ins = NULL;
 
 			//GSHAREDVT_FAILURE (il_op);
@@ -7412,9 +7437,9 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 			gboolean tailcall_virtual; tailcall_virtual = FALSE;
 			gboolean tailcall_extra_arg; tailcall_extra_arg = FALSE;
 
-			gboolean inst_tailcall; inst_tailcall = G_UNLIKELY (debug_tailcall_try_all
-							? (next_ip < end && next_ip [0] == CEE_RET)
-							: ((ins_flag & MONO_INST_TAILCALL) != 0));
+			gboolean inst_tailcall; inst_tailcall = G_UNLIKELY ((debug_tailcall_try_all
+							|| (ins_flag & MONO_INST_TAILCALL) != 0)
+							&& tail_prefix_applies (header, ip, next_ip, end));
 			ins = NULL;
 
 			/* Used to pass arguments to called functions */
