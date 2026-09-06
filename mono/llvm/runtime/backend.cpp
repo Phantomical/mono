@@ -1066,11 +1066,11 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 	 * behind it, so a later compile of the shared method reaches this
 	 * instantiation through the redirect every other caller goes through.
 	 *
-	 * An open method has no context of its own. It is a shared caller's
-	 * callee, named with the caller's own type parameter, and the caller
-	 * passes the context for it in the same register. A stub would overwrite
-	 * that with whatever mini_method_get_rgctx () makes of an open method: a
-	 * vtable for an open class, or an assert on an open method instantiation.
+	 * An open method has no context of its own. It arrived here as a shared
+	 * caller's callee, and the caller already left its context in the
+	 * register a stub would overwrite. Writing one anyway asks
+	 * mini_method_get_rgctx () for that context, which builds a vtable for
+	 * the open class or asserts outright on an open method instantiation.
 	 */
 	if (mono_method_check_context_used (dm.method) == 0
 	    && mono_method_needs_static_rgctx_invoke (shared, TRUE)) {
