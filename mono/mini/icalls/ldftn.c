@@ -5,12 +5,20 @@
  * Licensed under the MIT license. See LICENSE file in the project root for full license information.
  */
 #include "icalls/icalls.h"
+#include <mono/metadata/marshal.h>
 
 void*
 mono_ldftn (MonoMethod *method)
 {
 	gpointer addr;
 	ERROR_DECL (error);
+
+	/*
+	 * A synchronized method's lock is in the wrapper rather than in the body.
+	 * Whoever calls through this pointer has no other chance to take it.
+	 */
+	if (method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)
+		method = mono_marshal_get_synchronized_wrapper (method);
 
 	/*
 	 * mono_create_jump_trampoline ()'s stub is callable but is not the
