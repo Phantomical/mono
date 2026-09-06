@@ -768,8 +768,12 @@ conservatively.
 A tier-0 method leaves for tier 1 by being called, and by looping.
 `mono_tier0_arm_counter ()` arms a counter on the method's record before the body is
 emitted; the body's entry charges it one call through `mono_tier0_count ()`, and a
-backward branch charges it one turn behind a guard that skips the call once the count
-is spent (`tier0/tier-counter.c`). A counter that runs out calls
+backward branch charges it one turn. Both sites read the counter first and skip the
+call once the count is spent, so a body past its promotion calls nothing of its own
+at either one (`tier0/tier-counter.c`). A stack overflow in such a body therefore
+faults in managed code, where `mono_handle_soft_stack_ovf ()` raises a catchable
+StackOverflowException instead of aborting. `mono/tests/bug-60862.cs` is the gate.
+A counter that runs out calls
 `MonoDomainMethod::promote ()`, which is engine-neutral. It takes the decision on the
 `MonoDomainMethod`, so however many counters run out at once, only one request reaches
 the compile queue. A promotion that cannot be taken, such as one into a domain on its

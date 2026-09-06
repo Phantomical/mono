@@ -558,9 +558,9 @@ mono_tier0_count (MonoMethod *method, MonoDomain *domain)
 	// A count at or below zero is one arm_tier0_counter () wrote for a
 	// threshold of zero, or one a promotion this method already asked for
 	// spent. Without this check, decrementing it would ask for another
-	// promotion on every call. The back edge's own guard already checks
-	// the same word before it calls this. The entry has none, and calls
-	// it on every invocation.
+	// promotion on every call. A compiled body guards its own call on the
+	// same word with a plain load, so two threads can both arrive here on
+	// the count that spends it.
 	if (dm->tier0_counter.load (std::memory_order_relaxed) <= 0)
 		return;
 

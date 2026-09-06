@@ -569,7 +569,7 @@ add_widen_op (MonoCompile *cfg, MonoInst *ins, MonoInst **arg1_ref, MonoInst **a
 #define ADD_BINCOND(next_block) do {	\
 		MonoInst *cmp;	\
 		if (target <= ip) \
-			mini_tier0_emit_counter_backedge (cfg); \
+			mini_tier0_emit_counter (cfg); \
 		sp -= 2; \
 		MONO_INST_NEW(cfg, cmp, OP_COMPARE);	\
 		cmp->sreg1 = sp [0]->dreg;	\
@@ -6775,6 +6775,15 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 			emit_class_init (cfg, method->klass);
 		}
 
+		/*
+		 * The call this body charges against its way out of tier 0. The guard
+		 * that skips the charge once the count is spent is a branch, so this
+		 * goes in the first code block for the same reason the class init
+		 * above it does.
+		 */
+		if (ip - header->code == 0)
+			mini_tier0_emit_counter (cfg);
+
 		if (skip_dead_blocks) {
 			int ip_offset = ip - header->code;
 
@@ -8449,7 +8458,7 @@ calli_end:
 			break;
 		case MONO_CEE_BR:
 			if (target <= ip)
-				mini_tier0_emit_counter_backedge (cfg);
+				mini_tier0_emit_counter (cfg);
 
 			MONO_INST_NEW (cfg, ins, OP_BR);
 
@@ -8475,7 +8484,7 @@ calli_end:
 			gboolean is_true = il_op == MONO_CEE_BRTRUE_S || il_op == MONO_CEE_BRTRUE;
 
 			if (target <= ip)
-				mini_tier0_emit_counter_backedge (cfg);
+				mini_tier0_emit_counter (cfg);
 
 			if (sp [-1]->type == STACK_VTYPE || sp [-1]->type == STACK_R8)
 				UNVERIFIED;
@@ -11976,7 +11985,6 @@ mono_ldptr:
 	/* emit profiler enter code after a jit attach if there is one */
 	cfg->cbb = init_localsbb2;
 	mini_profiler_emit_enter (cfg);
-	mini_tier0_emit_counter_entry (cfg);
 	cfg->cbb = init_localsbb;
 
 	if (seq_points) {

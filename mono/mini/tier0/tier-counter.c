@@ -10,9 +10,11 @@
 
 /// Emits, out of line: "if (*counter > 0) mono_tier0_count (method, domain)".
 ///
-/// The plain load keeps the icall's own atomic decrement off the path a body
-/// takes once the count is spent. A loop back edge runs that path every
-/// turn for the rest of the method's run, once it has promoted.
+/// The plain load keeps the icall's own atomic decrement off the path a spent
+/// body takes. That path is every entry and every loop turn for the rest of the
+/// method's run. A spent body calls nothing of its own there, so a stack
+/// overflow faults in managed code, where mono_handle_soft_stack_ovf () raises
+/// StackOverflowException from it.
 static void
 emit_guarded_count (MonoCompile *cfg, int32_t *counter)
 {
@@ -38,21 +40,14 @@ emit_guarded_count (MonoCompile *cfg, int32_t *counter)
 	MONO_START_BB (cfg, done_bb);
 }
 
+/// Emits one count against the method's way out of tier 0, into the block being
+/// built.
+///
+/// The count sits behind a branch, so that block has to be one a branch can end.
+/// The initlocals block is not. The caller decides what one count is: the first
+/// code block charges one call, and a backward branch charges one turn.
 void
-mini_tier0_emit_counter_entry (MonoCompile *cfg)
-{
-	if (cfg->current_method != cfg->method)
-		return;
-
-	MonoInst *iargs [2];
-
-	EMIT_NEW_METHODCONST (cfg, iargs [0], cfg->method);
-	EMIT_NEW_PCONST (cfg, iargs [1], cfg->domain);
-	mono_emit_jit_icall (cfg, mono_tier0_count, iargs);
-}
-
-void
-mini_tier0_emit_counter_backedge (MonoCompile *cfg)
+mini_tier0_emit_counter (MonoCompile *cfg)
 {
 	if (cfg->current_method != cfg->method)
 		return;

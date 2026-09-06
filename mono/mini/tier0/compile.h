@@ -1431,8 +1431,7 @@ void        mini_profiler_emit_enter (MonoCompile *cfg);
 void        mini_profiler_emit_leave (MonoCompile *cfg, MonoInst *ret);
 void        mini_profiler_emit_tail_call (MonoCompile *cfg, MonoMethod *target);
 void        mini_profiler_emit_call_finally (MonoCompile *cfg, MonoMethodHeader *header, unsigned char *ip, guint32 index, MonoExceptionClause *clause);
-void        mini_tier0_emit_counter_entry (MonoCompile *cfg);
-void        mini_tier0_emit_counter_backedge (MonoCompile *cfg);
+void        mini_tier0_emit_counter (MonoCompile *cfg);
 /* graph dumping */
 void mono_cfg_dump_create_context (MonoCompile *cfg);
 void mono_cfg_dump_begin_group (MonoCompile *cfg);
