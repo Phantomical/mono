@@ -6325,9 +6325,9 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 	dont_verify |= method->wrapper_type == MONO_WRAPPER_COMINTEROP_INVOKE;
 
 	/*
-	 * The same rule as the translator's checks_accessibility ()
-	 * (mono/llvm/method-to-llvm/invalid-il.cpp), which says why each arm is
-	 * exempt. A method's access verdict must not change when it promotes.
+	 * This is the same rule as the translator's checks_accessibility ()
+	 * (mono/llvm/method-to-llvm/invalid-il.cpp), so a method's access verdict
+	 * does not change when it promotes.
 	 */
 	checks_accessibility = !cfg->skip_visibility
 		&& method->wrapper_type == MONO_WRAPPER_NONE
