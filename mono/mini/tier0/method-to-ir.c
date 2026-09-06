@@ -4154,7 +4154,6 @@ mini_emit_sext_index_reg (MonoCompile *cfg, MonoInst *index)
 	int index2_reg;
 
 #if SIZEOF_REGISTER == 8
-	/* The array reg is 64 bits but the index reg is only 32 */
 	if (COMPILE_LLVM (cfg)) {
 		/*
 		 * abcrem can't handle the OP_SEXT_I4, so add this after abcrem,

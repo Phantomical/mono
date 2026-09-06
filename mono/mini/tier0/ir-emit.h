@@ -1003,7 +1003,7 @@ mini_emit_bounds_check_offset (MonoCompile *cfg, int array_reg, int array_length
  * array_type is a struct (usually MonoArray or MonoString)
  * array_length_field is the field in the previous struct with the length
  * index_reg is the vreg holding the index
- * wide_index is whether that vreg holds a native int rather than an int32
+ * wide_index is whether the compare must use the whole register rather than 32 bits
  */
 #define MONO_EMIT_BOUNDS_CHECK(cfg, array_reg, array_type, array_length_field, index_reg, wide_index) do { \
 	mini_emit_bounds_check_offset ((cfg), (array_reg), MONO_STRUCT_OFFSET (array_type, array_length_field), (index_reg), NULL, (wide_index)); \
