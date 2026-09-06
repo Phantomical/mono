@@ -937,12 +937,9 @@ mono_runtime_suite(runtime-tier2-inline-generic-scope TESTS ${_tier2_inline_gene
 # PromoteNow drives the compiles the same way runtime-tier2-inline-clause does.
 _mono_exe_list(_tier2_inline_filter ${MONO_TESTS_TIER2_INLINE_FILTER_SRC})
 mono_runtime_suite(runtime-tier2-inline-filter TESTS ${_tier2_inline_filter}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
 mono_runtime_suite(runtime-tier2-inline-filter-off TESTS ${_tier2_inline_filter}
-                   ENV "MONO_LLVM_JIT_TIER2_THRESHOLD=0"
-                       "MONO_LLVM_JIT_INLINE_IL_LIMIT=0"
-                       "MONO_LLVM_JIT_FOLD_CLAUSES=0")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-fold-clauses=0")
 
 # The raising arm mono-inline-implicit-null-free leaves out of a callee's
 # cost. The body is past the default cost-translate limit and past the

@@ -332,7 +332,7 @@ public:
 	/// lay the code out by.
 	///
 	/// Returns nothing when the module was not instrumented: every tier-2
-	/// module, and a tier-1 module compiled with MONO_LLVM_JIT_TIER1_PGO off.
+	/// module, and a tier-1 module compiled with -mono-tier1-pgo off.
 	///
 	/// inliner, when given, is what tier 2 asks for the callee bodies it folds
 	/// in. Without one the module is compiled with every call it arrived with

@@ -1091,7 +1091,7 @@ set(MONO_TESTS_TIER2_INLINE_PROFILE_CONTEXT_SRC
 
 # Whether the cost model can weigh a filter-bearing callee without aborting
 # the compile. It runs twice, on the default and with
-# MONO_LLVM_JIT_FOLD_CLAUSES=0, and expects the same refusal either way.
+# -mono-fold-clauses=0, and expects the same refusal either way.
 set(MONO_TESTS_TIER2_INLINE_FILTER_SRC
   tier2-inline-filter.cs
 )
