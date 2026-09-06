@@ -970,13 +970,16 @@ static int ccount = 0;
 #endif
 
 static inline void
-mini_emit_bounds_check_offset (MonoCompile *cfg, int array_reg, int array_length_offset, int index_reg, const char *ex_name)
+mini_emit_bounds_check_offset (MonoCompile *cfg, int array_reg, int array_length_offset, int index_reg, const char *ex_name, gboolean wide_index)
 {
 	if (!(cfg->opt & MONO_OPT_UNSAFE)) {
 		ex_name = ex_name ? ex_name : "IndexOutOfRangeException";
 		if (!(cfg->opt & MONO_OPT_ABCREM)) {
 			MONO_EMIT_NULL_CHECK (cfg, array_reg, FALSE);
-			if (COMPILE_LLVM (cfg))
+			// An arch check can compare 32 bits alone, as amd64's does, which lets
+			// the high half of a native int past. The default one compares whole
+			// registers.
+			if (COMPILE_LLVM (cfg) || wide_index)
 				MONO_EMIT_DEFAULT_BOUNDS_CHECK ((cfg), (array_reg), (array_length_offset), (index_reg), TRUE, ex_name);
 			else
 				MONO_ARCH_EMIT_BOUNDS_CHECK ((cfg), (array_reg), (array_length_offset), (index_reg), ex_name);
@@ -1000,9 +1003,10 @@ mini_emit_bounds_check_offset (MonoCompile *cfg, int array_reg, int array_length
  * array_type is a struct (usually MonoArray or MonoString)
  * array_length_field is the field in the previous struct with the length
  * index_reg is the vreg holding the index
+ * wide_index is whether that vreg holds a native int rather than an int32
  */
-#define MONO_EMIT_BOUNDS_CHECK(cfg, array_reg, array_type, array_length_field, index_reg) do { \
-	mini_emit_bounds_check_offset ((cfg), (array_reg), MONO_STRUCT_OFFSET (array_type, array_length_field), (index_reg), NULL); \
+#define MONO_EMIT_BOUNDS_CHECK(cfg, array_reg, array_type, array_length_field, index_reg, wide_index) do { \
+	mini_emit_bounds_check_offset ((cfg), (array_reg), MONO_STRUCT_OFFSET (array_type, array_length_field), (index_reg), NULL, (wide_index)); \
     } while (0)
 
 #endif

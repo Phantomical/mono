@@ -4135,6 +4135,18 @@ mini_field_access_needs_cctor_run (MonoCompile *cfg, MonoMethod *method, MonoCla
 	return TRUE;
 }
 
+/// Whether index fills a whole register.
+static gboolean
+index_fills_a_register (MonoInst *index)
+{
+#if SIZEOF_REGISTER == 8
+	// An ILP32 target holds a 32-bit native int in a 64-bit register.
+	return index->type == STACK_I8 || (TARGET_SIZEOF_VOID_P == 8 && index->type == STACK_PTR);
+#else
+	return FALSE;
+#endif
+}
+
 int
 mini_emit_sext_index_reg (MonoCompile *cfg, MonoInst *index)
 {
@@ -4149,6 +4161,10 @@ mini_emit_sext_index_reg (MonoCompile *cfg, MonoInst *index)
 		 * during OP_BOUNDS_CHECK decomposition, and in the implementation
 		 * of OP_X86_LEA for llvm.
 		 */
+		index2_reg = index_reg;
+	} else if (index_fills_a_register (index)) {
+		// ECMA-335 III.4.9 admits a native int index, and sign extending one
+		// takes its own high half away.
 		index2_reg = index_reg;
 	} else {
 		index2_reg = alloc_preg (cfg);
@@ -4207,8 +4223,13 @@ mini_emit_ldelema_1_ins (MonoCompile *cfg, MonoClass *klass, MonoInst *arr, Mono
 		MONO_EMIT_NEW_BIALU (cfg, OP_PSUB, realidx2_reg, index2_reg, lower_bound_reg);
 	}
 
-	if (bcheck)
-		MONO_EMIT_BOUNDS_CHECK (cfg, array_reg, MonoArray, max_length, realidx2_reg);
+	if (bcheck) {
+		// A lower bound is taken off in whole registers, so the difference can
+		// set the high half whatever width the index arrived at.
+		gboolean wide_index = bounded || index_fills_a_register (index);
+
+		MONO_EMIT_BOUNDS_CHECK (cfg, array_reg, MonoArray, max_length, realidx2_reg, wide_index);
+	}
 
 #if defined(TARGET_X86) || defined(TARGET_AMD64)
 	if (size == 1 || size == 2 || size == 4 || size == 8) {
@@ -4408,7 +4429,7 @@ mini_emit_array_store (MonoCompile *cfg, MonoClass *klass, MonoInst **sp, gboole
 				MONO_EMIT_NEW_UNALU (cfg, OP_ZEXT_I4, index_reg, index_reg);
 
 			if (safety_checks)
-				MONO_EMIT_BOUNDS_CHECK (cfg, array_reg, MonoArray, max_length, index_reg);
+				MONO_EMIT_BOUNDS_CHECK (cfg, array_reg, MonoArray, max_length, index_reg, FALSE);
 			EMIT_NEW_STORE_MEMBASE_TYPE (cfg, ins, m_class_get_byval_arg (klass), array_reg, offset, sp [2]->dreg);
 		} else {
 			MonoInst *addr = mini_emit_ldelema_1_ins (cfg, klass, sp [0], sp [1], safety_checks, FALSE);
@@ -8539,8 +8560,17 @@ calli_end:
 					mono_unlink_bblock (cfg, cfg->cbb, targets [i]);
 			}
 
-			MONO_EMIT_NEW_BIALU_IMM (cfg, OP_ICOMPARE_IMM, -1, src1->dreg, n);
-			MONO_EMIT_NEW_BRANCH_BLOCK (cfg, OP_IBGE_UN, default_bblock);
+			// ECMA-335 III.3.66 compares the value against n as an unsigned
+			// integer, and the check above admits a native int. An int32 compare
+			// reads the low half alone, which lands a value whose high half is
+			// set on an arm instead of the default.
+			if (src1->type == STACK_PTR && TARGET_SIZEOF_VOID_P == 8) {
+				MONO_EMIT_NEW_BIALU_IMM (cfg, OP_COMPARE_IMM, -1, src1->dreg, n);
+				MONO_EMIT_NEW_BRANCH_BLOCK (cfg, OP_PBGE_UN, default_bblock);
+			} else {
+				MONO_EMIT_NEW_BIALU_IMM (cfg, OP_ICOMPARE_IMM, -1, src1->dreg, n);
+				MONO_EMIT_NEW_BRANCH_BLOCK (cfg, OP_IBGE_UN, default_bblock);
+			}
 
 			for (i = 0; i < n; ++i)
 				link_bblock (cfg, cfg->cbb, targets [i]);
@@ -10420,7 +10450,7 @@ field_access_end:
 				if (SIZEOF_REGISTER == 8 && COMPILE_LLVM (cfg))
 					MONO_EMIT_NEW_UNALU (cfg, OP_ZEXT_I4, index_reg, index_reg);
 
-				MONO_EMIT_BOUNDS_CHECK (cfg, array_reg, MonoArray, max_length, index_reg);
+				MONO_EMIT_BOUNDS_CHECK (cfg, array_reg, MonoArray, max_length, index_reg, FALSE);
 				EMIT_NEW_LOAD_MEMBASE_TYPE (cfg, ins, m_class_get_byval_arg (klass), array_reg, offset);
 			} else {
 				addr = mini_emit_ldelema_1_ins (cfg, klass, sp [0], sp [1], TRUE, FALSE);
