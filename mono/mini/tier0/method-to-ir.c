@@ -7528,6 +7528,15 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 			if (cmethod->string_ctor && method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE)
 				g_assert_not_reached ();
 
+			/*
+			 * A method with no this has no receiver to dispatch on, so the
+			 * site can only be an ordinary call. Left virtual, the call takes
+			 * the first argument as its receiver and the check-this emitted
+			 * for it dereferences that argument.
+			 */
+			if (virtual_ && !fsig->hasthis)
+				virtual_ = FALSE;
+
 			n = fsig->param_count + fsig->hasthis;
 
 			if (!cfg->gshared && mono_class_is_gtd (cmethod->klass))
