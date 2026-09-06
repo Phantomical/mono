@@ -4305,13 +4305,16 @@ mono_tier0_compile (MonoMethod *method, MonoDomain *domain, gpointer *out_code,
 	*out_needs_context = FALSE;
 
 	/*
-	 * Neither a generic method definition nor a method of a generic type
-	 * definition has an instantiation to compile against.
-	 * mini_method_compile () shares only an inflated method, so
-	 * mono_method_to_ir () gets the definition itself and asserts.
-	 * mono_ldftn () compiles whatever the IL names, and Reflection.Emit
-	 * writes an ldftn naming a generic method definition. The backend
-	 * translates one, so the refusal sends the method to tier 1.
+	 * A generic method definition has no instantiation to compile against.
+	 * mono_method_is_generic_impl () does not count an uninflated method as
+	 * generic unless its class is itself a generic type definition. So
+	 * mini_method_compile () never shares one, and mono_method_to_ir ()
+	 * gets the definition itself and asserts. mono_ldftn () compiles
+	 * whatever the IL names, and Reflection.Emit writes an ldftn naming a
+	 * generic method definition. The backend translates one, so the
+	 * refusal sends the method to tier 1. A method of a generic type
+	 * definition carries no instantiation either, and is refused alongside
+	 * it.
 	 */
 	if (method->is_generic || mono_class_is_gtd (method->klass)) {
 		mono_error_set_not_supported (error, "tier 0 does not compile an uninstantiated generic definition");
