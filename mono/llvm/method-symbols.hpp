@@ -38,12 +38,10 @@ namespace mono {
 /// functions.
 constexpr std::string_view filter_body_suffix = "$filter";
 
-/// The readable half of the symbol a method's body is defined under, and so
-/// the name a dump or a profile prints the body by, whichever engine emitted it.
+/// Returns the method's name with its signature left out.
 ///
-/// It leaves the signature out, the expensive half of printing a method: the
-/// identity chunk a symbol carries beside this is what makes the symbol
-/// unique, and an IR dump shows the declaration's own type next to it.
+/// A dump or a profile prints a method's body under this name, whichever
+/// engine emitted it.
 std::string method_display_name (MonoMethod *method);
 
 void mark_method_reference (llvm::GlobalValue &value, MonoMethod *method);
