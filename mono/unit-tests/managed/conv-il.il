@@ -573,4 +573,157 @@
 		ldloc.0
 		ret
 	}
+
+	// -------------------------------------------------------------------
+	// conv.ovf.u* from a float
+	//
+	// A source past int64 max is what tells a signed reading of the value
+	// apart from an unsigned one. Below it the two agree.
+	// -------------------------------------------------------------------
+
+	.method public static int32 test_1_conv_ovf_u_from_large_r8 () cil managed
+	{
+		.maxstack 3
+		ldc.r8 1e19
+		call float64 ConvIL::IdR8 (float64)
+		conv.ovf.u
+		conv.u8
+		ldc.i8 0x8AC7230489E80000
+		ceq
+		ret
+	}
+
+	.method public static int32 test_1_conv_ovf_u8_from_large_r8 () cil managed
+	{
+		.maxstack 3
+		ldc.r8 1e19
+		call float64 ConvIL::IdR8 (float64)
+		conv.ovf.u8
+		ldc.i8 0x8AC7230489E80000
+		ceq
+		ret
+	}
+
+	// 2^63 is exact in a float32, and it is the smallest source a signed
+	// reading rejects.
+	.method public static int32 test_1_conv_ovf_u_from_large_r4 () cil managed
+	{
+		.maxstack 3
+		ldc.r4 9.2233720368547758e18
+		call float32 ConvIL::IdR4 (float32)
+		conv.ovf.u
+		conv.u8
+		ldc.i8 0x8000000000000000
+		ceq
+		ret
+	}
+
+	.method public static int32 test_1_conv_ovf_u8_from_large_r4 () cil managed
+	{
+		.maxstack 3
+		ldc.r4 9.2233720368547758e18
+		call float32 ConvIL::IdR4 (float32)
+		conv.ovf.u8
+		ldc.i8 0x8000000000000000
+		ceq
+		ret
+	}
+
+	// Past int32 max, which an unsigned int32 still holds.
+	.method public static int32 test_1_conv_ovf_u4_from_r8 () cil managed
+	{
+		.maxstack 3
+		ldc.r8 3e9
+		call float64 ConvIL::IdR8 (float64)
+		conv.ovf.u4
+		conv.u8
+		ldc.i8 3000000000
+		ceq
+		ret
+	}
+
+	.method public static int32 test_1_conv_ovf_u2_from_r8 () cil managed
+	{
+		.maxstack 3
+		ldc.r8 60000.0
+		call float64 ConvIL::IdR8 (float64)
+		conv.ovf.u2
+		ldc.i4 60000
+		ceq
+		ret
+	}
+
+	.method public static int32 test_1_conv_ovf_u1_from_r8 () cil managed
+	{
+		.maxstack 3
+		ldc.r8 200.0
+		call float64 ConvIL::IdR8 (float64)
+		conv.ovf.u1
+		ldc.i4 200
+		ceq
+		ret
+	}
+
+	.method public static int32 test_1_conv_ovf_u_from_r8_negative_throws () cil managed
+	{
+		.maxstack 3
+		.locals init (int32 result)
+		.try {
+			ldc.r8 -1.0
+			call float64 ConvIL::IdR8 (float64)
+			conv.ovf.u
+			pop
+			leave IL_done
+		} catch [mscorlib]System.OverflowException {
+			pop
+			ldc.i4.1
+			stloc.0
+			leave IL_done
+		}
+	IL_done:
+		ldloc.0
+		ret
+	}
+
+	.method public static int32 test_1_conv_ovf_u4_from_r8_negative_throws () cil managed
+	{
+		.maxstack 3
+		.locals init (int32 result)
+		.try {
+			ldc.r8 -1.0
+			call float64 ConvIL::IdR8 (float64)
+			conv.ovf.u4
+			pop
+			leave IL_done
+		} catch [mscorlib]System.OverflowException {
+			pop
+			ldc.i4.1
+			stloc.0
+			leave IL_done
+		}
+	IL_done:
+		ldloc.0
+		ret
+	}
+
+	.method public static int32 test_1_conv_ovf_u4_from_large_r8_throws () cil managed
+	{
+		.maxstack 3
+		.locals init (int32 result)
+		.try {
+			ldc.r8 1e19
+			call float64 ConvIL::IdR8 (float64)
+			conv.ovf.u4
+			pop
+			leave IL_done
+		} catch [mscorlib]System.OverflowException {
+			pop
+			ldc.i4.1
+			stloc.0
+			leave IL_done
+		}
+	IL_done:
+		ldloc.0
+		ret
+	}
 }

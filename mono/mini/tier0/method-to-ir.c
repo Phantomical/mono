@@ -6236,6 +6236,20 @@ conv_ovf_dropping_un (int il_op)
 	}
 }
 
+/// Maps a conv.ovf.u* opcode to its .un counterpart, and leaves any other opcode
+/// alone.
+static int
+conv_ovf_adding_un (int il_op)
+{
+	switch (il_op) {
+	case MONO_CEE_CONV_OVF_U1: return MONO_CEE_CONV_OVF_U1_UN;
+	case MONO_CEE_CONV_OVF_U2: return MONO_CEE_CONV_OVF_U2_UN;
+	case MONO_CEE_CONV_OVF_U4: return MONO_CEE_CONV_OVF_U4_UN;
+	case MONO_CEE_CONV_OVF_U: return MONO_CEE_CONV_OVF_U_UN;
+	default: return il_op;
+	}
+}
+
 /*
  * mono_method_to_ir:
  *
@@ -8882,9 +8896,12 @@ calli_end:
 		case MONO_CEE_CONV_OVF_U8_UN:
 		case MONO_CEE_CONV_OVF_U_UN:
 			if (sp [-1]->type == STACK_R8 || sp [-1]->type == STACK_R4) {
-				/* floats are always signed, _UN has no effect */
+				// A float has no unsigned reading, so ECMA-335 III.3.29's .un
+				// changes nothing here. The int64 the first step leaves is
+				// unsigned, and narrowing it as signed would throw on every
+				// source past int64 max.
 				ADD_UNOP (CEE_CONV_OVF_U8);
-				ADD_UNOP (il_op);
+				ADD_UNOP (conv_ovf_adding_un (il_op));
 			} else {
 				ADD_UNOP (il_op);
 			}
