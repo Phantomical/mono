@@ -4,6 +4,7 @@
 // thrower where it is not, rather than emitting the access.
 
 .assembly extern mscorlib { }
+.assembly access { }
 
 .class public auto ansi AccessTarget extends [mscorlib]System.Object
 {

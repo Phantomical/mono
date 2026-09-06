@@ -170,7 +170,10 @@ list(APPEND _modules "${CMAKE_CURRENT_BINARY_DIR}/interp-tests-cs.netmodule")
 file(GLOB _il_sources CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" *.il)
 
 # These set their own assembly names, so they cannot be merged with the others.
-set(_own_assembly folding.il magic-conv.il)
+# access.il is its own because the merged assembly is built -unsafe and so
+# carries SkipVerification, which waives the access checks it tests
+# (mini_assembly_can_skip_verification ()).
+set(_own_assembly folding.il magic-conv.il access.il)
 set(_assemblies "")
 
 foreach(_il IN LISTS _il_sources)

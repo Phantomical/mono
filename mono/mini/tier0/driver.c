@@ -947,17 +947,6 @@ mono_create_jump_table (MonoCompile *cfg, MonoInst *label, MonoBasicBlock **bbs,
 	cfg->patch_info = ji;
 }
 
-gboolean
-mini_assembly_can_skip_verification (MonoDomain *domain, MonoMethod *method)
-{
-	MonoAssembly *assembly = m_class_get_image (method->klass)->assembly;
-	if (method->wrapper_type != MONO_WRAPPER_NONE && method->wrapper_type != MONO_WRAPPER_DYNAMIC_METHOD)
-		return FALSE;
-	if (assembly->in_gac || assembly->image == mono_defaults.corlib)
-		return FALSE;
-	return mono_assembly_has_skip_verification (assembly);
-}
-
 /*
  * mini_method_verify:
  * 
@@ -978,7 +967,7 @@ mini_method_verify (MonoCompile *cfg, MonoMethod *method, gboolean fail_compile)
 		return FALSE;
 
 	/*skip verification implies the assembly must be */
-	is_fulltrust = mono_verifier_is_method_full_trust (method) ||  mini_assembly_can_skip_verification (cfg->domain, method);
+	is_fulltrust = mono_verifier_is_method_full_trust (method) || mini_assembly_can_skip_verification (method);
 
 	res = mono_method_verify_with_current_settings (method, cfg->skip_visibility, is_fulltrust);
 

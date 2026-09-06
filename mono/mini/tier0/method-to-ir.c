@@ -6325,15 +6325,14 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 	dont_verify |= method->wrapper_type == MONO_WRAPPER_COMINTEROP_INVOKE;
 
 	/*
-	 * The accessibility checks below do not read dont_verify: SkipVerification
-	 * lets an assembly run unverifiable IL, not reach another class's private
-	 * members. mini_method_verify () calls an access verdict fatal whatever the
-	 * trust level, and the translator's checks_accessibility ()
-	 * (mono/llvm/method-to-llvm/invalid-il.cpp) reads these same three.
+	 * The same rule as the translator's checks_accessibility ()
+	 * (mono/llvm/method-to-llvm/invalid-il.cpp), which says why each arm is
+	 * exempt. A method's access verdict must not change when it promotes.
 	 */
 	checks_accessibility = !cfg->skip_visibility
 		&& method->wrapper_type == MONO_WRAPPER_NONE
-		&& !image->assembly->corlib_internal;
+		&& !image->assembly->corlib_internal
+		&& !mini_assembly_can_skip_verification (method);
 
 	/* still some type unsafety issues in marshal wrappers... (unknown is PtrToStructure) */
 	dont_verify_stloc = method->wrapper_type == MONO_WRAPPER_MANAGED_TO_NATIVE;
@@ -6424,7 +6423,7 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 	}
 
 	/* SkipVerification is not allowed if core-clr is enabled */
-	if (!dont_verify && mini_assembly_can_skip_verification (cfg->domain, method)) {
+	if (!dont_verify && mini_assembly_can_skip_verification (method)) {
 		dont_verify = TRUE;
 		dont_verify_stloc = TRUE;
 	}
