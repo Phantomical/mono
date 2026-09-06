@@ -1168,8 +1168,8 @@ mono_gc_alloc_pinned_obj (MonoVTable *vtable, size_t size)
 /*
  * Passes through GC_invoke_finalizers () that have not returned. It takes each
  * object off finalize_now before it runs the finalizer, so the queue alone
- * reads empty while a finalizer is still running, and WaitForPendingFinalizers
- * would return with that finalizer half done.
+ * reads empty while a finalizer is still running. mono_gc_pending_finalizers ()
+ * must still report it as pending in that gap.
  */
 static volatile gint32 finalizer_passes_running;
 
@@ -1188,10 +1188,12 @@ MonoBoolean
 mono_gc_pending_finalizers (void)
 {
 	/*
-	 * The queue before the count. A pass increments the count before it takes
-	 * an object off the queue, so a reader that finds the queue empty and then
-	 * the count zero saw the pass finish. Read the other way round, the count
-	 * can be read before the increment and the queue after the pop.
+	 * This checks the queue before the count. A pass increments the count
+	 * before it takes an object off the queue. An empty queue followed by a
+	 * zero count means the pass has finished. Reading the count first does
+	 * not hold that guarantee. The count can still read zero just before a
+	 * pass increments it, and the queue can read empty from that same pass's
+	 * pop.
 	 */
 	if (GC_should_invoke_finalizers ())
 		return TRUE;
