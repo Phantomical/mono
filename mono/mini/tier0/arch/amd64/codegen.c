@@ -302,6 +302,10 @@ mono_arch_compute_omit_fp (MonoCompile *cfg)
 		cfg->arch.omit_fp = FALSE;
 	if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG))
 		cfg->arch.omit_fp = FALSE;
+	/* A wide return's pointer arrives on the stack once the argument registers
+	 * are spent, and its offset is one more that the frame size decides. */
+	if (cinfo->ret.storage == ArgValuetypeAddrOnStack)
+		cfg->arch.omit_fp = FALSE;
 	for (i = 0; i < sig->param_count + sig->hasthis; ++i) {
 		ArgInfo *ainfo = &cinfo->args [i];
 
@@ -6042,9 +6046,11 @@ MONO_RESTORE_WARNING
 		if (cfg->vret_addr && (cfg->vret_addr->opcode != OP_REGVAR)) {
 			// AMD64_RAX carries no argument, so it is free to carry the
 			// pointer across from the slot the caller left it in.
-			if (cinfo->ret.storage == ArgValuetypeAddrOnStack)
+			if (cinfo->ret.storage == ArgValuetypeAddrOnStack) {
+				g_assert (!cfg->arch.omit_fp);
 				amd64_mov_reg_membase (code, AMD64_RAX, cfg->frame_reg,
 				                       ARGS_OFFSET + cinfo->ret.offset, 8);
+			}
 
 			amd64_mov_membase_reg (code, cfg->vret_addr->inst_basereg,
 			                       cfg->vret_addr->inst_offset,
