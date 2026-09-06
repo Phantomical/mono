@@ -13,10 +13,8 @@ mono_ldftn (MonoMethod *method)
 	gpointer addr;
 	ERROR_DECL (error);
 
-	/*
-	 * A synchronized method's lock is in the wrapper rather than in the body.
-	 * Whoever calls through this pointer has no other chance to take it.
-	 */
+	// A synchronized method's lock is in the wrapper rather than in the body.
+	// Whoever calls through this pointer has no other chance to take it.
 	if (method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)
 		method = mono_marshal_get_synchronized_wrapper (method);
 
