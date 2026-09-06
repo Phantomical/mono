@@ -221,8 +221,27 @@ set(MONO_INTERP_TESTS_JIT_XFAIL
 set(MONO_INTERP_TESTS_MIXED_XFAIL "")
 
 # What classic tier 0 answers differently from the interpreter, on the same
-# IL. Each entry has to say which engine is wrong.
-set(MONO_INTERP_TESTS_CLASSIC_XFAIL "")
+# IL. Each entry has to say which engine is wrong. Every one of these answers
+# what the tier-1 arm answers, so the entry beside it in
+# MONO_INTERP_TESTS_JIT_XFAIL is the same divergence seen from the other side.
+set(MONO_INTERP_TESTS_CLASSIC_XFAIL
+  # ECMA-335 Table III.9 fills a native unsigned int with zeroes, and neither
+  # compiled engine does: both widen it the way they widen a native int.
+  "NativeInt:test_1_stsfld_zero_extends"
+  "NativeInt:test_1_call_argument_zero_extends"
+  "NativeInt:test_1_ret_zero_extends"
+  # IL ECMA-335 does not allow, which the interpreter runs anyway. Classic
+  # refuses it, the method goes to tier 1, and the translator refuses it there,
+  # so what the program sees is the translator's own message.
+  "Refusals:test_9_localloc_with_stack"
+  "Merge:test_1_branch_type_mismatch"
+  # ECMA-335 III.3.34 has endfilter intercept an exception the filter raised.
+  # Classic lets it out to the caller instead, the same as the translator.
+  "Exceptions:test_2_an_exception_in_a_filter_continues_the_search"
+  # The interpreter addresses a local with 16 bits and refuses a body whose
+  # locals reach 64 KB, which is the InvalidProgramException this asks for.
+  # Classic has no such limit and compiles the body, the same as the translator.
+  "Limits:test_1_locals_size_too_big")
 
 # Tier 2 compiles the same IL the tier-1 arm does, so it starts from that arm's
 # list and adds whatever the optimizing pipeline answers differently.
