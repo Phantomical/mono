@@ -6795,11 +6795,29 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 			}
 		}
 		/*
-		 * Sequence points are points where the debugger can place a breakpoint.
-		 * Currently, we generate these automatically at points where the IL
-		 * stack is empty.
+		 * A sequence point is what puts a classic body's native offset back
+		 * in the IL, and that offset is what a stack trace prints. Every IL
+		 * offset gets one, so the offset names the instruction rather than
+		 * the statement around it. That is what the interpreter and the LLVM
+		 * tier report for the same frame.
+		 * mono_bb_deduplicate_op_il_seq_points () then drops the points that
+		 * start no code of their own.
+		 *
+		 * A debugger's sequence point emits code, and so does a coverage
+		 * counter. Both stay at the offsets the symbol file names, or at the
+		 * stack-empty offsets when it names none.
 		 */
-		if (seq_points && ((!sym_seq_points && (sp == stack_start)) || (sym_seq_points && mono_bitset_test_fast (seq_point_locs, ip - header->code)))) {
+		gboolean at_stack_empty = sp == stack_start;
+		gboolean wants_seq_point;
+
+		if (sym_seq_points)
+			wants_seq_point = mono_bitset_test_fast (seq_point_locs, ip - header->code);
+		else if (cfg->gen_sdb_seq_points || cfg->prof_coverage)
+			wants_seq_point = at_stack_empty;
+		else
+			wants_seq_point = TRUE;
+
+		if (seq_points && wants_seq_point) {
 			/*
 			 * Make methods interruptable at the beginning, and at the targets of
 			 * backward branches.
@@ -6809,13 +6827,12 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 			 * Backward branches are handled at the end of method-to-ir ().
 			 */
 			gboolean intr_loc = ip == header->code || (!cfg->cbb->last_ins && cfg->header->num_clauses);
-			gboolean sym_seq_point = sym_seq_points && mono_bitset_test_fast (seq_point_locs, ip - header->code);
 
 			/* Avoid sequence points on empty IL like .volatile */
 			// FIXME: Enable this
 			//if (!(cfg->cbb->last_ins && cfg->cbb->last_ins->opcode == OP_SEQ_POINT)) {
 			NEW_SEQ_POINT (cfg, ins, ip - header->code, intr_loc);
-			if ((sp != stack_start) && !sym_seq_point)
+			if (!at_stack_empty && !sym_seq_points)
 				ins->flags |= MONO_INST_NONEMPTY_STACK;
 			MONO_ADD_INS (cfg->cbb, ins);
 
