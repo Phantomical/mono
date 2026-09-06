@@ -1165,23 +1165,38 @@ mono_gc_alloc_pinned_obj (MonoVTable *vtable, size_t size)
 	return mono_gc_alloc_obj (vtable, size);
 }
 
+/*
+ * Passes through GC_invoke_finalizers () that have not returned. It takes each
+ * object off finalize_now before it runs the finalizer, so the queue alone
+ * reads empty while a finalizer is still running, and WaitForPendingFinalizers
+ * would return with that finalizer half done.
+ */
+static volatile gint32 finalizer_passes_running;
+
 int
 mono_gc_invoke_finalizers (void)
 {
-	/* There is a bug in GC_invoke_finalizer () in versions <= 6.2alpha4:
-	 * the 'mem_freed' variable is not initialized when there are no
-	 * objects to finalize, which leads to strange behavior later on.
-	 * The check is necessary to work around that bug.
-	 */
-	if (GC_should_invoke_finalizers ())
-		return GC_invoke_finalizers ();
-	return 0;
+	int count;
+
+	mono_atomic_inc_i32 (&finalizer_passes_running);
+	count = GC_invoke_finalizers ();
+	mono_atomic_dec_i32 (&finalizer_passes_running);
+	return count;
 }
 
 MonoBoolean
 mono_gc_pending_finalizers (void)
 {
-	return GC_should_invoke_finalizers ();
+	/*
+	 * The queue before the count. A pass increments the count before it takes
+	 * an object off the queue, so a reader that finds the queue empty and then
+	 * the count zero saw the pass finish. Read the other way round, the count
+	 * can be read before the increment and the queue after the pop.
+	 */
+	if (GC_should_invoke_finalizers ())
+		return TRUE;
+	mono_memory_read_barrier ();
+	return mono_atomic_load_i32 (&finalizer_passes_running) > 0;
 }
 
 void
