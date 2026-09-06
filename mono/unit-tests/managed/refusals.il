@@ -44,6 +44,47 @@
 		ret
 	}
 
+	// ECMA-335 III.3.47 does not allow a localloc inside an exception block.
+	.method public static int32 test_9_localloc_in_catch () cil managed
+	{
+		.maxstack 4
+		.locals init (int32 result, native int block)
+		.try {
+			newobj instance void [mscorlib]System.Exception::.ctor ()
+			throw
+		} catch [mscorlib]System.Exception {
+			pop
+			ldc.i4 32
+			localloc
+			stloc.1
+			ldc.i4.s 9
+			stloc.0
+			leave IL_done
+		}
+	IL_done:
+		ldloc.0
+		ret
+	}
+
+	.method public static int32 test_9_localloc_in_finally () cil managed
+	{
+		.maxstack 4
+		.locals init (int32 result, native int block)
+		.try {
+			ldc.i4.s 9
+			stloc.0
+			leave IL_done
+		} finally {
+			ldc.i4 32
+			localloc
+			stloc.1
+			endfinally
+		}
+	IL_done:
+		ldloc.0
+		ret
+	}
+
 	// An unaligned. prefix with an alignment ECMA-335 III.2.5 does not define.
 	.method public static int32 test_7_unaligned_three () cil managed
 	{

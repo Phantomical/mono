@@ -200,6 +200,8 @@ set(MONO_INTERP_TESTS_JIT_XFAIL
   # interpreter runs anyway.
   "Refusals:test_5_constrained_on_call"
   "Refusals:test_9_localloc_with_stack"
+  "Refusals:test_9_localloc_in_catch"
+  "Refusals:test_9_localloc_in_finally"
   "Refusals:test_7_unaligned_three"
   "Merge:test_1_merge_i4_into_i8"
   "Merge:test_1_branch_type_mismatch"
@@ -231,6 +233,8 @@ set(MONO_INTERP_TESTS_CLASSIC_XFAIL
   "NativeInt:test_1_ret_zero_extends"
   # The interpreter runs IL ECMA-335 forbids. Classic refuses it and tier 1 reports the refusal.
   "Refusals:test_9_localloc_with_stack"
+  "Refusals:test_9_localloc_in_catch"
+  "Refusals:test_9_localloc_in_finally"
   "Merge:test_1_branch_type_mismatch"
   # ECMA-335 III.3.34 has endfilter intercept a filter's own exception. Classic lets it escape instead.
   "Exceptions:test_2_an_exception_in_a_filter_continues_the_search"

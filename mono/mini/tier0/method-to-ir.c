@@ -11733,6 +11733,14 @@ mono_ldptr:
 			--sp;
 			if (sp != stack_start)
 				UNVERIFIED;
+			// ECMA-335 III.3.47 does not allow a localloc within an exception
+			// block: a filter, a catch, a finally or a fault.
+			for (i = 0; i < header->num_clauses; ++i) {
+				MonoExceptionClause *clause = &header->clauses [i];
+				if (MONO_OFFSET_IN_HANDLER (clause, ip - header->code)
+				    || MONO_OFFSET_IN_FILTER (clause, ip - header->code))
+					UNVERIFIED;
+			}
 			if (cfg->method != method)
 				/*
 				 * Inlining this into a loop in a parent could lead to
