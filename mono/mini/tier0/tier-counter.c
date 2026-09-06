@@ -12,9 +12,9 @@
 ///
 /// The plain load keeps the icall's own atomic decrement off the path a spent
 /// body takes. That path is every entry and every loop turn for the rest of the
-/// method's run. A spent body calls nothing of its own there, so a stack
-/// overflow faults in managed code, where mono_handle_soft_stack_ovf () raises
-/// StackOverflowException from it.
+/// method's run. A spent body calls nothing of its own there. A stack
+/// overflow then faults in managed code, where mono_handle_soft_stack_ovf ()
+/// raises a catchable StackOverflowException instead of aborting.
 static void
 emit_guarded_count (MonoCompile *cfg, int32_t *counter)
 {
@@ -41,7 +41,7 @@ emit_guarded_count (MonoCompile *cfg, int32_t *counter)
 }
 
 /// Emits one count against the method's way out of tier 0, into the block being
-/// built.
+/// built. Does nothing while cfg is translating an inlined callee's own body.
 ///
 /// The count sits behind a branch, so that block has to be one a branch can end.
 /// The initlocals block is not. The caller decides what one count is: the first

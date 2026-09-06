@@ -6777,9 +6777,9 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 
 		/*
 		 * The call this body charges against its way out of tier 0. The guard
-		 * that skips the charge once the count is spent is a branch, so this
-		 * goes in the first code block for the same reason the class init
-		 * above it does.
+		 * that skips the charge once the count is spent is a branch. This goes
+		 * in the first code block for the same reason the class init above it
+		 * does.
 		 */
 		if (ip - header->code == 0)
 			mini_tier0_emit_counter (cfg);
