@@ -303,7 +303,7 @@ mono_arch_compute_omit_fp (MonoCompile *cfg)
 	if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG))
 		cfg->arch.omit_fp = FALSE;
 	/* A wide return's pointer arrives on the stack once the argument registers
-	 * are spent, and its offset is one more that the frame size decides. */
+	 * are spent, and its offset is one more the frame size decides. */
 	if (cinfo->ret.storage == ArgValuetypeAddrOnStack)
 		cfg->arch.omit_fp = FALSE;
 	for (i = 0; i < sig->param_count + sig->hasthis; ++i) {

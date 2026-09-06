@@ -225,7 +225,7 @@ set(MONO_INTERP_TESTS_MIXED_XFAIL "")
 # what the tier-1 arm answers, so the entry beside it in
 # MONO_INTERP_TESTS_JIT_XFAIL is the same divergence seen from the other side.
 set(MONO_INTERP_TESTS_CLASSIC_XFAIL
-  # ECMA-335 Table III.9 fills a native unsigned int with zeroes, and neither
+  # ECMA-335 Table III.9 fills a native unsigned int with zeroes. Neither
   # compiled engine does: both widen it the way they widen a native int.
   "NativeInt:test_1_stsfld_zero_extends"
   "NativeInt:test_1_call_argument_zero_extends"

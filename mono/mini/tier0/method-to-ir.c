@@ -5618,13 +5618,12 @@ mono_is_not_supported_tailcall_helper (gboolean value, const char *svalue, MonoM
 /*
  * Whether the tail. prefix on the instruction at ip applies to it.
  *
- * III.2.4 puts a ret right behind the prefix and puts neither outside a
- * protected region. Both are shapes the emission needs rather than shapes it
- * checks: skip_ret folds that ret into the call, and OP_TAILCALL gives the
- * frame away before the callee runs, so a clause over the site would never be
- * dispatched into. IL that says otherwise gets an ordinary call here, the same
- * as it gets from the translator's should_tail_call ()
- * (mono/llvm/method-to-llvm/call.cpp).
+ * III.2.4 requires a ret right behind the prefix and forbids the prefix inside
+ * a protected region. The emission needs both rather than checking either.
+ * skip_ret folds that ret into the call. OP_TAILCALL gives the frame away
+ * before the callee runs, so a clause over the site is never dispatched into.
+ * IL that says otherwise gets an ordinary call, the same as the translator's
+ * should_tail_call () (mono/llvm/method-to-llvm/call.cpp) gives it.
  */
 static gboolean
 tail_prefix_applies (MonoMethodHeader *header, const guint8 *ip, const guint8 *next_ip, const guint8 *end)
