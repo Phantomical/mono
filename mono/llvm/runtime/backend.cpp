@@ -696,6 +696,7 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 		}
 
 		dm.attach_body (MonoTier::tier0, entry, jinfo);
+		perf::dump_method (jinfo_get_method (jinfo), jinfo);
 		raise_jit_done (method, jinfo);
 
 		if (mono_use_interpreter)

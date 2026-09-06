@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Assert the perf jit dump gives each range of JIT'd code to exactly one name.
+"""Assert the perf jit dump names every body of the fixture, under one name per
+method whichever engine emitted it, and gives each range of JIT'd code to
+exactly one record.
 
 perf resolves a sample against the range of the record holding the address, and
 the error a wrong range makes is invisible from the report: the names are real
@@ -9,17 +11,25 @@ object as the runs its layout actually has - so a batch neighbour with nothing
 between it and the next is described by the same record, under one of the
 batch's names, rather than by a record of its own.
 
-The rule the ranges still owe is a partition: the ranges do not overlap, and
-none of them sits inside another.  A record's code_size then covers only code
-this run's compile actually placed there, and no sample's name rests on the
-order two records were written in.
+The rule the ranges owe is a partition: the ranges do not overlap, and none of
+them sits inside another.  A record's code_size then covers only code this run's
+compile actually placed there, and no sample's name rests on the order two
+records were written in.
 
-A record's *name* is no longer one method's alone - the whole point of
-batching is that it is not - so what stands in for "the fixture's bodies
-reached tier 1" is the function count each record's own unwinding-info
-carries (one FDE per function described), summed over the records a fixture
-body leads. The fixture has to reach tier 1 for any of this to be measured, so
-the run also has to show that it did.
+The rule the names owe is that a method has one.  A body the classic compiler
+emitted at tier 0 and the body the backend compiles for the same method print
+under the same name, so a profile adds the two up rather than listing a method
+twice - or listing its tier-0 half as a bare address.  The corpus runs three
+times to check that: once at the default tiers, once with promotion off, where
+every fixture body is a classic one, and once with tier 0 off, where every one
+is the backend's.  The two single-engine runs have to name the same set, and
+each classic body has to carry a frame description, or a stack walk stops at it.
+
+What stands in for "the fixture's bodies reached tier 1" in the default run is
+the function count a record's own unwinding info carries (one FDE per function
+described), summed over the fixture records describing more than one: a
+classic body is one function under one record, so only a promoted batch
+describes several under one name.
 """
 
 import argparse
@@ -46,9 +56,20 @@ UNWIND_FIELDS = struct.Struct("<QQQ")
 # so this is never read for one that carries one.
 EH_FRAME_HDR_COUNT_OFFSET = 8
 
-# How many of the fixture's own bodies have to reach tier 1 before the run says
-# anything.  The batch size defaults to 32, so this is one full batch.
-WANT_COMPILED = 32
+# The fixture's own bodies: Work<T>'s four methods over its sixteen struct
+# instantiations, each a body of its own.
+FIXTURE_PREFIX = "Work`1<"
+WANT_BODIES = 64
+
+# How many of the fixture's own functions have to be described by batch records
+# in the default run before it says anything.  The batch size defaults to 32,
+# so this is one full batch.
+WANT_BATCHED = 32
+
+# Promotion off: every fixture body stays a classic tier-0 one.
+TIER0_ONLY = "--llvm-opt=-mono-tier1-threshold=0"
+# Tier 0 off: every fixture body is compiled by the backend, on its own.
+BACKEND_ONLY = "--llvm-opt=-mono-tier0-filter=0"
 
 
 def die(message, *details):
@@ -91,6 +112,32 @@ def records(path):
         at += total
 
 
+def run(runtime, corpus, *options):
+    """Run the corpus under --jitdump and return its records sorted by address."""
+    # The wrapper execs the runtime, so the dump the runtime opens is named for
+    # the pid this call gets back.
+    proc = subprocess.Popen([runtime, "--jitdump", *options, corpus],
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            universal_newlines=True)
+    out, err = proc.communicate()
+    dump = f"/tmp/jit-{proc.pid}.dump"
+    if proc.returncode != 0:
+        die(f"the corpus run {' '.join(options)} failed (exit {proc.returncode})",
+            *err.splitlines()[-20:])
+    if not os.path.isfile(dump):
+        die(f"the run wrote no {dump}",
+            "--jitdump is what opens it, and the runtime has to be built with it.")
+
+    try:
+        loaded = sorted(records(dump), key=lambda r: (r[0], r[1]))
+    finally:
+        os.unlink(dump)
+
+    if not loaded:
+        die(f"{dump} holds no JIT_CODE_LOAD record")
+    return loaded
+
+
 def partitioned(loaded):
     """Return one message for each break of the partition rule."""
     issues = []
@@ -107,46 +154,59 @@ def partitioned(loaded):
     return issues
 
 
+def fixture_bodies(loaded):
+    """The (name, functions) of every record led by one of the fixture's bodies."""
+    return [(name, functions) for _, _, name, functions in loaded
+            if name.startswith(FIXTURE_PREFIX)]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("runtime", help="the mono binary, or the mono-wrapper script")
     parser.add_argument("corpus", help="the corpus .exe to run")
     args = parser.parse_args()
 
-    # The wrapper execs the runtime, so the dump the runtime opens is named for
-    # the pid this call gets back.
-    proc = subprocess.Popen([args.runtime, "--jitdump", args.corpus],
-                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            universal_newlines=True)
-    out, err = proc.communicate()
-    dump = f"/tmp/jit-{proc.pid}.dump"
-    if proc.returncode != 0:
-        die(f"the corpus run failed (exit {proc.returncode})",
-            *err.splitlines()[-20:])
-    if not os.path.isfile(dump):
-        die(f"the run wrote no {dump}",
-            "--jitdump is what opens it, and the runtime has to be built with it.")
+    runs = {
+        "default": run(args.runtime, args.corpus),
+        "tier 0 only": run(args.runtime, args.corpus, TIER0_ONLY),
+        "backend only": run(args.runtime, args.corpus, BACKEND_ONLY),
+    }
 
-    try:
-        loaded = sorted(records(dump), key=lambda r: (r[0], r[1]))
-    finally:
-        os.unlink(dump)
-
-    if not loaded:
-        die(f"{dump} holds no JIT_CODE_LOAD record")
-
-    compiled = sum(functions for _, _, name, functions in loaded
-                   if name.startswith("Work`1<"))
-    if compiled < WANT_COMPILED:
-        die(f"only {compiled} of the fixture's own bodies reached tier 1",
-            f"The rule below is about a compile batch, which is {WANT_COMPILED}",
+    batched = sum(functions for _, functions in fixture_bodies(runs["default"])
+                  if functions >= 2)
+    if batched < WANT_BATCHED:
+        die(f"only {batched} of the fixture's own functions sit in batch records",
+            f"The partition rule is about a compile batch, which is {WANT_BATCHED}",
             "methods, so a run this small does not measure it.")
 
-    issues = partitioned(loaded)
+    issues = []
+    for label, loaded in runs.items():
+        issues += [f"{label}: {issue}" for issue in partitioned(loaded)]
+
+    tier0 = fixture_bodies(runs["tier 0 only"])
+    backend = fixture_bodies(runs["backend only"])
+    tier0_names = {name for name, _ in tier0}
+    backend_names = {name for name, _ in backend}
+    if len(tier0_names) < WANT_BODIES:
+        issues.append(f"tier 0 only: {len(tier0_names)} of the fixture's "
+                      f"{WANT_BODIES} bodies are named")
+    if len(backend_names) < WANT_BODIES:
+        issues.append(f"backend only: {len(backend_names)} of the fixture's "
+                      f"{WANT_BODIES} bodies are named")
+    for name in sorted(tier0_names - backend_names):
+        issues.append(f"{name} is named at tier 0 and not by the backend")
+    for name in sorted(backend_names - tier0_names):
+        issues.append(f"{name} is named by the backend and not at tier 0")
+    for name, functions in tier0:
+        if functions == 0:
+            issues.append(f"{name} at tier 0 carries no frame description")
+
     for issue in issues:
         print(f"  FAIL {issue}")
-    print(f"{len(loaded)} records, {compiled} of the fixture's own bodies described, "
-          f"{len(issues)} failed")
+    print(f"{sum(len(loaded) for loaded in runs.values())} records over "
+          f"{len(runs)} runs, {batched} of the fixture's own functions in batch "
+          f"records, {len(tier0_names)} bodies named at tier 0 and "
+          f"{len(backend_names)} by the backend, {len(issues)} failed")
     return 1 if issues else 0
 
 

@@ -1041,23 +1041,16 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 	 * identity_symbol () gives it, and legible, because a dump reads the
 	 * untranslated IR directly.
 	 *
-	 * The name skips the signature, the expensive half of printing a
-	 * method, because printing it would add nothing useful: identity_symbol ()
-	 * already makes the name unique, and a dump shows the declaration's own
-	 * type right beside it.
-	 *
 	 * A C entry keeps the name it is created with instead, because the engine
 	 * gives that name an address rather than a published entry. The address is
 	 * what the symbol stands for, so it is what makes the name unique.
 	 * MonoJit::register_symbol () refuses a name that already stands for a
 	 * different address, and a name built this way never meets that refusal.
 	 */
-	char *printed = mono_method_full_name (method, FALSE);
+	std::string printed = method_display_name (method);
 	std::string full_name =
-		in_c ? identity_symbol (std::string ("mono_icall_") + printed, c_entry)
+		in_c ? identity_symbol ("mono_icall_" + printed, c_entry)
 		     : identity_symbol (printed, method);
-
-	g_free (printed);
 
 	// A batched module defines several methods. A call to one of the others must
 	// reach its published entry rather than the body next door: a direct call is

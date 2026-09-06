@@ -120,14 +120,12 @@ code_slack ()
 	return enabled () ? 512 : 0;
 }
 
-void
-publish (const char *name, const CodeRange &range, std::vector<FrameFunction> functions)
-{
-	if (!enabled () || range.code == nullptr || range.extent == 0)
-		return;
+namespace {
 
+void
+publish_frame (const char *name, const CodeRange &range, EhFrame frame)
+{
 	size_t room = std::max (range.room, range.extent);
-	EhFrame frame = build_eh_frame (std::move (functions), range.extent);
 
 	/* The image reaches align8(extent) + the description past the code. A
 	 * description that runs out of the room this record owns reaches into the
@@ -140,18 +138,37 @@ publish (const char *name, const CodeRange &range, std::vector<FrameFunction> fu
 	write (name, range.code, range.extent, frame);
 }
 
+} // namespace
+
+void
+publish (const char *name, const CodeRange &range, std::vector<FrameFunction> functions)
+{
+	if (!enabled () || range.code == nullptr || range.extent == 0)
+		return;
+
+	publish_frame (name, range, build_eh_frame (std::move (functions), range.extent));
+}
+
+void
+publish (const char *name, const CodeRange &range, const uint8_t *cfi, size_t cfi_size)
+{
+	if (!enabled () || range.code == nullptr || range.extent == 0)
+		return;
+
+	publish_frame (name, range,
+	               build_eh_frame (cfi, cfi_size, range.extent, range.extent));
+}
+
 } // namespace mono::perf
 
 void
 mono_llvm_perf_dump_stub (const char *name, gpointer code, guint32 code_size,
                           const guint8 *cfi, guint32 cfi_size)
 {
-	if (!mono::perf::enabled () || code == nullptr || code_size == 0)
-		return;
-
-	mono::perf::write (name, (const uint8_t *) code, code_size,
-	                   mono::perf::build_eh_frame (cfi, cfi_size, code_size,
-	                                               code_size));
+	mono::perf::publish (name,
+	                     {(const uint8_t *) code, code_size,
+	                      code_size + mono::perf::code_slack ()},
+	                     cfi, cfi_size);
 }
 
 guint32

@@ -83,6 +83,7 @@
 #include "debugger-agent.h"
 #include "llvm-runtime.h"
 #include "../../llvm/runtime.h"
+#include "../../llvm/debugging/perf/perf.h"
 #include "lldb.h"
 #include "aot-runtime.h"
 #include "mini-runtime.h"
@@ -2497,6 +2498,7 @@ mono_codegen (MonoCompile *cfg)
 	guint8 *code;
 	MonoMemoryManager *code_mem_manager;
 	guint unwindlen = 0;
+	guint reserve_size;
 
 	code_mem_manager = cfg->mem_manager;
 
@@ -2563,6 +2565,10 @@ mono_codegen (MonoCompile *cfg)
 		unwindlen = mono_arch_unwindinfo_init_method_unwind_info (cfg);
 #endif
 
+	/* Nothing reads the slack. It keeps the next body out of the range a perf
+	 * dump gives this one's frame description. */
+	reserve_size = cfg->code_size + cfg->thunk_area + unwindlen + mono_llvm_perf_code_slack ();
+
 	if (cfg->method->dynamic) {
 		/* Allocate the code into a separate memory pool so it can be freed */
 		cfg->dynamic_info = g_new0 (MonoJitDynamicMethodInfo, 1);
@@ -2571,9 +2577,9 @@ mono_codegen (MonoCompile *cfg)
 		mono_dynamic_code_hash_insert (cfg->domain, cfg->method, cfg->dynamic_info);
 		mono_domain_unlock (cfg->domain);
 
-		code = (guint8 *)mono_code_manager_reserve (cfg->dynamic_info->code_mp, cfg->code_size + cfg->thunk_area + unwindlen);
+		code = (guint8 *)mono_code_manager_reserve (cfg->dynamic_info->code_mp, reserve_size);
 	} else {
-		code = (guint8 *)mono_mem_manager_code_reserve (code_mem_manager, cfg->code_size + cfg->thunk_area + unwindlen);
+		code = (guint8 *)mono_mem_manager_code_reserve (code_mem_manager, reserve_size);
 	}
 
 	mono_codeman_enable_write ();

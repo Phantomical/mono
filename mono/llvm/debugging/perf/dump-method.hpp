@@ -20,8 +20,16 @@
 #include <vector>
 
 typedef struct _MonoMethod MonoMethod;
+typedef struct _MonoJitInfo MonoJitInfo;
 
 namespace mono::perf {
+
+/// Name a body the classic compiler emitted in the dump, under the name the
+/// same method's compiled tiers get, with the frame description that lets a
+/// profile unwind out of it.
+///
+/// Does nothing unless a dump is open, so a caller needs no guard of its own.
+void dump_method (MonoMethod *method, MonoJitInfo *jinfo);
 
 /// Name a compiled method's code in the dump, with the frame description that
 /// lets a profile unwind out of it.

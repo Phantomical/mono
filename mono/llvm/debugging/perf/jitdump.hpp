@@ -51,6 +51,11 @@ struct CodeRange {
 void publish (const char *name, const CodeRange &range,
               std::vector<FrameFunction> functions = {});
 
+/// The same, for code whose frame description is already the DWARF CFI program
+/// mono keeps for a classic body or a stub (mono_unwind_ops_encode).
+void publish (const char *name, const CodeRange &range, const uint8_t *cfi,
+              size_t cfi_size);
+
 } // namespace mono::perf
 
 #endif /* MONO_LLVM_DEBUGGING_PERF_JITDUMP_HPP */

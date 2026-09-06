@@ -13,9 +13,23 @@
 #include <cstdio>
 #include <optional>
 
+#include <glib.h>
+
+#include "mono/metadata/debug-helpers.h"
+
 using namespace llvm;
 
 namespace mono {
+
+std::string
+method_display_name (MonoMethod *method)
+{
+	char *printed = mono_method_full_name (method, FALSE);
+	std::string name = printed;
+
+	g_free (printed);
+	return name;
+}
 
 namespace {
 
