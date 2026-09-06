@@ -9904,15 +9904,21 @@ calli_end:
 			/*
 			 * A body compiled for the tier-1 inliner keeps the class-init barrier
 			 * every elision below would drop. Each of them - a beforefieldinit
-			 * class, an accessor in the field's own class, a thread-static's
-			 * address path - is really the same argument: the accessor is only
-			 * reached through a call to it, and that call already triggered the
-			 * cctor. Folding the accessor into a caller is exactly what removes
-			 * that call, so the barrier has to be here, on the path that reaches
-			 * the field. Recorded in class_inits so the check further down does
-			 * not emit a second one for the same class in this block.
+			 * class, an accessor in the field's own class - is really the same
+			 * argument: the accessor is only reached through a call to it, and
+			 * that call already triggered the cctor. Folding the accessor into a
+			 * caller is exactly what removes that call, so the barrier has to be
+			 * here, on the path that reaches the field.
+			 *
+			 * A special static needs the barrier in every compile. The inlined
+			 * TLS read below and mono_get_special_static_data () reach one by
+			 * its offset alone. Neither carries a vtable, so neither runs the
+			 * declaring class's initializer.
+			 *
+			 * Recorded in class_inits so the check further down does not emit a
+			 * second one for the same class in this block.
 			 */
-			if (cfg->llvm_ir_only && !context_used &&
+			if ((is_special_static || (cfg->llvm_ir_only && !context_used)) &&
 			    mono_class_needs_cctor_run (klass, method) && !g_slist_find (class_inits, klass)) {
 				emit_class_init (cfg, klass);
 				CHECK_CFG_ERROR;
