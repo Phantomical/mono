@@ -17,8 +17,8 @@
  * assembly, and takes over the selection the caller does with the listing:
  * --only <regex> and --arm <name> narrow what runs, and --xfail <Class:name>
  * names a test that has to fail. Which engine runs the method is the caller's
- * business: the MONO_LLVM_JIT_TIER* variables decide it, and the suites pass
- * them in.
+ * business. MONO_ENV_OPTIONS carries each arm's options, and this runner
+ * applies them.
  *
  * --skip <Class:name> drops a test that ends the process rather than answering,
  * which one process per test survives and a shared one does not. Each one is
@@ -470,6 +470,27 @@ main (int argc, char *argv[])
 	if (listing) {
 		g_unsetenv ("MONO_VERBOSE_METHOD");
 		g_unsetenv ("MONO_INTERP_TRACE");
+	}
+
+	/*
+	 * The tier options are `--llvm-opt=` flags, and this harness has no command
+	 * line to carry them. mono_jit_init_version_for_test_only () reads
+	 * MONO_ENV_OPTIONS for none of them, so without this every arm would run
+	 * the default engine.
+	 *
+	 * The tokens outlive the call, because mono_jit_parse_options () hands some
+	 * of them on rather than copying them.
+	 */
+	if (char *env = g_getenv ("MONO_ENV_OPTIONS")) {
+		gchar **tokens = g_strsplit (env, " ", -1);
+		std::vector<char *> options;
+
+		for (gchar **token = tokens; *token != nullptr; ++token)
+			if (**token != '\0')
+				options.push_back (*token);
+
+		if (!options.empty ())
+			mono_jit_parse_options ((int) options.size (), options.data ());
 	}
 
 	/*
