@@ -477,9 +477,6 @@ main (int argc, char *argv[])
 	 * line to carry them. mono_jit_init_version_for_test_only () reads
 	 * MONO_ENV_OPTIONS for none of them, so without this every arm would run
 	 * the default engine.
-	 *
-	 * The tokens outlive the call, because mono_jit_parse_options () hands some
-	 * of them on rather than copying them.
 	 */
 	if (char *env = g_getenv ("MONO_ENV_OPTIONS")) {
 		gchar **tokens = g_strsplit (env, " ", -1);
