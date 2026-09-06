@@ -423,12 +423,13 @@ mini_emit_memory_copy_internal (MonoCompile *cfg, MonoInst *dest, MonoInst *src,
 				/*
 				 * mono_gc_wbarrier_range_copy () marks only the card the
 				 * destination begins in. A value type that crosses a card
-				 * boundary leaves its later fields in an unmarked card. The
-				 * card scanner tolerates that, because it rescans from the
-				 * start of the element a marked card begins inside.
-				 * check-remset-consistency does not: it reads the card for
-				 * the address it holds. mono_value_copy_internal () marks
-				 * every card the copy writes.
+				 * boundary leaves its later fields in an unmarked card. An
+				 * array of them tolerates that, because the card scanner
+				 * rescans from the start of the element a marked card
+				 * begins inside. check-remset-consistency does not: it
+				 * reads the card for the address it holds.
+				 * mono_value_copy_internal () marks every card the copy
+				 * writes.
 				 */
 				if (context_used) {
 					iargs [2] = mini_emit_get_rgctx_klass (cfg, context_used, klass, MONO_RGCTX_INFO_KLASS);
