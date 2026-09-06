@@ -6263,6 +6263,7 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 	guint num_args;
 	GSList *class_inits = NULL;
 	gboolean dont_verify, dont_verify_stloc, readonly = FALSE;
+	gboolean checks_accessibility;
 	int context_used;
 	gboolean init_locals, seq_points, skip_dead_blocks;
 	gboolean sym_seq_points = FALSE;
@@ -6284,6 +6285,17 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
  	dont_verify |= method->wrapper_type == MONO_WRAPPER_MANAGED_TO_NATIVE; /* bug #77896 */
 	dont_verify |= method->wrapper_type == MONO_WRAPPER_COMINTEROP;
 	dont_verify |= method->wrapper_type == MONO_WRAPPER_COMINTEROP_INVOKE;
+
+	/*
+	 * The accessibility checks below do not read dont_verify: SkipVerification
+	 * lets an assembly run unverifiable IL, not reach another class's private
+	 * members. mini_method_verify () calls an access verdict fatal whatever the
+	 * trust level, and the translator's checks_accessibility ()
+	 * (mono/llvm/method-to-llvm/invalid-il.cpp) reads these same three.
+	 */
+	checks_accessibility = !cfg->skip_visibility
+		&& method->wrapper_type == MONO_WRAPPER_NONE
+		&& !image->assembly->corlib_internal;
 
 	/* still some type unsafety issues in marshal wrappers... (unknown is PtrToStructure) */
 	dont_verify_stloc = method->wrapper_type == MONO_WRAPPER_MANAGED_TO_NATIVE;
@@ -7459,7 +7471,7 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 				}
 			}
 					
-			if (!dont_verify && !cfg->skip_visibility) {
+			if (checks_accessibility) {
 				MonoMethod *target_method = cil_method;
 				if (method->is_inflated) {
 					target_method = mini_get_method_allow_open (method, token, NULL, &(mono_method_get_generic_container (method_definition)->context), cfg->error);
@@ -9031,7 +9043,7 @@ calli_end:
 
 			context_used = mini_method_check_context_used (cfg, cmethod);
 
-			if (!dont_verify && !cfg->skip_visibility) {
+			if (checks_accessibility) {
 				MonoMethod *cil_method = cmethod;
 				MonoMethod *target_method = cil_method;
 
@@ -9719,7 +9731,7 @@ calli_end:
 					CHECK_TYPELOAD (klass);
 				CHECK_CFG_ERROR;
 			}
-			if (!dont_verify && !cfg->skip_visibility && !mono_method_can_access_field (method, field))
+			if (checks_accessibility && !mono_method_can_access_field (method, field))
 				FIELD_ACCESS_FAILURE (method, field);
 			mono_class_init_internal (klass);
 			mono_class_setup_fields (klass);
@@ -11506,7 +11518,7 @@ mono_ldptr:
 			context_used = mini_method_check_context_used (cfg, cmethod);
 
 			cil_method = cmethod;
-			if (!dont_verify && !cfg->skip_visibility && !mono_method_can_access_method (method, cmethod))
+			if (checks_accessibility && !mono_method_can_access_method (method, cmethod))
 				emit_method_access_failure (cfg, method, cil_method);
 
 			if (mono_security_core_clr_enabled ())
