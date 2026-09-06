@@ -419,7 +419,17 @@ mini_emit_memory_copy_internal (MonoCompile *cfg, MonoInst *dest, MonoInst *src,
 
 			/* It's ok to intrinsify under gsharing since shared code types are layout stable. */
 			if (!size_ins && (cfg->opt & MONO_OPT_INTRINS) && mini_emit_wb_aware_memcpy (cfg, klass, iargs, size, align)) {
-			} else if (size_ins || align < TARGET_SIZEOF_VOID_P) {
+			} else {
+				/*
+				 * mono_gc_wbarrier_range_copy () marks only the card the
+				 * destination begins in. A value type that crosses a card
+				 * boundary leaves its later fields in an unmarked card. The
+				 * card scanner tolerates that, because it rescans from the
+				 * start of the element a marked card begins inside.
+				 * check-remset-consistency does not: it reads the card for
+				 * the address it holds. mono_value_copy_internal () marks
+				 * every card the copy writes.
+				 */
 				if (context_used) {
 					iargs [2] = mini_emit_get_rgctx_klass (cfg, context_used, klass, MONO_RGCTX_INFO_KLASS);
 				}  else {
@@ -431,14 +441,6 @@ mini_emit_memory_copy_internal (MonoCompile *cfg, MonoInst *dest, MonoInst *src,
 					mono_emit_jit_icall (cfg, mono_gsharedvt_value_copy, iargs);
 				else
 					mono_emit_jit_icall (cfg, mono_value_copy_internal, iargs);
-			} else {
-				/* We don't unroll more than 5 stores to avoid code bloat. */
-				/*This is harmless and simplify mono_gc_get_range_copy_func */
-				size += (TARGET_SIZEOF_VOID_P - 1);
-				size &= ~(TARGET_SIZEOF_VOID_P - 1);
-
-				EMIT_NEW_ICONST (cfg, iargs [2], size);
-				mono_emit_jit_icall (cfg, mono_gc_wbarrier_range_copy, iargs);
 			}
 			return;
 		}
