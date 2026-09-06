@@ -249,7 +249,10 @@ struct CallInfo {
 	/* The index of the vret arg in the argument list */
 	int vret_arg_index;
 	ArgInfo ret;
+	/* Where the pointer to the vararg buffer travels */
 	ArgInfo sig_cookie;
+	/* The buffer's own offset in the outgoing argument area */
+	int vararg_buffer;
 	ArgInfo args [1];
 };
 

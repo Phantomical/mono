@@ -1374,19 +1374,6 @@ add_parameter (MonoMethodSignature *sig, CallInfo *cinfo, int i, guint32 *gr,
 		*gr = *fr;
 #endif
 
-	if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG) && (i == sig->sentinelpos)) {
-		/* We allways pass the sig cookie on the stack for simplicity */
-		/*
-		 * Prevent implicit arguments + the sig cookie from being passed
-		 * in registers.
-		 */
-		*gr = PARAM_REGS;
-		*fr = FLOAT_PARAM_REGS;
-
-		/* Emit the signature cookie just before the implicit arguments */
-		add_general (gr, stack_size, &cinfo->sig_cookie);
-	}
-
 	ptype = mini_get_underlying_type (sig->params [i]);
 	switch (ptype->type) {
 	case MONO_TYPE_I1:
@@ -1457,6 +1444,56 @@ add_parameter (MonoMethodSignature *sig, CallInfo *cinfo, int i, guint32 *gr,
 	default:
 		g_assert_not_reached ();
 	}
+}
+
+/*
+ * The number of sig's parameters the convention places in the argument
+ * sequence. The variable part of a vararg call travels in a buffer instead.
+ */
+static int
+placed_param_count (MonoMethodSignature *sig)
+{
+	if (sig->pinvoke || sig->call_convention != MONO_CALL_VARARG || sig->sentinelpos < 0)
+		return sig->param_count;
+
+	return sig->sentinelpos;
+}
+
+/*
+ * Reserves the buffer a vararg call passes its variable arguments in, and
+ * places the pointer to it that the callee is entered with.
+ *
+ * The buffer's layout is described in mono/llvm/method-to-llvm/call.cpp, above
+ * build_sig_cookie (). Each variable argument is ArgOnStack at the offset that
+ * layout gives it, so a caller writes it the way it writes any other stack
+ * argument. cookie_placed says the pointer already went in front of the hidden
+ * return pointer.
+ */
+static void
+add_vararg_buffer (MonoMethodSignature *sig, CallInfo *cinfo, guint32 *gr, guint32 *stack_size,
+                   gboolean cookie_placed)
+{
+	guint32 cursor;
+
+	if (!cookie_placed)
+		add_general (gr, stack_size, &cinfo->sig_cookie);
+
+	*stack_size = ALIGN_TO (*stack_size, TARGET_SIZEOF_VOID_P);
+	cinfo->vararg_buffer = *stack_size;
+	cursor = *stack_size + TARGET_SIZEOF_VOID_P;
+
+	for (int i = placed_param_count (sig); i < sig->param_count; ++i) {
+		ArgInfo *ainfo = &cinfo->args [sig->hasthis + i];
+
+		ainfo->storage = ArgOnStack;
+		ainfo->offset = cursor;
+		/* mono_type_stack_size () is the stride System.ArgIterator walks
+		 * the buffer by, so it is what the writer has to use as well. */
+		ainfo->arg_size = mono_type_stack_size (sig->params [i], NULL);
+		cursor += ainfo->arg_size;
+	}
+
+	*stack_size = ALIGN_TO (cursor, TARGET_SIZEOF_VOID_P);
 }
 
 /*
@@ -1578,8 +1615,14 @@ mono_arch_get_call_info (MonoMemPool *mp, MonoMethodSignature *sig)
 	 * set, like in the delegate invoke wrappers.
 	 */
 	ArgStorage ret_storage = cinfo->ret.storage;
+	gboolean is_vararg = !is_pinvoke && sig->call_convention == MONO_CALL_VARARG;
+	int placed = placed_param_count (sig);
+	/* The buffer pointer is one of the arguments counted here, so a vararg
+	 * signature never has none. */
+	int placed_args = sig->hasthis + placed + (is_vararg ? 1 : 0);
+	gboolean cookie_placed = FALSE;
 	gboolean behind_first_arg = !is_pinvoke
-		&& ((ret_storage == ArgValuetypeAddrInIReg && n > 0)
+		&& ((ret_storage == ArgValuetypeAddrInIReg && placed_args > 0)
 		    || (ret_storage == ArgGsharedvtVariableInReg
 		        && (sig->hasthis
 		            || (sig->param_count > 0
@@ -1588,9 +1631,12 @@ mono_arch_get_call_info (MonoMemPool *mp, MonoMethodSignature *sig)
 	if (behind_first_arg) {
 		if (sig->hasthis) {
 			add_general (&gr, &stack_size, cinfo->args + 0);
-		} else {
+		} else if (placed > 0) {
 			add_parameter (sig, cinfo, 0, &gr, &fr, &stack_size, &pool);
 			pstart = 1;
+		} else {
+			add_general (&gr, &stack_size, &cinfo->sig_cookie);
+			cookie_placed = TRUE;
 		}
 		add_general (&gr, &stack_size, &cinfo->ret);
 		if (cinfo->ret.storage == ArgOnStack) {
@@ -1618,24 +1664,11 @@ mono_arch_get_call_info (MonoMemPool *mp, MonoMethodSignature *sig)
 		}
 	}
 
-	if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG) && (n == 0)) {
-		gr = PARAM_REGS;
-		fr = FLOAT_PARAM_REGS;
-		
-		/* Emit the signature cookie just before the implicit arguments */
-		add_general (&gr, &stack_size, &cinfo->sig_cookie);
-	}
-
-	for (i = pstart; i < sig->param_count; ++i)
+	for (i = pstart; i < placed; ++i)
 		add_parameter (sig, cinfo, i, &gr, &fr, &stack_size, &pool);
 
-	if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG) && (n > 0) && (sig->sentinelpos == sig->param_count)) {
-		gr = PARAM_REGS;
-		fr = FLOAT_PARAM_REGS;
-		
-		/* Emit the signature cookie just before the implicit arguments */
-		add_general (&gr, &stack_size, &cinfo->sig_cookie);
-	}
+	if (is_vararg)
+		add_vararg_buffer (sig, cinfo, &gr, &stack_size, cookie_placed);
 
 	cinfo->stack_usage = stack_size;
 	cinfo->reg_usage = gr;

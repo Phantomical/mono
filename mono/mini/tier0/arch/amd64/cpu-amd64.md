@@ -148,7 +148,8 @@ compare_imm: src1:i len:13
 icompare_imm: src1:i len:8
 fcompare: src1:f src2:f clob:a len:13
 rcompare: src1:f src2:f clob:a len:13
-arglist: src1:b len:11
+arglist: src1:b len:20
+arglist_buffer: dest:i len:11
 check_this: src1:b len:5
 call: dest:a clob:c len:32
 voidcall: clob:c len:32

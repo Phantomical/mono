@@ -91,21 +91,17 @@ MINI_OP(OP_THROW, "throw", NONE, IREG, NONE)
 MINI_OP(OP_RETHROW,	"rethrow", NONE, IREG, NONE)
 
 /*
- * Vararg calls are implemented as follows:
- * - the caller emits a hidden argument just before the varargs argument. this
- *   'signature cookie' argument contains the signature describing the the call.
- * - all implicit arguments are passed in memory right after the signature cookie, i.e.
- *   the stack will look like this:
- *   <argn>
- *   ..
- *   <arg1>
- *   <sig cookie>
- * - the OP_ARGLIST opcode in the callee computes the address of the sig cookie argument
- *   on the stack and saves it into its sreg1.
- * - mono_ArgIterator_Setup receives this value and uses it to find the signature and
- *   the arguments.
+ * A vararg call passes its variable arguments in a buffer in the caller's
+ * frame, laid out as mono/llvm/method-to-llvm/call.cpp describes above
+ * build_sig_cookie (). The callee is entered with the buffer's address as one
+ * more argument, and OP_ARGLIST writes that address into the
+ * RuntimeArgumentHandle its sreg1 points at, which is what
+ * ves_icall_System_ArgIterator_Setup () is handed.
  */
 MINI_OP(OP_ARGLIST,	"arglist", NONE, IREG, NONE)
+/* The address of the buffer above, which this call site reserved at inst_imm
+ * in the outgoing argument area. */
+MINI_OP(OP_ARGLIST_BUFFER, "arglist_buffer", IREG, NONE, NONE)
 
 /* MONO_IS_STORE_MEMBASE depends on the order here */
 MINI_OP(OP_STORE_MEMBASE_REG,"store_membase_reg", IREG, IREG, NONE)

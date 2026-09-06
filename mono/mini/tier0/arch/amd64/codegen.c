@@ -195,6 +195,11 @@ mono_arch_tailcall_supported (MonoCompile *cfg, MonoMethodSignature *caller_sig,
 	gboolean res = IS_SUPPORTED_TAILCALL (callee_info->stack_usage <= caller_info->stack_usage)
                     && IS_SUPPORTED_TAILCALL (callee_info->ret.storage == caller_info->ret.storage);
 
+	/* The buffer a vararg call passes its variable arguments in sits in this
+	 * frame, and the callee reads it for the whole call. */
+	res &= IS_SUPPORTED_TAILCALL (callee_sig->pinvoke
+	                              || callee_sig->call_convention != MONO_CALL_VARARG);
+
 	/* A value type spread over several return registers is gathered into a
 	 * slot of this frame after the call, and a jump leaves no frame. */
 	res &= IS_SUPPORTED_TAILCALL (callee_info->ret.storage != ArgValuetypeInReg
@@ -576,10 +581,17 @@ mono_arch_allocate_vars (MonoCompile *cfg)
 	}
 	offset += locals_stack_size;
 
+	/* cfg->sig_cookie is where OP_ARGLIST reads the buffer pointer back. A
+	 * pointer that arrived in a register is spilled to a slot of its own,
+	 * because the opcode can sit anywhere in the body. */
 	if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG)) {
 		g_assert (!cfg->arch.omit_fp);
-		g_assert (cinfo->sig_cookie.storage == ArgOnStack);
-		cfg->sig_cookie = cinfo->sig_cookie.offset + ARGS_OFFSET;
+		if (cinfo->sig_cookie.storage == ArgOnStack) {
+			cfg->sig_cookie = cinfo->sig_cookie.offset + ARGS_OFFSET;
+		} else {
+			offset = ALIGN_TO (offset + 8, 8);
+			cfg->sig_cookie = -offset;
+		}
 	}
 
 	for (i = 0; i < sig->param_count + sig->hasthis; ++i) {
@@ -836,32 +848,35 @@ leaf_load_opcode (const ArgLeaf *leaf)
 	}
 }
 
+/*
+ * Finishes the buffer a vararg call passes its variable arguments in. Those
+ * arguments are ordinary stack arguments, so what is left is the signature at
+ * the front and the pointer the callee is entered with.
+ *
+ * System.ArgIterator names the variable part by index into the signature it
+ * finds there, so that has to be the call site's own.
+ */
 static void
 emit_sig_cookie (MonoCompile *cfg, MonoCallInst *call, CallInfo *cinfo)
 {
-	MonoMethodSignature *tmp_sig;
+	MonoInst *buffer;
 	int sig_reg;
 
-	if (call->tailcall) // FIXME tailcall is not always yet initialized.
-		NOT_IMPLEMENTED;
-
-	g_assert (cinfo->sig_cookie.storage == ArgOnStack);
-			
-	/*
-	 * mono_ArgIterator_Setup assumes the signature cookie is 
-	 * passed first and all the arguments which were before it are
-	 * passed on the stack after the signature. So compensate by 
-	 * passing a different signature.
-	 */
-	tmp_sig = mono_metadata_signature_dup_full (m_class_get_image (cfg->method->klass), call->signature);
-	tmp_sig->param_count -= call->signature->sentinelpos;
-	tmp_sig->sentinelpos = 0;
-	memcpy (tmp_sig->params, call->signature->params + call->signature->sentinelpos, tmp_sig->param_count * sizeof (MonoType*));
-
 	sig_reg = mono_alloc_ireg (cfg);
-	MONO_EMIT_NEW_SIGNATURECONST (cfg, sig_reg, tmp_sig);
+	MONO_EMIT_NEW_SIGNATURECONST (cfg, sig_reg, call->signature);
+	MONO_EMIT_NEW_STORE_MEMBASE (cfg, OP_STORE_MEMBASE_REG, AMD64_RSP, cinfo->vararg_buffer,
+	                             sig_reg);
 
-	MONO_EMIT_NEW_STORE_MEMBASE (cfg, OP_STORE_MEMBASE_REG, AMD64_RSP, cinfo->sig_cookie.offset, sig_reg);
+	MONO_INST_NEW (cfg, buffer, OP_ARGLIST_BUFFER);
+	buffer->dreg = mono_alloc_preg (cfg);
+	buffer->inst_imm = cinfo->vararg_buffer;
+	MONO_ADD_INS (cfg->cbb, buffer);
+
+	if (cinfo->sig_cookie.storage == ArgOnStack)
+		MONO_EMIT_NEW_STORE_MEMBASE (cfg, OP_STORE_MEMBASE_REG, AMD64_RSP,
+		                             cinfo->sig_cookie.offset, buffer->dreg);
+	else
+		add_outarg_reg (cfg, call, cinfo->sig_cookie.storage, cinfo->sig_cookie.reg, buffer);
 }
 
 #ifdef ENABLE_LLVM
@@ -1135,14 +1150,9 @@ mono_arch_emit_call (MonoCompile *cfg, MonoCallInst *call)
 		default:
 			g_assert_not_reached ();
 		}
-
-		if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG) && (i == sig->sentinelpos))
-			/* Emit the signature cookie just before the implicit arguments */
-			emit_sig_cookie (cfg, call, cinfo);
 	}
 
-	/* Handle the case where there are no implicit arguments */
-	if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG) && (n == sig->sentinelpos))
+	if (!sig->pinvoke && (sig->call_convention == MONO_CALL_VARARG))
 		emit_sig_cookie (cfg, call, cinfo);
 
 	switch (cinfo->ret.storage) {
@@ -3678,10 +3688,14 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			amd64_alu_membase_imm_size (code, X86_CMP, ins->sreg1, 0, 0, 4);
 			break;
 		case OP_ARGLIST: {
-			amd64_lea_membase (code, AMD64_R11, cfg->frame_reg, cfg->sig_cookie);
-			amd64_mov_membase_reg (code, ins->sreg1, 0, AMD64_R11, sizeof(gpointer));
+			amd64_mov_reg_membase (code, AMD64_R11, cfg->frame_reg, cfg->sig_cookie,
+			                       sizeof (gpointer));
+			amd64_mov_membase_reg (code, ins->sreg1, 0, AMD64_R11, sizeof (gpointer));
 			break;
 		}
+		case OP_ARGLIST_BUFFER:
+			amd64_lea_membase (code, ins->dreg, AMD64_RSP, ins->inst_imm);
+			break;
 		case OP_CALL:
 		case OP_FCALL:
 		case OP_RCALL:
@@ -5686,8 +5700,8 @@ get_max_prolog_arg_size (MonoCompile *cfg, MonoMethodSignature *sig)
 {
 	CallInfo *cinfo = cfg->arch.cinfo;
 	/* The hidden return pointer costs two moves when it arrives in a stack
-	 * slot of its own. */
-	int size = 2 * MAX_LEAF_MOVE_SIZE;
+	 * slot of its own. A vararg buffer pointer costs one more. */
+	int size = 3 * MAX_LEAF_MOVE_SIZE;
 
 	for (int i = 0; i < sig->param_count + sig->hasthis; ++i) {
 		ArgInfo *ainfo = cinfo->args + i;
@@ -6145,6 +6159,11 @@ MONO_RESTORE_WARNING
 			}
 		}
 	}
+
+	if (!sig->pinvoke && sig->call_convention == MONO_CALL_VARARG
+	    && cinfo->sig_cookie.storage == ArgInIReg)
+		amd64_mov_membase_reg (code, cfg->frame_reg, cfg->sig_cookie,
+		                       cinfo->sig_cookie.reg, 8);
 
 	if (cfg->method->save_lmf)
 		args_clobbered = TRUE;
