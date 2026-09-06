@@ -434,6 +434,33 @@ can_enter_interp (MonoCompile *cfg, MonoMethod *method, gboolean virtual_)
 	return TRUE;
 }
 
+/**
+ * Returns target, or the wrapper that takes and releases its lock when target
+ * carries [MethodImpl(Synchronized)].
+ *
+ * The lock is not in the flagged method's body. mono_marshal_get_synchronized_wrapper ()
+ * builds a wrapper that enters the monitor, calls the body and exits through a finally,
+ * and mono_llvm_jit_stub_for () publishes a thunk for whatever method a
+ * MONO_PATCH_INFO_METHOD patch names. A direct call therefore has to name the wrapper
+ * here, or the body runs with no lock held.
+ *
+ * A dispatched call site must not ask this. common_call_trampoline () puts the wrapper in
+ * the vtable slot, and the IMT key stays the method the caller named.
+ */
+MonoMethod *
+mini_synchronized_target (MonoCompile *cfg, MonoMethod *target)
+{
+	if (!(target->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED))
+		return target;
+
+	// This is the wrapper's own call to the body it locks. Without the exemption,
+	// wrapping target again here makes the wrapper call itself.
+	if (cfg->method->wrapper_type == MONO_WRAPPER_SYNCHRONIZED)
+		return target;
+
+	return mono_marshal_get_synchronized_wrapper (target);
+}
+
 MonoInst*
 mini_emit_method_call_full (MonoCompile *cfg, MonoMethod *method, MonoMethodSignature *sig, gboolean tailcall,
 							MonoInst **args, MonoInst *this_ins, MonoInst *imt_arg, MonoInst *rgctx_arg)
@@ -615,6 +642,11 @@ mini_emit_method_call_full (MonoCompile *cfg, MonoMethod *method, MonoMethodSign
 			call->is_virtual = TRUE;
 		}
 	}
+
+	// Asked after the remoting check, so a synchronized method on a remotable class
+	// locks inside the with-check wrapper rather than around it.
+	if (!virtual_)
+		call->method = mini_synchronized_target (cfg, call->method);
 
 	MONO_ADD_INS (cfg->cbb, (MonoInst*)call);
 

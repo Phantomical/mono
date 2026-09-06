@@ -1578,6 +1578,7 @@ MonoInst*         mini_emit_calli_full (MonoCompile *cfg, MonoMethodSignature *s
 										MonoInst *imt_arg, MonoInst *rgctx_arg, gboolean tailcall);
 MonoInst*         mini_emit_method_call_full (MonoCompile *cfg, MonoMethod *method, MonoMethodSignature *sig, gboolean tailcall,
 											  MonoInst **args, MonoInst *this_ins, MonoInst *imt_arg, MonoInst *rgctx_arg);
+MonoMethod*       mini_synchronized_target (MonoCompile *cfg, MonoMethod *target);
 MonoInst*         mini_emit_abs_call (MonoCompile *cfg, MonoJumpInfoType patch_type, gconstpointer data,
 									  MonoMethodSignature *sig, MonoInst **args);
 MonoInst*         mono_emit_native_call (MonoCompile *cfg, gconstpointer func, MonoMethodSignature *sig,
