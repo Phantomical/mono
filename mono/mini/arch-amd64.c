@@ -1447,8 +1447,9 @@ add_parameter (MonoMethodSignature *sig, CallInfo *cinfo, int i, guint32 *gr,
 }
 
 /*
- * The number of sig's parameters the convention places in the argument
- * sequence. The variable part of a vararg call travels in a buffer instead.
+ * Counts sig's parameters that the convention places in the ordinary
+ * argument sequence. The variable part of a vararg call travels in a buffer
+ * instead.
  */
 static int
 placed_param_count (MonoMethodSignature *sig)
@@ -1487,8 +1488,6 @@ add_vararg_buffer (MonoMethodSignature *sig, CallInfo *cinfo, guint32 *gr, guint
 
 		ainfo->storage = ArgOnStack;
 		ainfo->offset = cursor;
-		/* mono_type_stack_size () is the stride System.ArgIterator walks
-		 * the buffer by, so it is what the writer has to use as well. */
 		ainfo->arg_size = mono_type_stack_size (sig->params [i], NULL);
 		cursor += ainfo->arg_size;
 	}

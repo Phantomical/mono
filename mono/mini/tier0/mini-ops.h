@@ -95,8 +95,8 @@ MINI_OP(OP_RETHROW,	"rethrow", NONE, IREG, NONE)
  * frame, laid out as mono/llvm/method-to-llvm/call.cpp describes above
  * build_sig_cookie (). The callee is entered with the buffer's address as one
  * more argument, and OP_ARGLIST writes that address into the
- * RuntimeArgumentHandle its sreg1 points at, which is what
- * ves_icall_System_ArgIterator_Setup () is handed.
+ * RuntimeArgumentHandle its sreg1 points at. The handle carries it to
+ * ves_icall_System_ArgIterator_Setup ().
  */
 MINI_OP(OP_ARGLIST,	"arglist", NONE, IREG, NONE)
 /* The address of the buffer above, which this call site reserved at inst_imm
