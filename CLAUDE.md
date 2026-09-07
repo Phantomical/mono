@@ -471,6 +471,22 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   match proves both. `mono/tests/delegate-fold.cs` gates it and carries the off arm,
   reading the `MONO_FOLD_DELEGATES` environment variable the suite sets alongside the
   flag to know which arm it is in.
+- `--llvm-opt=-mono-simd=<0|false|empty>` (`runtime/options.cpp`) — turn a SIMD
+  type's operator lowering off, so a Mono.Simd, `Vector4` or `Vector<T>` operation
+  runs its managed fallback body instead of the vector-IR row written for it. On
+  by default. The type stays a `FixedVectorType` either way: a `Vector4f` is a
+  `<4 x float>` on both arms, so a caller and a callee never disagree about a
+  value's register. `mono/tests/simd-semantics.cs` is the differential gate,
+  three arms: `runtime-simd-semantics` reaches it with the classic compiler as
+  tier 0, `-interp` swaps the interpreter in, and `-off` is the negative control
+  the switch names directly. `-off` is also the negative control for what the
+  lowering is worth, and only at tier 1, which is where nearly all code stays. A
+  written row is small enough for the pre-pass to fold into its caller, where
+  the fallback body is not, and the matmul and n-body kernels landed as
+  `benchmark-simd-matmul` and `benchmark-simd-nbody` measured roughly 2x there.
+  At tier 2 the cost model folds the fallback body too, and the same two
+  kernels show no measurable difference against `-mono-simd=0` — ratios of
+  0.95 and 0.99.
 - `--llvm-opt=-mono-guard-arrays=<0|false|empty>` (`runtime/options.cpp`) — turn the
   array dispatch guard off, so a dispatch on an array receiver reads its callee out of
   the receiver's vtable whatever the IR says the slot is declared with. On by default,
