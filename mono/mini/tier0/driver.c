@@ -52,6 +52,8 @@
 #include <mono/metadata/attach.h>
 #include <mono/metadata/runtime.h>
 #include <mono/metadata/attrdefs.h>
+#include <mono/metadata/reflection-internals.h>
+#include <mono/metadata/icall-internals.h>
 #include <mono/utils/mono-math.h>
 #include <mono/utils/mono-compiler.h>
 #include <mono/utils/mono-counters.h>
@@ -81,6 +83,7 @@
 
 #include "mini-gc.h"
 #include "debugger-agent.h"
+#include "llvmonly-runtime.h"
 #include "llvm-runtime.h"
 #include "../../llvm/runtime.h"
 #include "../../llvm/debugging/perf/perf.h"
