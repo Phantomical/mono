@@ -33,7 +33,7 @@ dump_method (MonoMethod *method, MonoJitInfo *jinfo)
 
 namespace {
 
-/// How far a record for the piece at \p code may reach: to the next piece the
+/// How far a record for the piece at \p code can reach: to the next piece the
 /// object placed, or past the object's last piece to where the code allocator's
 /// slack ends.
 size_t
@@ -73,8 +73,8 @@ dump_method (MonoMethod *method, const CompiledMethod &compiled)
 
 		/* A function whose block cannot be read is named and left undescribed.
 		 * A body with a prologue does not keep the caller's frame, so a no-rule
-		 * FDE there unwinds to a wrong answer, where leaving it out only stops
-		 * the walk. */
+		 * FDE there unwinds to a wrong answer. Leaving it out only stops the
+		 * walk. */
 		if (parse_unwind_records (compiled.unwind_table, compiled.unwind_table_size,
 		                          code, fn.records))
 			described.push_back (std::move (fn));

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Assert the perf jit dump names every body of the fixture, one record per
-function under one name per method whichever engine emitted it, and gives each
-range of JIT'd code to exactly one record.
+"""Assert the perf jit dump names every body of the fixture under one name per
+method whichever engine emitted it, describes it with one record per function,
+and gives each range of JIT'd code to exactly one record.
 
 perf resolves a sample against the range of the record holding the address, and
 the error a wrong range makes is invisible from the report: the names are real

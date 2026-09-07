@@ -201,7 +201,7 @@ struct CompiledMethod {
 
 	/// Every function and stub the object holds, ascending by address, shared
 	/// by the methods linked into it. The entry after a piece is what bounds
-	/// how far a dump record for that piece may reach.
+	/// how far a dump record for that piece can reach.
 	///
 	/// Every method a compile publishes carries it. A record built by hand for
 	/// a body that shares another method's object does not.
