@@ -882,9 +882,24 @@ mono_class_create_generic_inst (MonoGenericClass *gclass)
 		if (mono_type_is_primitive (gclass->context.class_inst->type_argv [0]))
 			klass->simd_type = 1;
 	}
+	/*
+	 * System.Numerics.Vectors only forwards Vector`1, so the arm above never
+	 * fires and this one is what marks the type. char, bool and the native
+	 * integers are left out because Register, the union that holds a
+	 * Vector<T>'s lanes, has no field of any of them, and every operator over
+	 * such a T throws NotSupportedException.
+	 */
+	if (mono_is_corlib_image (gklass->image) && !strcmp (gklass->name_space, "System.Numerics")
+		&& !strcmp (gklass->name, "Vector`1")) {
+		MonoType *etype = gclass->context.class_inst->type_argv [0];
+		if (mono_type_is_primitive (etype) && etype->type != MONO_TYPE_CHAR
+			&& etype->type != MONO_TYPE_BOOLEAN && etype->type != MONO_TYPE_I
+			&& etype->type != MONO_TYPE_U)
+			klass->simd_type = 1;
+	}
 #ifdef ENABLE_NETCORE
 	if (mono_is_corlib_image (gklass->image) &&
-		(!strcmp (gklass->name, "Vector`1") || !strcmp (gklass->name, "Vector128`1") || !strcmp (gklass->name, "Vector256`1"))) {
+		(!strcmp (gklass->name, "Vector128`1") || !strcmp (gklass->name, "Vector256`1"))) {
 		MonoType *etype = gclass->context.class_inst->type_argv [0];
 		if (mono_type_is_primitive (etype) && etype->type != MONO_TYPE_CHAR && etype->type != MONO_TYPE_BOOLEAN)
 			klass->simd_type = 1;
