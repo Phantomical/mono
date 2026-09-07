@@ -754,9 +754,9 @@ optimization mask of `MONO_OPT_FLOAT32 | MONO_OPT_GSHARED` — the two bits that
 correctness rather than speed: an R4's width on the evaluation stack, and whether a
 shared generic body can be built at all. `runs_at_tier0 ()` refuses the methods that
 would be wrong there rather than merely slow: no IL of its own, most wrappers, or a body
-this backend writes itself (`is_intrinsic ()`, which is `ByReference<T>`, whose IL only
-throws). A `MONO_WRAPPER_DYNAMIC_METHOD` is the one wrapper it accepts, because it
-carries IL of its own from Reflection.Emit and `create_delegate_method_ptr ()`
+this backend writes itself (`builtin_body_replaces_il ()`, which is `ByReference<T>`,
+whose IL only throws). A `MONO_WRAPPER_DYNAMIC_METHOD` is the one wrapper it accepts,
+because it carries IL of its own from Reflection.Emit and `create_delegate_method_ptr ()`
 otherwise compiles it on the thread that makes the delegate over it. A method tier 0
 refuses, or fails to compile, goes to the backend at tier 1. Nothing falls back to the
 interpreter.
