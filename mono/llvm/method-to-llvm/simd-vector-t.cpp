@@ -76,10 +76,19 @@ lane_of (MonoMethod *method)
 	return lane_of_class (method->klass);
 }
 
-/// The lane of the Vector<T> parameter index names.
-///
-/// The conversions below are declared on the non-generic Vector, so the type
-/// argument the answer turns on is the parameter's rather than the class's.
+/**
+ * The lane of the Vector<T> parameter index names.
+ *
+ * These conversions are declared on the non-generic Vector, so lane_of () reads
+ * a class with no type argument and answers other for all of them.
+ *
+ * Nothing else tells two of them apart. ConvertToSingle (Vector<int>) and
+ * ConvertToSingle (Vector<uint>) both take <4 x i32> and answer <4 x float>, so
+ * their LLVM types are identical. The registry matches a name and a V or an S
+ * per parameter, which is identical too. A row reading the types alone would
+ * pick one signedness for both. Above int.MaxValue, where sitofp and uitofp
+ * part company, that is a wrong answer rather than a slow one.
+ */
 Lane
 lane_of_parameter (MonoMethod *method, int index)
 {

@@ -66,6 +66,8 @@ const char *const absolute_differences =
 	"Mono.Simd.Vector16sb)";
 const char *const non_temporal_prefetch =
 	"Mono.Simd.Vector4f:PrefetchNonTemporal(Mono.Simd.Vector4f&)";
+const char *const temporal_prefetch =
+	"Mono.Simd.Vector4f:PrefetchTemporalAllCacheLevels(Mono.Simd.Vector4f&)";
 const char *const acceleration_mode = "Mono.Simd.SimdRuntime:get_AccelMode";
 const char *const aligned_load = "Mono.Simd.Vector4f:LoadAligned(Mono.Simd.Vector4f&)";
 const char *const truncating_conversion =
@@ -453,7 +455,11 @@ TEST_F (SimdBodies, WideningConversionZeroFillsTheLanesTheBodyDoesNotWrite)
 
 // The managed body is empty and exists for a compiler to recognize. A prefetch
 // reaches no value the program can read, so the row leaves every answer alone.
-TEST_F (SimdBodies, PrefetchAsksTheCacheAndAnswersNothing)
+//
+// The trailing 1 is the data cache. Passing 0 there names the instruction cache,
+// which x86 lowers to no instruction at all, and no differential test could see
+// that because a prefetch has nothing to compare.
+TEST_F (SimdBodies, PrefetchAsksTheDataCacheForARead)
 {
 	const Translation &asked = translate ("Mono.Simd", non_temporal_prefetch);
 
@@ -465,20 +471,32 @@ TEST_F (SimdBodies, PrefetchAsksTheCacheAndAnswersNothing)
 	EXPECT_TRUE (asked.function->getReturnType ()->isVoidTy ()) << asked.text ();
 }
 
-// AccelMode's managed body answers None whatever the target is, so this is the
-// one SIMD method that must not run its own IL at any tier.
-TEST_F (SimdBodies, AccelModeReplacesItsOwnIl)
+// The four names run from the whole hierarchy down to non-temporal, which is
+// llvm.prefetch's locality counting the other way: 3 selects prefetcht0 and 0
+// selects prefetchnta.
+TEST_F (SimdBodies, EachPrefetchNameTakesItsOwnLocality)
+{
+	const Translation &all_levels = translate ("Mono.Simd", temporal_prefetch);
+
+	ASSERT_TRUE (all_levels.error.empty ()) << all_levels.error;
+	ASSERT_NE (all_levels.function, nullptr);
+
+	EXPECT_EQ (all_levels.count ("i32 0, i32 3, i32 1"), 1u) << all_levels.text ();
+}
+
+// AccelMode's managed body answers None whatever the target is, so a row could
+// only answer by computing something its own IL does not. il_agrees false is
+// not enough to make that safe: it reaches runs_at_tier0 (), which decides only
+// for methods the backend is asked about, and the interpreter never asks about
+// a callee it reached itself. Such a row measured 0x0 under an interpreted
+// caller against 0x3F under a compiled one on the same host.
+TEST_F (SimdBodies, AccelModeIsLeftOnItsOwnIl)
 {
 	MonoMethod *method = find_method ("Mono.Simd", acceleration_mode);
 
 	ASSERT_NE (method, nullptr);
-	EXPECT_TRUE (builtin_body_replaces_il (method));
-
-	const Translation &asked = translate ("Mono.Simd", acceleration_mode);
-
-	ASSERT_TRUE (asked.error.empty ()) << asked.error;
-	ASSERT_NE (asked.function, nullptr);
-	EXPECT_EQ (shape_of (*asked.function).instructions, 1u) << asked.text ();
+	EXPECT_EQ (builtin_body_for (method), nullptr);
+	EXPECT_FALSE (builtin_body_replaces_il (method));
 }
 
 // LoadAligned's managed body is a copy through a byref, which the translator

@@ -744,6 +744,13 @@ class SimdSemantics
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_Ctor4 (int r) { return Bytes (new Vector4f (FE[r % FE.Length], FE[(r + 1) % FE.Length], FE[(r + 2) % FE.Length], FE[(r + 3) % FE.Length])); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_CtorSplat (int r) { return Bytes (new Vector4f (FE[r % FE.Length])); }
 
+	// SimdRuntime.AccelMode is left on its own IL. A row answering the target's
+	// real SSE levels cannot be made consistent: il_agrees false reaches
+	// runs_at_tier0 (), which decides only for methods the backend is asked
+	// about, and the interpreter never asks about a callee it reached itself.
+	// This case is what fails if such a row is added back.
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_AccelMode (int r) { return BitConverter.GetBytes ((int) SimdRuntime.AccelMode); }
+
 	// A prefetch answers nothing, so what this checks is that asking for one
 	// leaves the vector beside it alone and faults on no address.
 	[MethodImpl (MethodImplOptions.NoInlining)]
@@ -804,6 +811,7 @@ class SimdSemantics
 		RunKernelOnly (f, "Vector4f ctor(4)", "K_V4f_Ctor4", K_V4f_Ctor4, 4);
 		RunKernelOnly (f, "Vector4f ctor(splat)", "K_V4f_CtorSplat", K_V4f_CtorSplat, 4);
 		RunKernelOnly (f, "Vector4f prefetch", "K_V4f_Prefetch", K_V4f_Prefetch, 4);
+		RunKernelOnly (f, "SimdRuntime.AccelMode", "K_AccelMode", K_AccelMode, 4);
 		RunKernelOnly (f, "Vector4f indexer get", "K_V4f_Index", K_V4f_Index, 4);
 	}
 

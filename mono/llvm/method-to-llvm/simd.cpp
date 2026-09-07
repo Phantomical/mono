@@ -6,8 +6,12 @@
  * and a method's answer must not change when it promotes. Write a row from the
  * body, never from the SSE instruction it is expected to select.
  *
- * A row answering il_agrees false is the exception. It keeps the method off its
- * own IL at every tier, so no engine is left running something else.
+ * il_agrees false does not buy a way out of that rule here. It reaches
+ * runs_at_tier0 (), which decides only for methods the backend is asked about,
+ * and the interpreter never asks about a callee it reached itself. So a row
+ * computing something its own IL does not answers one way under an interpreted
+ * caller and another under a compiled one. SimdRuntime.get_AccelMode is the
+ * method that wants such a row, and it is left on its IL for this reason.
  */
 
 #include "intrinsics.hpp"
@@ -20,7 +24,6 @@
 #include "mono/metadata/class-internals.h"
 
 #include <llvm/ADT/SmallVector.h>
-#include <llvm/ADT/StringMap.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
@@ -28,7 +31,6 @@
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
-#include <llvm/TargetParser/Host.h>
 
 #include <algorithm>
 #include <optional>
@@ -138,40 +140,6 @@ integer_lanes (llvm::FixedVectorType *type, unsigned width)
 	return llvm::FixedVectorType::get (
 		llvm::Type::getIntNTy (type->getContext (), width),
 		type->getNumElements ());
-}
-
-/// The AccelMode mask naming the SSE levels the host reports.
-///
-/// AccelMode's members are masks over the levels an Acceleration attribute
-/// names. jit.cpp gives the TargetMachine this same feature set, so the answer
-/// describes the code this backend writes and not just the CPU under it.
-uint64_t
-host_acceleration_mode ()
-{
-	static const struct {
-		const char *feature;
-		uint64_t bit;
-	} named[] = {
-		{ "sse", 1u << 0 },	{ "sse2", 1u << 1 },   { "sse3", 1u << 2 },
-		{ "ssse3", 1u << 3 },	{ "sse4.1", 1u << 4 }, { "sse4.2", 1u << 5 },
-		{ "sse4a", 1u << 6 },
-	};
-
-	static const uint64_t mode = [] {
-		llvm::StringMap<bool> features = llvm::sys::getHostCPUFeatures ();
-		uint64_t mask = 0;
-
-		for (const auto &entry : named) {
-			auto found = features.find (entry.feature);
-
-			if (found != features.end () && found->second)
-				mask |= entry.bit;
-		}
-
-		return mask;
-	} ();
-
-	return mode;
 }
 
 } // namespace
@@ -1100,21 +1068,6 @@ struct SimdEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// Answers with the SSE levels this backend's target machine has.
-	///
-	/// The managed body answers AccelMode.None whatever the target is, which is
-	/// why this row is the one that keeps the method off its own IL.
-	static BuiltinResult acceleration_mode (MethodLLVMEmitter &emitter,
-	                                        llvm::IRBuilder<> &builder, MonoMethod *)
-	{
-		llvm::Type *answer = return_type (emitter);
-
-		if (!answer->isIntegerTy ())
-			return std::nullopt;
-
-		builder.CreateRet (llvm::ConstantInt::get (answer, host_acceleration_mode ()));
-		return llvm::Error::success ();
-	}
 };
 
 namespace {
@@ -1139,7 +1092,6 @@ constexpr ClassKey vector8us { "Mono.Simd", "Mono.Simd", "Vector8us" };
 constexpr ClassKey vector16sb { "Mono.Simd", "Mono.Simd", "Vector16sb" };
 constexpr ClassKey vector16b { "Mono.Simd", "Mono.Simd", "Vector16b" };
 constexpr ClassKey operations { "Mono.Simd", "Mono.Simd", "VectorOperations" };
-constexpr ClassKey simd_runtime { "Mono.Simd", "Mono.Simd", "SimdRuntime" };
 
 /// The ten structs, each of which declares the prefetch surface itself.
 constexpr ClassKey structs[] = { vector4f,  vector2d, vector4i,  vector4ui, vector2l,
@@ -1346,8 +1298,6 @@ const BuiltinBody simd_table[] = {
 	  S::pack<true> },
 	{ operations, "SignedPackWithUnsignedSaturation", "VV", true, simd_lowering,
 	  S::pack<true> },
-
-	{ simd_runtime, "get_AccelMode", "", false, simd_lowering, S::acceleration_mode },
 };
 
 /// The four prefetches, which every struct above declares under one name each.
