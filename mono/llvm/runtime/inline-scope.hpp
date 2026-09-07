@@ -125,7 +125,10 @@ bool may_fold (MonoDomain *domain, MonoMethod *callee);
 ///
 /// Both inliners bound what they translate by the callee's IL size, and such a
 /// body is a handful of instructions whatever that size is. Vector4f's operator
-/// + is 58 bytes of ldfld and newobj, and one fadd once translated.
+/// + is 58 bytes of ldfld and newobj over the pre-pass's 32-byte limit, and one
+/// fadd once translated. VectorOperations::CompareOrdered is 154 bytes, over
+/// the cost model's own 64-byte limit at a cold call site, and one vector
+/// compare once translated.
 bool written_by_the_backend (MonoMethod *method);
 
 /// Whether a body of this shape can be translated in as an inline copy: no
