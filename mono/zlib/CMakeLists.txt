@@ -20,7 +20,12 @@ add_library(monoz OBJECT
   inffast.c)
 
 target_include_directories(monoz PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_definitions(monoz PRIVATE HAVE_UNISTD_H HAVE_HIDDEN)
+# unistd.h does not exist under MSVC or clang-cl, and zconf.h includes it when this is
+# defined.
+if(NOT MONO_HOST_WINDOWS)
+  target_compile_definitions(monoz PRIVATE HAVE_UNISTD_H)
+endif()
+target_compile_definitions(monoz PRIVATE HAVE_HIDDEN)
 # zlib is third-party.  Mono's warning set is not its problem.
 target_compile_options(monoz PRIVATE -w)
 
