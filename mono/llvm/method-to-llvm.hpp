@@ -316,6 +316,8 @@ private:
 	friend struct SimdEmitters;
 	// The System.Numerics.Vector4 bodies (method-to-llvm/simd-numerics.cpp).
 	friend struct SimdNumericsEmitters;
+	// The Vector<T> bodies (method-to-llvm/simd-vector-t.cpp), the same.
+	friend struct SimdVectorTEmitters;
 
 	struct Entry {
 		llvm::Value *alloca;

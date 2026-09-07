@@ -359,6 +359,8 @@ body_table ()
 		made.insert (made.end (), simd_bodies ().begin (), simd_bodies ().end ());
 		made.insert (made.end (), simd_numerics_bodies ().begin (),
 		             simd_numerics_bodies ().end ());
+		made.insert (made.end (), simd_vector_t_bodies ().begin (),
+		             simd_vector_t_bodies ().end ());
 		return made;
 	} ();
 

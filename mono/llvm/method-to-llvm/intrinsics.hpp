@@ -100,6 +100,9 @@ llvm::ArrayRef<BuiltinBody> simd_bodies ();
 /// System.Numerics.Vector4's rows, kept in method-to-llvm/simd-numerics.cpp.
 llvm::ArrayRef<BuiltinBody> simd_numerics_bodies ();
 
+/// System.Numerics.Vector<T>'s rows, kept in method-to-llvm/simd-vector-t.cpp.
+llvm::ArrayRef<BuiltinBody> simd_vector_t_bodies ();
+
 /// One System.Math or System.MathF method the backend answers itself.
 struct MathBuiltin {
 	std::string_view name;
