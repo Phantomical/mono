@@ -246,8 +246,9 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 		return nullptr;
 	}
 
-	bool fits = fold_clause_bearing_callees () ? is_small_enough (header, limit)
-	                                           : is_small_and_clause_free (header, limit);
+	bool fits = written_by_the_backend (callee)
+	            || (fold_clause_bearing_callees () ? is_small_enough (header, limit)
+	                                              : is_small_and_clause_free (header, limit));
 
 	if (!fits) {
 		if (is_jit_trace_enabled ()) {

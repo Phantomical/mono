@@ -11,10 +11,13 @@
 
 #include "cl-opt-override.hpp"
 #include "method-to-llvm/intrinsics.hpp"
+#include "runtime/inline-scope.hpp"
+#include "runtime/options.hpp"
 
 #include <glib.h>
 #include <mono/metadata/debug-helpers.h>
 #include <mono/metadata/loader.h>
+#include <mono/metadata/metadata.h>
 
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
@@ -192,6 +195,38 @@ TEST_F (SimdBodies, VectorAddStillRunsItsOwnIl)
 
 	ASSERT_NE (method, nullptr);
 	EXPECT_FALSE (builtin_body_replaces_il (method));
+}
+
+// The pre-pass bounds a fold by the callee's IL size, and this operator is over
+// that limit. What lets it fold anyway is that the backend writes the body
+// rather than translating the IL the limit measures.
+TEST_F (SimdBodies, TheAddOperatorIsOverThePrePassIlLimit)
+{
+	MonoMethod *method = find_method ("Mono.Simd", vector_add);
+
+	ASSERT_NE (method, nullptr);
+
+	MonoMethodHeader *header = mono_method_get_header (method);
+
+	ASSERT_NE (header, nullptr);
+
+	guint32 size = 0;
+
+	mono_method_header_get_code (header, &size, nullptr);
+
+	EXPECT_GT (size, trivial_inline_il_limit ());
+	EXPECT_TRUE (written_by_the_backend (method));
+}
+
+// Turning the lowering off puts the operator back on its own IL, which is what
+// the limit is there to measure.
+TEST_F (SimdBodies, LoweringOffPutsTheAddOperatorBackUnderTheLimit)
+{
+	BoolOptionOverride off ("mono-simd", false);
+	MonoMethod *method = find_method ("Mono.Simd", vector_add);
+
+	ASSERT_NE (method, nullptr);
+	EXPECT_FALSE (written_by_the_backend (method));
 }
 
 // C# shifts a short as an int and casts back, so the count is masked to 31 and

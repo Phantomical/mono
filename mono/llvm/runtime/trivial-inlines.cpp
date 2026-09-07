@@ -490,15 +490,15 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 				continue;
 			}
 
-			if (!is_small_and_clause_free (header, limit))
+			// The three tests below all read the callee's IL, which a body
+			// the backend writes itself does not run.
+			bool reads_its_il = !written_by_the_backend (callee);
+
+			if (reads_its_il && !is_small_and_clause_free (header, limit))
 				continue;
-
-			std::optional<Shape> shape = shape_of (callee, header);
-
-			if (!shape)
+			if (reads_its_il && !shape_of (callee, header))
 				continue;
-
-			if (forwards_into_a_cycle (callee, domain))
+			if (reads_its_il && forwards_into_a_cycle (callee, domain))
 				continue;
 
 			size_t before = externals.size ();

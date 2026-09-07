@@ -120,6 +120,14 @@ bool folding_off_for_seq_points ();
 /// does not answer.
 bool may_fold (MonoDomain *domain, MonoMethod *callee);
 
+/// Whether the backend writes method's body itself rather than translating its
+/// IL.
+///
+/// Both inliners bound what they translate by the callee's IL size, and such a
+/// body is a handful of instructions whatever that size is. Vector4f's operator
+/// + is 66 bytes of ldfld and newobj, and one fadd once translated.
+bool written_by_the_backend (MonoMethod *method);
+
 /// Whether a body of this shape can be translated in as an inline copy: no
 /// clauses at all, and at most il_limit bytes of IL.
 ///

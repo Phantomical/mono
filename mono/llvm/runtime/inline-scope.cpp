@@ -4,6 +4,7 @@
 
 #include "domain-method.hpp"
 #include "method-override.hpp"
+#include "method-to-llvm/intrinsics.hpp"
 #include "naming.hpp"
 #include "options.hpp"
 #include "passes/inline-copies.hpp"
@@ -201,6 +202,12 @@ bool
 is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_limit)
 {
 	return header->num_clauses == 0 && header->code_size <= il_limit;
+}
+
+bool
+written_by_the_backend (MonoMethod *method)
+{
+	return builtin_body_for (method) != nullptr;
 }
 
 bool
