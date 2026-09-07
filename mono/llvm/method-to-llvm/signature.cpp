@@ -126,10 +126,10 @@ simd_class_to_llvm_type (llvm::LLVMContext &ctx, MonoClass *klass)
 	if (name == "Vector16sb" || name == "Vector16b")
 		return llvm::FixedVectorType::get (llvm::Type::getInt8Ty (ctx), 16);
 	/*
-	 * Vector4f is a Mono.Simd type. Vector2, Vector3 and Vector4 are
-	 * System.Numerics types. All four fit in one 128-bit, four-float register.
+	 * Vector4f (Mono.Simd) and Vector4 (System.Numerics) both fit in one
+	 * 128-bit, four-float register.
 	 */
-	if (name == "Vector4f" || name == "Vector2" || name == "Vector3" || name == "Vector4")
+	if (name == "Vector4f" || name == "Vector4")
 		return llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx), 4);
 
 	return nullptr;
