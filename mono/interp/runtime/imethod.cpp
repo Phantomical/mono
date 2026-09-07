@@ -13,6 +13,7 @@
 #include "entry.hpp"
 #include "imethod.hpp"
 
+#include <mono/llvm/runtime.h>
 #include <mono/metadata/marshal.h>
 #include <mono/metadata/metadata-update.h>
 #include <mono/mini/domain-method.h>
@@ -25,15 +26,15 @@ namespace mono::interp {
 
 namespace {
 
-/// Sets how many calls imethod takes before it is asked for as tier 1.
+/// Sets what imethod spends before it is asked for as tier 1.
 ///
-/// A count of zero or less means the method never promotes.
+/// A budget of zero or less means the method never promotes.
 void
-arm_tier_counter (InterpMethod *imethod, gint32 calls)
+arm_tier_counter (InterpMethod *imethod, gint32 budget)
 {
 	// The call sites only reach interp_check_call_promotion () while tier_counter
 	// tests positive. That test is what makes a count of zero or less permanent.
-	mono_atomic_store_i32 (&imethod->tier_counter, calls > 0 ? calls : -1);
+	mono_atomic_store_i32 (&imethod->tier_counter, budget > 0 ? budget : -1);
 }
 
 } // namespace
@@ -96,16 +97,21 @@ interp_transform_method (MonoMethod *method, MonoError *error)
 	return is_ok (error);
 }
 
-/// Counts one call against imethod's way to tier 1, and asks for the method
+/// Charges one call against imethod's way to tier 1, and asks for the method
 /// once the count has run out.
 ///
 /// This tests for a count that has run out, not for the call that ended it.
-/// Several threads can decrement at once, so the one landing on zero is not
-/// necessarily the last to arrive.
+/// Several threads can charge at once, so the one landing at or below zero is
+/// not necessarily the last to arrive.
+///
+/// The interpreter has no counterpart to the loop turns tier0-classic charges,
+/// so a method that loops rather than being called never reaches the threshold
+/// here.
 void
 interp_check_call_promotion (InterpMethod *imethod)
 {
-	if (mono_atomic_dec_i32 (&imethod->tier_counter) > 0)
+	if (mono_atomic_add_i32 (&imethod->tier_counter,
+	                         -mono_llvm_jit_tier0_entry_weight ()) > 0)
 		return;
 
 	if (mono_promote_method (imethod->method, imethod->domain))
@@ -113,11 +119,11 @@ interp_check_call_promotion (InterpMethod *imethod)
 
 	/*
 	 * A refused promotion spends the count for nothing, so this re-arms it. The
-	 * loss then costs this method another threshold of calls, not the rest of
-	 * the process.
+	 * loss then costs this method another threshold, not the rest of the
+	 * process.
 	 */
 	if (MonoDomainMethod *dm = domain_method_find (imethod->domain, imethod->method))
-		arm_tier_counter (imethod, dm->tier_calls.load (std::memory_order_relaxed));
+		arm_tier_counter (imethod, dm->tier_budget.load (std::memory_order_relaxed));
 }
 
 /// method now has native code in domain, so calls to it from interpreted code
@@ -285,7 +291,7 @@ mono_interp_imethod_named (MonoDomain *domain, MonoMethod *method, MonoError *er
 	else
 		imethod->rtype = mini_get_underlying_type (sig->ret);
 	imethod->code_owner = mono_method_get_code_owner_handle (domain, method);
-	arm_tier_counter (imethod, (*dm)->tier_calls.load (std::memory_order_relaxed));
+	arm_tier_counter (imethod, (*dm)->tier_budget.load (std::memory_order_relaxed));
 	imethod->param_types = static_cast<MonoType **> (
 		m_method_alloc0 (domain, method, sizeof (MonoType *) * sig->param_count));
 	for (i = 0; i < sig->param_count; ++i)

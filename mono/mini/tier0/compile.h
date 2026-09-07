@@ -1431,7 +1431,14 @@ void        mini_profiler_emit_enter (MonoCompile *cfg);
 void        mini_profiler_emit_leave (MonoCompile *cfg, MonoInst *ret);
 void        mini_profiler_emit_tail_call (MonoCompile *cfg, MonoMethod *target);
 void        mini_profiler_emit_call_finally (MonoCompile *cfg, MonoMethodHeader *header, unsigned char *ip, guint32 index, MonoExceptionClause *clause);
-void        mini_tier0_emit_counter (MonoCompile *cfg);
+/* Charge one call, and one turn of a loop whose body spans il_bytes, against
+ * the method's way out of tier 0. Both do nothing while cfg is translating an
+ * inlined callee's own body.
+ *
+ * The charge sits behind a branch, so the block being built has to be one a
+ * branch can end. The initlocals block is not. */
+void        mini_tier0_emit_entry_counter (MonoCompile *cfg);
+void        mini_tier0_emit_loop_counter (MonoCompile *cfg, int32_t il_bytes);
 /* graph dumping */
 void mono_cfg_dump_create_context (MonoCompile *cfg);
 void mono_cfg_dump_begin_group (MonoCompile *cfg);

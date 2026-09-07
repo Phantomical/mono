@@ -4714,8 +4714,12 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			amd64_alu_reg_imm (code, X86_CMP, AMD64_RAX, X86_FP_C0);
 			amd64_pop_reg (code, AMD64_RAX);
 			amd64_fstp (code, 0);
+			/* The scratch has to go back before the branch, because the
+			 * raising arm never returns here and the unwind info records
+			 * one stack pointer for both. lea rather than add, since the
+			 * flags are the compare's answer. */
+			amd64_lea_membase (code, AMD64_RSP, AMD64_RSP, 16);
 			EMIT_COND_SYSTEM_EXCEPTION (X86_CC_EQ, FALSE, "OverflowException");
-			amd64_alu_reg_imm (code, X86_ADD, AMD64_RSP, 16);
 			break;
 		case OP_TLS_GET: {
 			code = mono_amd64_emit_tls_get (code, ins->dreg, ins->inst_offset);

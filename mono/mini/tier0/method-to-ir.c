@@ -563,13 +563,13 @@ add_widen_op (MonoCompile *cfg, MonoInst *ins, MonoInst **arg1_ref, MonoInst **a
 /*
  * target <= ip marks a backward branch: CIL has no other way to write a
  * loop. Three shapes can be one - this macro, an unconditional br, and a
- * brtrue/brfalse pair. Each counts its own back edge against classic
- * tier0's own way to tier 1.
+ * brtrue/brfalse pair. Each charges its own back edge against classic tier0's
+ * own way to tier 1, for the IL bytes the turn ran over.
  */
 #define ADD_BINCOND(next_block) do {	\
 		MonoInst *cmp;	\
 		if (target <= ip) \
-			mini_tier0_emit_counter (cfg); \
+			mini_tier0_emit_loop_counter (cfg, (int32_t)(ip - target)); \
 		sp -= 2; \
 		MONO_INST_NEW(cfg, cmp, OP_COMPARE);	\
 		cmp->sreg1 = sp [0]->dreg;	\
@@ -6831,7 +6831,7 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 		 * does.
 		 */
 		if (ip - header->code == 0)
-			mini_tier0_emit_counter (cfg);
+			mini_tier0_emit_entry_counter (cfg);
 
 		if (skip_dead_blocks) {
 			int ip_offset = ip - header->code;
@@ -8507,7 +8507,7 @@ calli_end:
 			break;
 		case MONO_CEE_BR:
 			if (target <= ip)
-				mini_tier0_emit_counter (cfg);
+				mini_tier0_emit_loop_counter (cfg, (int32_t)(ip - target));
 
 			MONO_INST_NEW (cfg, ins, OP_BR);
 
@@ -8533,7 +8533,7 @@ calli_end:
 			gboolean is_true = il_op == MONO_CEE_BRTRUE_S || il_op == MONO_CEE_BRTRUE;
 
 			if (target <= ip)
-				mini_tier0_emit_counter (cfg);
+				mini_tier0_emit_loop_counter (cfg, (int32_t)(ip - target));
 
 			if (sp [-1]->type == STACK_VTYPE || sp [-1]->type == STACK_R8)
 				UNVERIFIED;

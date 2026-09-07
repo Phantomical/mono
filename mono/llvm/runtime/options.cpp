@@ -135,8 +135,12 @@ llvm::cl::opt<bool> TagNonPointerInvariantGroupOpt (
 	llvm::cl::desc ("Tag a non-pointer array-header read with !invariant.group"));
 
 llvm::cl::opt<unsigned> Tier1ThresholdOpt (
-	"mono-tier1-threshold", llvm::cl::Hidden, llvm::cl::init (10),
-	llvm::cl::desc ("Calls an interpreted method takes before it is compiled"));
+	"mono-tier1-threshold", llvm::cl::Hidden, llvm::cl::init (5000000),
+	llvm::cl::desc ("What a tier-0 body spends before it asks for tier 1"));
+
+llvm::cl::opt<unsigned> Tier1EntryWeightOpt (
+	"mono-tier1-entry-weight", llvm::cl::Hidden, llvm::cl::init (5000),
+	llvm::cl::desc ("What one call adds to the tier-1 promotion count"));
 
 llvm::cl::opt<uint64_t> Tier2ThresholdOpt (
 	"mono-tier2-threshold", llvm::cl::Hidden, llvm::cl::init (100000000),
@@ -265,7 +269,17 @@ recompiling (MonoMethod *method)
 uint32_t
 tier1_threshold ()
 {
-	return Tier1ThresholdOpt;
+	// The counter this arms is a signed 32-bit word, so that a charge can take
+	// it past zero and the thread that crossed can see that it did.
+	return std::min<uint32_t> (Tier1ThresholdOpt.getValue (), INT32_MAX);
+}
+
+uint32_t
+tier1_entry_weight ()
+{
+	// A weight past the whole threshold promotes on the first call, which the
+	// threshold already says on its own.
+	return std::min (Tier1EntryWeightOpt.getValue (), tier1_threshold ());
 }
 
 uint32_t
@@ -613,7 +627,7 @@ trivial_inline_instance_budget ()
 }
 
 int32_t
-tier0_calls (MonoMethod *method)
+tier0_budget (MonoMethod *method)
 {
 	if (!runs_at_tier0 (method))
 		return 0;

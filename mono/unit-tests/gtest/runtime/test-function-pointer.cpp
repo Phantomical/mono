@@ -100,7 +100,7 @@ TEST_F (FunctionPointer, IsTheStubTheBackendPublished)
 	MonoMethod *method = cold_method ("System", "Version", "Clone", 0);
 
 	ASSERT_NE (nullptr, method);
-	ASSERT_GT (mono_llvm_jit_tier0_calls (method), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (method), 0)
 		<< "this method no longer starts at tier 0, so it checks nothing";
 
 	void *from_handle = mono_compile_method_checked (method, error);
@@ -147,7 +147,7 @@ TEST_F (FunctionPointer, SurvivesPromotion)
 	MonoMethod *method = cold_method ("System", "Version", "Clone", 0);
 
 	ASSERT_NE (nullptr, method);
-	ASSERT_GT (mono_llvm_jit_tier0_calls (method), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (method), 0)
 		<< "this method no longer starts at tier 0, so it checks nothing";
 
 	void *before = mono_compile_method_checked (method, error);

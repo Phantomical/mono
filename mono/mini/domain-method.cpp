@@ -517,14 +517,14 @@ mono_promote_method (MonoMethod *method, MonoDomain *domain)
 
 namespace {
 
-/// Tier0-classic's mirror of imethod.cpp's arm_tier_counter (). A threshold
-/// of zero or less maps to a count that never runs out, rather than one that
-/// promotes on its first decrement.
+/// Tier0-classic's mirror of imethod.cpp's arm_tier_counter (). A budget of
+/// zero or less maps to a count that never runs out, rather than one that
+/// promotes on its first charge.
 void
 arm_tier0_counter (mono::MonoDomainMethod *dm)
 {
-	int32_t calls = dm->tier_calls.load (std::memory_order_relaxed);
-	dm->tier0_counter.store (calls > 0 ? calls : -1, std::memory_order_relaxed);
+	int32_t budget = dm->tier_budget.load (std::memory_order_relaxed);
+	dm->tier0_counter.store (budget > 0 ? budget : -1, std::memory_order_relaxed);
 }
 
 } // namespace
@@ -541,37 +541,26 @@ mono_tier0_counter_address (MonoMethod *method, MonoDomain *domain)
 {
 	mono::MonoDomainMethod *dm = mono::domain_method_find (domain, method);
 
-	// tier0_counter is lock-free, so this address is its underlying int32_t's.
-	// A compiled body's plain load and this function's own atomic decrement
-	// read the same object there.
+	// tier0_counter is lock-free, so this address is its underlying int32_t's,
+	// and a compiled body can read and write it with plain accesses instead of
+	// an atomic one.
 	return dm != nullptr ? reinterpret_cast<int32_t *> (&dm->tier0_counter) : nullptr;
 }
 
 void
-mono_tier0_count (MonoMethod *method, MonoDomain *domain)
+mono_tier0_spent (MonoMethod *method, MonoDomain *domain)
 {
 	mono::MonoDomainMethod *dm = mono::domain_method_find (domain, method);
 
 	if (dm == nullptr)
 		return;
 
-	// A count at or below zero here is one a promotion this method
-	// already asked for. The guard that calls this reads the counter
-	// with a plain load, so two racing threads can both pass it on the
-	// same count. Without this check, the second one would ask for
-	// another promotion on a count already spent.
-	if (dm->tier0_counter.load (std::memory_order_relaxed) <= 0)
-		return;
-
-	if (dm->tier0_counter.fetch_sub (1, std::memory_order_relaxed) > 1)
-		return;
-
 	if (dm->promote ())
 		return;
 
 	// A refused promotion spends the count for nothing, so this re-arms it.
-	// The loss then costs this method another threshold of calls, not the
-	// rest of the process.
+	// The loss then costs this method another threshold, not the rest of the
+	// process.
 	arm_tier0_counter (dm);
 }
 

@@ -306,7 +306,7 @@ TEST_F (MethodDetour, OutranksAPromotion)
 	MonoMethod *method = method_named ("Inlined", 1);
 
 	ASSERT_NE (nullptr, method);
-	ASSERT_GT (mono_llvm_jit_tier0_calls (method), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (method), 0)
 		<< "this method no longer starts at tier 0, so it checks nothing";
 
 	mono_install_method_detour (method, domain, (void *) detoured_body);
@@ -335,9 +335,9 @@ TEST_F (MethodDetour, IsSeenByAnInterpretedCaller)
 
 	ASSERT_NE (nullptr, target);
 	ASSERT_NE (nullptr, caller);
-	ASSERT_GT (mono_llvm_jit_tier0_calls (caller), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (caller), 0)
 		<< "the caller no longer starts at tier 0, so it is not interpreted";
-	ASSERT_GT (mono_llvm_jit_tier0_calls (target), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (target), 0)
 		<< "the callee already has code, so this checks a compiled call";
 
 	mono_install_method_detour (target, mono_domain_get (), (void *) detoured_body);
@@ -358,9 +358,9 @@ TEST_F (MethodDetour, IsSeenAfterAnInterpretedCallLatchedFirst)
 
 	ASSERT_NE (nullptr, target);
 	ASSERT_NE (nullptr, caller);
-	ASSERT_GT (mono_llvm_jit_tier0_calls (caller), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (caller), 0)
 		<< "the caller no longer starts at tier 0, so it is not interpreted";
-	ASSERT_GT (mono_llvm_jit_tier0_calls (target), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (target), 0)
 		<< "the callee no longer starts at tier 0, so this checks nothing";
 	ASSERT_EQ (nullptr, mono_llvm_jit_find_body (mono_domain_get (), target))
 		<< "the callee already has code, so this call site never latches onto interpreting it";
@@ -393,9 +393,9 @@ TEST_F (MethodDetour, IsSeenByAnInterpretedCallerOfAnInstantiation)
 	MonoMethod *target = instantiated_over_string (definition);
 
 	ASSERT_NE (nullptr, target);
-	ASSERT_GT (mono_llvm_jit_tier0_calls (caller), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (caller), 0)
 		<< "the caller no longer starts at tier 0, so it is not interpreted";
-	ASSERT_GT (mono_llvm_jit_tier0_calls (target), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (target), 0)
 		<< "the callee already has code, so this checks a compiled call";
 
 	mono_install_method_detour (target, mono_domain_get (), (void *) detoured_body);
@@ -516,9 +516,9 @@ TEST_F (MethodDetour, ADetourOnOneInstantiationLeavesTheOthersForAnInterpretedCa
 	ASSERT_NE (nullptr, untouched);
 	ASSERT_NE (nullptr, calls_detoured);
 	ASSERT_NE (nullptr, calls_untouched);
-	ASSERT_GT (mono_llvm_jit_tier0_calls (calls_detoured), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (calls_detoured), 0)
 		<< "the caller no longer starts at tier 0, so it is not interpreted";
-	ASSERT_GT (mono_llvm_jit_tier0_calls (calls_untouched), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (calls_untouched), 0)
 		<< "the caller no longer starts at tier 0, so it is not interpreted";
 
 	void *body = promoted_body (detoured);
@@ -550,7 +550,7 @@ TEST_F (MethodDetour, IsMissedByAnInlinedCallee)
 
 	ASSERT_NE (nullptr, target);
 	ASSERT_NE (nullptr, caller);
-	ASSERT_GT (mono_llvm_jit_tier0_calls (caller), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (caller), 0)
 		<< "the caller no longer starts at tier 0, so it is not interpreted";
 
 	mono_install_method_detour (target, mono_domain_get (), (void *) detoured_body);
@@ -585,9 +585,9 @@ TEST_F (MethodDetour, DetourCallsBackIntoManagedAndThrows)
 	ASSERT_NE (nullptr, caller);
 	ASSERT_NE (nullptr, through_compiled);
 	ASSERT_NE (nullptr, deep_throw);
-	ASSERT_GT (mono_llvm_jit_tier0_calls (caller), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (caller), 0)
 		<< "the caller no longer starts at tier 0, so it is not interpreted";
-	ASSERT_GT (mono_llvm_jit_tier0_calls (deep_throw), 0)
+	ASSERT_GT (mono_llvm_jit_tier0_budget (deep_throw), 0)
 		<< "the throw site no longer starts at tier 0, so this checks nothing";
 
 	g_call_through_compiled =

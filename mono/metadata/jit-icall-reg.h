@@ -324,7 +324,7 @@ MONO_JIT_ICALL (mono_throw_unmanaged_callers_only) \
 MONO_JIT_ICALL (mono_throw_bad_image) \
 MONO_JIT_ICALL (mono_throw_not_supported) \
 MONO_JIT_ICALL (mono_throw_invalid_program) \
-MONO_JIT_ICALL (mono_tier0_count) \
+MONO_JIT_ICALL (mono_tier0_spent) \
 MONO_JIT_ICALL (mono_trace_enter_method) \
 MONO_JIT_ICALL (mono_trace_leave_method) \
 MONO_JIT_ICALL (mono_trace_tail_method) \

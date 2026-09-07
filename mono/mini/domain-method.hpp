@@ -117,12 +117,13 @@ public:
 	/// The tier that owns the entry now.
 	MonoTier tier () const { return tier_.load (std::memory_order_acquire); }
 
-	/// How many calls this method takes at its entry tier before it is asked
-	/// for as the next one. Zero means it never promotes.
-	std::atomic<int32_t> tier_calls{0};
+	/// What this method's counter at its entry tier starts at, in the units
+	/// mono_llvm_jit_tier0_budget () answers in. Zero means it never promotes.
+	std::atomic<int32_t> tier_budget{0};
 
 	/// Classic tier0's own live count of what remains before it asks for the
-	/// next tier: a call, or a loop's own back edge. Armed from tier_calls,
+	/// next tier. A call takes mono_llvm_jit_tier0_entry_weight () off it and a
+	/// loop's own back edge takes the loop's IL bytes. Armed from tier_budget,
 	/// the same as the interpreter arms InterpMethod::tier_counter. That
 	/// counter lives on InterpMethod instead, since interp keeps a record of
 	/// its own for every method.

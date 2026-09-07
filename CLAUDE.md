@@ -370,10 +370,20 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   through the backend, which separates a tier-0 bug from a backend one. A substring gets
   a compiled caller and a tier-0 callee into one process, which no threshold produces,
   because a callee is called at least as often as its caller.
-- `--llvm-opt=-mono-tier1-threshold=<n>` (`runtime/options.cpp`) — calls at tier 0
-  before a method is asked for as tier 1, default 10. Zero never promotes, which
-  separates a tier-0 entry bug from a promotion bug. One promotes on the first call,
-  which puts the switch inside a loop.
+- `--llvm-opt=-mono-tier1-threshold=<n>` (`runtime/options.cpp`) — what a tier-0 body
+  spends before it asks for tier 1, default 5000000. A call costs
+  `-mono-tier1-entry-weight` and one turn of a loop costs the IL bytes of the loop it
+  closes, so one counter reaches a method that is called often and a method entered once
+  that loops. The default is a thousand calls at the default weight, which is where the
+  classic compiler being much faster than the interpreter puts it. Zero never promotes,
+  which separates a tier-0 entry bug from a promotion bug. A value equal to the weight
+  promotes on the first call, which puts the switch inside a loop.
+- `--llvm-opt=-mono-tier1-entry-weight=<n>` (`runtime/options.cpp`) — what one call adds
+  to that count, default 5000, the same as tier 2 charges a call. Zero counts loop turns
+  alone, which separates a promotion the work asked for from one the calls asked for.
+  The interpreter charges this per call as well, and has no counterpart to the loop
+  turns, so a method that loops rather than being called promotes out of classic tier 0
+  and not out of the interpreter.
 - `--llvm-opt=-mono-tier2-threshold=<n>` (`runtime/options.cpp`) — what a tier-1 body
   spends before it asks for tier 2, default 100000000. One unit is one instruction that
   emits code, and a call costs `-mono-tier2-entry-weight` on top, so one counter reaches
@@ -767,13 +777,15 @@ conservatively.
 
 A tier-0 method leaves for tier 1 by being called, and by looping.
 `mono_tier0_arm_counter ()` arms a counter on the method's record before the body is
-emitted; the body's entry charges it one call through `mono_tier0_count ()`, and a
-backward branch charges it one turn. Both sites read the counter first and skip the
-call once the count is spent, so a body past its promotion calls nothing of its own
-at either one (`tier0/tier-counter.c`). A stack overflow in such a body therefore
+emitted; the body's entry charges it `-mono-tier1-entry-weight`, and a backward branch
+charges it the IL bytes of the loop it closes. The charge is a plain load, subtract and
+store rather than a locked instruction, so two threads charging at once lose a count
+between them and no more. Both sites read the counter first and leave it alone once the
+count is spent, so a body past its promotion neither writes nor calls anything of its
+own at either one (`tier0/tier-counter.c`). A stack overflow in such a body therefore
 faults in managed code, where `mono_handle_soft_stack_ovf ()` raises a catchable
 StackOverflowException instead of aborting. `mono/tests/bug-60862.cs` is the gate.
-A counter that runs out calls
+The charge that takes the count to zero or below calls `mono_tier0_spent ()`, which calls
 `MonoDomainMethod::promote ()`, which is engine-neutral. It takes the decision on the
 `MonoDomainMethod`, so however many counters run out at once, only one request reaches
 the compile queue. A promotion that cannot be taken, such as one into a domain on its
@@ -793,9 +805,11 @@ as the whole engine, with no tier to leave for. The rest of this section describ
 interpreter as tier 0.
 
 Under the interpreter the counter is a word on `InterpMethod`, set from the method's
-record when the `InterpMethod` is built, then decremented at the three places a call
-arrives: the interpreter's `call:` and `tailcall:` labels and `interp_entry ()`. A
-counter that runs out calls `mono_promote_method ()`, the same decision as above.
+record when the `InterpMethod` is built, then charged one entry weight at the three
+places a call arrives: the interpreter's `call:` and `tailcall:` labels and
+`interp_entry ()`. A counter that runs out calls `mono_promote_method ()`, the same
+decision as above. Nothing charges a loop turn here, so an interpreted method that
+loops rather than being called never reaches the threshold.
 
 The counter has to sit where the interpreter reaches it rather than in a wrapper in
 front of the method. Such a wrapper sees only calls arriving through the method's

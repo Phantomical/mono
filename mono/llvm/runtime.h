@@ -117,9 +117,15 @@ mono_bool mono_llvm_jit_tier0_enabled (void);
 /// compiler takes every tier-0 method.
 mono_bool mono_llvm_jit_interp_tier0_enabled (void);
 
-/// How many calls a method takes at tier 0 before it is asked for as tier 1,
-/// or zero if it never promotes.
-int32_t mono_llvm_jit_tier0_calls (MonoMethod *method);
+/// What a method's tier-0 counter starts at, or zero if it never promotes.
+///
+/// A call takes mono_llvm_jit_tier0_entry_weight () off that count and one turn
+/// of a loop takes the IL bytes of the loop it closes, so a method reaches tier
+/// 1 by being called and by looping.
+int32_t mono_llvm_jit_tier0_budget (MonoMethod *method);
+
+/// What one call takes off the count above.
+int32_t mono_llvm_jit_tier0_entry_weight (void);
 
 /// Asks for a method to be compiled at the given tier, replacing whatever tier
 /// runs it now. The tier is a MonoTier.

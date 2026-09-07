@@ -18,33 +18,30 @@ typedef struct _MonoMethod MonoMethod;
 
 /// Asks for a method to be run by the next tier up.
 ///
-/// Whichever engine's call count ran out calls this, and only one request goes
-/// out however many of them run out at once. It returns as soon as the work is
+/// Whichever engine's counter ran out calls this, and only one request goes out
+/// however many of them run out at once. It returns as soon as the work is
 /// queued, never once it is done.
 ///
 /// Returns FALSE only when the request was refused and nothing will retry it,
-/// which is the caller's signal to count another threshold of calls.
+/// which is the caller's signal to arm another threshold.
 mono_bool mono_promote_method (MonoMethod *method, MonoDomain *domain);
 
-/// Arms method's own tier0-classic live counter from its tier_calls in
-/// domain. Call this once, before a compile emits code that reads it.
+/// Arms method's own tier0-classic live counter from its budget in domain.
+/// Call this once, before a compile emits code that reads it.
 void mono_tier0_arm_counter (MonoMethod *method, MonoDomain *domain);
 
 /// The address of method's own tier0-classic live counter in domain, or NULL
 /// while no record exists yet. Valid for as long as the record is.
 ///
-/// Read it with a plain load, and call mono_tier0_count () only when it
-/// tests positive. That keeps the atomic decrement off every call and every
-/// loop turn once the count has run out.
+/// Charge it with a plain load, subtract and store, leaving it alone once it
+/// tests at or below zero, and call mono_tier0_spent () on the charge that
+/// takes it there. Nothing here needs a locked instruction: a charge two
+/// threads make at once loses a count between them and no more.
 int32_t *mono_tier0_counter_address (MonoMethod *method, MonoDomain *domain);
 
-/// Counts one call or one loop back edge against method's own way to the
-/// next tier in domain. Asks for it once the count runs out.
-///
-/// Classic tier0's own equivalent of the interpreter's per-call-site
-/// counter, except a loop's own back edges count too, which a call count
-/// alone cannot see.
-void mono_tier0_count (MonoMethod *method, MonoDomain *domain);
+/// Asks for method's next tier in domain, its tier0-classic counter having run
+/// out. Re-arms that counter when the request is refused.
+void mono_tier0_spent (MonoMethod *method, MonoDomain *domain);
 
 /// Hands the address a method is entered at to native code at \p target.
 ///

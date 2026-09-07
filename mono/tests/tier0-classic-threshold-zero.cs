@@ -5,9 +5,9 @@ using System.Threading;
 // -mono-tier1-threshold=0 is the setting a test reaches for when it wants a
 // method pinned at tier 0, and this file is what says it holds for a classic
 // body. arm_tier0_counter () (mono/mini/domain-method.cpp) writes -1 for a
-// threshold of zero, and mono_tier0_count () treats any count at or below
-// zero as one that never runs out, so a classic body pinned this way never
-// asks for tier 1.
+// threshold of zero, and emit_guarded_count ()'s guard leaves any count at or
+// below zero alone before every charge, so a classic body pinned this way
+// never asks for tier 1.
 //
 // ThresholdZeroSpin () reaches the counter both ways: once at the entry,
 // and repeatedly at its loop's own back edge.

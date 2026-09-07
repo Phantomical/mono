@@ -3,11 +3,11 @@ using System.Reflection;
 using System.Threading;
 
 // --llvm-opt=-mono-tier0-classic=BackedgeCounter filters BackedgeCounterLoop
-// to the classic compiler. It is called exactly once, which charges its
-// entry counter one unit against the default threshold of ten - well short
-// of it alone. Only its loop's own back edges can spend the rest. Reaching
-// tier 1 here is what tells classic tier0's back edge count apart from its
-// call count.
+// to the classic compiler. It is called exactly once, which charges its entry
+// counter one call's weight - a thousandth of the default threshold. Only its
+// loop's own back edges can spend the rest, at the twenty IL bytes of the loop
+// they close. Reaching tier 1 here is what tells classic tier0's charge for the
+// work a method does apart from its charge for the calls it takes.
 //
 // Reflection crosses into a compiled runtime-invoke wrapper, the same way
 // tier0-classic-gsharedvt.cs's GsharedShareEnter does. An ordinary call from
@@ -27,11 +27,13 @@ public class Tier0ClassicBackedgeTest
 {
 	const int tier1 = 3;
 
+	const long turns = 300000L;
+
 	static long BackedgeCounterLoop ()
 	{
 		long acc = 0;
 
-		for (long i = 0; i < 1000; i++)
+		for (long i = 0; i < turns; i++)
 			acc += i;
 
 		return acc;
@@ -43,7 +45,7 @@ public class Tier0ClassicBackedgeTest
 			"BackedgeCounterLoop", BindingFlags.Static | BindingFlags.NonPublic);
 		IntPtr handle = method.MethodHandle.Value;
 
-		const long want = 999L * 1000L / 2L;
+		const long want = (turns - 1L) * turns / 2L;
 		long got = (long) method.Invoke (null, null);
 
 		if (got != want) {

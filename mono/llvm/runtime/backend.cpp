@@ -378,7 +378,7 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 	                  [] (void *data) { delete static_cast<MethodState *> (data); }};
 
 	/* Tier policy is this engine's, so the record is told rather than asked. */
-	dm.tier_calls.store (tier0_calls (method), std::memory_order_relaxed);
+	dm.tier_budget.store (tier0_budget (method), std::memory_order_relaxed);
 
 	/*
 	 * Two trampolines rather than one, so that deciding and compiling are

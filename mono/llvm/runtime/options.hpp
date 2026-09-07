@@ -60,15 +60,28 @@ std::mutex &jit_trace_mutex ();
 /// breakpoint everywhere a method is executing.
 bool recompiling (MonoMethod *method);
 
-/// How many calls an interpreted method is given before it is compiled.
+/// How much a tier-0 body spends before it asks to be compiled.
 ///
-/// Ten, and it is not a tuned number. All a threshold has to do is keep
-/// methods called once or twice out of the compiler. What the trade is worth
-/// past that needs an execution-count distribution measured off a real
-/// workload, not an argument. Zero leaves every tier-0 method interpreted for
-/// good, which separates the tier-0 entry path from promotion when one of
-/// them misbehaves.
+/// A call costs tier1_entry_weight () and one turn of a loop costs the IL bytes
+/// of the loop it closes, so the calls a method takes and the work it does both
+/// reach this threshold. Never past INT32_MAX, since the counter it arms is a
+/// signed 32-bit word.
+///
+/// Five million, which is a thousand calls at the default weight. Zero leaves
+/// every tier-0 method where it is for good, which separates the tier-0 entry
+/// path from promotion when one of them misbehaves.
 uint32_t tier1_threshold ();
+
+/// What one call adds to the count tier1_threshold () bounds.
+///
+/// It is the exchange rate between how hot a method is and how much it does, in
+/// the same units: a method whose calls return without looping promotes after
+/// tier1_threshold () / tier1_entry_weight () of them. Zero counts loop turns
+/// alone, which separates a promotion the work asked for from one the calls
+/// asked for.
+///
+/// The default is five thousand, the same as tier 2 charges a call.
+uint32_t tier1_entry_weight ();
 
 /// How many methods a tier-1 promotion compile can take at once.
 ///
@@ -293,11 +306,12 @@ uint32_t trivial_inline_fanout_limit ();
 /// off.
 uint32_t trivial_inline_instance_budget ();
 
-/// How many calls a method takes at tier 0 before it is asked for as tier 1.
+/// What a method's tier-0 counter starts at, in the units tier1_threshold ()
+/// bounds.
 ///
 /// Zero for a method that does not run at tier 0 at all. That also tells a
-/// caller that counting its calls settles nothing.
-int32_t tier0_calls (MonoMethod *method);
+/// caller that charging its counter settles nothing.
+int32_t tier0_budget (MonoMethod *method);
 
 /// Whether any method at all starts at tier 0.
 ///

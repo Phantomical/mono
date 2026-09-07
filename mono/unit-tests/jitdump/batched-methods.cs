@@ -69,7 +69,10 @@ class Driver {
 	{
 		int acc = 0;
 
-		for (int i = 0; i < 400; i++)
+		/* Past tier1_threshold () / tier1_entry_weight (), so that every body
+		 * here promotes on its calls rather than on the loop turns each one
+		 * spends inside. */
+		for (int i = 0; i < 2000; i++)
 			acc += Work<T>.Sum (7) + Work<T>.Mix (7) + Work<T>.Fold (7)
 			       + Work<T>.Scan (7);
 		return acc;
