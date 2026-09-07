@@ -134,7 +134,7 @@ endfinally: len:9
 endfilter: src1:a len:9
 get_ex_obj: dest:a len:16
 
-ckfinite: dest:f src1:f len:43
+ckfinite: dest:f src1:f len:32
 ceq: dest:c len:8
 cgt: dest:c len:8
 cgt_un: dest:c len:8
@@ -397,7 +397,7 @@ cos: dest:f src1:f len:32
 abs: dest:f src1:f clob:1 len:32
 tan: dest:f src1:f len:59
 atan: dest:f src1:f len:9
-sqrt: dest:f src1:f len:32
+sqrt: dest:f src1:f len:8
 sext_i1: dest:i src1:i len:4
 sext_i2: dest:i src1:i len:4
 sext_i4: dest:i src1:i len:8

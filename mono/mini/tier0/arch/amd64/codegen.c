@@ -1378,14 +1378,6 @@ mono_arch_emit_setret (MonoCompile *cfg, MonoMethod *method, MonoInst *val)
 		}			\
 	} while (0); 
 
-#define EMIT_SSE2_FPFUNC(code, op, dreg, sreg1) do { \
-    amd64_movsd_membase_reg (code, AMD64_RSP, -8, (sreg1)); \
-	amd64_fld_membase (code, AMD64_RSP, -8, TRUE); \
-	amd64_ ##op (code); \
-	amd64_fst_membase (code, AMD64_RSP, -8, TRUE, TRUE); \
-	amd64_movsd_reg_membase (code, (dreg), AMD64_RSP, -8); \
-} while (0);
-
 #ifndef DISABLE_JIT
 static guint8*
 emit_call (MonoCompile *cfg, MonoCallInst *call, guint8 *code, MonoJitICallId jit_icall_id)
@@ -4331,7 +4323,7 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			break;
 		}
 		case OP_SQRT:
-			EMIT_SSE2_FPFUNC (code, fsqrt, ins->dreg, ins->sreg1);
+			amd64_sse_sqrtsd_reg_reg (code, ins->dreg, ins->sreg1);
 			break;
 
 		case OP_RADD:
@@ -4702,24 +4694,16 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			EMIT_COND_BRANCH (ins, X86_CC_GE, FALSE);
 			break;
 		case OP_CKFINITE:
-			/* Transfer value to the fp stack */
-			amd64_alu_reg_imm (code, X86_SUB, AMD64_RSP, 16);
-			amd64_movsd_membase_reg (code, AMD64_RSP, 0, ins->sreg1);
-			amd64_fld_membase (code, AMD64_RSP, 0, TRUE);
-
-			amd64_push_reg (code, AMD64_RAX);
-			amd64_fxam (code);
-			amd64_fnstsw (code);
-			amd64_alu_reg_imm (code, X86_AND, AMD64_RAX, 0x4100);
-			amd64_alu_reg_imm (code, X86_CMP, AMD64_RAX, X86_FP_C0);
-			amd64_pop_reg (code, AMD64_RAX);
-			amd64_fstp (code, 0);
-			/* The scratch has to go back before the branch, because the
-			 * raising arm never returns here and the unwind info records
-			 * one stack pointer for both. lea rather than add, since the
-			 * flags are the compare's answer. */
-			amd64_lea_membase (code, AMD64_RSP, AMD64_RSP, 16);
+			/* The exponent reads all ones only for the two infinities and
+			 * every NaN, never for a finite double. Shifting the sign bit out
+			 * and the mantissa away leaves the exponent in the low bits. */
+			amd64_movd_reg_xreg_size (code, AMD64_R11, ins->sreg1, 8);
+			amd64_shift_reg_imm_size (code, X86_SHL, AMD64_R11, 1, 8);
+			amd64_shift_reg_imm_size (code, X86_SHR, AMD64_R11, 53, 8);
+			amd64_alu_reg_imm_size (code, X86_CMP, AMD64_R11, 0x7ff, 8);
 			EMIT_COND_SYSTEM_EXCEPTION (X86_CC_EQ, FALSE, "OverflowException");
+			if (ins->dreg != ins->sreg1)
+				amd64_sse_movsd_reg_reg (code, ins->dreg, ins->sreg1);
 			break;
 		case OP_TLS_GET: {
 			code = mono_amd64_emit_tls_get (code, ins->dreg, ins->inst_offset);
