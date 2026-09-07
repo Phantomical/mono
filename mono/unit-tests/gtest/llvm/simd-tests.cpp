@@ -489,7 +489,8 @@ TEST_F (SimdBodies, EachPrefetchNameTakesItsOwnLocality)
 // not enough to make that safe: it reaches runs_at_tier0 (), which decides only
 // for methods the backend is asked about, and the interpreter never asks about
 // a callee it reached itself. Such a row measured 0x0 under an interpreted
-// caller against 0x3F under a compiled one on the same host.
+// caller against 0x3F under a compiled one on the same host. The interpreter is
+// tier 0 only under -mono-tier0-classic=0, so that is the arm the hole is in.
 TEST_F (SimdBodies, AccelModeIsLeftOnItsOwnIl)
 {
 	MonoMethod *method = find_method ("Mono.Simd", acceleration_mode);
