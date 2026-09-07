@@ -1,5 +1,9 @@
 # zlib first: it may define the ZLIB::ZLIB everything else links against.
 add_subdirectory(zlib)
+# zlib/'s own PARENT_SCOPE only reaches this directory. support/ and
+# tools/pedump/ read ZLIB_FOUND too, and both sit outside this subtree, so
+# bubble it up once more.
+set(ZLIB_FOUND "${ZLIB_FOUND}" PARENT_SCOPE)
 add_subdirectory(eglib)
 add_subdirectory(utils)
 add_subdirectory(culture)
