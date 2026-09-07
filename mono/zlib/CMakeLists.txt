@@ -6,7 +6,11 @@ if(ZLIB_FOUND)
   return()
 endif()
 
-add_library(monoz OBJECT
+# STATIC rather than OBJECT. Every consumer reaches monoz through two hops of
+# ALIAS (ZLIB::ZLIB -> mono_zlib -> monoz). CMake does not forward an object
+# library's objects through that chain, and every consumer fails to link on
+# undefined zlib symbols instead.
+add_library(monoz STATIC
   adler32.c
   compress.c
   crc32.c
