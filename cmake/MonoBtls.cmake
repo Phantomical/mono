@@ -28,6 +28,12 @@ ExternalProject_Add(mono-btls
   BINARY_DIR      "${MONO_BTLS_BINARY_DIR}"
   CMAKE_ARGS
     -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+    # mono/btls and the BoringSSL submodule beneath it both declare
+    # `cmake_minimum_required (VERSION 2.8.10)`. CMake 4's own floor is 3.5,
+    # and it refuses that outright rather than warning. This is the
+    # compatibility flag CMake's own error suggests, kept off the parent
+    # configure so it does not mask a real floor violation there too.
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
     -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
     -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
