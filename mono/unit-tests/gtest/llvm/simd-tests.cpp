@@ -37,6 +37,24 @@ const char *const vector_multiply =
 const char *const scalar_multiply =
 	"Mono.Simd.Vector4f:op_Multiply(Mono.Simd.Vector4f,single)";
 
+const char *const narrow_shift =
+	"Mono.Simd.Vector8s:op_RightShift(Mono.Simd.Vector8s,int)";
+const char *const saturating_add =
+	"Mono.Simd.VectorOperations:AddWithSaturation(Mono.Simd.Vector8s,Mono.Simd.Vector8s)";
+const char *const compare_less =
+	"Mono.Simd.VectorOperations:CompareLessThan(Mono.Simd.Vector4f,Mono.Simd.Vector4f)";
+const char *const float_min =
+	"Mono.Simd.VectorOperations:Min(Mono.Simd.Vector4f,Mono.Simd.Vector4f)";
+const char *const horizontal_add =
+	"Mono.Simd.VectorOperations:HorizontalAdd(Mono.Simd.Vector4f,Mono.Simd.Vector4f)";
+const char *const equality =
+	"Mono.Simd.Vector4f:op_Equality(Mono.Simd.Vector4f,Mono.Simd.Vector4f)";
+
+// Every op_Explicit Vector4f declares takes one Vector4f and differs only in
+// what it answers with, so a signature does not pick one out either. Each is
+// the same reinterpretation, so the test asserts on whichever one is found.
+const char *const reinterpretation = "Mono.Simd.Vector4f:op_Explicit";
+
 /// Instruction counts read off one translated function.
 struct Shape {
 	unsigned instructions = 0;
@@ -133,10 +151,9 @@ TEST_F (SimdBodies, VectorMultiplyIsOneVectorFmul)
 		<< multiplied.text ();
 }
 
-// A row that took the scalar overload would still leave its managed body to
-// be translated, because the emitter declines non-vector operands. Only the
-// row each overload selects tells the two apart.
-TEST_F (SimdBodies, OnlyTheVectorOverloadSelectsTheRow)
+// Both overloads are lowered, each with a body of its own. The row a method
+// selects is what tells them apart, since the name and the arity do not.
+TEST_F (SimdBodies, EachMultiplyOverloadSelectsItsOwnRow)
 {
 	MonoMethod *vectors = find_method ("Mono.Simd", vector_multiply);
 	MonoMethod *scalar = find_method ("Mono.Simd", scalar_multiply);
@@ -144,16 +161,16 @@ TEST_F (SimdBodies, OnlyTheVectorOverloadSelectsTheRow)
 	ASSERT_NE (vectors, nullptr);
 	ASSERT_NE (scalar, nullptr);
 
-	const BuiltinBody *row = builtin_body_for (vectors);
+	const BuiltinBody *vector_row = builtin_body_for (vectors);
+	const BuiltinBody *scalar_row = builtin_body_for (scalar);
 
-	ASSERT_NE (row, nullptr);
-	EXPECT_EQ (row->params, "VV");
-	EXPECT_EQ (builtin_body_for (scalar), nullptr);
+	ASSERT_NE (vector_row, nullptr);
+	ASSERT_NE (scalar_row, nullptr);
+	EXPECT_EQ (vector_row->params, "VV");
+	EXPECT_EQ (scalar_row->params, "VS");
 }
 
-// The scalar overload shares the row's name and arity, and its managed body
-// multiplies each lane by one float.
-TEST_F (SimdBodies, ScalarMultiplyTranslatesTheManagedBody)
+TEST_F (SimdBodies, ScalarMultiplySplatsTheScalar)
 {
 	const Translation &multiplied = translate ("Mono.Simd", scalar_multiply);
 
@@ -162,9 +179,10 @@ TEST_F (SimdBodies, ScalarMultiplyTranslatesTheManagedBody)
 
 	Shape shape = shape_of (*multiplied.function);
 
-	EXPECT_EQ (shape.vector_fmuls, 0u) << multiplied.text ();
-	EXPECT_EQ (shape.scalar_fmuls, 4u) << multiplied.text ();
-	EXPECT_GT (shape.instructions, 2u) << multiplied.text ();
+	EXPECT_EQ (shape.vector_fmuls, 1u) << multiplied.text ();
+	EXPECT_EQ (shape.scalar_fmuls, 0u) << multiplied.text ();
+	EXPECT_EQ (shape.calls, 0u) << multiplied.text ();
+	EXPECT_EQ (multiplied.count ("insertelement"), 1u) << multiplied.text ();
 }
 
 // The IL adds the same lanes, so tier 0 can keep running it.
@@ -174,6 +192,108 @@ TEST_F (SimdBodies, VectorAddStillRunsItsOwnIl)
 
 	ASSERT_NE (method, nullptr);
 	EXPECT_FALSE (builtin_body_replaces_il (method));
+}
+
+// C# shifts a short as an int and casts back, so the count is masked to 31 and
+// not to 15. A shift by 17 then keeps sign bits an i16 shift would drop.
+TEST_F (SimdBodies, NarrowShiftRunsAtTheWidthTheIlShiftsAt)
+{
+	const Translation &shifted = translate ("Mono.Simd", narrow_shift);
+
+	ASSERT_TRUE (shifted.error.empty ()) << shifted.error;
+	ASSERT_NE (shifted.function, nullptr);
+
+	EXPECT_EQ (shape_of (*shifted.function).calls, 0u) << shifted.text ();
+	EXPECT_EQ (shifted.count ("sext <8 x i16>"), 1u) << shifted.text ();
+	EXPECT_EQ (shifted.count (", 31"), 1u) << shifted.text ();
+	EXPECT_EQ (shifted.count ("ashr <8 x i32>"), 1u) << shifted.text ();
+	EXPECT_EQ (shifted.count ("trunc <8 x i32>"), 1u) << shifted.text ();
+}
+
+TEST_F (SimdBodies, SaturatingAddIsOneIntrinsic)
+{
+	const Translation &added = translate ("Mono.Simd", saturating_add);
+
+	ASSERT_TRUE (added.error.empty ()) << added.error;
+	ASSERT_NE (added.function, nullptr);
+
+	EXPECT_EQ (shape_of (*added.function).instructions, 2u) << added.text ();
+	EXPECT_EQ (added.count ("llvm.sadd.sat.v8i16"), 1u) << added.text ();
+}
+
+// The managed body writes the mask through an int pointer into the operands'
+// own struct, so a float struct answers with float lanes holding the bits.
+TEST_F (SimdBodies, CompareAnswersAMaskInTheOperandsType)
+{
+	const Translation &compared = translate ("Mono.Simd", compare_less);
+
+	ASSERT_TRUE (compared.error.empty ()) << compared.error;
+	ASSERT_NE (compared.function, nullptr);
+
+	EXPECT_EQ (shape_of (*compared.function).calls, 0u) << compared.text ();
+	EXPECT_EQ (compared.count ("fcmp olt <4 x float>"), 1u) << compared.text ();
+	EXPECT_EQ (compared.count ("sext <4 x i1>"), 1u) << compared.text ();
+	EXPECT_EQ (compared.count ("bitcast <4 x i32>"), 1u) << compared.text ();
+	EXPECT_TRUE (compared.function->getReturnType ()->getScalarType ()->isFloatTy ())
+		<< compared.text ();
+}
+
+// Math.Min answers with its second argument for two zeros of opposite sign and
+// with its first for a NaN there, which llvm.minnum does not.
+TEST_F (SimdBodies, FloatMinFollowsMathMinsNanRule)
+{
+	const Translation &smallest = translate ("Mono.Simd", float_min);
+
+	ASSERT_TRUE (smallest.error.empty ()) << smallest.error;
+	ASSERT_NE (smallest.function, nullptr);
+
+	EXPECT_EQ (shape_of (*smallest.function).calls, 0u) << smallest.text ();
+	EXPECT_EQ (smallest.count ("fcmp olt <4 x float>"), 1u) << smallest.text ();
+	EXPECT_EQ (smallest.count ("fcmp uno <4 x float>"), 1u) << smallest.text ();
+	EXPECT_EQ (smallest.count ("select"), 2u) << smallest.text ();
+	EXPECT_EQ (smallest.count ("minnum"), 0u) << smallest.text ();
+}
+
+TEST_F (SimdBodies, HorizontalAddPairsNeighbouringLanes)
+{
+	const Translation &added = translate ("Mono.Simd", horizontal_add);
+
+	ASSERT_TRUE (added.error.empty ()) << added.error;
+	ASSERT_NE (added.function, nullptr);
+
+	Shape shape = shape_of (*added.function);
+
+	EXPECT_EQ (shape.vector_fadds, 1u) << added.text ();
+	EXPECT_EQ (shape.calls, 0u) << added.text ();
+	EXPECT_EQ (added.count ("<i32 0, i32 2, i32 4, i32 6>"), 1u) << added.text ();
+	EXPECT_EQ (added.count ("<i32 1, i32 3, i32 5, i32 7>"), 1u) << added.text ();
+}
+
+TEST_F (SimdBodies, ExplicitConversionIsOneBitcast)
+{
+	const Translation &converted = translate ("Mono.Simd", reinterpretation);
+
+	ASSERT_TRUE (converted.error.empty ()) << converted.error;
+	ASSERT_NE (converted.function, nullptr);
+
+	EXPECT_EQ (shape_of (*converted.function).instructions, 2u) << converted.text ();
+	EXPECT_EQ (converted.count ("bitcast"), 1u) << converted.text ();
+	EXPECT_TRUE (converted.function->getReturnType ()->isVectorTy ())
+		<< converted.text ();
+}
+
+TEST_F (SimdBodies, EqualityReducesTheLaneCompare)
+{
+	const Translation &compared = translate ("Mono.Simd", equality);
+
+	ASSERT_TRUE (compared.error.empty ()) << compared.error;
+	ASSERT_NE (compared.function, nullptr);
+
+	EXPECT_EQ (compared.count ("fcmp oeq <4 x float>"), 1u) << compared.text ();
+	EXPECT_EQ (compared.count ("llvm.vector.reduce.and"), 1u) << compared.text ();
+	EXPECT_EQ (compared.count ("zext i1"), 1u) << compared.text ();
+	EXPECT_TRUE (compared.function->getReturnType ()->isIntegerTy ())
+		<< compared.text ();
 }
 
 } // namespace
