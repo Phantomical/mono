@@ -40,12 +40,20 @@ target_include_directories(monogc
   PUBLIC  "${BDWGC_DIR}/include"
           "${BDWGC_DIR}/libatomic_ops/src")
 
-target_compile_definitions(monogc
-  PRIVATE HAVE_CONFIG_H GC_PTHREAD_START_STANDALONE
-  # These have to agree between the collector and mono/metadata/boehm-gc.c,
-  # which includes gc.h with the same expectations.
-  PUBLIC  GC_LINUX_THREADS _GNU_SOURCE _REENTRANT USE_MMAP USE_MUNMAP
-          USE_COMPILER_TLS)
+target_compile_definitions(monogc PRIVATE HAVE_CONFIG_H GC_PTHREAD_START_STANDALONE)
+# gc_config_macros.h defines GC_WIN32_THREADS on its own once it sees _WIN32.
+# thread_local_alloc.h picks USE_WIN32_COMPILER_TLS the same way, but only
+# when nothing has already defined a TLS strategy. GC_LINUX_THREADS forces the
+# pthreads arm regardless of host, which pulls a bare <pthread.h> into a
+# clang-cl compile. The rest of this list is pthreads/glibc-only alongside it,
+# and none of it belongs on Windows.
+if(NOT MONO_HOST_WINDOWS)
+  target_compile_definitions(monogc
+    # These have to agree between the collector and mono/metadata/boehm-gc.c,
+    # which includes gc.h with the same expectations.
+    PUBLIC GC_LINUX_THREADS _GNU_SOURCE _REENTRANT USE_MMAP USE_MUNMAP
+           USE_COMPILER_TLS)
+endif()
 
 target_compile_options(monogc PRIVATE
   -fno-strict-aliasing
