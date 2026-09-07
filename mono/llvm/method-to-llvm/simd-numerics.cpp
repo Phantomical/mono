@@ -189,9 +189,9 @@ struct SimdNumericsEmitters {
 		return llvm::Error::success ();
 	}
 
-	/// Ands the lane compares, which is the `X == other.X && ...` of the
-	/// Equals () op_Equality's managed body calls. The lanes are floats, so
-	/// comparing all of them cannot differ from that body's short circuit.
+	/// Ands the lane compares, which is what Equals () computes and
+	/// op_Equality's managed body calls. The lanes are floats, so comparing
+	/// all of them cannot differ from that body's short circuit.
 	template <bool negated>
 	static BuiltinResult equality (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                               MonoMethod *)
@@ -226,8 +226,8 @@ namespace {
 
 const ClassKey vector4 = { "System.Numerics", "System.Numerics", "Vector4" };
 
-// The named twin beside each operator forwards to that operator, so it takes
-// the operator's own row rather than one of its own.
+// The named twin beside each operator forwards to that operator, so its row
+// names the operator's own emitter rather than one of its own.
 const BuiltinBody simd_numerics_table[] = {
 	// `new Vector4 (left.X + right.X, ...)`.
 	{ vector4, "op_Addition", "VV", true, simd_lowering,
