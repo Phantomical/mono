@@ -490,8 +490,9 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 				continue;
 			}
 
-			// The three tests below all read the callee's IL, which a body
-			// the backend writes itself does not run.
+			// The three tests below all read the callee's IL. A body the
+			// backend writes itself is never translated from that IL, so
+			// none of them apply.
 			bool reads_its_il = !written_by_the_backend (callee);
 
 			if (reads_its_il && !is_small_and_clause_free (header, limit))

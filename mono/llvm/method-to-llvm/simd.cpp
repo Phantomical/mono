@@ -312,8 +312,9 @@ struct SimdEmitters {
 	 * Shifts every lane by a scalar count.
 	 *
 	 * C# shifts a lane narrower than int as an int and casts the answer back.
-	 * A short shifted right by 17 therefore keeps 15 bits of its sign, where
-	 * an i16 shift masks the count to 1.
+	 * The count is masked to 31, not to the lane's own width. A short shifted
+	 * right by 17 therefore collapses to its sign in every bit. An i16 ashr
+	 * instead masks the count to 1, which mostly keeps the original value.
 	 *
 	 * signed_lanes picks the widening and the right shift together. The two
 	 * named shifts in VectorOperations ask for the arm their own name says
@@ -444,9 +445,9 @@ struct SimdEmitters {
 	/**
 	 * Answers each lane with System.Math's own Min or Max of the two.
 	 *
-	 * Math.Min (a, b) is `a < b ? a : (IsNaN (a) ? a : b)`, so it answers with
-	 * b for two zeros of opposite sign and with a NaN only where a is one.
-	 * llvm.minnum and minps each break one of those.
+	 * Math.Min (a, b) is `a < b ? a : (IsNaN (a) ? a : b)`. It answers with b
+	 * for two zeros of opposite sign, and it propagates whichever operand is
+	 * NaN rather than suppressing it the way llvm.minnum does.
 	 */
 	template <bool maximum>
 	static BuiltinResult min_max (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,

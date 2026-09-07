@@ -230,7 +230,8 @@ TEST_F (SimdBodies, LoweringOffPutsTheAddOperatorBackUnderTheLimit)
 }
 
 // C# shifts a short as an int and casts back, so the count is masked to 31 and
-// not to 15. A shift by 17 then keeps sign bits an i16 shift would drop.
+// not to 15. A shift by 17 then collapses every lane to its sign, which an
+// i16 ashr masked to 15 would not do.
 TEST_F (SimdBodies, NarrowShiftRunsAtTheWidthTheIlShiftsAt)
 {
 	const Translation &shifted = translate ("Mono.Simd", narrow_shift);
@@ -273,8 +274,9 @@ TEST_F (SimdBodies, CompareAnswersAMaskInTheOperandsType)
 		<< compared.text ();
 }
 
-// Math.Min answers with its second argument for two zeros of opposite sign and
-// with its first for a NaN there, which llvm.minnum does not.
+// Math.Min answers with its second argument for two zeros of opposite sign.
+// It also propagates whichever argument is NaN, rather than suppressing it
+// the way llvm.minnum does.
 TEST_F (SimdBodies, FloatMinFollowsMathMinsNanRule)
 {
 	const Translation &smallest = translate ("Mono.Simd", float_min);
