@@ -23,10 +23,8 @@
 
 namespace mono {
 
-/**
- * The emitters the tables below point at. MethodLLVMEmitter befriends this
- * struct, so an emitter added here reaches that class's own emitters.
- */
+/// The emitters the tables below point at. MethodLLVMEmitter befriends this
+/// struct, so an emitter added here reaches that class's own emitters.
 struct BuiltinEmitters {
 	static BuiltinResult unsafe_mov (MethodLLVMEmitter &emitter,
 	                                 llvm::IRBuilder<> &builder, const BuiltinCall &call)
@@ -209,12 +207,10 @@ struct BuiltinEmitters {
 		                              call.constrained != nullptr && !call.box_receiver);
 	}
 
-	/**
-	 * ByReference<T> is a contract with the JIT, not code. Its IL bodies only
-	 * throw, and the JIT must substitute the real semantics itself. The struct
-	 * is one interior pointer. The constructor stores it, and the getter loads
-	 * it.
-	 */
+	/// ByReference<T> is a contract with the JIT, not code. Its IL bodies only
+	/// throw, and the JIT must substitute the real semantics itself. The
+	/// struct is one interior pointer. The constructor stores it, and the
+	/// getter loads it.
 	static BuiltinResult byreference (MethodLLVMEmitter &emitter,
 	                                  llvm::IRBuilder<> &builder, MonoMethod *method)
 	{
@@ -429,8 +425,8 @@ builtin_assemblies ()
 
 /// Whether any entry can name a method in image.
 ///
-/// Every call the translator writes asks this first, which is why corlib is a
-/// pointer compare.
+/// A call this registry might answer asks it first, before any name is
+/// compared, which is why corlib is a pointer compare.
 bool
 carries_builtins (MonoImage *image)
 {
