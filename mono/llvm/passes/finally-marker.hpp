@@ -20,10 +20,11 @@ namespace mono {
 /// Whether i is one of the front end's finally-body markers: an
 /// `llvm.experimental.stackmap` call whose id names a finally clause
 /// (method-to-llvm/exceptions.cpp, mono_lsda_format.hpp). When it is,
-/// *clause and *opening, if given, name which clause and which end.
+/// *clause, *opening and *owner, if given, name which clause, which end and
+/// which method the clause index indexes into.
 inline bool
 finally_body_marker (const llvm::Instruction &i, std::uint32_t *clause = nullptr,
-                     bool *opening = nullptr)
+                     bool *opening = nullptr, std::uint64_t *owner = nullptr)
 {
 	const auto *call = llvm::dyn_cast<llvm::IntrinsicInst> (&i);
 
@@ -45,6 +46,17 @@ finally_body_marker (const llvm::Instruction &i, std::uint32_t *clause = nullptr
 		is_opening = false;
 	else
 		return false;
+
+	if (owner != nullptr) {
+		const auto *who = call->arg_size () > 2
+			? llvm::dyn_cast<llvm::ConstantInt> (call->getArgOperand (2))
+			: nullptr;
+
+		if (who == nullptr)
+			return false;
+
+		*owner = who->getZExtValue ();
+	}
 
 	if (clause != nullptr)
 		*clause = static_cast<std::uint32_t> (value & MONO_LLVM_FINALLY_STACKMAP_ID_MASK);

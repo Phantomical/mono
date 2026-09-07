@@ -1084,6 +1084,12 @@ set(MONO_TESTS_TIER2_INLINE_CLAUSE_SRC
   tier2-inline-clause.cs
 )
 
+# Which method a folded finally's `.mono_guards` record belongs to, when
+# several folded bodies each carry a clause 0 and the root carries none.
+set(MONO_TESTS_TIER2_FINALLY_GUARD_OWNER_SRC
+  tier2-finally-guard-owner.cs
+)
+
 # Whether a candidate the cost model materializes is weighed on its own
 # record or the root's. Single arm: nothing turns this off.
 set(MONO_TESTS_TIER2_INLINE_PROFILE_CONTEXT_SRC

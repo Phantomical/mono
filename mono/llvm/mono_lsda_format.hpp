@@ -84,6 +84,19 @@ constexpr std::uint32_t MONO_LSDA_KIND_TIER_UNWIND = 0x10002;
  * a MachineBasicBlock still means "body". An instruction does survive, because
  * passes move and clone instructions rather than rewriting them.
  *
+ * Each marker's first live value is which method its clause index indexes into,
+ * as (uint64_t)(uintptr_t) of a MonoMethod*. passes/clause-marker.hpp decodes
+ * the same convention off a landing pad's type_info_N global. A fold puts a
+ * callee's markers in the root's frame, so the index alone names no clause. An
+ * opening marker's second live value is the guard byte.
+ *
+ * The owner rides on the marker rather than being read off its debug scope,
+ * because the optimizer does not preserve one. Two markers naming one clause
+ * index over one frame slot are identical machine instructions. BranchFolding
+ * merges them and hands the survivor DILocation::getMergedLocation () of the
+ * two, which names neither body. The operand also stops the two being
+ * identical, so nothing merges them now.
+ *
  * The front end plants the pair (method-to-llvm/exceptions.cpp), and
  * MonoFinallyRangePass (passes/finally-range.cpp) walks between them.
  */

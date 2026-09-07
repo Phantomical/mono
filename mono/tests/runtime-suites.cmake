@@ -936,6 +936,13 @@ mono_runtime_suite(runtime-tier2-inline-clause-off TESTS ${_tier2_inline_clause}
                    ENV "MONO_FOLD_CLAUSES=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-fold-clauses=0")
 
+# PromoteNow drives the compiles, so self-promotion is off, and the trivial
+# pre-pass is off so every clause in the root's body arrives through the cost
+# model's fold.
+_mono_exe_list(_tier2_finally_guard_owner ${MONO_TESTS_TIER2_FINALLY_GUARD_OWNER_SRC})
+mono_runtime_suite(runtime-tier2-finally-guard-owner TESTS ${_tier2_finally_guard_owner}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
+
 # Whether a candidate the cost model materializes is weighed on its own
 # tier-1 record or the root's. The suite drives both promotions itself, so
 # self-promotion is off, and the trivial pre-pass is off so the fold the

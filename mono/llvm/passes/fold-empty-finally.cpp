@@ -126,11 +126,12 @@ guarded_alloca (llvm::Instruction *begin)
 {
 	const auto *call = llvm::cast<llvm::CallBase> (begin);
 
-	// id, shadow bytes, then the guard - emit_finally_body_marker () (exceptions.cpp).
-	if (call->arg_size () <= 2)
+	// id, shadow bytes, owner, then the guard - emit_finally_body_marker ()
+	// (exceptions.cpp).
+	if (call->arg_size () <= 3)
 		return nullptr;
 
-	return llvm::dyn_cast<llvm::AllocaInst> (call->getArgOperand (2));
+	return llvm::dyn_cast<llvm::AllocaInst> (call->getArgOperand (3));
 }
 
 /// Whether guard's only uses besides begin are stores of the constant zero

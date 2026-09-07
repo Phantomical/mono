@@ -43,12 +43,17 @@ end_id (std::uint32_t clause)
 	return MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE | clause;
 }
 
-/// Plants a marker the way emit_finally_body_marker () does: an opening one
-/// names its clause's guard, a closing one names nothing.
+/// Stands in for the MonoMethod* a real marker names as its clause's owner.
+/// These tests never read it back, so the value itself carries nothing.
+constexpr std::uint64_t marker_owner = 0x4d4f4e4fu;
+
+/// Plants a marker the way emit_finally_body_marker () does: the owner first,
+/// then its clause's guard on an opening one and nothing on a closing one.
 CallInst *
 emit_marker (IRBuilder<> &b, std::uint64_t id, ArrayRef<Value *> vars = {})
 {
-	std::vector<Value *> args = { b.getInt64 (id), b.getInt32 (0) };
+	std::vector<Value *> args = { b.getInt64 (id), b.getInt32 (0),
+		                      b.getInt64 (marker_owner) };
 
 	args.insert (args.end (), vars.begin (), vars.end ());
 	return b.CreateIntrinsic (Intrinsic::experimental_stackmap, {}, args);

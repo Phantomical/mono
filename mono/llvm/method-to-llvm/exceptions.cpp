@@ -449,10 +449,11 @@ MethodLLVMEmitter::emit_finally_body_marker (MonoIrBuilder &builder, uint32_t cl
 	uint64_t id = (opening ? MONO_LLVM_FINALLY_STACKMAP_ID_BASE
 	                       : MONO_LLVM_FINALLY_END_STACKMAP_ID_BASE)
 	              | clause;
-	llvm::Value *guard = clause_state[clause].abort_guard;
+	llvm::Value *owner = builder.getInt64 ((uint64_t) (uintptr_t) method);
+	llvm::Value *live[] = { owner, clause_state[clause].abort_guard };
 
-	emit_stackmap_marker (builder, id, opening ? llvm::ArrayRef (guard)
-	                                            : llvm::ArrayRef<llvm::Value *> ());
+	emit_stackmap_marker (builder, id,
+	                      llvm::ArrayRef (live).take_front (opening ? 2 : 1));
 }
 
 /// Deliver an abort that arrived while the clause's handler was running, now that

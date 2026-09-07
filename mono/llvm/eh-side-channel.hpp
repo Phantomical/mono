@@ -99,8 +99,7 @@ struct MonoEHFinallyBody {
 	int clause_index = -1;
 	/// Same convention as MonoEHClause::owner above: 0 for this compile's own
 	/// method, otherwise a folded body's own MonoMethod*. finally-range.cpp
-	/// reads it off a finally marker's own DILocation scope, which a marker
-	/// never shares with the code around it.
+	/// reads it off the marker's own operands (mono_lsda_format.hpp).
 	std::uint64_t owner = 0;
 	/// Where the clause's thread-abort guard byte sits in the frame: the DWARF
 	/// number of the register it is addressed off, and a displacement from it.

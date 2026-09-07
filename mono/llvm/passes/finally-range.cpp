@@ -42,10 +42,11 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-/// Whether mi is one of our finally markers, and if so, the clause it names
-/// and whether it opens or closes the body.
+/// Whether mi is one of our finally markers, and if so which end of the body it
+/// is. *clause and *owner name the clause and the MonoMethod* that index indexes
+/// into. The caller is what turns that method into MonoEHFinallyBody::owner's 0.
 bool
-finally_marker (const MachineInstr &mi, int *clause, bool *is_start)
+finally_marker (const MachineInstr &mi, int *clause, uint64_t *owner, bool *is_start)
 {
 	if (mi.getOpcode () != TargetOpcode::STACKMAP)
 		return false;
@@ -59,32 +60,18 @@ finally_marker (const MachineInstr &mi, int *clause, bool *is_start)
 	else
 		return false;
 
+	// The operands run id, shadow bytes, then each live value in the order the
+	// front end passed it. A constant one becomes a ConstantOp tag and the value
+	// (Select_STACKMAP (), SelectionDAGISel.cpp), so the owner is operand 3. A
+	// marker missing its tag means our own emission or reader is wrong.
+	if (mi.getNumOperands () < 4 || !mi.getOperand (2).isImm ()
+	    || mi.getOperand (2).getImm () != StackMaps::ConstantOp
+	    || !mi.getOperand (3).isImm ())
+		report_fatal_error ("mono: a finally marker carries no owner - our own emission or reader is wrong");
+
+	*owner = (uint64_t) mi.getOperand (3).getImm ();
 	*clause = (int) (uint32_t) (id & MONO_LLVM_FINALLY_STACKMAP_ID_MASK);
 	return true;
-}
-
-/// Which method a marker's clause index indexes into: 0 for the method this
-/// compile is building, otherwise a folded body's own MonoMethod*, the same
-/// convention eh-gather.cpp's landing-pad owner uses. A marker never shares
-/// its DILocation with the code around it, unlike a landing pad's protected
-/// range, so this reads it straight off the marker instruction's own scope,
-/// through the same id map il_debug_subprogram_ids () hands out. A marker's
-/// location must always name a subprogram this compile registered, since
-/// materialize_trivial_callees () and the tier-2 inliner both translate
-/// through method_to_llvm (), which gives every function one. A marker that
-/// does not means our own emission or reader is wrong.
-uint64_t
-marker_owner (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self,
-             const MachineInstr &mi)
-{
-	const DILocation *loc = mi.getDebugLoc ().get ();
-	const DISubprogram *sp = loc ? loc->getScope ()->getSubprogram () : nullptr;
-	auto found = sp ? ids.find (sp) : ids.end ();
-
-	if (found == ids.end ())
-		report_fatal_error ("mono: a finally marker names no subprogram this compile registered - our own emission or reader is wrong");
-
-	return found->second == self ? 0 : found->second;
 }
 
 /// A clause index paired with the method it belongs to - two folded bodies
@@ -107,13 +94,15 @@ struct ClauseKey {
 std::pair<int, std::int64_t>
 marker_slot (const MachineInstr &mi, const TargetRegisterInfo *tri)
 {
-	// id, shadow bytes, then the live values.
-	if (mi.getNumOperands () < 5)
+	// id, shadow bytes and the owner's ConstantOp pair come first. The guard's
+	// frame index then becomes a DirectMemRefOp tag, a register and a
+	// displacement (emitPatchPoint (), TargetLoweringBase.cpp).
+	if (mi.getNumOperands () < 7)
 		return { -1, 0 };
 
-	const MachineOperand &kind = mi.getOperand (2);
-	const MachineOperand &base = mi.getOperand (3);
-	const MachineOperand &offset = mi.getOperand (4);
+	const MachineOperand &kind = mi.getOperand (4);
+	const MachineOperand &base = mi.getOperand (5);
+	const MachineOperand &offset = mi.getOperand (6);
 
 	if (!kind.isImm () || kind.getImm () != StackMaps::DirectMemRefOp)
 		return { -1, 0 };
@@ -155,32 +144,29 @@ close_range (MonoEHFinallyFunction &fn, MachineBasicBlock &mbb,
 	fn.bodies.push_back (body);
 }
 
-/// Whether a marker in mbb names key, and if so its own clause index and
-/// whether it opens or closes the body - key.owner already answers which
-/// method, so the caller need not resolve it again.
+/// Whether mi is a marker naming key, and if so which end of the body it is.
 bool
-finally_marker_for (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self,
-                    const MachineInstr &mi, ClauseKey key, bool *is_start)
+finally_marker_for (uint64_t self, const MachineInstr &mi, ClauseKey key, bool *is_start)
 {
 	int found;
+	uint64_t owner;
 
-	if (!finally_marker (mi, &found, is_start) || found != key.clause)
+	if (!finally_marker (mi, &found, &owner, is_start) || found != key.clause)
 		return false;
 
-	return marker_owner (ids, self, mi) == key.owner;
+	return (owner == self ? 0 : owner) == key.owner;
 }
 
 /// Whether mbb, entered inside key's body or not, leaves inside it.
 bool
-transfer (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self,
-         MachineBasicBlock &mbb, ClauseKey key, bool in)
+transfer (uint64_t self, MachineBasicBlock &mbb, ClauseKey key, bool in)
 {
 	bool state = in;
 
 	for (MachineInstr &mi : mbb) {
 		bool is_start;
 
-		if (!finally_marker_for (ids, self, mi, key, &is_start))
+		if (!finally_marker_for (self, mi, key, &is_start))
 			continue;
 		state = is_start;
 	}
@@ -226,8 +212,8 @@ starts_inside_body (const MachineBasicBlock &mbb,
 
 /// Fills in_body with whether each block starts inside key's handler body.
 void
-solve (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self, MachineFunction &mf,
-      ClauseKey key, DenseMap<const MachineBasicBlock *, bool> &in_body)
+solve (uint64_t self, MachineFunction &mf, ClauseKey key,
+      DenseMap<const MachineBasicBlock *, bool> &in_body)
 {
 	DenseMap<const MachineBasicBlock *, bool> known, out_body;
 	bool changed = true;
@@ -253,7 +239,7 @@ solve (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self, Machi
 				have = true;
 			}
 
-			bool out = transfer (ids, self, mbb, key, in);
+			bool out = transfer (self, mbb, key, in);
 
 			if (known[&mbb] != have || in_body[&mbb] != in || out_body[&mbb] != out) {
 				known[&mbb] = have;
@@ -268,8 +254,7 @@ solve (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self, Machi
 /// Brackets each maximal run of key's body instructions with a pair of
 /// labels, and records it.
 void
-record_ranges (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t self,
-              MachineFunction &mf, ClauseKey key,
+record_ranges (uint64_t self, MachineFunction &mf, ClauseKey key,
               const DenseMap<const MachineBasicBlock *, bool> &in_body,
               MonoEHFinallyFunction &fn, std::pair<int, std::int64_t> slot)
 {
@@ -286,7 +271,7 @@ record_ranges (const DenseMap<const DISubprogram *, uint64_t> &ids, uint64_t sel
 		for (MachineBasicBlock::iterator it = mbb.begin (), end = mbb.end (); it != end; ++it) {
 			bool is_start;
 
-			if (!finally_marker_for (ids, self, *it, key, &is_start))
+			if (!finally_marker_for (self, *it, key, &is_start))
 				continue;
 
 			if (is_start && !state) {
@@ -345,12 +330,13 @@ MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 	for (MachineBasicBlock &mbb : mf) {
 		for (MachineInstr &mi : mbb) {
 			int clause;
+			uint64_t owner;
 			bool is_start;
 
-			if (!finally_marker (mi, &clause, &is_start))
+			if (!finally_marker (mi, &clause, &owner, &is_start))
 				continue;
 
-			ClauseKey key { marker_owner (ids_, self, mi), clause };
+			ClauseKey key { owner == self ? 0 : owner, clause };
 
 			clauses.insert (key);
 			if (!is_start)
@@ -394,8 +380,8 @@ MonoFinallyRangePass::runOnMachineFunction (MachineFunction &mf)
 	for (ClauseKey key : clauses) {
 		DenseMap<const MachineBasicBlock *, bool> in_body;
 
-		solve (ids_, self, mf, key, in_body);
-		record_ranges (ids_, self, mf, key, in_body, fn, slots[key]);
+		solve (self, mf, key, in_body);
+		record_ranges (self, mf, key, in_body, fn, slots[key]);
 	}
 
 	sc_->finally_functions.push_back (std::move (fn));
