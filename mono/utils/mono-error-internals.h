@@ -322,6 +322,13 @@ mono_error_set_first_argument (MonoError *oerror, const char *first_argument);
 
 #include <windows.h>
 
+// clang declares __read/writefsdword and __read/writegsdword in <intrin.h>,
+// but does not implement __writegsdword as a builtin. It links a call to
+// that name instead of the instruction. mono_SetLastError falls back to the
+// real SetLastError there, in the #else below.
+#if !defined(__clang__)
+#include <intrin.h>
+
 // Single instruction inlinable form of GetLastError.
 //
 // Naming violation so can search disassembly for GetLastError.
@@ -365,6 +372,12 @@ mono_SetLastError (unsigned long err)
 #error Unreachable, see above.
 #endif
 }
+
+#else // clang, x86 or amd64: no __writegsdword builtin, see above
+
+#define mono_SetLastError SetLastError
+
+#endif // clang
 
 #else // arm, arm64, etc.
 
