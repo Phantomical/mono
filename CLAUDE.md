@@ -487,6 +487,17 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   At tier 2 the cost model folds the fallback body too, and the same two
   kernels show no measurable difference against `-mono-simd=0` — ratios of
   0.95 and 0.99.
+  What a row costs to *compile* is paid per call site rather than per method,
+  because the pre-pass materializes and folds one row body at each of them: a
+  program of 256 kernels written to be nothing but SIMD pays 24% more compile
+  CPU at tier 1, and with `-mono-inline-il-limit=0` on both arms — neither
+  folding anything — the two are indistinguishable, which is what says the
+  fold is the cost and not the row. At tier 2 that reverses to 0.65 and 0.72,
+  because reaching the same code from the fallback bodies means translating
+  them at O3. Neither shows on an ordinary program: the ~170
+  `managed-to-native` wrapper compiles every process here starts with are far
+  more than a kernel's own handful. `.claude/handoff/356/DONE.md` has the
+  sweeps.
 - `--llvm-opt=-mono-guard-arrays=<0|false|empty>` (`runtime/options.cpp`) — turn the
   array dispatch guard off, so a dispatch on an array receiver reads its callee out of
   the receiver's vtable whatever the IR says the slot is declared with. On by default,
