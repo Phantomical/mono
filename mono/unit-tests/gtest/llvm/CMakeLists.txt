@@ -24,7 +24,7 @@ set(MONO_LLVM_TEST_SOURCES
     gc-barrier-tests.cpp operand-class-tests.cpp dead-alloc-tests.cpp
     escape-tests.cpp promote-alloc-tests.cpp constant-values-tests.cpp
     one-file-vfs-tests.cpp hidden-return-tests.cpp inline-save-lmf-tests.cpp
-    fold-empty-finally-tests.cpp)
+    fold-empty-finally-tests.cpp simd-tests.cpp)
 
 if(MONO_CORPUS_ENABLED)
   # RELATIVE, because mono_corpus_il resolves its source against the current

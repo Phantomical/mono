@@ -18,6 +18,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/Support/Alignment.h>
 
+#include <iterator>
 #include <string_view>
 #include <vector>
 
@@ -239,22 +240,11 @@ struct BuiltinEmitters {
 
 namespace {
 
-/// The param_count of an entry that matches whatever arity the site has.
-constexpr int any_params = -1;
-
 /// What an entry's method does with a receiver.
 enum class Receiver {
 	any,
 	one,
 	none,
-};
-
-/// Where an entry's class comes from.
-struct ClassKey {
-	/// The assembly's name, or null for corlib.
-	const char *assembly;
-	const char *name_space;
-	const char *name;
 };
 
 /// One method the registry answers a call to.
@@ -276,15 +266,6 @@ struct BuiltinClass {
 	/// pointer compare. Null for a class matched by name.
 	MonoClass *const *known;
 	llvm::ArrayRef<BuiltinMethod> methods;
-};
-
-/// One method the backend writes the whole body of.
-struct BuiltinBody {
-	ClassKey klass;
-	/// Whether the method's own IL computes what this body computes. False
-	/// keeps the method out of every engine that runs the IL.
-	bool il_agrees;
-	BuiltinResult (*emit) (MethodLLVMEmitter &, llvm::IRBuilder<> &, MonoMethod *);
 };
 
 const BuiltinMethod array_methods[] = {
@@ -343,8 +324,11 @@ const BuiltinMethod debugger_methods[] = {
 	{ "Break", 0, Receiver::none, BuiltinEmitters::debugger_break },
 };
 
-const BuiltinBody body_table[] = {
-	{ { nullptr, "System", "ByReference`1" }, false, BuiltinEmitters::byreference },
+/// ByReference`1's row takes every member the class has. One with no lowering
+/// is refused rather than left to run IL that only throws.
+const BuiltinBody core_bodies[] = {
+	{ { nullptr, "System", "ByReference`1" }, {}, any_params, false, nullptr,
+	  BuiltinEmitters::byreference },
 };
 
 /// The entries System.Math and System.MathF share, one for each name
@@ -359,6 +343,20 @@ math_methods ()
 			made.push_back ({ name.name, name.param_count, Receiver::none,
 			                  BuiltinEmitters::math });
 
+		return made;
+	} ();
+
+	return entries;
+}
+
+const std::vector<BuiltinBody> &
+body_table ()
+{
+	static const std::vector<BuiltinBody> entries = [] {
+		std::vector<BuiltinBody> made (std::begin (core_bodies),
+		                               std::end (core_bodies));
+
+		made.insert (made.end (), simd_bodies ().begin (), simd_bodies ().end ());
 		return made;
 	} ();
 
@@ -413,7 +411,7 @@ builtin_assemblies ()
 		for (const BuiltinClass &entry : class_table ())
 			if (entry.klass.assembly != nullptr)
 				made.push_back (entry.klass.assembly);
-		for (const BuiltinBody &entry : body_table)
+		for (const BuiltinBody &entry : body_table ())
 			if (entry.klass.assembly != nullptr)
 				made.push_back (entry.klass.assembly);
 
@@ -485,15 +483,36 @@ methods_of (MonoClass *klass)
 	return {};
 }
 
+/// Whether entry is the row for method.
+bool
+names_body (const BuiltinBody &entry, MonoMethod *method)
+{
+	if (!names_class (entry.klass, method->klass))
+		return false;
+	if (!entry.name.empty () && entry.name != std::string_view (method->name))
+		return false;
+	if (entry.param_count == any_params)
+		return true;
+
+	// Asked last, because it parses the signature and the questions above it
+	// are string compares.
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+	return sig != nullptr && sig->param_count == entry.param_count;
+}
+
 const BuiltinBody *
 body_of (MonoMethod *method)
 {
 	if (!carries_builtins (m_class_get_image (method->klass)))
 		return nullptr;
 
-	for (const BuiltinBody &entry : body_table)
-		if (names_class (entry.klass, method->klass))
+	for (const BuiltinBody &entry : body_table ()) {
+		if (entry.enabled != nullptr && !entry.enabled ())
+			continue;
+		if (names_body (entry, method))
 			return &entry;
+	}
 
 	return nullptr;
 }

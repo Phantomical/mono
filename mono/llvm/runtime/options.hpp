@@ -126,6 +126,15 @@ bool fold_casts ();
 /// either way, so the two arms differ in one pass.
 bool fold_delegates ();
 
+/// Whether the backend writes a SIMD type's operations as vector IR instead of
+/// translating the managed body they are declared with.
+///
+/// A false value translates that body, which computes the same lanes and is the
+/// answer the lowering has to agree with. It does not reach the type
+/// representation. That placement is ABI, and a caller and a callee that
+/// disagreed about it would disagree about a register.
+bool simd_lowering ();
+
 /// Whether the array dispatch guard is on.
 ///
 /// A false value leaves every dispatch on an array receiver reading its callee

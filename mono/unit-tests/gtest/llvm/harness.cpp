@@ -126,6 +126,12 @@ load_image (const std::string &name)
 		return mono_get_corlib ();
 
 	std::string path = std::string (MONO_LLVM_TESTS_DIR) + "/" + name + ".dll";
+
+	// A class library other than mscorlib is named the same way, and it is
+	// built into the class directory rather than beside the fixtures.
+	if (!g_file_test (path.c_str (), G_FILE_TEST_EXISTS))
+		path = std::string (MONO_LLVM_TESTS_ASSEMBLIES) + "/" + name + ".dll";
+
 	MonoImageOpenStatus status = MONO_IMAGE_OK;
 	MonoAssemblyOpenRequest request;
 

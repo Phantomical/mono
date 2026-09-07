@@ -110,6 +110,11 @@ llvm::cl::opt<bool> FoldDelegatesOpt (
 	"mono-fold-delegates", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Fold a delegate Invoke whose target the translator can name"));
 
+llvm::cl::opt<bool> SimdLoweringOpt (
+	"mono-simd", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Write a SIMD type's operations as vector IR in place of its "
+	                "managed body"));
+
 llvm::cl::opt<bool> GuardArrayDispatchOpt (
 	"mono-guard-arrays", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Guard a dispatch on an array receiver with a vtable compare"));
@@ -399,6 +404,12 @@ bool
 fold_delegates ()
 {
 	return FoldDelegatesOpt;
+}
+
+bool
+simd_lowering ()
+{
+	return SimdLoweringOpt;
 }
 
 bool

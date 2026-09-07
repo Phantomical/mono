@@ -57,6 +57,36 @@ BuiltinResult emit_builtin_body (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &
 /// its own IL computes something else.
 bool builtin_body_replaces_il (MonoMethod *method);
 
+/// The param_count of an entry that matches whatever arity it is asked about.
+constexpr int any_params = -1;
+
+/// The name an entry's class is matched by.
+struct ClassKey {
+	/// The assembly's name, or null for corlib.
+	const char *assembly;
+	const char *name_space;
+	const char *name;
+};
+
+/// One method the backend writes the whole body of.
+struct BuiltinBody {
+	ClassKey klass;
+	/// The method's name, or empty to take every method the class declares.
+	std::string_view name;
+	/// The arity this row is written for, or any_params.
+	int param_count;
+	/// Whether the method's own IL computes what this body computes. False
+	/// keeps the method out of every engine that runs the IL.
+	bool il_agrees;
+	/// Whether this row answers at all, or null for one that always does.
+	/// Asked at each lookup, so it can read an --llvm-opt.
+	bool (*enabled) ();
+	BuiltinResult (*emit) (MethodLLVMEmitter &, llvm::IRBuilder<> &, MonoMethod *);
+};
+
+/// Returns the rows for the SIMD types' operations.
+llvm::ArrayRef<BuiltinBody> simd_bodies ();
+
 /// One System.Math or System.MathF method the backend answers itself.
 struct MathBuiltin {
 	std::string_view name;

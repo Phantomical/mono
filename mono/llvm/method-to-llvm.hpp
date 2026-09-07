@@ -311,6 +311,9 @@ private:
 	// The built-in registry's emitters (method-to-llvm/intrinsics.cpp), each of
 	// which calls one of the emitters below.
 	friend struct BuiltinEmitters;
+	// The SIMD bodies (method-to-llvm/simd.cpp), which write vector IR against
+	// this class's arguments rather than calling an emitter below.
+	friend struct SimdEmitters;
 
 	struct Entry {
 		llvm::Value *alloca;
