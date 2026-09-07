@@ -845,6 +845,22 @@ mono_runtime_suite(runtime-delegate-fold-off TESTS ${_delegate_fold}
                    ENV "MONO_FOLD_DELEGATES=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-fold-delegates=0")
 
+# Every SIMD operation is still ordinary managed IL, so the interpreter and
+# both compiled tiers agree by construction. The tier-1 and tier-2
+# thresholds are zero so the test's own PromoteNow calls decide which tier
+# ran, not a call count racing the compile queue.
+mono_runtime_suite(runtime-simd-semantics TESTS simd-semantics.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0")
+
+# The off arm exercises a lowering that does not exist yet: -mono-simd is not
+# a registered option, and an unrecognized --llvm-opt token stops the LLVM
+# backend from starting at all rather than being ignored. Uncomment once a
+# -mono-simd switch lands to select the pre-lowering managed bodies.
+#
+# mono_runtime_suite(runtime-simd-semantics-off TESTS simd-semantics.exe
+#                    ENV "MONO_SIMD=off"
+#                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-simd=0")
+
 # The guard a dispatch on an array receiver goes through. It is tier 2's, and
 # the default threshold is far past what this program runs, so the arm that
 # reaches it names one of its own. The off arm leaves every such site

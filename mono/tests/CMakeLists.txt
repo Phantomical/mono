@@ -382,6 +382,12 @@ endforeach()
 mono_test_assembly(override-copy-a.dll LIBRARY SOURCES override-copy.cs)
 mono_test_assembly(override-copy-b.dll LIBRARY SOURCES override-copy.cs)
 
+# Outside the generic loop above because that loop passes no REFS, and this
+# source needs Mono.Simd and System.Numerics.Vectors.
+mono_test_assembly(simd-semantics.exe SOURCES simd-semantics.cs
+                   REFS "${_class}/Mono.Simd.dll" "${_class}/System.Numerics.dll"
+                        "${_class}/System.Numerics.Vectors.dll")
+
 add_custom_target(runtime-corpora ALL DEPENDS ${_all_assemblies})
 add_dependencies(runtime-corpora mono-test-toolchain)
 
