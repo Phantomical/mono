@@ -133,9 +133,9 @@ TEST_F (SimdBodies, VectorMultiplyIsOneVectorFmul)
 		<< multiplied.text ();
 }
 
-// A row that took the scalar overload would still leave it on its managed body,
-// because the emitter declines non-vector operands. Only the row each overload
-// selects tells the two apart.
+// A row that took the scalar overload would still leave its managed body to
+// be translated, because the emitter declines non-vector operands. Only the
+// row each overload selects tells the two apart.
 TEST_F (SimdBodies, OnlyTheVectorOverloadSelectsTheRow)
 {
 	MonoMethod *vectors = find_method ("Mono.Simd", vector_multiply);

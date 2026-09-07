@@ -496,7 +496,7 @@ travels_as_a_vector (MonoType *t)
 	return klass != nullptr && m_class_is_simd_type (klass);
 }
 
-/// Whether sig's parameters are the ones params classifies.
+/// Whether sig's parameters match what params encodes.
 bool
 names_params (std::string_view params, MonoMethodSignature *sig)
 {
