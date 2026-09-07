@@ -354,4 +354,164 @@ build_eh_frame (const uint8_t *cfi, size_t cfi_size, size_t code_size,
 	                 image_size);
 }
 
+namespace {
+
+/// mono/mini/mini-unwind.h's own opcode, at DWARF's reserved lo_user and so
+/// missing from llvm::dwarf's own enumerators. A classic tier-0 epilog emits
+/// it in place of a real advance_loc, at whatever offset the epilog lands at
+/// in that method. That is what lets mono_cache_unwind_info () share one byte
+/// string across every method with the same epilog shape.
+constexpr uint8_t DW_CFA_mono_advance_loc = 0x1c;
+
+} // namespace
+
+bool
+decode_mono_unwind_ops (const uint8_t *ops, size_t size, size_t epilog_offset,
+                        std::vector<UnwindRecord> &out)
+{
+	const uint8_t *p = ops;
+	const uint8_t *end = ops + size;
+	uint32_t pos = 0;
+	bool ok = true;
+	std::vector<UnwindRecord> records;
+
+	auto uleb = [&] () -> uint64_t {
+		const char *error = nullptr;
+		uint64_t v = llvm::decodeULEB128AndInc (p, end, &error);
+
+		ok = ok && error == nullptr;
+		return v;
+	};
+	auto sleb = [&] () -> int64_t {
+		const char *error = nullptr;
+		int64_t v = llvm::decodeSLEB128AndInc (p, end, &error);
+
+		ok = ok && error == nullptr;
+		return v;
+	};
+	auto fixed = [&] (unsigned width) -> uint32_t {
+		uint32_t v = 0;
+
+		if ((size_t) (end - p) < width) {
+			ok = false;
+			return 0;
+		}
+		for (unsigned i = 0; i < width; ++i)
+			v |= (uint32_t) p[i] << (8 * i);
+		p += width;
+		return v;
+	};
+
+	while (ok && p < end) {
+		uint8_t byte = *p++;
+		uint8_t primary = byte & 0xc0;
+
+		if (primary == DW_CFA_advance_loc) {
+			pos += byte & 0x3f;
+			continue;
+		}
+
+		if (primary == DW_CFA_offset) {
+			int32_t reg = byte & 0x3f;
+			int64_t value = (int64_t) uleb () * arch::dwarf_data_alignment_factor;
+
+			if (ok)
+				records.push_back ({pos, MONO_UNWIND_OP_OFFSET, reg, value});
+			continue;
+		}
+
+		if (primary != 0) {
+			/* The packed restore form (0xc0 | reg): mono's own encoder never
+			 * emits it, and mono's own unwinder does not decode it either. */
+			ok = false;
+			break;
+		}
+
+		switch (byte) {
+		case DW_CFA_nop:
+			break;
+		case DW_CFA_advance_loc1:
+			pos += fixed (1);
+			break;
+		case DW_CFA_advance_loc2:
+			pos += fixed (2);
+			break;
+		case DW_CFA_advance_loc4:
+			pos += fixed (4);
+			break;
+		case DW_CFA_def_cfa: {
+			int32_t reg = (int32_t) uleb ();
+			int64_t value = (int64_t) uleb ();
+
+			if (ok)
+				records.push_back ({pos, MONO_UNWIND_OP_DEF_CFA, reg, value});
+			break;
+		}
+		case DW_CFA_def_cfa_offset: {
+			int64_t value = (int64_t) uleb ();
+
+			if (ok)
+				records.push_back ({pos, MONO_UNWIND_OP_DEF_CFA_OFFSET, 0, value});
+			break;
+		}
+		case DW_CFA_def_cfa_register: {
+			int32_t reg = (int32_t) uleb ();
+
+			if (ok)
+				records.push_back ({pos, MONO_UNWIND_OP_DEF_CFA_REGISTER, reg, 0});
+			break;
+		}
+		case DW_CFA_offset_extended: {
+			int32_t reg = (int32_t) uleb ();
+			int64_t value = (int64_t) uleb () * arch::dwarf_data_alignment_factor;
+
+			if (ok)
+				records.push_back ({pos, MONO_UNWIND_OP_OFFSET, reg, value});
+			break;
+		}
+		case DW_CFA_offset_extended_sf: {
+			int32_t reg = (int32_t) uleb ();
+			int64_t value = sleb () * arch::dwarf_data_alignment_factor;
+
+			if (ok)
+				records.push_back ({pos, MONO_UNWIND_OP_OFFSET, reg, value});
+			break;
+		}
+		case DW_CFA_same_value: {
+			int32_t reg = (int32_t) uleb ();
+
+			if (ok)
+				records.push_back ({pos, MONO_UNWIND_OP_SAME_VALUE, reg, 0});
+			break;
+		}
+		case DW_CFA_remember_state:
+			records.push_back ({pos, MONO_UNWIND_OP_REMEMBER_STATE, 0, 0});
+			break;
+		case DW_CFA_restore_state:
+			records.push_back ({pos, MONO_UNWIND_OP_RESTORE_STATE, 0, 0});
+			break;
+		case DW_CFA_mono_advance_loc:
+			/* Carries no rule of its own: mono's own unwinder
+			 * (mono_unwind_frame ()) reads this same target from its own
+			 * mark_locations argument instead, never from these bytes. */
+			if (epilog_offset == no_epilog_offset)
+				ok = false;
+			else
+				pos = (uint32_t) epilog_offset;
+			break;
+		default:
+			/* Everything mono's own unwinder (mono_unwind_frame ()) does not
+			 * decode either: DW_CFA_register, DW_CFA_undefined, the
+			 * expression/def_cfa_sf/val_offset family, DW_CFA_set_loc. */
+			ok = false;
+			break;
+		}
+	}
+
+	if (ok)
+		out.insert (out.end (), records.begin (), records.end ());
+
+	return ok;
+}
+
 } // namespace mono::perf

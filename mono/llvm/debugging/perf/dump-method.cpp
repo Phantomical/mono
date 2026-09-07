@@ -24,11 +24,20 @@ dump_method (MonoMethod *method, MonoJitInfo *jinfo)
 	const guint8 *cfi = mono_jinfo_get_unwind_info (jinfo, &cfi_size);
 	std::string display = method_display_name (method);
 	size_t size = jinfo->code_size;
+	size_t epilog_offset = jinfo->has_arch_eh_info
+	                                ? size - mono_jinfo_get_epilog_size (jinfo)
+	                                : no_epilog_offset;
+
+	std::vector<FrameFunction> described;
+	FrameFunction fn{0, size, {}};
+
+	if (decode_mono_unwind_ops (cfi, cfi_size, epilog_offset, fn.records))
+		described.push_back (std::move (fn));
 
 	/* The room is what mono_codegen () reserves past the body. */
 	publish (display.c_str (),
 	         {(const uint8_t *) jinfo->code_start, size, size + code_slack ()},
-	         cfi, cfi_size);
+	         std::move (described));
 }
 
 namespace {

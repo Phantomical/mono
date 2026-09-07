@@ -56,6 +56,24 @@ EhFrame build_eh_frame (std::vector<FrameFunction> functions, size_t image_size)
 EhFrame build_eh_frame (const uint8_t *cfi, size_t cfi_size, size_t code_size,
                         size_t image_size);
 
+/// No epilog offset to give decode_mono_unwind_ops () - it declines a method
+/// whose program turns out to need one.
+constexpr size_t no_epilog_offset = static_cast<size_t> (-1);
+
+/// Decodes a classic tier-0 method's own unwind-op encoding
+/// (mono/mini/unwind.c's mono_unwind_ops_encode ()) into the UnwindRecord shape
+/// build_eh_frame () already knows how to write as DWARF.
+///
+/// epilog_offset is mono_jinfo_get_epilog_size ()'s answer read back into a
+/// code offset, and it is where that encoding's own DW_CFA_mono_advance_loc
+/// opcode points.
+///
+/// Returns false, leaving out unchanged, for a rule this cannot decode. The
+/// method still has its own unwinder, so a partial description here is worse
+/// than none.
+bool decode_mono_unwind_ops (const uint8_t *ops, size_t size, size_t epilog_offset,
+                             std::vector<UnwindRecord> &out);
+
 } // namespace mono::perf
 
 #endif /* MONO_LLVM_DEBUGGING_PERF_EH_FRAME_HPP */
