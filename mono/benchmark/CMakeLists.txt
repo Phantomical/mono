@@ -16,6 +16,7 @@ endif()
 set(_src      "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_bin      "${CMAKE_CURRENT_BINARY_DIR}")
 set(_buildcls "${MONO_MCS_LIBDIR}/build")
+set(_class    "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
 set(_wrapper  "${MONO_RUNTIME_WRAPPER}")
 
 mono_tools_runtime(_host MONO_PATH "${_buildcls}" AOT_PATH "${_buildcls}")
@@ -60,6 +61,27 @@ foreach(_b IN LISTS _il_benchmarks)
   list(APPEND _benchmark_exes "${_bin}/${_b}.exe")
 endforeach()
 
+# Mono.Simd and System.Numerics.Vector4 aren't in the default reference set,
+# so these two compile outside the generic loop above.
+# mono/tests/CMakeLists.txt sets simd-semantics.exe apart from its own loop
+# the same way.
+add_custom_command(
+  OUTPUT "${_bin}/simd-matmul.exe"
+  COMMAND ${_csc} "-out:${_bin}/simd-matmul.exe" "${_src}/simd-matmul.cs"
+          "-r:${_class}/Mono.Simd.dll" -nowarn:0618
+  DEPENDS "${_src}/simd-matmul.cs" mcs
+  COMMENT "CSC simd-matmul.exe"
+  VERBATIM)
+add_custom_command(
+  OUTPUT "${_bin}/simd-nbody.exe"
+  COMMAND ${_csc} "-out:${_bin}/simd-nbody.exe" "${_src}/simd-nbody.cs"
+          "-r:${_class}/System.Numerics.dll"
+  DEPENDS "${_src}/simd-nbody.cs" mcs
+  COMMENT "CSC simd-nbody.exe"
+  VERBATIM)
+set(_simd_benchmarks simd-matmul simd-nbody)
+list(APPEND _benchmark_exes "${_bin}/simd-matmul.exe" "${_bin}/simd-nbody.exe")
+
 add_custom_target(benchmarks ALL DEPENDS ${_benchmark_exes})
 add_dependencies(benchmarks mono-${MONO_DEFAULT_GC_SUFFIX})
 
@@ -73,4 +95,18 @@ foreach(_b IN LISTS _cs_benchmarks _il_benchmarks)
     LABELS "benchmark;slow"
     TIMEOUT 600
     ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
+endforeach()
+
+# Both kernels promote out of tier 0 during the warmup phase. Pinning tier 2
+# off keeps the measured phase at tier 1, where the SIMD rows fold into their
+# caller (CLAUDE.md, -mono-simd). At tier 2, O3 recovers the same code from
+# the managed fallback body, so a regression in the rows would not show up
+# there.
+foreach(_b IN LISTS _simd_benchmarks)
+  add_test(NAME "benchmark-${_b}"
+           COMMAND "${_wrapper}" -O=all "${_bin}/${_b}.exe")
+  set_tests_properties("benchmark-${_b}" PROPERTIES
+    LABELS "benchmark;slow"
+    TIMEOUT 600
+    ENVIRONMENT "MONO_PATH=${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE};MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2=0")
 endforeach()
