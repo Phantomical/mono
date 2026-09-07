@@ -1405,8 +1405,9 @@ class SimdSemantics
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_Ne (int r) { return BoolBytes (EqSNV4A[r] != EqSNV4B[r]); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_MulScalarL (int r) { return Bytes (FA (r) * SNV4A[r]); }
 
-	// Add, Subtract, Multiply, Divide and Negate are rows of their own, not
-	// forwarders the operator rows already answer for.
+	// Add, Subtract, Multiply, Divide and Negate compile as methods of their
+	// own. Testing the matching operator does not already cover the forward
+	// each one makes to it.
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_NAdd (int r) { return Bytes (System.Numerics.Vector4.Add (SNV4A[r], SNV4B[r])); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_NSub (int r) { return Bytes (System.Numerics.Vector4.Subtract (SNV4A[r], SNV4B[r])); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_NMul (int r) { return Bytes (System.Numerics.Vector4.Multiply (SNV4A[r], SNV4B[r])); }
