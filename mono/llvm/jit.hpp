@@ -200,8 +200,8 @@ struct CompiledMethod {
 	std::vector<std::pair<const uint8_t *, size_t>> linker_stubs;
 
 	/// Every function and stub the object holds, ascending by address, shared
-	/// by the methods linked into it. A gap between two of these is padding,
-	/// which is what tells this method's own code from a batch neighbour's.
+	/// by the methods linked into it. The entry after a piece is what bounds
+	/// how far a dump record for that piece may reach.
 	///
 	/// Every method a compile publishes carries it. A record built by hand for
 	/// a body that shares another method's object does not.

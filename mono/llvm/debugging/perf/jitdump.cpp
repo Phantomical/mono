@@ -110,12 +110,9 @@ size_t
 code_slack ()
 {
 	/*
-	 * Room for the description of a whole object. A description is 96 bytes plus
-	 * 32 and its rules for each function, so what needs the most is a method with
-	 * many filter bodies. Over the mini corpora the largest is 192 bytes.
-	 *
-	 * There is no bound on how many functions an object can hold, so this is a
-	 * generous number rather than a proof.
+	 * Room for one function's description, which is 96 bytes plus 32 and the
+	 * function's rules. Nothing bounds how many rules a body's CFI program
+	 * holds, so this is a generous number rather than a proof.
 	 */
 	return enabled () ? 512 : 0;
 }

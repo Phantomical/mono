@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Assert the perf jit dump names every body of the fixture, under one name per
-method whichever engine emitted it, and gives each range of JIT'd code to
-exactly one record.
+"""Assert the perf jit dump names every body of the fixture, one record per
+function under one name per method whichever engine emitted it, and gives each
+range of JIT'd code to exactly one record.
 
 perf resolves a sample against the range of the record holding the address, and
 the error a wrong range makes is invisible from the report: the names are real
 methods and the totals are plausible.  A tier-1 promotion links up to a batch's
-worth of methods into one object, and the dump writer publishes that whole
-object as the runs its layout actually has - so a batch neighbour with nothing
-between it and the next is described by the same record, under one of the
-batch's names, rather than by a record of its own.
+worth of methods into one object, and the dump writer publishes each function of
+that object as a record of its own, so a sample in a batch neighbour prints
+under the neighbour's name and not under whichever member the object put first.
 
 The rule the ranges owe is a partition: the ranges do not overlap, and none of
 them sits inside another.  A record's code_size then covers only code this run's
 compile actually placed there, and no sample's name rests on the order two
-records were written in.
+records were written in.  The rule the records owe is one function each: a
+record describing two is naming one of them after the other.
 
 The rule the names owe is that a method has one.  A body the classic compiler
 emitted at tier 0 and the body the backend compiles for the same method print
@@ -23,16 +23,17 @@ twice - or listing its tier-0 half as a bare address.  The corpus runs three
 times to check that: once at the default tiers, once with promotion off, where
 every fixture body is a classic one, and once with tier 0 off, where every one
 is the backend's.  The two single-engine runs have to name the same set, and
-each classic body has to carry a frame description, or a stack walk stops at it.
+every fixture record in every run has to carry a frame description, or a stack
+walk stops at it: a backend body whose record has no room past it for one is
+published without it.
 
 What stands in for "the fixture's bodies reached tier 1" in the default run is
-the function count a record's own unwinding info carries (one FDE per function
-described), summed over the fixture records describing more than one: a
-classic body is one function under one record, so only a promoted batch
-describes several under one name.
+a fixture name published twice: once for the classic body and once for the
+backend's, at two addresses.
 """
 
 import argparse
+import collections
 import os
 import struct
 import subprocess
@@ -61,10 +62,10 @@ EH_FRAME_HDR_COUNT_OFFSET = 8
 FIXTURE_PREFIX = "Work`1<"
 WANT_BODIES = 64
 
-# How many of the fixture's own functions have to be described by batch records
-# in the default run before it says anything.  The batch size defaults to 32,
-# so this is one full batch.
-WANT_BATCHED = 32
+# How many of the fixture's bodies have to reach the backend in the default run
+# before it says anything.  The batch size defaults to 32, so this is one full
+# batch.
+WANT_PROMOTED = 32
 
 # Promotion off: every fixture body stays a classic tier-0 one.
 TIER0_ONLY = "--llvm-opt=-mono-tier1-threshold=0"
@@ -154,8 +155,14 @@ def partitioned(loaded):
     return issues
 
 
+def one_function_each(loaded):
+    """Return one message for each record describing more than one function."""
+    return [f"{name} at 0x{address:x} describes {functions} functions"
+            for address, _, name, functions in loaded if functions >= 2]
+
+
 def fixture_bodies(loaded):
-    """The (name, functions) of every record led by one of the fixture's bodies."""
+    """The (name, functions) of every record for one of the fixture's bodies."""
     return [(name, functions) for _, _, name, functions in loaded
             if name.startswith(FIXTURE_PREFIX)]
 
@@ -172,21 +179,24 @@ def main():
         "backend only": run(args.runtime, args.corpus, BACKEND_ONLY),
     }
 
-    batched = sum(functions for _, functions in fixture_bodies(runs["default"])
-                  if functions >= 2)
-    if batched < WANT_BATCHED:
-        die(f"only {batched} of the fixture's own functions sit in batch records",
-            f"The partition rule is about a compile batch, which is {WANT_BATCHED}",
-            "methods, so a run this small does not measure it.")
+    published = collections.Counter(name for name, _ in fixture_bodies(runs["default"]))
+    promoted = sum(1 for count in published.values() if count >= 2)
+    if promoted < WANT_PROMOTED:
+        die(f"only {promoted} of the fixture's bodies were published twice in the "
+            "default run",
+            f"A compile batch is {WANT_PROMOTED} methods, so a run that promotes",
+            "fewer does not reach the object the record-per-function rule is about.")
 
     issues = []
     for label, loaded in runs.items():
         issues += [f"{label}: {issue}" for issue in partitioned(loaded)]
+        issues += [f"{label}: {issue}" for issue in one_function_each(loaded)]
+        for name, functions in fixture_bodies(loaded):
+            if functions == 0:
+                issues.append(f"{label}: {name} carries no frame description")
 
-    tier0 = fixture_bodies(runs["tier 0 only"])
-    backend = fixture_bodies(runs["backend only"])
-    tier0_names = {name for name, _ in tier0}
-    backend_names = {name for name, _ in backend}
+    tier0_names = {name for name, _ in fixture_bodies(runs["tier 0 only"])}
+    backend_names = {name for name, _ in fixture_bodies(runs["backend only"])}
     if len(tier0_names) < WANT_BODIES:
         issues.append(f"tier 0 only: {len(tier0_names)} of the fixture's "
                       f"{WANT_BODIES} bodies are named")
@@ -197,15 +207,12 @@ def main():
         issues.append(f"{name} is named at tier 0 and not by the backend")
     for name in sorted(backend_names - tier0_names):
         issues.append(f"{name} is named by the backend and not at tier 0")
-    for name, functions in tier0:
-        if functions == 0:
-            issues.append(f"{name} at tier 0 carries no frame description")
 
     for issue in issues:
         print(f"  FAIL {issue}")
     print(f"{sum(len(loaded) for loaded in runs.values())} records over "
-          f"{len(runs)} runs, {batched} of the fixture's own functions in batch "
-          f"records, {len(tier0_names)} bodies named at tier 0 and "
+          f"{len(runs)} runs, {promoted} of the fixture's bodies published by "
+          f"both engines, {len(tier0_names)} bodies named at tier 0 and "
           f"{len(backend_names)} by the backend, {len(issues)} failed")
     return 1 if issues else 0
 

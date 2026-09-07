@@ -1320,13 +1320,6 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 	std::vector<TranslationTarget> targets;
 	std::vector<const TranslationTarget *> handles;
 	std::vector<MonoMethod *> methods;
-	/*
-	 * One sink for every member taken here, so the object they share reaches
-	 * the dump as the runs it actually has instead of one run per member.
-	 * dms is a batch of one outside a real tier-1 promotion, and a batch of
-	 * one through this sink is what dump_method () on its own already was.
-	 */
-	perf::BatchSink sink;
 
 	// The handles below point into this, so it must not move under them.
 	targets.reserve (taken.size ());
@@ -1401,7 +1394,7 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 		targets.push_back (TranslationTarget { domain.jit.get (), domain.domain,
 			                               member->publish_callee, member->note,
 			                               member->recover, pipeline,
-			                               member->profile, &sink });
+			                               member->profile });
 		methods.push_back (dm->method);
 		members.push_back (std::move (member));
 	}
@@ -1415,11 +1408,6 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 		return pipeline == JitTier::tier2 ? compile_tier2 (handles, methods)
 		                                  : compile_tier1 (handles, methods);
 	}();
-
-	// Every member that published took its pieces into sink rather than
-	// dumping itself; now that the batch is done compiling, publish them as
-	// the batch's own object.
-	sink.flush ();
 
 	// A compile has now run, so the tables LLVM builds inside one exist and the
 	// exit teardown can be ordered ahead of them.
