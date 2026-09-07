@@ -25,9 +25,10 @@ namespace mono {
  *
  * The constrained intrinsics carry no poison clause, and LLVM constant folds none of
  * them, so each one reaches the target's own conversion instruction. On amd64 that is
- * cvttsd2si, which returns the integer indefinite value. The interpreter's C cast
- * compiles to the same instruction, so the two engines agree with no range test in
- * front of either of them.
+ * cvttsd2si for a scalar and a packed conversion for a vector. Both answer an
+ * out-of-range operand with the integer indefinite value. The interpreter's C cast
+ * reaches the scalar one, so the two engines agree with no range test in front of
+ * either.
  *
  * fpexcept.ignore asks for the value and no more than the value. The strictfp attribute
  * is what a constrained intrinsic requires of the function that holds it.
