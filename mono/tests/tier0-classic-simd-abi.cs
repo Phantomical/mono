@@ -17,6 +17,11 @@ using Mono.Simd;
 // integers, which spends both files at once; and ten vector arguments, the last
 // two of which land on 16-byte stack slots.
 //
+// Vector<T> reaches that convention through the loader's simd_type mark, not
+// through the name list managed_simd_size () carries. Its cases: a vector of
+// int in and out, one of float, one past the eight floating-point parameter
+// registers, one behind a field beside an integer, and ten at once.
+//
 // Each shape has an A and a B copy, the same per-direction split
 // tier0-classic-vret-spill.cs uses.
 namespace Mono.Tiering {
@@ -32,6 +37,10 @@ public class Tier0ClassicSimdAbiTest
 {
 	const int tier0classic = 2;
 	const int tier1 = 3;
+	// Vector<T>'s Register union is 16 bytes, so an int or float vector holds
+	// four lanes. The wanted totals below are computed for that count, which is
+	// why Main () checks it.
+	const int laneCount = 4;
 
 	struct SimdAbiPair {
 		public Vector4 V;
@@ -69,6 +78,11 @@ public class Tier0ClassicSimdAbiTest
 		public long X;
 		public long Y;
 		public long Z;
+	}
+
+	struct SimdAbiVecPair {
+		public Vector<int> V;
+		public long Tag;
 	}
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
@@ -267,6 +281,88 @@ public class Tier0ClassicSimdAbiTest
 			+ WeighFloats (j) * 10;
 	}
 
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Vector<int> SimdAbiVecIntA (Vector<int> v)
+	{
+		return v + new Vector<int> (1);
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Vector<int> SimdAbiVecIntB (Vector<int> v)
+	{
+		return v + new Vector<int> (1);
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Vector<float> SimdAbiVecFloatA (Vector<float> v)
+	{
+		return v * new Vector<float> (2);
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Vector<float> SimdAbiVecFloatB (Vector<float> v)
+	{
+		return v * new Vector<float> (2);
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SimdAbiVecSpillA (float a, float b, float c, float d,
+	                             float e, float f, float g, float h, Vector<int> v)
+	{
+		return (int) (a * 1 + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h * 8)
+			+ WeighVecInt (v);
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SimdAbiVecSpillB (float a, float b, float c, float d,
+	                             float e, float f, float g, float h, Vector<int> v)
+	{
+		return (int) (a * 1 + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h * 8)
+			+ WeighVecInt (v);
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static SimdAbiVecPair SimdAbiVecPairA (SimdAbiVecPair p)
+	{
+		SimdAbiVecPair r;
+
+		r.V = p.V + new Vector<int> (1);
+		r.Tag = p.Tag * 3;
+		return r;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static SimdAbiVecPair SimdAbiVecPairB (SimdAbiVecPair p)
+	{
+		SimdAbiVecPair r;
+
+		r.V = p.V + new Vector<int> (1);
+		r.Tag = p.Tag * 3;
+		return r;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SimdAbiVecTenA (Vector<int> a, Vector<int> b, Vector<int> c, Vector<int> d,
+	                           Vector<int> e, Vector<int> f, Vector<int> g, Vector<int> h,
+	                           Vector<int> i, Vector<int> j)
+	{
+		return WeighVecInt (a) * 1 + WeighVecInt (b) * 2 + WeighVecInt (c) * 3
+			+ WeighVecInt (d) * 4 + WeighVecInt (e) * 5 + WeighVecInt (f) * 6
+			+ WeighVecInt (g) * 7 + WeighVecInt (h) * 8 + WeighVecInt (i) * 9
+			+ WeighVecInt (j) * 10;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SimdAbiVecTenB (Vector<int> a, Vector<int> b, Vector<int> c, Vector<int> d,
+	                           Vector<int> e, Vector<int> f, Vector<int> g, Vector<int> h,
+	                           Vector<int> i, Vector<int> j)
+	{
+		return WeighVecInt (a) * 1 + WeighVecInt (b) * 2 + WeighVecInt (c) * 3
+			+ WeighVecInt (d) * 4 + WeighVecInt (e) * 5 + WeighVecInt (f) * 6
+			+ WeighVecInt (g) * 7 + WeighVecInt (h) * 8 + WeighVecInt (i) * 9
+			+ WeighVecInt (j) * 10;
+	}
+
 	// Each component is weighed by its own position, so a value that arrived
 	// in the wrong register reads as a wrong number rather than as a wrong
 	// component.
@@ -280,6 +376,44 @@ public class Tier0ClassicSimdAbiTest
 	static int WeighUints (Vector4ui v)
 	{
 		return (int) (v.X * 1 + v.Y * 2 + v.Z * 3 + v.W * 4);
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int WeighVecInt (Vector<int> v)
+	{
+		int sum = 0;
+
+		for (int i = 0; i < laneCount; i++)
+			sum += v[i] * (i + 1);
+		return sum;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int WeighVecFloat (Vector<float> v)
+	{
+		float sum = 0;
+
+		for (int i = 0; i < laneCount; i++)
+			sum += v[i] * (i + 1);
+		return (int) sum;
+	}
+
+	static Vector<int> VecRamp (int k)
+	{
+		int[] lanes = new int[laneCount];
+
+		for (int i = 0; i < laneCount; i++)
+			lanes[i] = k + i;
+		return new Vector<int> (lanes);
+	}
+
+	static Vector<float> VecRampFloat (int k)
+	{
+		float[] lanes = new float[laneCount];
+
+		for (int i = 0; i < laneCount; i++)
+			lanes[i] = k + i;
+		return new Vector<float> (lanes);
 	}
 
 	static Vector4 Floats ()
@@ -376,6 +510,42 @@ public class Tier0ClassicSimdAbiTest
 			               Ramp (6), Ramp (7), Ramp (8), Ramp (9), Ramp (10));
 	}
 
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SimdAbiVecCallerA ()
+	{
+		SimdAbiVecPair p;
+
+		p.V = VecRamp (1);
+		p.Tag = 7;
+		p = SimdAbiVecPairA (p);
+
+		return WeighVecInt (SimdAbiVecIntA (VecRamp (1)))
+			+ WeighVecFloat (SimdAbiVecFloatA (VecRampFloat (1)))
+			+ SimdAbiVecSpillA (1, 2, 3, 4, 5, 6, 7, 8, VecRamp (1))
+			+ WeighVecInt (p.V) + (int) p.Tag
+			+ SimdAbiVecTenA (VecRamp (1), VecRamp (2), VecRamp (3), VecRamp (4),
+			                  VecRamp (5), VecRamp (6), VecRamp (7), VecRamp (8),
+			                  VecRamp (9), VecRamp (10));
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SimdAbiVecCallerB ()
+	{
+		SimdAbiVecPair p;
+
+		p.V = VecRamp (1);
+		p.Tag = 7;
+		p = SimdAbiVecPairB (p);
+
+		return WeighVecInt (SimdAbiVecIntB (VecRamp (1)))
+			+ WeighVecFloat (SimdAbiVecFloatB (VecRampFloat (1)))
+			+ SimdAbiVecSpillB (1, 2, 3, 4, 5, 6, 7, 8, VecRamp (1))
+			+ WeighVecInt (p.V) + (int) p.Tag
+			+ SimdAbiVecTenB (VecRamp (1), VecRamp (2), VecRamp (3), VecRamp (4),
+			                  VecRamp (5), VecRamp (6), VecRamp (7), VecRamp (8),
+			                  VecRamp (9), VecRamp (10));
+	}
+
 	static IntPtr Handle (string name)
 	{
 		MethodInfo method = typeof (Tier0ClassicSimdAbiTest).GetMethod (
@@ -419,11 +589,23 @@ public class Tier0ClassicSimdAbiTest
 		// 390 for the three vectors, 720 for the four, 1150 for the five, 62
 		// for the vector beside three integers and 4950 for the ten arguments.
 		const int wantWide = 7272;
+		// 40 for the incremented int vector, 60 for the doubled float one,
+		// 204 + 30 for the spilled call, 40 + 21 for the pair and 4950 for the
+		// ten arguments.
+		const int wantVec = 5345;
+
+		if (Vector<int>.Count != laneCount) {
+			Console.WriteLine ("FAIL: Vector<int> holds {0} lanes, want {1}",
+			                   Vector<int>.Count, laneCount);
+			return 1;
+		}
 
 		Check ("tier 0 both sides", SimdAbiCallerA (), want);
 		Check ("tier 0 both sides", SimdAbiCallerB (), want);
 		Check ("wide, tier 0 both sides", SimdAbiWideCallerA (), wantWide);
 		Check ("wide, tier 0 both sides", SimdAbiWideCallerB (), wantWide);
+		Check ("Vector<T>, tier 0 both sides", SimdAbiVecCallerA (), wantVec);
+		Check ("Vector<T>, tier 0 both sides", SimdAbiVecCallerB (), wantVec);
 
 		// CheckClassic only holds on the select-all suite arm
 		// (mono/tests/runtime-suites.cmake), where every method here compiles
@@ -441,6 +623,12 @@ public class Tier0ClassicSimdAbiTest
 			CheckClassic ("SimdAbiMixedA");
 			CheckClassic ("SimdAbiTenA");
 			CheckClassic ("SimdAbiWideCallerA");
+			CheckClassic ("SimdAbiVecIntA");
+			CheckClassic ("SimdAbiVecFloatA");
+			CheckClassic ("SimdAbiVecSpillA");
+			CheckClassic ("SimdAbiVecPairA");
+			CheckClassic ("SimdAbiVecTenA");
+			CheckClassic ("SimdAbiVecCallerA");
 		}
 
 		if (!Promote ("SimdAbiCallerA") || !Promote ("SimdAbiFloatsB")
@@ -448,7 +636,10 @@ public class Tier0ClassicSimdAbiTest
 		    || !Promote ("SimdAbiSpillB") || !Promote ("SimdAbiTwoB")
 		    || !Promote ("SimdAbiWideCallerA") || !Promote ("SimdAbiThreeB")
 		    || !Promote ("SimdAbiFourB") || !Promote ("SimdAbiFiveB")
-		    || !Promote ("SimdAbiMixedB") || !Promote ("SimdAbiTenB")) {
+		    || !Promote ("SimdAbiMixedB") || !Promote ("SimdAbiTenB")
+		    || !Promote ("SimdAbiVecCallerA") || !Promote ("SimdAbiVecIntB")
+		    || !Promote ("SimdAbiVecFloatB") || !Promote ("SimdAbiVecSpillB")
+		    || !Promote ("SimdAbiVecPairB") || !Promote ("SimdAbiVecTenB")) {
 			Console.WriteLine ("FAIL: a method would not compile at tier 1");
 			return 1;
 		}
@@ -457,13 +648,18 @@ public class Tier0ClassicSimdAbiTest
 		Check ("compiled callee", SimdAbiCallerB (), want);
 		Check ("wide, compiled caller", SimdAbiWideCallerA (), wantWide);
 		Check ("wide, compiled callee", SimdAbiWideCallerB (), wantWide);
+		Check ("Vector<T>, compiled caller", SimdAbiVecCallerA (), wantVec);
+		Check ("Vector<T>, compiled callee", SimdAbiVecCallerB (), wantVec);
 
 		if (!Promote ("SimdAbiFloatsA") || !Promote ("SimdAbiUintsA")
 		    || !Promote ("SimdAbiPairA") || !Promote ("SimdAbiSpillA")
 		    || !Promote ("SimdAbiTwoA") || !Promote ("SimdAbiCallerB")
 		    || !Promote ("SimdAbiThreeA") || !Promote ("SimdAbiFourA")
 		    || !Promote ("SimdAbiFiveA") || !Promote ("SimdAbiMixedA")
-		    || !Promote ("SimdAbiTenA") || !Promote ("SimdAbiWideCallerB")) {
+		    || !Promote ("SimdAbiTenA") || !Promote ("SimdAbiWideCallerB")
+		    || !Promote ("SimdAbiVecCallerB") || !Promote ("SimdAbiVecIntA")
+		    || !Promote ("SimdAbiVecFloatA") || !Promote ("SimdAbiVecSpillA")
+		    || !Promote ("SimdAbiVecPairA") || !Promote ("SimdAbiVecTenA")) {
 			Console.WriteLine ("FAIL: a method would not compile at tier 1");
 			return 1;
 		}
@@ -472,6 +668,8 @@ public class Tier0ClassicSimdAbiTest
 		Check ("tier 1 both sides", SimdAbiCallerB (), want);
 		Check ("wide, tier 1 both sides", SimdAbiWideCallerA (), wantWide);
 		Check ("wide, tier 1 both sides", SimdAbiWideCallerB (), wantWide);
+		Check ("Vector<T>, tier 1 both sides", SimdAbiVecCallerA (), wantVec);
+		Check ("Vector<T>, tier 1 both sides", SimdAbiVecCallerB (), wantVec);
 
 		if (bad != 0)
 			return 1;
