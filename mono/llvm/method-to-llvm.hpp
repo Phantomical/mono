@@ -308,6 +308,10 @@ struct BufferCopy {
 
 class MethodLLVMEmitter {
 private:
+	// The built-in registry's emitters (method-to-llvm/intrinsics.cpp), each of
+	// which calls one of the emitters below.
+	friend struct BuiltinEmitters;
+
 	struct Entry {
 		llvm::Value *alloca;
 		MonoType *type;
@@ -1337,12 +1341,6 @@ void carry_parameter_extensions (llvm::CallBase *call, MonoMethodSignature *sig,
 /// Anything walking IL needs this, and a second copy of the table disagrees
 /// with this one the first time an operand kind is added.
 std::optional<size_t> il_operand_size (MonoOpcodeEnum opcode);
-
-/// Whether this method is implemented entirely by the backend, with its
-/// actual IL ignored.
-///
-/// This is true only for System.ByReference`1.
-bool is_intrinsic (MonoMethod *method);
 
 /// The method a direct call to method enters, which for an internal call is
 /// the marshalling wrapper the runtime publishes in its place.

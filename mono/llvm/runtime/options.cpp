@@ -2,6 +2,7 @@
 
 #include "jit.hpp"
 #include "method-to-llvm.hpp"
+#include "method-to-llvm/intrinsics.hpp"
 #include "naming.hpp"
 
 #include <llvm/ADT/StringRef.h>
@@ -748,7 +749,7 @@ runs_at_tier0 (MonoMethod *method)
 	if (!setting.enabled || mono_ee_features.force_use_interpreter)
 		return false;
 
-	if (implemented_outside_il (method) || is_intrinsic (method))
+	if (implemented_outside_il (method) || builtin_body_replaces_il (method))
 		return false;
 
 	if (method->wrapper_type != MONO_WRAPPER_NONE && !wrapper_runs_at_tier0 (method))

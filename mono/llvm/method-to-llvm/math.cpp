@@ -4,10 +4,12 @@
  */
 
 #include "method-to-llvm.hpp"
+#include "intrinsics.hpp"
 
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
 
+#include <llvm/ADT/ArrayRef.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Intrinsics.h>
@@ -16,6 +18,7 @@
 
 #include <optional>
 #include <string_view>
+#include <vector>
 
 namespace mono {
 
@@ -196,6 +199,21 @@ matches_shape (const MathTableEntry &entry, MonoMethodSignature *sig)
 }
 
 } // namespace
+
+llvm::ArrayRef<MathBuiltin>
+math_builtins ()
+{
+	static const std::vector<MathBuiltin> names = [] {
+		std::vector<MathBuiltin> made;
+
+		for (const MathTableEntry &entry : math_table)
+			made.push_back ({ entry.name, (int) entry.arity });
+
+		return made;
+	} ();
+
+	return names;
+}
 
 std::optional<MathIntrinsic>
 math_intrinsic_for (MonoMethod *method, MonoMethodSignature *sig)

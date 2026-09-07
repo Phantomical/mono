@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "analysis/operand-class.hpp"
 #include "hidden-return.hpp"
+#include "intrinsics.hpp"
 #include "method-symbols.hpp"
 #include "mini-runtime.h"
 #include "passes/vtable-func.hpp"
@@ -31,18 +32,6 @@
 #include <string_view>
 
 namespace mono {
-
-static bool
-is_debugger_break (MonoMethod *target, MonoMethodSignature *sig)
-{
-	MonoClass *klass = target->klass;
-
-	return sig->param_count == 0 && !sig->hasthis
-	       && m_class_get_image (klass) == mono_defaults.corlib
-	       && std::string_view (target->name) == "Break"
-	       && std::string_view (m_class_get_name (klass)) == "Debugger"
-	       && std::string_view (m_class_get_name_space (klass)) == "System.Diagnostics";
-}
 
 /*
  * Array.Length, GetLength () and GetLowerBound () return an int32, and the
@@ -1443,84 +1432,6 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	    && (callee_method->iflags & METHOD_IMPL_ATTRIBUTE_NATIVE))
 		return emit_array_accessor_call (builder, callee_method, sig);
 
-	if (callee_method->klass == mono_defaults.array_class
-	    && std::string_view (callee_method->name) == "UnsafeMov")
-		return emit_unsafe_mov (builder, sig);
-
-	// The body corlib gives these two is a call to an icall that reads the
-	// element size off the array and moves that many bytes. The element type is
-	// known here, so the site becomes an address and one access.
-	if (std::optional<ArrayGenericAccess> access =
-		    array_generic_access_for (callee_method, sig))
-		return emit_array_generic_access (builder, sig, *access);
-
-	if (callee_method->klass == mono_defaults.string_class
-	    && std::string_view (callee_method->name) == "get_Length"
-	    && sig->hasthis && sig->param_count == 0)
-		return emit_string_length (builder);
-
-	if (callee_method->klass == mono_defaults.string_class
-	    && std::string_view (callee_method->name) == "FastAllocateString"
-	    && !sig->hasthis && sig->param_count == 1)
-		return emit_string_alloc_call (builder, sig);
-
-	if (answers_array_shape (callee_method, sig)) {
-		std::string_view what = callee_method->name;
-
-		if (what == "get_Rank" || what == "GetRank")
-			return emit_array_rank (builder);
-
-		if (what == "get_Length")
-			return emit_array_total_length (builder);
-
-		// Whatever dimension the site names. lower_array_shapes () leaves the
-		// ones it cannot read on the accessor, and it reads the dimension where an
-		// inliner has already folded a forwarded parameter into a constant.
-		if (what == "GetLength")
-			return emit_array_dimension (builder, callee_method, false);
-
-		if (what == "GetLowerBound")
-			return emit_array_dimension (builder, callee_method, true);
-	}
-
-	// Asked of the method the IL named, ahead of the wrapper swap below. That
-	// wrapper is the cost the arithmetic replaces.
-	if (std::optional<MathIntrinsic> math = math_intrinsic_for (callee_method, sig))
-		return emit_math_call (builder, *math, sig);
-
-	// Asked here for the same reason: the wrapper is what the intrinsic
-	// replaces, so the match has to see the icall the IL named.
-	if (std::optional<BufferCopy> copy = buffer_copy_for (callee_method, sig))
-		return emit_buffer_copy (builder, *copy, sig);
-
-	// Asked of the method the IL named for the same reason. Each reads what the
-	// icall reads, and Array.GetValue () asks both once for every element.
-	if (answers_cor_element_type (callee_method, sig))
-		return emit_cor_element_type (builder, sig);
-
-	if (answers_element_type (callee_method, sig))
-		return emit_element_type (builder, callee_method, sig);
-
-	// Asked here for the same reason, and the call each puts on the declined
-	// edge is the one the rest of this function would have emitted.
-	if (std::optional<MonoJitICallId> fast = monitor_enter_fast_icall (callee_method, sig))
-		return emit_monitor_fast_path (builder, callee_method, sig, *fast);
-
-	if (std::optional<MonoJitICallId> fast = monitor_exit_fast_icall (callee_method, sig))
-		return emit_monitor_fast_path (builder, callee_method, sig, *fast);
-
-	if (is_current_managed_thread_id (callee_method, sig))
-		return emit_current_managed_thread_id (builder, sig);
-
-	// Debugger.Break () has an empty body and a comment where the code goes: the
-	// JIT gives the call its meaning, and that meaning is the one the break
-	// instruction has. An embedder can say no through mono_set_break_policy.
-	if (is_debugger_break (callee_method, sig)) {
-		if (!mini_should_insert_breakpoint (method))
-			return llvm::Error::success ();
-		return emit_user_break (builder);
-	}
-
 	// The boxed receiver replaces the managed pointer in its stack slot, below
 	// the explicit arguments, before the arguments are collected.
 	if (box_receiver) {
@@ -1560,26 +1471,18 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	}
 
 	/*
-	 * object.GetType () is an internal call, so it is published as a
-	 * managed-to-native wrapper and reached through a remoting with-check
-	 * wrapper. The receiver's vtable carries the answer, so the site becomes
-	 * one load.
+	 * Asked of the method the IL named, ahead of the wrapper swap below: the
+	 * wrapper is what each lowering replaces, so the match has to see the icall
+	 * the IL named.
 	 *
-	 * Asked after the constrained. prefix settles the receiver, so the value
-	 * under it is an object whichever spelling the site used.
-	 *
-	 * Reflection on a proxy gives GetType () a meaning of its own, and the
-	 * runtime-invoke wrapper is how it gets there. The interpreter refuses the
-	 * same site (mono/interp/transform/intrinsics.cpp).
+	 * Asked after the box above, because Object:GetType () reads the boxed
+	 * receiver. It is the only entry a boxed receiver reaches: the prefix boxes
+	 * only for a method the value type leaves to a base class, and GetType ()
+	 * is the one such method the registry answers.
 	 */
-	if (callee_method->klass == mono_defaults.object_class
-	    && std::string_view (callee_method->name) == "GetType"
-	    && sig->hasthis && sig->param_count == 0
-#ifndef DISABLE_REMOTING
-	    && method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE
-#endif
-	)
-		return emit_get_type (builder, constrained != nullptr && !box_receiver);
+	if (BuiltinResult lowered = emit_builtin_call (
+		    *this, builder, { callee_method, sig, method, constrained, box_receiver }))
+		return std::move (*lowered);
 
 	// A receiver whose class the IL settles takes the implementation of that
 	// class, which puts the site in front of both inliners.

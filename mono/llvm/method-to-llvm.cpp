@@ -2,6 +2,7 @@
 #include "hidden-return.hpp"
 #include "domain-method.hpp"
 #include "analysis/operand-class.hpp"
+#include "method-to-llvm/intrinsics.hpp"
 #include "passes/inline-policy.hpp"
 #include "passes/tier-counter.hpp"
 #include "runtime/options.hpp"
@@ -924,27 +925,11 @@ MethodLLVMEmitter::emit ()
 	entry_block = llvm::BasicBlock::Create (context (), "entry", function);
 	builder.SetInsertPoint (entry_block);
 
-	// ByReference<T> is a contract with the JIT, not code. Its IL bodies only throw,
-	// and the JIT must substitute the real semantics itself. The struct is one
-	// interior pointer. The constructor stores it, and the getter loads it.
-	if (is_intrinsic (method)) {
-		llvm::Align align (TARGET_SIZEOF_VOID_P);
-		std::string_view name = method->name;
-		auto argument = [&] (unsigned i) {
-			return function->getArg (natural_parameter_index (i, function));
-		};
+	if (BuiltinResult written = emit_builtin_body (*this, builder, method)) {
+		if (llvm::Error error = std::move (*written))
+			return std::move (error);
 
-		if (name == ".ctor") {
-			builder.CreateAlignedStore (argument (1), argument (0), align);
-			builder.CreateRetVoid ();
-			return function;
-		}
-		if (name == "get_Value") {
-			builder.CreateRet (builder.CreateAlignedLoad (
-				llvm::PointerType::get (context (), 0), argument (0), align));
-			return function;
-		}
-		return unsupported_il ("an unrecognized ByReference member");
+		return function;
 	}
 
 	// This runs before anything that can call out. A stack walk entered below this

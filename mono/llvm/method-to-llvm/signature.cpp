@@ -372,14 +372,6 @@ carry_parameter_extensions (llvm::CallBase *call, MonoMethodSignature *sig, unsi
 }
 
 bool
-is_intrinsic (MonoMethod *method)
-{
-	return m_class_get_image (method->klass) == mono_get_corlib ()
-	       && std::string_view (m_class_get_name_space (method->klass)) == "System"
-	       && std::string_view (m_class_get_name (method->klass)) == "ByReference`1";
-}
-
-bool
 implemented_outside_il (MonoMethod *method)
 {
 	/*
