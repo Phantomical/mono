@@ -378,7 +378,11 @@ Handle macros/functions
 // yielding two unrelated non-void pointers is the type of the first, plus a warning.
 // This can be used to simulate gcc typeof extension.
 // Otherwise we are forced to evaluate twice, or use C++.
-#ifdef _MSC_VER
+//
+// clang-cl also defines _MSC_VER, but its ternary unifies mismatched pointers to void*
+// instead of picking the first, and the caller then fails to compile. It takes the
+// __typeof__ branch below instead.
+#if defined(_MSC_VER) && !defined(__clang__)
 typedef struct _MonoTypeofCastHelper *MonoTypeofCastHelper; // a pointer type unrelated to anything else
 #define MONO_TYPEOF_CAST(typeexpr, expr) __pragma(warning(suppress:4133))(0 ? (typeexpr) : (MonoTypeofCastHelper)(expr))
 #else
