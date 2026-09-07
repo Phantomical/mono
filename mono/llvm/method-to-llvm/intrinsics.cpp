@@ -357,6 +357,8 @@ body_table ()
 		                               std::end (core_bodies));
 
 		made.insert (made.end (), simd_bodies ().begin (), simd_bodies ().end ());
+		made.insert (made.end (), simd_numerics_bodies ().begin (),
+		             simd_numerics_bodies ().end ());
 		return made;
 	} ();
 

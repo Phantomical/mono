@@ -314,6 +314,8 @@ private:
 	// The SIMD bodies (method-to-llvm/simd.cpp), which write vector IR against
 	// this class's arguments rather than calling an emitter below.
 	friend struct SimdEmitters;
+	// The System.Numerics.Vector4 bodies (method-to-llvm/simd-numerics.cpp).
+	friend struct SimdNumericsEmitters;
 
 	struct Entry {
 		llvm::Value *alloca;
