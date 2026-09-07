@@ -458,10 +458,12 @@ g_asciiz_equal_caseinsensitive (const char *s1, const char *s2)
 #define g_strstrip(a) g_strchug (g_strchomp (a))
 #else
 #define g_strcasecmp strcasecmp
-#define g_ascii_strtoull strtoull
 #define g_strncasecmp strncasecmp
 #define g_strstrip(a) g_strchug (g_strchomp (a))
 #endif
+// strtoull is C99 and the UCRT has always had it, unlike strcasecmp and
+// its relatives above.
+#define g_ascii_strtoull strtoull
 #define g_ascii_strdup strdup
 
 /*
