@@ -118,14 +118,19 @@ add_custom_command(
 list(APPEND _all_assemblies "${_bin}/bug-81691.exe")
 list(APPEND MONO_TESTS_SPECIAL bug-81691.exe)
 
-# bug-17537 checks that a non-executable assembly still loads.
+# bug-17537 checks that a non-executable assembly still loads. Windows has no
+# executable bit to clear, so the test runs against a normally-loadable file
+# there instead.
 add_custom_command(
   OUTPUT "${_bin}/bug-17537-helper.exe"
   COMMAND ${_csc_unsafe} "-out:${_bin}/bug-17537-helper.exe" "${_src}/bug-17537-helper.cs"
-  COMMAND chmod -x "${_bin}/bug-17537-helper.exe"
   DEPENDS "${_src}/bug-17537-helper.cs" mono-test-toolchain
   COMMENT "CSC bug-17537-helper.exe"
   VERBATIM)
+if(NOT MONO_HOST_WINDOWS)
+  add_custom_command(OUTPUT "${_bin}/bug-17537-helper.exe" APPEND
+    COMMAND chmod -x "${_bin}/bug-17537-helper.exe")
+endif()
 _mono_special(bug-17537.exe SOURCES bug-17537.cs DEPENDS "${_bin}/bug-17537-helper.exe")
 
 # --- type-load and reflection suites ----------------------------------------
