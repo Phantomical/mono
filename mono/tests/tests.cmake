@@ -729,6 +729,7 @@ set(MONO_TESTS_IL_SRC
   calliTest.il
   calliGenericTest.il
   ckfiniteTest.il
+  ckfinite-edges.il
   interp-float-conv.il
   tier0-classic-fpconv.il
   fault-handler.il

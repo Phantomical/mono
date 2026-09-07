@@ -135,6 +135,7 @@ endfilter: src1:a len:9
 get_ex_obj: dest:a len:16
 
 ckfinite: dest:f src1:f len:32
+r4_ckfinite: dest:f src1:f len:32
 ceq: dest:c len:8
 cgt: dest:c len:8
 cgt_un: dest:c len:8

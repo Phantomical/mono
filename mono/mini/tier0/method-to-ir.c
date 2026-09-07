@@ -10592,6 +10592,17 @@ field_access_end:
 
 				iargs [0] = sp [0];
 				*sp++ = mono_emit_jit_icall (cfg, mono_ckfinite, iargs);
+			} else if (sp [0]->type == STACK_R4) {
+				/* A float32 carries every exponent bit ckfinite needs, so
+				 * testing it directly skips the round trip through double
+				 * that widening here would cost. */
+				MONO_INST_NEW (cfg, ins, OP_RCKFINITE);
+				ins->sreg1 = sp [0]->dreg;
+				ins->dreg = alloc_freg (cfg);
+				ins->type = STACK_R4;
+				MONO_ADD_INS (cfg->cbb, ins);
+
+				*sp++ = mono_decompose_opcode (cfg, ins);
 			} else  {
 				sp [0] = convert_value (cfg, m_class_get_byval_arg (mono_defaults.double_class), sp [0]);
 				MONO_INST_NEW (cfg, ins, OP_CKFINITE);

@@ -4694,16 +4694,26 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 			EMIT_COND_BRANCH (ins, X86_CC_GE, FALSE);
 			break;
 		case OP_CKFINITE:
-			/* The exponent reads all ones only for the two infinities and
-			 * every NaN, never for a finite double. Shifting the sign bit out
-			 * and the mantissa away leaves the exponent in the low bits. */
-			amd64_movd_reg_xreg_size (code, AMD64_R11, ins->sreg1, 8);
-			amd64_shift_reg_imm_size (code, X86_SHL, AMD64_R11, 1, 8);
-			amd64_shift_reg_imm_size (code, X86_SHR, AMD64_R11, 53, 8);
-			amd64_alu_reg_imm_size (code, X86_CMP, AMD64_R11, 0x7ff, 8);
-			EMIT_COND_SYSTEM_EXCEPTION (X86_CC_EQ, FALSE, "OverflowException");
+			/* x - x is NaN when x is +/-infinity or itself a NaN, and an
+			 * exact zero for every other value. Comparing the difference
+			 * with itself is therefore unordered for exactly what ckfinite
+			 * rejects. The subtraction raises invalid for +/-infinity and a
+			 * signalling NaN, the values that throw, and nothing for a
+			 * finite operand or a quiet NaN. */
+			amd64_sse_movsd_reg_reg (code, MONO_ARCH_FP_SCRATCH_REG, ins->sreg1);
+			amd64_sse_subsd_reg_reg (code, MONO_ARCH_FP_SCRATCH_REG, ins->sreg1);
+			amd64_sse_ucomisd_reg_reg (code, MONO_ARCH_FP_SCRATCH_REG, MONO_ARCH_FP_SCRATCH_REG);
+			EMIT_COND_SYSTEM_EXCEPTION (X86_CC_P, FALSE, "OverflowException");
 			if (ins->dreg != ins->sreg1)
 				amd64_sse_movsd_reg_reg (code, ins->dreg, ins->sreg1);
+			break;
+		case OP_RCKFINITE:
+			amd64_sse_movss_reg_reg (code, MONO_ARCH_FP_SCRATCH_REG, ins->sreg1);
+			amd64_sse_subss_reg_reg (code, MONO_ARCH_FP_SCRATCH_REG, ins->sreg1);
+			amd64_sse_ucomiss_reg_reg (code, MONO_ARCH_FP_SCRATCH_REG, MONO_ARCH_FP_SCRATCH_REG);
+			EMIT_COND_SYSTEM_EXCEPTION (X86_CC_P, FALSE, "OverflowException");
+			if (ins->dreg != ins->sreg1)
+				amd64_sse_movss_reg_reg (code, ins->dreg, ins->sreg1);
 			break;
 		case OP_TLS_GET: {
 			code = mono_amd64_emit_tls_get (code, ins->dreg, ins->inst_offset);

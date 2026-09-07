@@ -801,6 +801,8 @@ typedef union {
 #define amd64_sse_comisd_reg_membase(inst,dreg,basereg,disp) emit_sse_reg_membase ((inst), (dreg), (basereg), (disp), 0x66, 0x0f, 0x2f)
 
 #define amd64_sse_ucomisd_reg_reg(inst,dreg,reg) emit_sse_reg_reg ((inst),(dreg),(reg),0x66,0x0f,0x2e)
+/* Unlike UCOMISD, UCOMISS takes no mandatory prefix. */
+#define amd64_sse_ucomiss_reg_reg(inst,dreg,reg) emit_sse_reg_reg_op2 ((inst),(dreg),(reg),0x0f,0x2e)
 
 #define amd64_sse_cvtsd2si_reg_reg(inst,dreg,reg) emit_sse_reg_reg_size ((inst), (dreg), (reg), 0xf2, 0x0f, 0x2d, 8)
 #define amd64_sse_cvtss2si_reg_reg(inst,dreg,reg) emit_sse_reg_reg_size ((inst), (dreg), (reg), 0xf3, 0x0f, 0x2d, 8)
