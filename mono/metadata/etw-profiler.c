@@ -24,7 +24,9 @@
 
 #if defined (HOST_WIN32)
 #include <glib.h>
+#include <mono/metadata/assembly-internals.h>
 #include <mono/metadata/assembly.h>
+#include <mono/metadata/class-internals.h>
 #include <mono/metadata/debug-helpers.h>
 #include <mono/metadata/debug-internals.h>
 #include <mono/metadata/debug-mono-ppdb.h>
@@ -210,9 +212,9 @@ method_load (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo, gboolea
 	}
 
 	MonoClass *klass = mono_method_get_class (method);
-	char *signature = mono_signature_get_desc (mono_method_signature (method), TRUE);
-	char *full_class_name = g_strdup_printf ("%s.%s", mono_class_get_name (klass), mono_method_get_name (method));
-	const char *namespace = mono_class_get_namespace (klass);
+	char *signature = mono_signature_get_desc (mono_method_signature_internal (method), TRUE);
+	char *full_class_name = g_strdup_printf ("%s.%s", m_class_get_name (klass), mono_method_get_name (method));
+	const char *namespace = m_class_get_name_space (klass);
 	gpointer code_start = mono_jit_info_get_code_start (jinfo);
 	int code_size = mono_jit_info_get_code_size (jinfo);
 	MonoImage *image = mono_class_get_image (klass);
@@ -255,7 +257,7 @@ on_enumerate_assembly (MonoAssembly *assembly, void *user_data)
 	struct JITEnumerationData *enumerationData = (struct JITEnumerationData *)user_data;
 	enumerationData->mNumAssemblies++;
 
-	MonoImage *image = mono_assembly_get_image (assembly);
+	MonoImage *image = mono_assembly_get_image_internal (assembly);
 	image_event (image, TRUE, FALSE);
 }
 
