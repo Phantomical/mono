@@ -6673,3 +6673,27 @@ mono_arch_opcode_supported (int opcode)
 		return FALSE;
 	}
 }
+
+#if defined(TARGET_WIN32) && !defined(DISABLE_JIT)
+
+guint
+mono_arch_unwindinfo_init_method_unwind_info (gpointer cfg)
+{
+	MonoCompile *current_cfg = (MonoCompile *) cfg;
+	PUNWIND_INFO unwindinfo;
+
+	g_assert (current_cfg->arch.unwindinfo == NULL);
+
+	unwindinfo = mono_arch_unwindinfo_alloc_unwind_info (current_cfg->unwind_ops);
+	if (!unwindinfo) {
+		// A leaf with no pushes or stack allocation replays no ops, but the
+		// installer below still needs a valid, if empty, struct to publish.
+		unwindinfo = g_new0 (UNWIND_INFO, 1);
+		unwindinfo->Version = 1;
+	}
+
+	current_cfg->arch.unwindinfo = unwindinfo;
+	return mono_arch_unwindinfo_get_size (unwindinfo->CountOfCodes);
+}
+
+#endif /* defined(TARGET_WIN32) && !defined(DISABLE_JIT) */
