@@ -327,7 +327,7 @@ const BuiltinMethod debugger_methods[] = {
 /// ByReference`1's row takes every member the class has. One with no lowering
 /// is refused rather than left to run IL that only throws.
 const BuiltinBody core_bodies[] = {
-	{ { nullptr, "System", "ByReference`1" }, {}, any_params, false, nullptr,
+	{ { nullptr, "System", "ByReference`1" }, {}, any_signature, false, nullptr,
 	  BuiltinEmitters::byreference },
 };
 
@@ -483,6 +483,44 @@ methods_of (MonoClass *klass)
 	return {};
 }
 
+/// Whether t arrives as a vector, which is what convert_vtype () makes of a
+/// class the loader marked simd_type.
+bool
+travels_as_a_vector (MonoType *t)
+{
+	if (t->byref)
+		return false;
+
+	MonoClass *klass = mono_class_from_mono_type_internal (t);
+
+	return klass != nullptr && m_class_is_simd_type (klass);
+}
+
+/// Whether sig's parameters are the ones params classifies.
+bool
+names_params (std::string_view params, MonoMethodSignature *sig)
+{
+	if (params.size () != (size_t) sig->param_count)
+		return false;
+
+	for (size_t i = 0; i < params.size (); ++i) {
+		switch (params[i]) {
+		case 'V':
+			if (!travels_as_a_vector (sig->params[i]))
+				return false;
+			break;
+		case 'S':
+			if (travels_as_a_vector (sig->params[i]))
+				return false;
+			break;
+		default:
+			return false;
+		}
+	}
+
+	return true;
+}
+
 /// Whether entry is the row for method.
 bool
 names_body (const BuiltinBody &entry, MonoMethod *method)
@@ -491,18 +529,20 @@ names_body (const BuiltinBody &entry, MonoMethod *method)
 		return false;
 	if (!entry.name.empty () && entry.name != std::string_view (method->name))
 		return false;
-	if (entry.param_count == any_params)
+	if (entry.params == any_signature)
 		return true;
 
 	// Asked last, because it parses the signature and the questions above it
 	// are string compares.
 	MonoMethodSignature *sig = mono_method_signature_internal (method);
 
-	return sig != nullptr && sig->param_count == entry.param_count;
+	return sig != nullptr && names_params (entry.params, sig);
 }
 
+} // namespace
+
 const BuiltinBody *
-body_of (MonoMethod *method)
+builtin_body_for (MonoMethod *method)
 {
 	if (!carries_builtins (m_class_get_image (method->klass)))
 		return nullptr;
@@ -516,8 +556,6 @@ body_of (MonoMethod *method)
 
 	return nullptr;
 }
-
-} // namespace
 
 BuiltinResult
 emit_builtin_call (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
@@ -551,7 +589,7 @@ BuiltinResult
 emit_builtin_body (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
                    MonoMethod *method)
 {
-	const BuiltinBody *entry = body_of (method);
+	const BuiltinBody *entry = builtin_body_for (method);
 
 	if (entry == nullptr)
 		return std::nullopt;
@@ -562,7 +600,7 @@ emit_builtin_body (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 bool
 builtin_body_replaces_il (MonoMethod *method)
 {
-	const BuiltinBody *entry = body_of (method);
+	const BuiltinBody *entry = builtin_body_for (method);
 
 	return entry != nullptr && !entry->il_agrees;
 }

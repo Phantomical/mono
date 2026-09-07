@@ -41,8 +41,9 @@ struct SimdEmitters {
 	/// Answers nothing where the operands did not arrive as one vector type,
 	/// which leaves the managed body to be translated. Only a class the loader
 	/// marked simd_type converts to a vector.
+	template <BinaryOp op>
 	static BuiltinResult binary (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
-	                             BinaryOp op)
+	                             MonoMethod *)
 	{
 		llvm::Value *lhs = argument (emitter, 0);
 		llvm::Value *rhs = argument (emitter, 1);
@@ -62,10 +63,13 @@ struct SimdEmitters {
 		return MethodLLVMEmitter::relax_float (builder.CreateFAdd (lhs, rhs));
 	}
 
-	static BuiltinResult float_add (MethodLLVMEmitter &emitter,
-	                                llvm::IRBuilder<> &builder, MonoMethod *)
+	/// Writes a lane-wise float multiply. It carries relax_float ()'s flags
+	/// because the managed body multiplies each lane, which is a multiply the
+	/// IL asked for.
+	static llvm::Value *fmul (llvm::IRBuilder<> &builder, llvm::Value *lhs,
+	                          llvm::Value *rhs)
 	{
-		return binary (emitter, builder, fadd);
+		return MethodLLVMEmitter::relax_float (builder.CreateFMul (lhs, rhs));
 	}
 };
 
@@ -74,8 +78,13 @@ namespace {
 const BuiltinBody simd_table[] = {
 	// il_agrees, because the managed body is `new Vector4f (v1.x + v2.x, ...)`
 	// and that is this add in each lane.
-	{ { "Mono.Simd", "Mono.Simd", "Vector4f" }, "op_Addition", 2, true, simd_lowering,
-	  SimdEmitters::float_add },
+	{ { "Mono.Simd", "Mono.Simd", "Vector4f" }, "op_Addition", "VV", true, simd_lowering,
+	  SimdEmitters::binary<SimdEmitters::fadd> },
+
+	// il_agrees, because the managed body is `new Vector4f (v1.x * v2.x, ...)`
+	// and that is this multiply in each lane.
+	{ { "Mono.Simd", "Mono.Simd", "Vector4f" }, "op_Multiply", "VV", true, simd_lowering,
+	  SimdEmitters::binary<SimdEmitters::fmul> },
 };
 
 } // namespace

@@ -60,6 +60,10 @@ bool builtin_body_replaces_il (MonoMethod *method);
 /// The param_count of an entry that matches whatever arity it is asked about.
 constexpr int any_params = -1;
 
+/// The params of a body entry that matches whatever signature it is asked
+/// about.
+constexpr std::string_view any_signature = "*";
+
 /// The name an entry's class is matched by.
 struct ClassKey {
 	/// The assembly's name, or null for corlib.
@@ -73,8 +77,10 @@ struct BuiltinBody {
 	ClassKey klass;
 	/// The method's name, or empty to take every method the class declares.
 	std::string_view name;
-	/// The arity this row is written for, or any_params.
-	int param_count;
+	/// One character for each parameter: `V` for one that arrives as a
+	/// vector, `S` for any other. The row's arity is this string's length,
+	/// and any_signature takes every signature.
+	std::string_view params;
 	/// Whether the method's own IL computes what this body computes. False
 	/// keeps the method out of every engine that runs the IL.
 	bool il_agrees;
@@ -83,6 +89,9 @@ struct BuiltinBody {
 	bool (*enabled) ();
 	BuiltinResult (*emit) (MethodLLVMEmitter &, llvm::IRBuilder<> &, MonoMethod *);
 };
+
+/// The row that writes method's body, or null where the backend writes none.
+const BuiltinBody *builtin_body_for (MonoMethod *method);
 
 /// The SIMD types' rows, kept in method-to-llvm/simd.cpp so a family of rows
 /// can live in a file of its own.
