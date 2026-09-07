@@ -10,8 +10,8 @@
 #include "intrinsics.hpp"
 
 #include "../runtime/options.hpp"
-#include "hidden-return.hpp"
 #include "method-to-llvm.hpp"
+#include "simd-emit.hpp"
 
 #include "mono/metadata/class-internals.h"
 
@@ -136,25 +136,10 @@ integer_lanes (llvm::FixedVectorType *type, unsigned width)
 
 } // namespace
 
-/// The emitters the table below points at. MethodLLVMEmitter befriends this
-/// struct, so an emitter has to be a member of it to reach the arguments and
-/// the float rules.
-struct SimdEmitters {
-	/// The two operands of a binary operator, combined into its answer.
-	using BinaryOp = llvm::Value *(*) (llvm::IRBuilder<> &, llvm::Value *, llvm::Value *);
-
+/// The emitters the table below points at, written against SimdEmit.
+struct SimdEmitters : SimdEmit {
 	/// Which way a shift moves its lanes.
 	enum class Direction { left, right };
-
-	/// Returns the value of parameter i.
-	///
-	/// A SIMD class converts to a vector rather than a struct, so
-	/// held_in_memory () leaves it in a register and there is nothing to load.
-	static llvm::Value *argument (MethodLLVMEmitter &emitter, unsigned i)
-	{
-		return emitter.function->getArg (
-			natural_parameter_index (i, emitter.function));
-	}
 
 	/// The first two arguments where both arrived as one vector type, and
 	/// nothing otherwise, which leaves the managed body to be translated.
@@ -191,34 +176,6 @@ struct SimdEmitters {
 
 		builder.CreateRet (op (builder, args->first, args->second));
 		return llvm::Error::success ();
-	}
-
-	/// Writes a lane-wise float add. It carries relax_float ()'s flags because
-	/// the managed body adds each lane, which is an addition the IL asked for.
-	/// Every float operation the IL asked for below carries them for the same
-	/// reason.
-	static llvm::Value *fadd (llvm::IRBuilder<> &builder, llvm::Value *lhs,
-	                          llvm::Value *rhs)
-	{
-		return MethodLLVMEmitter::relax_float (builder.CreateFAdd (lhs, rhs));
-	}
-
-	static llvm::Value *fsub (llvm::IRBuilder<> &builder, llvm::Value *lhs,
-	                          llvm::Value *rhs)
-	{
-		return MethodLLVMEmitter::relax_float (builder.CreateFSub (lhs, rhs));
-	}
-
-	static llvm::Value *fmul (llvm::IRBuilder<> &builder, llvm::Value *lhs,
-	                          llvm::Value *rhs)
-	{
-		return MethodLLVMEmitter::relax_float (builder.CreateFMul (lhs, rhs));
-	}
-
-	static llvm::Value *fdiv (llvm::IRBuilder<> &builder, llvm::Value *lhs,
-	                          llvm::Value *rhs)
-	{
-		return MethodLLVMEmitter::relax_float (builder.CreateFDiv (lhs, rhs));
 	}
 
 	/// Writes a lane-wise integer add. It wraps, because the managed body
@@ -303,8 +260,7 @@ struct SimdEmitters {
 		llvm::Value *splat =
 			builder.CreateVectorSplat (type->getNumElements (), scalar);
 
-		builder.CreateRet (
-			MethodLLVMEmitter::relax_float (builder.CreateFMul (splat, vector)));
+		builder.CreateRet (fmul (builder, splat, vector));
 		return llvm::Error::success ();
 	}
 
@@ -358,7 +314,7 @@ struct SimdEmitters {
 		llvm::Value *value = argument (emitter, 0);
 		auto *from = llvm::dyn_cast<llvm::FixedVectorType> (value->getType ());
 		auto *to = llvm::dyn_cast<llvm::FixedVectorType> (
-			emitter.function->getReturnType ());
+			return_type (emitter));
 
 		if (from == nullptr || to == nullptr)
 			return std::nullopt;
@@ -377,7 +333,7 @@ struct SimdEmitters {
 	{
 		std::optional<std::pair<llvm::Value *, llvm::Value *>> args =
 			operands (emitter);
-		llvm::Type *answer = emitter.function->getReturnType ();
+		llvm::Type *answer = return_type (emitter);
 
 		if (!args || !answer->isIntegerTy ())
 			return std::nullopt;
@@ -571,7 +527,7 @@ struct SimdEmitters {
 	{
 		llvm::Value *value = argument (emitter, 0);
 		auto *type = llvm::dyn_cast<llvm::FixedVectorType> (value->getType ());
-		llvm::Type *answer = emitter.function->getReturnType ();
+		llvm::Type *answer = return_type (emitter);
 
 		if (type == nullptr || !type->getElementType ()->isIntegerTy (8))
 			return std::nullopt;
@@ -581,7 +537,7 @@ struct SimdEmitters {
 		llvm::Value *signs = builder.CreateICmpSLT (
 			value, llvm::Constant::getNullValue (type));
 		llvm::Value *bits = builder.CreateBitCast (
-			signs, llvm::Type::getIntNTy (emitter.context (),
+			signs, llvm::Type::getIntNTy (context (emitter),
 		                                      type->getNumElements ()));
 
 		builder.CreateRet (builder.CreateZExt (bits, answer));
@@ -602,7 +558,7 @@ struct SimdEmitters {
 		if (type == nullptr || !type->getElementType ()->isFloatingPointTy ())
 			return std::nullopt;
 
-		builder.CreateRet (MethodLLVMEmitter::relax_float (
+		builder.CreateRet (relax (
 			builder.CreateIntrinsic (llvm::Intrinsic::sqrt, { type }, { value })));
 		return llvm::Error::success ();
 	}
@@ -623,13 +579,13 @@ struct SimdEmitters {
 			return std::nullopt;
 
 		llvm::FixedVectorType *wide = llvm::FixedVectorType::get (
-			llvm::Type::getDoubleTy (emitter.context ()),
+			llvm::Type::getDoubleTy (context (emitter)),
 			type->getNumElements ());
-		llvm::Value *root = MethodLLVMEmitter::relax_float (builder.CreateIntrinsic (
+		llvm::Value *root = relax (builder.CreateIntrinsic (
 			llvm::Intrinsic::sqrt, { wide },
 			{ builder.CreateFPExt (value, wide) }));
-		llvm::Value *quotient = MethodLLVMEmitter::relax_float (
-			builder.CreateFDiv (llvm::ConstantFP::get (wide, 1.0), root));
+		llvm::Value *quotient =
+			fdiv (builder, llvm::ConstantFP::get (wide, 1.0), root);
 
 		builder.CreateRet (builder.CreateFPTrunc (quotient, type));
 		return llvm::Error::success ();
@@ -645,8 +601,8 @@ struct SimdEmitters {
 		if (type == nullptr || !type->getElementType ()->isFloatTy ())
 			return std::nullopt;
 
-		builder.CreateRet (MethodLLVMEmitter::relax_float (builder.CreateFDiv (
-			llvm::ConstantFP::get (type, 1.0), value)));
+		builder.CreateRet (
+			fdiv (builder, llvm::ConstantFP::get (type, 1.0), value));
 		return llvm::Error::success ();
 	}
 
@@ -773,7 +729,7 @@ struct SimdEmitters {
 		std::optional<std::pair<llvm::Value *, llvm::Value *>> args =
 			operands (emitter);
 		auto *narrow = llvm::dyn_cast<llvm::FixedVectorType> (
-			emitter.function->getReturnType ());
+			return_type (emitter));
 
 		if (!args || narrow == nullptr)
 			return std::nullopt;

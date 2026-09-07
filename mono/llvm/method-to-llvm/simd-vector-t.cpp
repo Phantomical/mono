@@ -13,8 +13,8 @@
 #include "intrinsics.hpp"
 
 #include "../runtime/options.hpp"
-#include "hidden-return.hpp"
 #include "method-to-llvm.hpp"
+#include "simd-emit.hpp"
 
 #include "mono/metadata/class-internals.h"
 
@@ -89,23 +89,8 @@ enum class Comparison {
 
 } // namespace
 
-/// The emitters the table below points at. MethodLLVMEmitter befriends this
-/// struct, so an emitter has to be a member of it to reach the arguments and
-/// the float rules.
-struct SimdVectorTEmitters {
-	/// Returns the value of parameter i. A SIMD class arrives in a register,
-	/// so there is nothing to load.
-	static llvm::Value *argument (MethodLLVMEmitter &emitter, unsigned i)
-	{
-		return emitter.function->getArg (
-			natural_parameter_index (i, emitter.function));
-	}
-
-	static llvm::Value *relax (llvm::Value *value)
-	{
-		return MethodLLVMEmitter::relax_float (value);
-	}
-
+/// The emitters the table below points at, written against SimdEmit.
+struct SimdVectorTEmitters : SimdEmit {
 	/// The vector type parameter i arrived as, or null where it arrived as
 	/// something else.
 	static llvm::FixedVectorType *vector_argument (MethodLLVMEmitter &emitter, unsigned i)
@@ -244,8 +229,8 @@ struct SimdVectorTEmitters {
 		    || lane_of (method) != Lane::floating)
 			return std::nullopt;
 
-		builder.CreateRet (relax (builder.CreateFDiv (argument (emitter, 0),
-		                                              argument (emitter, 1))));
+		builder.CreateRet (fdiv (builder, argument (emitter, 0),
+		                         argument (emitter, 1)));
 		return llvm::Error::success ();
 	}
 
@@ -331,7 +316,7 @@ struct SimdVectorTEmitters {
 	{
 		llvm::FixedVectorType *type = vector_arguments (emitter, 2);
 		Lane lane = lane_of (method);
-		llvm::Type *answer = emitter.function->getReturnType ();
+		llvm::Type *answer = return_type (emitter);
 
 		if (type == nullptr || lane == Lane::other || !answer->isIntegerTy ())
 			return std::nullopt;
@@ -358,7 +343,7 @@ struct SimdVectorTEmitters {
 	{
 		llvm::FixedVectorType *from = vector_argument (emitter, 0);
 		auto *to = llvm::dyn_cast<llvm::FixedVectorType> (
-			emitter.function->getReturnType ());
+			return_type (emitter));
 
 		if (from == nullptr || to == nullptr || bit_width (from) != bit_width (to))
 			return std::nullopt;
@@ -474,7 +459,7 @@ struct SimdVectorTEmitters {
 		Lane lane = lane_of (method);
 
 		if (type == nullptr || lane == Lane::other
-		    || emitter.function->getReturnType () != type->getElementType ())
+		    || return_type (emitter) != type->getElementType ())
 			return std::nullopt;
 
 		llvm::Value *lhs = argument (emitter, 0);
@@ -494,9 +479,7 @@ struct SimdVectorTEmitters {
 	}
 
 private:
-	/// op applied to lhs and rhs in lane's own arithmetic. A float carries
-	/// relax_float ()'s flags because the managed body computes each lane with
-	/// an operation the IL asked for.
+	/// op applied to lhs and rhs in lane's own arithmetic.
 	template <Arithmetic op>
 	static llvm::Value *apply (llvm::IRBuilder<> &builder, Lane lane, llvm::Value *lhs,
 	                           llvm::Value *rhs)
@@ -505,13 +488,13 @@ private:
 
 		switch (op) {
 		case Arithmetic::add:
-			return floating ? relax (builder.CreateFAdd (lhs, rhs))
+			return floating ? fadd (builder, lhs, rhs)
 			                : builder.CreateAdd (lhs, rhs);
 		case Arithmetic::subtract:
-			return floating ? relax (builder.CreateFSub (lhs, rhs))
+			return floating ? fsub (builder, lhs, rhs)
 			                : builder.CreateSub (lhs, rhs);
 		case Arithmetic::multiply:
-			return floating ? relax (builder.CreateFMul (lhs, rhs))
+			return floating ? fmul (builder, lhs, rhs)
 			                : builder.CreateMul (lhs, rhs);
 		}
 

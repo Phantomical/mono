@@ -9,8 +9,8 @@
 #include "intrinsics.hpp"
 
 #include "../runtime/options.hpp"
-#include "hidden-return.hpp"
 #include "method-to-llvm.hpp"
+#include "simd-emit.hpp"
 
 #include <llvm/IR/Constant.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -22,19 +22,8 @@
 
 namespace mono {
 
-/// The emitters the table below points at. MethodLLVMEmitter befriends this
-/// struct, so an emitter has to be a member of it to reach the arguments and
-/// the float rules.
-struct SimdNumericsEmitters {
-	/// The two operands of a binary operator, combined into its answer.
-	using BinaryOp = llvm::Value *(*) (llvm::IRBuilder<> &, llvm::Value *, llvm::Value *);
-
-	static llvm::Value *argument (MethodLLVMEmitter &emitter, unsigned i)
-	{
-		return emitter.function->getArg (
-			natural_parameter_index (i, emitter.function));
-	}
-
+/// The emitters the table below points at, written against SimdEmit.
+struct SimdNumericsEmitters : SimdEmit {
 	/// The float lanes value travels in, or null where it is not a vector of
 	/// floats. An emitter that gets a null answers nothing, which leaves the
 	/// managed body to be translated.
@@ -46,33 +35,6 @@ struct SimdNumericsEmitters {
 			return nullptr;
 
 		return type;
-	}
-
-	// The managed body writes each of these on every field, so the IL asked for
-	// them and they carry relax_float ()'s flags.
-
-	static llvm::Value *fadd (llvm::IRBuilder<> &builder, llvm::Value *lhs,
-	                          llvm::Value *rhs)
-	{
-		return MethodLLVMEmitter::relax_float (builder.CreateFAdd (lhs, rhs));
-	}
-
-	static llvm::Value *fsub (llvm::IRBuilder<> &builder, llvm::Value *lhs,
-	                          llvm::Value *rhs)
-	{
-		return MethodLLVMEmitter::relax_float (builder.CreateFSub (lhs, rhs));
-	}
-
-	static llvm::Value *fmul (llvm::IRBuilder<> &builder, llvm::Value *lhs,
-	                          llvm::Value *rhs)
-	{
-		return MethodLLVMEmitter::relax_float (builder.CreateFMul (lhs, rhs));
-	}
-
-	static llvm::Value *fdiv (llvm::IRBuilder<> &builder, llvm::Value *lhs,
-	                          llvm::Value *rhs)
-	{
-		return MethodLLVMEmitter::relax_float (builder.CreateFDiv (lhs, rhs));
 	}
 
 	template <BinaryOp op>
@@ -157,7 +119,7 @@ struct SimdNumericsEmitters {
 		if (type == nullptr)
 			return std::nullopt;
 
-		builder.CreateRet (MethodLLVMEmitter::relax_float (
+		builder.CreateRet (relax (
 			builder.CreateIntrinsic (id, { type }, { value })));
 		return llvm::Error::success ();
 	}
@@ -199,7 +161,7 @@ struct SimdNumericsEmitters {
 		llvm::Value *lhs = argument (emitter, 0);
 		llvm::Value *rhs = argument (emitter, 1);
 		llvm::FixedVectorType *type = lanes (lhs);
-		llvm::Type *answer = emitter.function->getReturnType ();
+		llvm::Type *answer = return_type (emitter);
 
 		if (type == nullptr || lhs->getType () != rhs->getType ()
 		    || !answer->isIntegerTy ())
