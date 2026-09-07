@@ -845,12 +845,19 @@ mono_runtime_suite(runtime-delegate-fold-off TESTS ${_delegate_fold}
                    ENV "MONO_FOLD_DELEGATES=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-fold-delegates=0")
 
-# Each SIMD operation is computed interpreted and at both compiled tiers, where
-# the body the backend writes runs instead of the IL the interpreter runs. The
-# tier-1 and tier-2 thresholds are zero so the test's own PromoteNow calls
-# decide which tier ran, not a call count racing the compile queue.
+# Each SIMD operation is computed at tier 0 and at both compiled tiers, where
+# the backend's written body runs instead of tier 0's IL. The tier-1 and tier-2
+# thresholds are zero so the test's own PromoteNow calls decide which tier ran,
+# not a call count racing the compile queue.
 mono_runtime_suite(runtime-simd-semantics TESTS simd-semantics.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0")
+
+# The same program with the interpreter as tier 0, which the default no longer
+# reaches. It is the arm that holds the il_agrees rule. A callee the interpreter
+# reached itself never passes through runs_at_tier0 (), so such a row answers
+# differently here than under a compiled caller.
+mono_runtime_suite(runtime-simd-semantics-interp TESTS simd-semantics.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0 --llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0")
 
 # The off arm runs the same program with the lowering off, so every tier is back
 # on the managed IL. It is the negative control: the answers must not move when

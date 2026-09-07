@@ -1,17 +1,21 @@
 // Differential gate for a SIMD lowering the backend does not have yet. Today
 // every Mono.Simd, System.Numerics.Vector4 and System.Numerics.Vector<T>
-// operation is ordinary managed IL, so the interpreter and both compiled
-// tiers run the same instructions and agree trivially. This program freezes
-// that agreement so a later change that replaces those bodies with LLVM
-// vector IR has something to fail against.
+// operation is ordinary managed IL, so tier 0 and both compiled tiers run the
+// same instructions and agree trivially. This program freezes that agreement
+// so a later change that replaces those bodies with LLVM vector IR has
+// something to fail against.
 //
-// Each operation is computed four ways: interpreted, promoted to tier 1,
+// Each operation is computed four ways: at tier 0, promoted to tier 1,
 // promoted to tier 2, and through a delegate created over the operation's
 // own compiled body (entering its thunk rather than a copy folded into a
 // caller) at tier 1 and again at tier 2. All four are compared against the
-// interpreted result as raw bytes, never with ==, because a float compare
-// treats a NaN as unequal to itself and would hide the one difference a bit
-// pattern change is meant to catch.
+// tier-0 result as raw bytes, never with ==, because a float compare treats a
+// NaN as unequal to itself and would hide the one difference a bit pattern
+// change is meant to catch.
+//
+// Which engine tier 0 is decides what the baseline measures. The classic
+// compiler is the default, and -mono-tier0-classic=0 makes it the interpreter;
+// runtime-suites.cmake runs an arm of each.
 
 using System;
 using System.Numerics;
@@ -748,7 +752,9 @@ class SimdSemantics
 	// real SSE levels cannot be made consistent: il_agrees false reaches
 	// runs_at_tier0 (), which decides only for methods the backend is asked
 	// about, and the interpreter never asks about a callee it reached itself.
-	// This case is what fails if such a row is added back.
+	// Under classic tier 0 such a row is consistent, because runs_at_tier0 ()
+	// refuses the method and the call reaches tier 1 through the thunk. So this
+	// case is what fails on the interpreter arm if such a row is added back.
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_AccelMode (int r) { return BitConverter.GetBytes ((int) SimdRuntime.AccelMode); }
 
 	// A prefetch answers nothing, so what this checks is that asking for one
