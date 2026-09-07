@@ -72,6 +72,135 @@ class SimdSemantics
 	static readonly sbyte[] SBEabs = { 0, 1, -1, sbyte.MaxValue, 100 };
 	static readonly int[] ShAmt = { 0, 1, 7, 31, 32, 33, 63, 64, -1 };
 
+	// ==================== equality tables ====================
+	//
+	// op_Equality answers one bool for the whole vector. Each table pairs with
+	// its partner index for index, and MakeV* reads a window of consecutive
+	// indices, so a window inside the leading run of equal pairs answers true
+	// and one reaching past it answers false. Keep that run longer than the
+	// widest vector reading the table, or no row answers true.
+	//
+	// Two pairs decide whether a lowering compares numbers or bytes. The last
+	// pair of the run is +0.0 against -0.0, equal with different bytes. The
+	// first pair past it is a NaN against its own bit pattern, unequal with
+	// identical bytes.
+
+	static readonly float[] FEqA = {
+		1f, 3f, 7f, -1f, 0.5f, float.PositiveInfinity, 100f, 0f,
+		BitConverter.Int32BitsToSingle (unchecked ((int) 0x7FC00000)),
+		2f, float.NegativeInfinity,
+		BitConverter.Int32BitsToSingle (unchecked ((int) 0x7FC00000)),
+		float.MaxValue, float.MinValue
+	};
+
+	static readonly float[] FEqB = {
+		1f, 3f, 7f, -1f, 0.5f, float.PositiveInfinity, 100f, -0f,
+		BitConverter.Int32BitsToSingle (unchecked ((int) 0x7FC00000)),
+		5f, float.PositiveInfinity,
+		BitConverter.Int32BitsToSingle (unchecked ((int) 0xFFC00000)),
+		float.MaxValue, float.MaxValue
+	};
+
+	static readonly double[] DEqA = {
+		1d, 3d, 7d, -1d, 0.5d, double.PositiveInfinity, 100d, 0d,
+		BitConverter.Int64BitsToDouble (unchecked ((long) 0x7FF8000000000000L)),
+		2d, double.NegativeInfinity,
+		BitConverter.Int64BitsToDouble (unchecked ((long) 0x7FF8000000000000L)),
+		double.MaxValue, double.MinValue
+	};
+
+	static readonly double[] DEqB = {
+		1d, 3d, 7d, -1d, 0.5d, double.PositiveInfinity, 100d, -0d,
+		BitConverter.Int64BitsToDouble (unchecked ((long) 0x7FF8000000000000L)),
+		5d, double.PositiveInfinity,
+		BitConverter.Int64BitsToDouble (unchecked ((long) 0xFFF8000000000000L)),
+		double.MaxValue, double.MaxValue
+	};
+
+	static readonly int[] IEqA = { 0, 1, -1, 100, int.MaxValue, int.MinValue, 7, 0, int.MinValue, -1, 3, int.MaxValue, 5, 0 };
+	static readonly int[] IEqB = { 0, 1, -1, 100, int.MaxValue, int.MinValue, 7, 1, int.MaxValue, 1, 3, int.MinValue, 5, -1 };
+
+	static readonly uint[] UIEqA = { 0u, 1u, uint.MaxValue, 100u, 0x80000000u, 0x7FFFFFFFu, 7u, 0u, 0x80000000u, uint.MaxValue, 3u, 0x7FFFFFFFu, 5u, 0u };
+	static readonly uint[] UIEqB = { 0u, 1u, uint.MaxValue, 100u, 0x80000000u, 0x7FFFFFFFu, 7u, 1u, 0x7FFFFFFFu, 0u, 3u, 0x80000000u, 5u, uint.MaxValue };
+
+	static readonly long[] LEqA = { 0L, 1L, -1L, 100L, long.MaxValue, long.MinValue, 7L, 0L, long.MinValue, -1L, 3L, long.MaxValue, 5L, 0L };
+	static readonly long[] LEqB = { 0L, 1L, -1L, 100L, long.MaxValue, long.MinValue, 7L, 1L, long.MaxValue, 1L, 3L, long.MinValue, 5L, -1L };
+
+	static readonly ulong[] ULEqA = { 0UL, 1UL, ulong.MaxValue, 100UL, 0x8000000000000000UL, 0x7FFFFFFFFFFFFFFFUL, 7UL, 0UL, 0x8000000000000000UL, ulong.MaxValue, 3UL, 0x7FFFFFFFFFFFFFFFUL, 5UL, 0UL };
+	static readonly ulong[] ULEqB = { 0UL, 1UL, ulong.MaxValue, 100UL, 0x8000000000000000UL, 0x7FFFFFFFFFFFFFFFUL, 7UL, 1UL, 0x7FFFFFFFFFFFFFFFUL, 0UL, 3UL, 0x8000000000000000UL, 5UL, ulong.MaxValue };
+
+	static readonly short[] SEqA = { 0, 1, -1, 100, short.MaxValue, short.MinValue, 7, 3, 5, 2, -100, 11, 0, short.MinValue, -1, short.MaxValue, 0, 9, 1, -1 };
+	static readonly short[] SEqB = { 0, 1, -1, 100, short.MaxValue, short.MinValue, 7, 3, 5, 2, -100, 11, 1, short.MaxValue, 1, short.MinValue, -1, 9, 0, 0 };
+
+	static readonly ushort[] USEqA = { 0, 1, ushort.MaxValue, 100, 0x8000, 0x7FFF, 7, 3, 5, 2, 200, 11, 0, 0x8000, ushort.MaxValue, 0x7FFF, 0, 9, 1, ushort.MaxValue };
+	static readonly ushort[] USEqB = { 0, 1, ushort.MaxValue, 100, 0x8000, 0x7FFF, 7, 3, 5, 2, 200, 11, 1, 0x7FFF, 1, 0x8000, ushort.MaxValue, 9, 0, 0 };
+
+	static readonly byte[] BEqA = {
+		0, 1, 255, 0x7F, 0x80, 100, 7, 3, 5, 2, 9, 11, 13, 17, 19, 23, 29, 31, 37, 41,
+		0, 255, 0x80, 0, 1, 0x7F, 100, 43, 255, 0, 47, 128
+	};
+
+	static readonly byte[] BEqB = {
+		0, 1, 255, 0x7F, 0x80, 100, 7, 3, 5, 2, 9, 11, 13, 17, 19, 23, 29, 31, 37, 41,
+		1, 0, 0x7F, 255, 0, 0x80, 101, 43, 254, 128, 47, 0
+	};
+
+	static readonly sbyte[] SBEqA = {
+		0, 1, -1, sbyte.MinValue, sbyte.MaxValue, 100, -100, 7, 3, 5, 2, 9, 11, 13, 17, 19, 23, 29, 31, 41,
+		0, -1, sbyte.MinValue, 0, 1, sbyte.MaxValue, 100, 43, -1, 0, 47, -128
+	};
+
+	static readonly sbyte[] SBEqB = {
+		0, 1, -1, sbyte.MinValue, sbyte.MaxValue, 100, -100, 7, 3, 5, 2, 9, 11, 13, 17, 19, 23, 29, 31, 41,
+		1, 1, sbyte.MaxValue, -1, 0, sbyte.MinValue, 101, 43, 0, -128, 47, 0
+	};
+
+	// ==================== saturation boundary tables ====================
+	//
+	// These members take an unsigned parameter and read each lane as signed.
+	// SignedPackWithSignedSaturation clamps a Vector4ui lane to short and a
+	// Vector8us lane to sbyte. SignedPackWithUnsignedSaturation clamps the
+	// same readings to ushort and byte. Each table carries the value on both
+	// sides of all four boundaries, spelled in the unsigned parameter type.
+
+	static readonly uint[] UISat = {
+		0u, 1u, 0xFFFFFFFFu, 32766u, 32767u, 32768u, 0xFFFF8000u, 0xFFFF7FFFu,
+		65534u, 65535u, 65536u, 0x80000000u, 0x7FFFFFFFu
+	};
+
+	static readonly ushort[] USSat = {
+		0, 1, 0xFFFF, 126, 127, 128, 0xFF80, 0xFF7F, 254, 255, 256, 0x8000, 0x7FFF
+	};
+
+	// ==================== conditional-select tables ====================
+	//
+	// ConditionalSelect is (left & condition) | AndNot (right, condition), so a
+	// condition lane that is neither all-ones nor zero blends the two sources
+	// bit by bit. These tables carry such lanes alongside the two mask values,
+	// which is what tells a bitwise lowering from a per-lane select.
+
+	static readonly int[] ICond = { 0, -1, 0x0F0F0F0F, unchecked ((int) 0xF0F0F0F0), 1, unchecked ((int) 0x80000000), -1, 0 };
+	static readonly long[] LCond = { 0L, -1L, 0x0F0F0F0F0F0F0F0FL, unchecked ((long) 0xF0F0F0F0F0F0F0F0L), 1L, unchecked ((long) 0x8000000000000000L), -1L, 0L };
+	static readonly short[] SCond = { 0, -1, 0x0F0F, unchecked ((short) 0xF0F0), 1, unchecked ((short) 0x8000), -1, 0 };
+	static readonly byte[] BCond = { 0, 255, 0x0F, 0xF0, 1, 0x80, 255, 0 };
+
+	static readonly float[] FCond = MakeFloatBits (ICond);
+
+	static float[] MakeFloatBits (int[] bits)
+	{
+		var r = new float[bits.Length];
+		for (int i = 0; i < bits.Length; i++)
+			r[i] = BitConverter.Int32BitsToSingle (bits[i]);
+		return r;
+	}
+
+	// ==================== scalar operand tables ====================
+
+	static readonly int[] IScale = { 0, 1, -1, 2, int.MinValue, int.MaxValue, 100 };
+	static readonly long[] LScale = { 0L, 1L, -1L, 2L, long.MinValue, long.MaxValue, 100L };
+	static readonly short[] SScale = { 0, 1, -1, 2, short.MinValue, short.MaxValue, 100 };
+	static readonly byte[] BScale = { 0, 1, 2, 255, 0x80, 100 };
+
 	// ==================== byte reinterpretation ====================
 	//
 	// Every comparison in this file reads the memory image of a result
@@ -348,6 +477,43 @@ class SimdSemantics
 			Report (family, op, r, interp[r], AllArms, new[] { t1[r], t2[r], d1[r], d2[r] }, elemSize);
 	}
 
+	// ConditionalSelect takes three vectors that all vary per row, which the
+	// fixed third operand of RunTernary () cannot express.
+	static void RunTernary3<TA, TB, TC, TR> (string family, string op, string kernelName, Func<int, byte[]> kernel,
+	                                          MethodInfo body, TA[] a, TB[] b, TC[] c, Func<TR, byte[]> toBytes, int elemSize)
+	{
+		var interp = new byte[ROWS][];
+		for (int r = 0; r < ROWS; r++)
+			interp[r] = kernel (r);
+
+		Promote (kernelName, TIER1);
+		var t1 = new byte[ROWS][];
+		for (int r = 0; r < ROWS; r++)
+			t1[r] = kernel (r);
+
+		Promote (kernelName, TIER2);
+		var t2 = new byte[ROWS][];
+		for (int r = 0; r < ROWS; r++)
+			t2[r] = kernel (r);
+
+		var del = (Func<TA, TB, TC, TR>) Delegate.CreateDelegate (typeof (Func<TA, TB, TC, TR>), body);
+
+		Promote (body, TIER1);
+		var d1 = new byte[ROWS][];
+		for (int r = 0; r < ROWS; r++)
+			d1[r] = toBytes (del (a[r % a.Length], b[r % b.Length], c[r % c.Length]));
+
+		Promote (body, TIER2);
+		var d2 = new byte[ROWS][];
+		for (int r = 0; r < ROWS; r++)
+			d2[r] = toBytes (del (a[r % a.Length], b[r % b.Length], c[r % c.Length]));
+
+		for (int r = 0; r < ROWS; r++)
+			Report (family, op, r, interp[r], AllArms, new[] { t1[r], t2[r], d1[r], d2[r] }, elemSize);
+	}
+
+	static byte[] BoolBytes (bool v) { return new[] { (byte) (v ? 1 : 0) }; }
+
 	// ==================== row construction ====================
 
 	static Vector4f[] MakeV4f (float[] e, int shift)
@@ -501,7 +667,44 @@ class SimdSemantics
 	static Vector<short>[] VSAabs = MakeVecTRows<short> (SEabs, 0);
 	static Vector<sbyte>[] VSBAabs = MakeVecTRows<sbyte> (SBEabs, 0);
 
+	// Both views take shift 0, so lane j of row r pairs FEqA[(r + j) % N] with
+	// FEqB[(r + j) % N]. A different shift breaks the pairing.
+	static Vector4f[] EqV4fA = MakeV4f (FEqA, 0), EqV4fB = MakeV4f (FEqB, 0);
+	static Vector4i[] EqV4iA = MakeV4i (IEqA, 0), EqV4iB = MakeV4i (IEqB, 0);
+	static Vector4ui[] EqV4uiA = MakeV4ui (UIEqA, 0), EqV4uiB = MakeV4ui (UIEqB, 0);
+	static Vector8s[] EqV8sA = MakeV8s (SEqA, 0), EqV8sB = MakeV8s (SEqB, 0);
+	static Vector8us[] EqV8usA = MakeV8us (USEqA, 0), EqV8usB = MakeV8us (USEqB, 0);
+	static Vector16b[] EqV16bA = MakeV16b (BEqA, 0), EqV16bB = MakeV16b (BEqB, 0);
+	static Vector16sb[] EqV16sbA = MakeV16sb (SBEqA, 0), EqV16sbB = MakeV16sb (SBEqB, 0);
+	static System.Numerics.Vector4[] EqSNV4A = MakeSNV4 (FEqA, 0), EqSNV4B = MakeSNV4 (FEqB, 0);
+
+	static Vector<float>[] EqVFA = MakeVecTRows<float> (FEqA, 0), EqVFB = MakeVecTRows<float> (FEqB, 0);
+	static Vector<double>[] EqVDA = MakeVecTRows<double> (DEqA, 0), EqVDB = MakeVecTRows<double> (DEqB, 0);
+	static Vector<int>[] EqVIA = MakeVecTRows<int> (IEqA, 0), EqVIB = MakeVecTRows<int> (IEqB, 0);
+	static Vector<uint>[] EqVUIA = MakeVecTRows<uint> (UIEqA, 0), EqVUIB = MakeVecTRows<uint> (UIEqB, 0);
+	static Vector<long>[] EqVLA = MakeVecTRows<long> (LEqA, 0), EqVLB = MakeVecTRows<long> (LEqB, 0);
+	static Vector<ulong>[] EqVULA = MakeVecTRows<ulong> (ULEqA, 0), EqVULB = MakeVecTRows<ulong> (ULEqB, 0);
+	static Vector<short>[] EqVSA = MakeVecTRows<short> (SEqA, 0), EqVSB = MakeVecTRows<short> (SEqB, 0);
+	static Vector<ushort>[] EqVUSA = MakeVecTRows<ushort> (USEqA, 0), EqVUSB = MakeVecTRows<ushort> (USEqB, 0);
+	static Vector<byte>[] EqVBA = MakeVecTRows<byte> (BEqA, 0), EqVBB = MakeVecTRows<byte> (BEqB, 0);
+	static Vector<sbyte>[] EqVSBA = MakeVecTRows<sbyte> (SBEqA, 0), EqVSBB = MakeVecTRows<sbyte> (SBEqB, 0);
+
+	static Vector4ui[] SatV4uiA = MakeV4ui (UISat, 0), SatV4uiB = MakeV4ui (UISat, 5);
+	static Vector8us[] SatV8usA = MakeV8us (USSat, 0), SatV8usB = MakeV8us (USSat, 5);
+
+	static Vector<int>[] CondVI = MakeVecTRows<int> (ICond, 0);
+	static Vector<long>[] CondVL = MakeVecTRows<long> (LCond, 0);
+	static Vector<short>[] CondVS = MakeVecTRows<short> (SCond, 0);
+	static Vector<byte>[] CondVB = MakeVecTRows<byte> (BCond, 0);
+	static Vector<float>[] CondVF = MakeVecTRows<float> (FCond, 0);
+
 	static float FA (int row) { return FE[row % FE.Length]; }
+
+	static int IA (int row) { return IScale[row % IScale.Length]; }
+	static long LA (int row) { return LScale[row % LScale.Length]; }
+	static short SA (int row) { return SScale[row % SScale.Length]; }
+	static byte BA (int row) { return BScale[row % BScale.Length]; }
+	static double DA (int row) { return DE[row % DE.Length]; }
 
 	static int Shift (int row) { return ShAmt[row % ShAmt.Length]; }
 
@@ -1092,6 +1295,93 @@ class SimdSemantics
 		RunKernelOnly (f, "Vector16sb indexer get", "K_V16sb_Index", K_V16sb_Index, 1);
 	}
 
+	// ==================== Mono.Simd: the remaining lowered members ====================
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_MulSR (int r) { return Bytes (V4fA[r] * FA (r)); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_MulSL (int r) { return Bytes (FA (r) * V4fA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_AndNot (int r) { return Bytes (VectorOperations.AndNot (V4fA[r], V4fB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V2d_AndNot (int r) { return Bytes (VectorOperations.AndNot (V2dA[r], V2dB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_CmpEq (int r) { return Bytes (VectorOperations.CompareEqual (V4fA[r], V4fB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V2d_CmpEq (int r) { return Bytes (VectorOperations.CompareEqual (V2dA[r], V2dB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V2d_CmpLE (int r) { return Bytes (VectorOperations.CompareLessEqual (V2dA[r], V2dB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_CmpNLT (int r) { return Bytes (VectorOperations.CompareNotLessThan (V4fA[r], V4fB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_CmpNLE (int r) { return Bytes (VectorOperations.CompareNotLessEqual (V4fA[r], V4fB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V2d_CmpNLT (int r) { return Bytes (VectorOperations.CompareNotLessThan (V2dA[r], V2dB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V2d_CmpNLE (int r) { return Bytes (VectorOperations.CompareNotLessEqual (V2dA[r], V2dB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4ui_SPackS (int r) { return Bytes (VectorOperations.SignedPackWithSignedSaturation (SatV4uiA[r], SatV4uiB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V8us_SPackS (int r) { return Bytes (VectorOperations.SignedPackWithSignedSaturation (SatV8usA[r], SatV8usB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4ui_SPackU (int r) { return Bytes (VectorOperations.SignedPackWithUnsignedSaturation (SatV4uiA[r], SatV4uiB[r])); }
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_Eq (int r) { return BoolBytes (EqV4fA[r] == EqV4fB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_Ne (int r) { return BoolBytes (EqV4fA[r] != EqV4fB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4i_Eq (int r) { return BoolBytes (EqV4iA[r] == EqV4iB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4i_Ne (int r) { return BoolBytes (EqV4iA[r] != EqV4iB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4ui_Eq (int r) { return BoolBytes (EqV4uiA[r] == EqV4uiB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4ui_Ne (int r) { return BoolBytes (EqV4uiA[r] != EqV4uiB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V8s_Eq (int r) { return BoolBytes (EqV8sA[r] == EqV8sB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V8s_Ne (int r) { return BoolBytes (EqV8sA[r] != EqV8sB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V8us_Eq (int r) { return BoolBytes (EqV8usA[r] == EqV8usB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V8us_Ne (int r) { return BoolBytes (EqV8usA[r] != EqV8usB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V16b_Eq (int r) { return BoolBytes (EqV16bA[r] == EqV16bB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V16b_Ne (int r) { return BoolBytes (EqV16bA[r] != EqV16bB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V16sb_Eq (int r) { return BoolBytes (EqV16sbA[r] == EqV16sbB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V16sb_Ne (int r) { return BoolBytes (EqV16sbA[r] != EqV16sbB[r]); }
+
+	static void CheckSimdRest ()
+	{
+		string f = "Mono.Simd";
+		Type vo = typeof (VectorOperations);
+		Type t4f = typeof (Vector4f), t2d = typeof (Vector2d);
+		Type t4i = typeof (Vector4i), t4ui = typeof (Vector4ui);
+		Type t8s = typeof (Vector8s), t8us = typeof (Vector8us);
+		Type t16b = typeof (Vector16b), t16sb = typeof (Vector16sb);
+		Type[] ff = { t4f, t4f };
+		Type[] dd = { t2d, t2d };
+
+		// A scalar multiply splats its scalar with a shufflevector, and LLVM
+		// commutes the fmul reading it. An fmul of two NaNs answers the first
+		// operand's payload, so the reordering decides which one survives.
+		// floatRelax takes either payload and holds every other bit, signed
+		// zeros and infinities included.
+		RunBinary<Vector4f, float, Vector4f> (f, "Vector4f * scalar", "K_V4f_MulSR", K_V4f_MulSR,
+			t4f.GetMethod ("op_Multiply", new[] { t4f, typeof (float) }), V4fA, FE, Bytes, 4, floatRelax: true);
+		RunBinary<float, Vector4f, Vector4f> (f, "scalar * Vector4f", "K_V4f_MulSL", K_V4f_MulSL,
+			t4f.GetMethod ("op_Multiply", new[] { typeof (float), t4f }), FE, V4fA, Bytes, 4, floatRelax: true);
+
+		RunBinary<Vector4f, Vector4f, Vector4f> (f, "Vector4f.AndNot", "K_V4f_AndNot", K_V4f_AndNot, vo.GetMethod ("AndNot", ff), V4fA, V4fB, Bytes, 4);
+		RunBinary<Vector2d, Vector2d, Vector2d> (f, "Vector2d.AndNot", "K_V2d_AndNot", K_V2d_AndNot, vo.GetMethod ("AndNot", dd), V2dA, V2dB, Bytes, 8);
+
+		RunBinary<Vector4f, Vector4f, Vector4f> (f, "Vector4f.CompareEqual", "K_V4f_CmpEq", K_V4f_CmpEq, vo.GetMethod ("CompareEqual", ff), V4fA, V4fB, Bytes, 4);
+		RunBinary<Vector2d, Vector2d, Vector2d> (f, "Vector2d.CompareEqual", "K_V2d_CmpEq", K_V2d_CmpEq, vo.GetMethod ("CompareEqual", dd), V2dA, V2dB, Bytes, 8);
+		RunBinary<Vector2d, Vector2d, Vector2d> (f, "Vector2d.CompareLessEqual", "K_V2d_CmpLE", K_V2d_CmpLE, vo.GetMethod ("CompareLessEqual", dd), V2dA, V2dB, Bytes, 8);
+		RunBinary<Vector4f, Vector4f, Vector4f> (f, "Vector4f.CompareNotLessThan", "K_V4f_CmpNLT", K_V4f_CmpNLT, vo.GetMethod ("CompareNotLessThan", ff), V4fA, V4fB, Bytes, 4);
+		RunBinary<Vector4f, Vector4f, Vector4f> (f, "Vector4f.CompareNotLessEqual", "K_V4f_CmpNLE", K_V4f_CmpNLE, vo.GetMethod ("CompareNotLessEqual", ff), V4fA, V4fB, Bytes, 4);
+		RunBinary<Vector2d, Vector2d, Vector2d> (f, "Vector2d.CompareNotLessThan", "K_V2d_CmpNLT", K_V2d_CmpNLT, vo.GetMethod ("CompareNotLessThan", dd), V2dA, V2dB, Bytes, 8);
+		RunBinary<Vector2d, Vector2d, Vector2d> (f, "Vector2d.CompareNotLessEqual", "K_V2d_CmpNLE", K_V2d_CmpNLE, vo.GetMethod ("CompareNotLessEqual", dd), V2dA, V2dB, Bytes, 8);
+
+		RunBinary<Vector4ui, Vector4ui, Vector8s> (f, "Vector4ui.SignedPackWithSignedSaturation", "K_V4ui_SPackS", K_V4ui_SPackS,
+			vo.GetMethod ("SignedPackWithSignedSaturation", new[] { t4ui, t4ui }), SatV4uiA, SatV4uiB, Bytes, 2);
+		RunBinary<Vector8us, Vector8us, Vector16sb> (f, "Vector8us.SignedPackWithSignedSaturation", "K_V8us_SPackS", K_V8us_SPackS,
+			vo.GetMethod ("SignedPackWithSignedSaturation", new[] { t8us, t8us }), SatV8usA, SatV8usB, Bytes, 1);
+		RunBinary<Vector4ui, Vector4ui, Vector8us> (f, "Vector4ui.SignedPackWithUnsignedSaturation", "K_V4ui_SPackU", K_V4ui_SPackU,
+			vo.GetMethod ("SignedPackWithUnsignedSaturation", new[] { t4ui, t4ui }), SatV4uiA, SatV4uiB, Bytes, 2);
+
+		RunBinary<Vector4f, Vector4f, bool> (f, "Vector4f ==", "K_V4f_Eq", K_V4f_Eq, t4f.GetMethod ("op_Equality", ff), EqV4fA, EqV4fB, BoolBytes, 1);
+		RunBinary<Vector4f, Vector4f, bool> (f, "Vector4f !=", "K_V4f_Ne", K_V4f_Ne, t4f.GetMethod ("op_Inequality", ff), EqV4fA, EqV4fB, BoolBytes, 1);
+		RunBinary<Vector4i, Vector4i, bool> (f, "Vector4i ==", "K_V4i_Eq", K_V4i_Eq, t4i.GetMethod ("op_Equality", new[] { t4i, t4i }), EqV4iA, EqV4iB, BoolBytes, 1);
+		RunBinary<Vector4i, Vector4i, bool> (f, "Vector4i !=", "K_V4i_Ne", K_V4i_Ne, t4i.GetMethod ("op_Inequality", new[] { t4i, t4i }), EqV4iA, EqV4iB, BoolBytes, 1);
+		RunBinary<Vector4ui, Vector4ui, bool> (f, "Vector4ui ==", "K_V4ui_Eq", K_V4ui_Eq, t4ui.GetMethod ("op_Equality", new[] { t4ui, t4ui }), EqV4uiA, EqV4uiB, BoolBytes, 1);
+		RunBinary<Vector4ui, Vector4ui, bool> (f, "Vector4ui !=", "K_V4ui_Ne", K_V4ui_Ne, t4ui.GetMethod ("op_Inequality", new[] { t4ui, t4ui }), EqV4uiA, EqV4uiB, BoolBytes, 1);
+		RunBinary<Vector8s, Vector8s, bool> (f, "Vector8s ==", "K_V8s_Eq", K_V8s_Eq, t8s.GetMethod ("op_Equality", new[] { t8s, t8s }), EqV8sA, EqV8sB, BoolBytes, 1);
+		RunBinary<Vector8s, Vector8s, bool> (f, "Vector8s !=", "K_V8s_Ne", K_V8s_Ne, t8s.GetMethod ("op_Inequality", new[] { t8s, t8s }), EqV8sA, EqV8sB, BoolBytes, 1);
+		RunBinary<Vector8us, Vector8us, bool> (f, "Vector8us ==", "K_V8us_Eq", K_V8us_Eq, t8us.GetMethod ("op_Equality", new[] { t8us, t8us }), EqV8usA, EqV8usB, BoolBytes, 1);
+		RunBinary<Vector8us, Vector8us, bool> (f, "Vector8us !=", "K_V8us_Ne", K_V8us_Ne, t8us.GetMethod ("op_Inequality", new[] { t8us, t8us }), EqV8usA, EqV8usB, BoolBytes, 1);
+		RunBinary<Vector16b, Vector16b, bool> (f, "Vector16b ==", "K_V16b_Eq", K_V16b_Eq, t16b.GetMethod ("op_Equality", new[] { t16b, t16b }), EqV16bA, EqV16bB, BoolBytes, 1);
+		RunBinary<Vector16b, Vector16b, bool> (f, "Vector16b !=", "K_V16b_Ne", K_V16b_Ne, t16b.GetMethod ("op_Inequality", new[] { t16b, t16b }), EqV16bA, EqV16bB, BoolBytes, 1);
+		RunBinary<Vector16sb, Vector16sb, bool> (f, "Vector16sb ==", "K_V16sb_Eq", K_V16sb_Eq, t16sb.GetMethod ("op_Equality", new[] { t16sb, t16sb }), EqV16sbA, EqV16sbB, BoolBytes, 1);
+		RunBinary<Vector16sb, Vector16sb, bool> (f, "Vector16sb !=", "K_V16sb_Ne", K_V16sb_Ne, t16sb.GetMethod ("op_Inequality", new[] { t16sb, t16sb }), EqV16sbA, EqV16sbB, BoolBytes, 1);
+	}
+
 	// ==================== System.Numerics.Vector4 ====================
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_Add (int r) { return Bytes (SNV4A[r] + SNV4B[r]); }
@@ -1111,7 +1401,20 @@ class SimdSemantics
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_Norm (int r) { return Bytes (System.Numerics.Vector4.Normalize (SNV4A[r])); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_Clamp (int r) { return Bytes (System.Numerics.Vector4.Clamp (SNV4A[r], -System.Numerics.Vector4.One, System.Numerics.Vector4.One)); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_Lerp (int r) { return Bytes (System.Numerics.Vector4.Lerp (SNV4A[r], SNV4B[r], FA (r) == 0f ? 0f : 0.25f)); }
-	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_Eq (int r) { return new[] { (byte) (SNV4A[r] == SNV4B[r] ? 1 : 0) }; }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_Eq (int r) { return BoolBytes (EqSNV4A[r] == EqSNV4B[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_Ne (int r) { return BoolBytes (EqSNV4A[r] != EqSNV4B[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_MulScalarL (int r) { return Bytes (FA (r) * SNV4A[r]); }
+
+	// Add, Subtract, Multiply, Divide and Negate are rows of their own, not
+	// forwarders the operator rows already answer for.
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_NAdd (int r) { return Bytes (System.Numerics.Vector4.Add (SNV4A[r], SNV4B[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_NSub (int r) { return Bytes (System.Numerics.Vector4.Subtract (SNV4A[r], SNV4B[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_NMul (int r) { return Bytes (System.Numerics.Vector4.Multiply (SNV4A[r], SNV4B[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_NMulVS (int r) { return Bytes (System.Numerics.Vector4.Multiply (SNV4A[r], FA (r))); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_NMulSV (int r) { return Bytes (System.Numerics.Vector4.Multiply (FA (r), SNV4A[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_NDiv (int r) { return Bytes (System.Numerics.Vector4.Divide (SNV4A[r], SNV4B[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_NDivVS (int r) { return Bytes (System.Numerics.Vector4.Divide (SNV4A[r], FA (r))); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_NNeg (int r) { return Bytes (System.Numerics.Vector4.Negate (SNV4A[r])); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_Ctor4 (int r) { return Bytes (new System.Numerics.Vector4 (FE[r % FE.Length], FE[(r + 1) % FE.Length], FE[(r + 2) % FE.Length], FE[(r + 3) % FE.Length])); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV4_CtorSplat (int r) { return Bytes (new System.Numerics.Vector4 (FE[r % FE.Length])); }
 	[MethodImpl (MethodImplOptions.NoInlining)]
@@ -1135,7 +1438,7 @@ class SimdSemantics
 		RunBinary<System.Numerics.Vector4, System.Numerics.Vector4, System.Numerics.Vector4> (f, "Vector4 +", "K_SNV4_Add", K_SNV4_Add, t.GetMethod ("op_Addition", tt), SNV4A, SNV4B, Bytes, 4);
 		RunBinary<System.Numerics.Vector4, System.Numerics.Vector4, System.Numerics.Vector4> (f, "Vector4 -", "K_SNV4_Sub", K_SNV4_Sub, t.GetMethod ("op_Subtraction", tt), SNV4A, SNV4B, Bytes, 4);
 		RunBinary<System.Numerics.Vector4, System.Numerics.Vector4, System.Numerics.Vector4> (f, "Vector4 *", "K_SNV4_Mul", K_SNV4_Mul, t.GetMethod ("op_Multiply", tt), SNV4A, SNV4B, Bytes, 4);
-		RunBinary<System.Numerics.Vector4, float, System.Numerics.Vector4> (f, "Vector4 * scalar", "K_SNV4_MulScalar", K_SNV4_MulScalar, t.GetMethod ("op_Multiply", tf), SNV4A, FE, Bytes, 4);
+		RunBinary<System.Numerics.Vector4, float, System.Numerics.Vector4> (f, "Vector4 * scalar", "K_SNV4_MulScalar", K_SNV4_MulScalar, t.GetMethod ("op_Multiply", tf), SNV4A, FE, Bytes, 4, floatRelax: true);
 		RunBinary<System.Numerics.Vector4, System.Numerics.Vector4, System.Numerics.Vector4> (f, "Vector4 /", "K_SNV4_Div", K_SNV4_Div, t.GetMethod ("op_Division", tt), SNV4A, SNV4B, Bytes, 4);
 		RunBinary<System.Numerics.Vector4, float, System.Numerics.Vector4> (f, "Vector4 / scalar", "K_SNV4_DivScalar", K_SNV4_DivScalar, t.GetMethod ("op_Division", tf), SNV4A, FE, Bytes, 4);
 		RunUnary<System.Numerics.Vector4, System.Numerics.Vector4> (f, "-Vector4", "K_SNV4_Neg", K_SNV4_Neg, t.GetMethod ("op_UnaryNegation", new[] { t }), SNV4A, Bytes, 4);
@@ -1153,7 +1456,19 @@ class SimdSemantics
 
 		RunKernelOnly (f, "Vector4.Clamp", "K_SNV4_Clamp", K_SNV4_Clamp, 4);
 		RunKernelOnly (f, "Vector4.Lerp", "K_SNV4_Lerp", K_SNV4_Lerp, 4);
-		RunKernelOnly (f, "Vector4 ==", "K_SNV4_Eq", K_SNV4_Eq, 1);
+		RunBinary<float, System.Numerics.Vector4, System.Numerics.Vector4> (f, "scalar * Vector4", "K_SNV4_MulScalarL", K_SNV4_MulScalarL, t.GetMethod ("op_Multiply", ft), FE, SNV4A, Bytes, 4, floatRelax: true);
+		RunBinary<System.Numerics.Vector4, System.Numerics.Vector4, bool> (f, "Vector4 ==", "K_SNV4_Eq", K_SNV4_Eq, t.GetMethod ("op_Equality", tt), EqSNV4A, EqSNV4B, BoolBytes, 1);
+		RunBinary<System.Numerics.Vector4, System.Numerics.Vector4, bool> (f, "Vector4 !=", "K_SNV4_Ne", K_SNV4_Ne, t.GetMethod ("op_Inequality", tt), EqSNV4A, EqSNV4B, BoolBytes, 1);
+
+		RunBinary<System.Numerics.Vector4, System.Numerics.Vector4, System.Numerics.Vector4> (f, "Vector4.Add", "K_SNV4_NAdd", K_SNV4_NAdd, t.GetMethod ("Add", tt), SNV4A, SNV4B, Bytes, 4);
+		RunBinary<System.Numerics.Vector4, System.Numerics.Vector4, System.Numerics.Vector4> (f, "Vector4.Subtract", "K_SNV4_NSub", K_SNV4_NSub, t.GetMethod ("Subtract", tt), SNV4A, SNV4B, Bytes, 4);
+		RunBinary<System.Numerics.Vector4, System.Numerics.Vector4, System.Numerics.Vector4> (f, "Vector4.Multiply", "K_SNV4_NMul", K_SNV4_NMul, t.GetMethod ("Multiply", tt), SNV4A, SNV4B, Bytes, 4);
+		RunBinary<System.Numerics.Vector4, float, System.Numerics.Vector4> (f, "Vector4.Multiply(V,S)", "K_SNV4_NMulVS", K_SNV4_NMulVS, t.GetMethod ("Multiply", tf), SNV4A, FE, Bytes, 4, floatRelax: true);
+		RunBinary<float, System.Numerics.Vector4, System.Numerics.Vector4> (f, "Vector4.Multiply(S,V)", "K_SNV4_NMulSV", K_SNV4_NMulSV, t.GetMethod ("Multiply", ft), FE, SNV4A, Bytes, 4, floatRelax: true);
+		RunBinary<System.Numerics.Vector4, System.Numerics.Vector4, System.Numerics.Vector4> (f, "Vector4.Divide", "K_SNV4_NDiv", K_SNV4_NDiv, t.GetMethod ("Divide", tt), SNV4A, SNV4B, Bytes, 4);
+		RunBinary<System.Numerics.Vector4, float, System.Numerics.Vector4> (f, "Vector4.Divide(V,S)", "K_SNV4_NDivVS", K_SNV4_NDivVS, t.GetMethod ("Divide", tf), SNV4A, FE, Bytes, 4);
+		RunUnary<System.Numerics.Vector4, System.Numerics.Vector4> (f, "Vector4.Negate", "K_SNV4_NNeg", K_SNV4_NNeg, t.GetMethod ("Negate", new[] { t }), SNV4A, Bytes, 4);
+
 		RunKernelOnly (f, "Vector4 ctor(4)", "K_SNV4_Ctor4", K_SNV4_Ctor4, 4);
 		RunKernelOnly (f, "Vector4 ctor(splat)", "K_SNV4_CtorSplat", K_SNV4_CtorSplat, 4);
 		RunKernelOnly (f, "Vector4.CopyTo", "K_SNV4_CopyTo", K_SNV4_CopyTo, 4);
@@ -1304,6 +1619,156 @@ class SimdSemantics
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VSB_Dot (int r) { return ScalarBytes (System.Numerics.Vector.Dot<sbyte> (VSBA[r], VSBB[r])); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VSB_Abs (int r) { return Bytes (System.Numerics.Vector.Abs<sbyte> (VSBAabs[r])); }
 
+	// ---- the three ordered comparisons ----
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF_Le (int r) { return Bytes (System.Numerics.Vector.LessThanOrEqual<float> (VFA[r], VFB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF_Gt (int r) { return Bytes (System.Numerics.Vector.GreaterThan<float> (VFA[r], VFB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF_Ge (int r) { return Bytes (System.Numerics.Vector.GreaterThanOrEqual<float> (VFA[r], VFB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VD_Le (int r) { return Bytes (System.Numerics.Vector.LessThanOrEqual<double> (VDA[r], VDB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VD_Gt (int r) { return Bytes (System.Numerics.Vector.GreaterThan<double> (VDA[r], VDB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VD_Ge (int r) { return Bytes (System.Numerics.Vector.GreaterThanOrEqual<double> (VDA[r], VDB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VI_Le (int r) { return Bytes (System.Numerics.Vector.LessThanOrEqual<int> (VIA[r], VIB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VI_Gt (int r) { return Bytes (System.Numerics.Vector.GreaterThan<int> (VIA[r], VIB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VI_Ge (int r) { return Bytes (System.Numerics.Vector.GreaterThanOrEqual<int> (VIA[r], VIB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUI_Le (int r) { return Bytes (System.Numerics.Vector.LessThanOrEqual<uint> (VUIA[r], VUIB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUI_Gt (int r) { return Bytes (System.Numerics.Vector.GreaterThan<uint> (VUIA[r], VUIB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUI_Ge (int r) { return Bytes (System.Numerics.Vector.GreaterThanOrEqual<uint> (VUIA[r], VUIB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VL_Le (int r) { return Bytes (System.Numerics.Vector.LessThanOrEqual<long> (VLA[r], VLB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VL_Gt (int r) { return Bytes (System.Numerics.Vector.GreaterThan<long> (VLA[r], VLB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VL_Ge (int r) { return Bytes (System.Numerics.Vector.GreaterThanOrEqual<long> (VLA[r], VLB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUL_Le (int r) { return Bytes (System.Numerics.Vector.LessThanOrEqual<ulong> (VULA[r], VULB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUL_Gt (int r) { return Bytes (System.Numerics.Vector.GreaterThan<ulong> (VULA[r], VULB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUL_Ge (int r) { return Bytes (System.Numerics.Vector.GreaterThanOrEqual<ulong> (VULA[r], VULB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VS_Le (int r) { return Bytes (System.Numerics.Vector.LessThanOrEqual<short> (VSA[r], VSB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VS_Gt (int r) { return Bytes (System.Numerics.Vector.GreaterThan<short> (VSA[r], VSB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VS_Ge (int r) { return Bytes (System.Numerics.Vector.GreaterThanOrEqual<short> (VSA[r], VSB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUS_Le (int r) { return Bytes (System.Numerics.Vector.LessThanOrEqual<ushort> (VUSA[r], VUSB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUS_Gt (int r) { return Bytes (System.Numerics.Vector.GreaterThan<ushort> (VUSA[r], VUSB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUS_Ge (int r) { return Bytes (System.Numerics.Vector.GreaterThanOrEqual<ushort> (VUSA[r], VUSB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VB_Le (int r) { return Bytes (System.Numerics.Vector.LessThanOrEqual<byte> (VBA[r], VBB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VB_Gt (int r) { return Bytes (System.Numerics.Vector.GreaterThan<byte> (VBA[r], VBB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VB_Ge (int r) { return Bytes (System.Numerics.Vector.GreaterThanOrEqual<byte> (VBA[r], VBB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VSB_Le (int r) { return Bytes (System.Numerics.Vector.LessThanOrEqual<sbyte> (VSBA[r], VSBB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VSB_Gt (int r) { return Bytes (System.Numerics.Vector.GreaterThan<sbyte> (VSBA[r], VSBB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VSB_Ge (int r) { return Bytes (System.Numerics.Vector.GreaterThanOrEqual<sbyte> (VSBA[r], VSBB[r])); }
+
+	// ---- op_Equality and op_Inequality ----
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF_EqB (int r) { return BoolBytes (EqVFA[r] == EqVFB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF_NeB (int r) { return BoolBytes (EqVFA[r] != EqVFB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VD_EqB (int r) { return BoolBytes (EqVDA[r] == EqVDB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VD_NeB (int r) { return BoolBytes (EqVDA[r] != EqVDB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VI_EqB (int r) { return BoolBytes (EqVIA[r] == EqVIB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VI_NeB (int r) { return BoolBytes (EqVIA[r] != EqVIB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUI_EqB (int r) { return BoolBytes (EqVUIA[r] == EqVUIB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUI_NeB (int r) { return BoolBytes (EqVUIA[r] != EqVUIB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VL_EqB (int r) { return BoolBytes (EqVLA[r] == EqVLB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VL_NeB (int r) { return BoolBytes (EqVLA[r] != EqVLB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUL_EqB (int r) { return BoolBytes (EqVULA[r] == EqVULB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUL_NeB (int r) { return BoolBytes (EqVULA[r] != EqVULB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VS_EqB (int r) { return BoolBytes (EqVSA[r] == EqVSB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VS_NeB (int r) { return BoolBytes (EqVSA[r] != EqVSB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUS_EqB (int r) { return BoolBytes (EqVUSA[r] == EqVUSB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUS_NeB (int r) { return BoolBytes (EqVUSA[r] != EqVUSB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VB_EqB (int r) { return BoolBytes (EqVBA[r] == EqVBB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VB_NeB (int r) { return BoolBytes (EqVBA[r] != EqVBB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VSB_EqB (int r) { return BoolBytes (EqVSBA[r] == EqVSBB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VSB_NeB (int r) { return BoolBytes (EqVSBA[r] != EqVSBB[r]); }
+
+	// ---- op_OnesComplement, the scalar multiplies and ConditionalSelect ----
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF_Not (int r) { return Bytes (~VFA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VD_Not (int r) { return Bytes (~VDA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VI_Not (int r) { return Bytes (~VIA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VL_Not (int r) { return Bytes (~VLA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VS_Not (int r) { return Bytes (~VSA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VB_Not (int r) { return Bytes (~VBA[r]); }
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF_MulVS (int r) { return Bytes (VFA[r] * FA (r)); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF_MulSV (int r) { return Bytes (FA (r) * VFA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VD_MulVS (int r) { return Bytes (VDA[r] * DA (r)); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VD_MulSV (int r) { return Bytes (DA (r) * VDA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VI_MulVS (int r) { return Bytes (VIA[r] * IA (r)); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VI_MulSV (int r) { return Bytes (IA (r) * VIA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VL_MulVS (int r) { return Bytes (VLA[r] * LA (r)); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VL_MulSV (int r) { return Bytes (LA (r) * VLA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VS_MulVS (int r) { return Bytes (VSA[r] * SA (r)); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VS_MulSV (int r) { return Bytes (SA (r) * VSA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VB_MulVS (int r) { return Bytes (VBA[r] * BA (r)); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VB_MulSV (int r) { return Bytes (BA (r) * VBA[r]); }
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF_Sel (int r) { return Bytes (System.Numerics.Vector.ConditionalSelect<float> (CondVF[r], VFA[r], VFB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VI_Sel (int r) { return Bytes (System.Numerics.Vector.ConditionalSelect<int> (CondVI[r], VIA[r], VIB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VL_Sel (int r) { return Bytes (System.Numerics.Vector.ConditionalSelect<long> (CondVL[r], VLA[r], VLB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VS_Sel (int r) { return Bytes (System.Numerics.Vector.ConditionalSelect<short> (CondVS[r], VSA[r], VSB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VB_Sel (int r) { return Bytes (System.Numerics.Vector.ConditionalSelect<byte> (CondVB[r], VBA[r], VBB[r])); }
+
+	// ---- op_Division, SquareRoot, Abs and op_Explicit ----
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF_Div (int r) { return Bytes (VFA[r] / VFB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VD_Div (int r) { return Bytes (VDA[r] / VDB[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF_Sqrt (int r) { return Bytes (System.Numerics.Vector.SquareRoot<float> (VFA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VD_Sqrt (int r) { return Bytes (System.Numerics.Vector.SquareRoot<double> (VDA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF_Abs (int r) { return Bytes (System.Numerics.Vector.Abs<float> (VFA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VD_Abs (int r) { return Bytes (System.Numerics.Vector.Abs<double> (VDA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VB_Abs (int r) { return Bytes (System.Numerics.Vector.Abs<byte> (VBA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUS_Abs (int r) { return Bytes (System.Numerics.Vector.Abs<ushort> (VUSA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUI_Abs (int r) { return Bytes (System.Numerics.Vector.Abs<uint> (VUIA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUL_Abs (int r) { return Bytes (System.Numerics.Vector.Abs<ulong> (VULA[r])); }
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VI2F (int r) { return Bytes ((Vector<float>) VIA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF2I (int r) { return Bytes ((Vector<int>) VFA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VL2B (int r) { return Bytes ((Vector<byte>) VLA[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VB2L (int r) { return Bytes ((Vector<long>) VBA[r]); }
+
+	static void CheckVecTOrdered<T> (string typeName, string suf,
+	                                  Func<int, byte[]> kLe, Func<int, byte[]> kGt, Func<int, byte[]> kGe,
+	                                  Vector<T>[] a, Vector<T>[] b, Func<Vector<T>, byte[]> toBytes, int elemSize) where T : struct
+	{
+		string f = "System.Numerics.Vector<T>";
+		RunBinary<Vector<T>, Vector<T>, Vector<T>> (f, typeName + " Vector.LessThanOrEqual", "K_" + suf + "_Le", kLe, VecGeneric ("LessThanOrEqual", typeof (T)), a, b, toBytes, elemSize);
+		RunBinary<Vector<T>, Vector<T>, Vector<T>> (f, typeName + " Vector.GreaterThan", "K_" + suf + "_Gt", kGt, VecGeneric ("GreaterThan", typeof (T)), a, b, toBytes, elemSize);
+		RunBinary<Vector<T>, Vector<T>, Vector<T>> (f, typeName + " Vector.GreaterThanOrEqual", "K_" + suf + "_Ge", kGe, VecGeneric ("GreaterThanOrEqual", typeof (T)), a, b, toBytes, elemSize);
+	}
+
+	static void CheckVecTEquality<T> (string typeName, string suf, Func<int, byte[]> kEq, Func<int, byte[]> kNe,
+	                                   Vector<T>[] a, Vector<T>[] b) where T : struct
+	{
+		string f = "System.Numerics.Vector<T>";
+		Type t = typeof (Vector<T>);
+		Type[] tt = { t, t };
+		RunBinary<Vector<T>, Vector<T>, bool> (f, typeName + " ==", "K_" + suf + "_EqB", kEq, t.GetMethod ("op_Equality", tt), a, b, BoolBytes, 1);
+		RunBinary<Vector<T>, Vector<T>, bool> (f, typeName + " !=", "K_" + suf + "_NeB", kNe, t.GetMethod ("op_Inequality", tt), a, b, BoolBytes, 1);
+	}
+
+	static void CheckVecTScale<T> (string typeName, string suf, Func<int, byte[]> kVS, Func<int, byte[]> kSV,
+	                                Vector<T>[] a, T[] s, Func<Vector<T>, byte[]> toBytes, int elemSize) where T : struct
+	{
+		string f = "System.Numerics.Vector<T>";
+		Type t = typeof (Vector<T>);
+		bool relax = typeof (T) == typeof (float) || typeof (T) == typeof (double);
+		RunBinary<Vector<T>, T, Vector<T>> (f, typeName + " * scalar", "K_" + suf + "_MulVS", kVS,
+			t.GetMethod ("op_Multiply", new[] { t, typeof (T) }), a, s, toBytes, elemSize, floatRelax: relax);
+		RunBinary<T, Vector<T>, Vector<T>> (f, "scalar * " + typeName, "K_" + suf + "_MulSV", kSV,
+			t.GetMethod ("op_Multiply", new[] { typeof (T), t }), s, a, toBytes, elemSize, floatRelax: relax);
+	}
+
+	static void CheckVecTNot<T> (string typeName, string suf, Func<int, byte[]> kNot,
+	                              Vector<T>[] a, Func<Vector<T>, byte[]> toBytes, int elemSize) where T : struct
+	{
+		Type t = typeof (Vector<T>);
+		RunUnary<Vector<T>, Vector<T>> ("System.Numerics.Vector<T>", "~" + typeName, "K_" + suf + "_Not", kNot,
+			t.GetMethod ("op_OnesComplement", new[] { t }), a, toBytes, elemSize);
+	}
+
+	static void CheckVecTSelect<T> (string typeName, string suf, Func<int, byte[]> kSel,
+	                                 Vector<T>[] c, Vector<T>[] a, Vector<T>[] b, Func<Vector<T>, byte[]> toBytes, int elemSize) where T : struct
+	{
+		RunTernary3<Vector<T>, Vector<T>, Vector<T>, Vector<T>> ("System.Numerics.Vector<T>",
+			typeName + " Vector.ConditionalSelect", "K_" + suf + "_Sel", kSel,
+			VecGeneric ("ConditionalSelect", typeof (T)), c, a, b, toBytes, elemSize);
+	}
+
 	// int.MinValue pairs with 0 at every row here, not with -1: that division
 	// overflows rather than raising DivideByZeroException, which is a
 	// different arm CheckIntDivByZero () does not cover.
@@ -1373,6 +1838,67 @@ class SimdSemantics
 		RunKernelOnly (f, "Vector<int> indexer get", "K_VI_Index", K_VI_Index, 4);
 		RunKernelOnly (f, "Vector<byte> ctor(T)", "K_VB_Ctor", K_VB_Ctor, 1);
 		RunKernelOnly (f, "Vector<byte> indexer get", "K_VB_Index", K_VB_Index, 1);
+
+		CheckVecTOrdered<float> ("Vector<float>", "VF", K_VF_Le, K_VF_Gt, K_VF_Ge, VFA, VFB, Bytes, 4);
+		CheckVecTOrdered<double> ("Vector<double>", "VD", K_VD_Le, K_VD_Gt, K_VD_Ge, VDA, VDB, Bytes, 8);
+		CheckVecTOrdered<int> ("Vector<int>", "VI", K_VI_Le, K_VI_Gt, K_VI_Ge, VIA, VIB, Bytes, 4);
+		CheckVecTOrdered<uint> ("Vector<uint>", "VUI", K_VUI_Le, K_VUI_Gt, K_VUI_Ge, VUIA, VUIB, Bytes, 4);
+		CheckVecTOrdered<long> ("Vector<long>", "VL", K_VL_Le, K_VL_Gt, K_VL_Ge, VLA, VLB, Bytes, 8);
+		CheckVecTOrdered<ulong> ("Vector<ulong>", "VUL", K_VUL_Le, K_VUL_Gt, K_VUL_Ge, VULA, VULB, Bytes, 8);
+		CheckVecTOrdered<short> ("Vector<short>", "VS", K_VS_Le, K_VS_Gt, K_VS_Ge, VSA, VSB, Bytes, 2);
+		CheckVecTOrdered<ushort> ("Vector<ushort>", "VUS", K_VUS_Le, K_VUS_Gt, K_VUS_Ge, VUSA, VUSB, Bytes, 2);
+		CheckVecTOrdered<byte> ("Vector<byte>", "VB", K_VB_Le, K_VB_Gt, K_VB_Ge, VBA, VBB, Bytes, 1);
+		CheckVecTOrdered<sbyte> ("Vector<sbyte>", "VSB", K_VSB_Le, K_VSB_Gt, K_VSB_Ge, VSBA, VSBB, Bytes, 1);
+
+		CheckVecTEquality<float> ("Vector<float>", "VF", K_VF_EqB, K_VF_NeB, EqVFA, EqVFB);
+		CheckVecTEquality<double> ("Vector<double>", "VD", K_VD_EqB, K_VD_NeB, EqVDA, EqVDB);
+		CheckVecTEquality<int> ("Vector<int>", "VI", K_VI_EqB, K_VI_NeB, EqVIA, EqVIB);
+		CheckVecTEquality<uint> ("Vector<uint>", "VUI", K_VUI_EqB, K_VUI_NeB, EqVUIA, EqVUIB);
+		CheckVecTEquality<long> ("Vector<long>", "VL", K_VL_EqB, K_VL_NeB, EqVLA, EqVLB);
+		CheckVecTEquality<ulong> ("Vector<ulong>", "VUL", K_VUL_EqB, K_VUL_NeB, EqVULA, EqVULB);
+		CheckVecTEquality<short> ("Vector<short>", "VS", K_VS_EqB, K_VS_NeB, EqVSA, EqVSB);
+		CheckVecTEquality<ushort> ("Vector<ushort>", "VUS", K_VUS_EqB, K_VUS_NeB, EqVUSA, EqVUSB);
+		CheckVecTEquality<byte> ("Vector<byte>", "VB", K_VB_EqB, K_VB_NeB, EqVBA, EqVBB);
+		CheckVecTEquality<sbyte> ("Vector<sbyte>", "VSB", K_VSB_EqB, K_VSB_NeB, EqVSBA, EqVSBB);
+
+		CheckVecTScale<float> ("Vector<float>", "VF", K_VF_MulVS, K_VF_MulSV, VFA, FE, Bytes, 4);
+		CheckVecTScale<double> ("Vector<double>", "VD", K_VD_MulVS, K_VD_MulSV, VDA, DE, Bytes, 8);
+		CheckVecTScale<int> ("Vector<int>", "VI", K_VI_MulVS, K_VI_MulSV, VIA, IScale, Bytes, 4);
+		CheckVecTScale<long> ("Vector<long>", "VL", K_VL_MulVS, K_VL_MulSV, VLA, LScale, Bytes, 8);
+		CheckVecTScale<short> ("Vector<short>", "VS", K_VS_MulVS, K_VS_MulSV, VSA, SScale, Bytes, 2);
+		CheckVecTScale<byte> ("Vector<byte>", "VB", K_VB_MulVS, K_VB_MulSV, VBA, BScale, Bytes, 1);
+
+		CheckVecTNot<float> ("Vector<float>", "VF", K_VF_Not, VFA, Bytes, 4);
+		CheckVecTNot<double> ("Vector<double>", "VD", K_VD_Not, VDA, Bytes, 8);
+		CheckVecTNot<int> ("Vector<int>", "VI", K_VI_Not, VIA, Bytes, 4);
+		CheckVecTNot<long> ("Vector<long>", "VL", K_VL_Not, VLA, Bytes, 8);
+		CheckVecTNot<short> ("Vector<short>", "VS", K_VS_Not, VSA, Bytes, 2);
+		CheckVecTNot<byte> ("Vector<byte>", "VB", K_VB_Not, VBA, Bytes, 1);
+
+		CheckVecTSelect<float> ("Vector<float>", "VF", K_VF_Sel, CondVF, VFA, VFB, Bytes, 4);
+		CheckVecTSelect<int> ("Vector<int>", "VI", K_VI_Sel, CondVI, VIA, VIB, Bytes, 4);
+		CheckVecTSelect<long> ("Vector<long>", "VL", K_VL_Sel, CondVL, VLA, VLB, Bytes, 8);
+		CheckVecTSelect<short> ("Vector<short>", "VS", K_VS_Sel, CondVS, VSA, VSB, Bytes, 2);
+		CheckVecTSelect<byte> ("Vector<byte>", "VB", K_VB_Sel, CondVB, VBA, VBB, Bytes, 1);
+
+		Type tvf = typeof (Vector<float>), tvd = typeof (Vector<double>);
+		RunBinary<Vector<float>, Vector<float>, Vector<float>> (f, "Vector<float> /", "K_VF_Div", K_VF_Div, tvf.GetMethod ("op_Division", new[] { tvf, tvf }), VFA, VFB, Bytes, 4);
+		RunBinary<Vector<double>, Vector<double>, Vector<double>> (f, "Vector<double> /", "K_VD_Div", K_VD_Div, tvd.GetMethod ("op_Division", new[] { tvd, tvd }), VDA, VDB, Bytes, 8);
+
+		RunUnary<Vector<float>, Vector<float>> (f, "Vector<float>.SquareRoot", "K_VF_Sqrt", K_VF_Sqrt, VecGeneric ("SquareRoot", typeof (float)), VFA, Bytes, 4);
+		RunUnary<Vector<double>, Vector<double>> (f, "Vector<double>.SquareRoot", "K_VD_Sqrt", K_VD_Sqrt, VecGeneric ("SquareRoot", typeof (double)), VDA, Bytes, 8);
+
+		RunUnary<Vector<float>, Vector<float>> (f, "Vector<float>.Abs", "K_VF_Abs", K_VF_Abs, VecGeneric ("Abs", typeof (float)), VFA, Bytes, 4);
+		RunUnary<Vector<double>, Vector<double>> (f, "Vector<double>.Abs", "K_VD_Abs", K_VD_Abs, VecGeneric ("Abs", typeof (double)), VDA, Bytes, 8);
+		RunUnary<Vector<byte>, Vector<byte>> (f, "Vector<byte>.Abs", "K_VB_Abs", K_VB_Abs, VecGeneric ("Abs", typeof (byte)), VBA, Bytes, 1);
+		RunUnary<Vector<ushort>, Vector<ushort>> (f, "Vector<ushort>.Abs", "K_VUS_Abs", K_VUS_Abs, VecGeneric ("Abs", typeof (ushort)), VUSA, Bytes, 2);
+		RunUnary<Vector<uint>, Vector<uint>> (f, "Vector<uint>.Abs", "K_VUI_Abs", K_VUI_Abs, VecGeneric ("Abs", typeof (uint)), VUIA, Bytes, 4);
+		RunUnary<Vector<ulong>, Vector<ulong>> (f, "Vector<ulong>.Abs", "K_VUL_Abs", K_VUL_Abs, VecGeneric ("Abs", typeof (ulong)), VULA, Bytes, 8);
+
+		RunUnary<Vector<int>, Vector<float>> (f, "Vector<int>->Vector<float>", "K_VI2F", K_VI2F, Explicit (typeof (Vector<int>), tvf), VIA, Bytes, 1);
+		RunUnary<Vector<float>, Vector<int>> (f, "Vector<float>->Vector<int>", "K_VF2I", K_VF2I, Explicit (tvf, typeof (Vector<int>)), VFA, Bytes, 1);
+		RunUnary<Vector<long>, Vector<byte>> (f, "Vector<long>->Vector<byte>", "K_VL2B", K_VL2B, Explicit (typeof (Vector<long>), typeof (Vector<byte>)), VLA, Bytes, 1);
+		RunUnary<Vector<byte>, Vector<long>> (f, "Vector<byte>->Vector<long>", "K_VB2L", K_VB2L, Explicit (typeof (Vector<byte>), typeof (Vector<long>)), VBA, Bytes, 1);
 	}
 
 	// A lane divisor of zero makes op_Division throw. "Threw" is a result the
@@ -1419,6 +1945,7 @@ class SimdSemantics
 		CheckVector2d ();
 		CheckVector8s ();
 		CheckVector16b ();
+		CheckSimdRest ();
 		CheckVector4 ();
 		CheckVectorT ();
 		CheckIntDivByZero ();
