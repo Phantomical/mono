@@ -103,8 +103,13 @@ endif()
 
 # Exceptions stay on regardless of how LLVM itself was built: the ORC APIs
 # report failures through llvm::Error, and the unwinder needs the tables.
-# MSVC's /EHsc, which CMake passes already, is both of those.
-if(NOT MSVC)
+# clang-cl simulates MSVC closely enough to take the MSVC branch above for
+# /GR-, but not for this. Absent /EHsc, it treats a `try`/`throw` as a hard
+# error, where cl.exe itself only warns (C4530). The flag is spelled out here
+# instead of assumed.
+if(MSVC)
+  target_compile_options(mono_llvm INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/EHsc>)
+else()
   target_compile_options(mono_llvm INTERFACE
     $<$<COMPILE_LANGUAGE:CXX>:-fexceptions>
     $<$<COMPILE_LANGUAGE:CXX>:-funwind-tables>)
