@@ -130,8 +130,8 @@ bool fold_delegates ();
 /// translating the managed body they are declared with.
 ///
 /// A false value translates that body, which computes the same lanes and is the
-/// answer the lowering has to agree with. It does not reach the type
-/// representation. That placement is ABI, and a caller and a callee that
+/// answer the lowering has to agree with. Either value leaves the type
+/// representation alone. That placement is ABI, and a caller and a callee that
 /// disagreed about it would disagree about a register.
 bool simd_lowering ();
 

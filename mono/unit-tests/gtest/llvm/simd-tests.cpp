@@ -30,7 +30,7 @@ namespace {
 
 const char *const vector_add = "Mono.Simd.Vector4f:op_Addition";
 
-/// How many instructions of each kind the translated operator is made of.
+/// Instruction counts read off one translated function.
 struct Shape {
 	unsigned instructions = 0;
 	unsigned calls = 0;

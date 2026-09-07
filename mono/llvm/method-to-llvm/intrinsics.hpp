@@ -84,7 +84,8 @@ struct BuiltinBody {
 	BuiltinResult (*emit) (MethodLLVMEmitter &, llvm::IRBuilder<> &, MonoMethod *);
 };
 
-/// Returns the rows for the SIMD types' operations.
+/// The SIMD types' rows, kept in method-to-llvm/simd.cpp so a family of rows
+/// can live in a file of its own.
 llvm::ArrayRef<BuiltinBody> simd_bodies ();
 
 /// One System.Math or System.MathF method the backend answers itself.

@@ -26,7 +26,7 @@ struct SimdEmitters {
 	/// The two operands of a binary operator, combined into its answer.
 	using BinaryOp = llvm::Value *(*) (llvm::IRBuilder<> &, llvm::Value *, llvm::Value *);
 
-	/// Returns the value parameter i arrives in.
+	/// Returns the value of parameter i.
 	///
 	/// A SIMD class converts to a vector rather than a struct, so
 	/// held_in_memory () leaves it in a register and there is nothing to load.
@@ -36,7 +36,7 @@ struct SimdEmitters {
 			natural_parameter_index (i, emitter.function));
 	}
 
-	/// Writes op over a binary operator's two operands and returns it.
+	/// Applies op to the callee's two arguments and returns the result.
 	///
 	/// Answers nothing where the operands did not arrive as one vector type,
 	/// which leaves the managed body to be translated. Only a class the loader
