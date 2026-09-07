@@ -5,17 +5,22 @@
  * Each row must reproduce the managed body lane for lane. Tier 0 runs that body,
  * and a method's answer must not change when it promotes. Write a row from the
  * body, never from the SSE instruction it is expected to select.
+ *
+ * A row answering il_agrees false is the exception. It keeps the method off its
+ * own IL at every tier, so no engine is left running something else.
  */
 
 #include "intrinsics.hpp"
 
 #include "../runtime/options.hpp"
+#include "float-convert.hpp"
 #include "method-to-llvm.hpp"
 #include "simd-emit.hpp"
 
 #include "mono/metadata/class-internals.h"
 
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/ADT/StringMap.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
@@ -23,6 +28,7 @@
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
+#include <llvm/TargetParser/Host.h>
 
 #include <algorithm>
 #include <optional>
@@ -134,12 +140,59 @@ integer_lanes (llvm::FixedVectorType *type, unsigned width)
 		type->getNumElements ());
 }
 
+/// The AccelMode mask naming the SSE levels the host reports.
+///
+/// AccelMode's members are masks over the levels an Acceleration attribute
+/// names. jit.cpp gives the TargetMachine this same feature set, so the answer
+/// describes the code this backend writes and not just the CPU under it.
+uint64_t
+host_acceleration_mode ()
+{
+	static const struct {
+		const char *feature;
+		uint64_t bit;
+	} named[] = {
+		{ "sse", 1u << 0 },	{ "sse2", 1u << 1 },   { "sse3", 1u << 2 },
+		{ "ssse3", 1u << 3 },	{ "sse4.1", 1u << 4 }, { "sse4.2", 1u << 5 },
+		{ "sse4a", 1u << 6 },
+	};
+
+	static const uint64_t mode = [] {
+		llvm::StringMap<bool> features = llvm::sys::getHostCPUFeatures ();
+		uint64_t mask = 0;
+
+		for (const auto &entry : named) {
+			auto found = features.find (entry.feature);
+
+			if (found != features.end () && found->second)
+				mask |= entry.bit;
+		}
+
+		return mask;
+	} ();
+
+	return mode;
+}
+
 } // namespace
 
 /// The emitters the table below points at, written against SimdEmit.
 struct SimdEmitters : SimdEmit {
 	/// Which way a shift moves its lanes.
 	enum class Direction { left, right };
+
+	/// What a ConvertTo row makes of each lane.
+	enum class LaneConvert {
+		/// A float of the answer's own width, from an integer or another float.
+		floating,
+		/// An integer, through System.Math.Round.
+		rounded,
+		/// An integer, truncated toward zero.
+		truncated,
+	};
+
+	/// Which lanes a one-operand shuffle selects, leaving the rest alone.
+	enum class ShuffleWindow { whole, low, high };
 
 	/// The first two arguments where both arrived as one vector type, and
 	/// nothing otherwise, which leaves the managed body to be translated.
@@ -767,6 +820,301 @@ struct SimdEmitters : SimdEmit {
 		                                                clamp (args->second), mask));
 		return llvm::Error::success ();
 	}
+
+	/// value's first count lanes.
+	static llvm::Value *first_lanes (llvm::IRBuilder<> &builder, llvm::Value *value,
+	                                 unsigned count)
+	{
+		if (type_of (value)->getNumElements () == count)
+			return value;
+
+		llvm::SmallVector<int, 4> mask;
+
+		for (unsigned i = 0; i < count; ++i)
+			mask.push_back ((int) i);
+
+		return builder.CreateShuffleVector (value, mask);
+	}
+
+	/// value's lanes, with zeros filling the answer out to count of them.
+	///
+	/// The mask is the identity: index i past value's own lanes already names
+	/// a lane of the zeros standing beside them.
+	static llvm::Value *zero_filled (llvm::IRBuilder<> &builder, llvm::Value *value,
+	                                 unsigned count)
+	{
+		llvm::FixedVectorType *type = type_of (value);
+
+		if (type->getNumElements () == count)
+			return value;
+
+		llvm::SmallVector<int, 4> mask;
+
+		for (unsigned i = 0; i < count; ++i)
+			mask.push_back ((int) i);
+
+		return builder.CreateShuffleVector (value, llvm::Constant::getNullValue (type),
+		                                    mask);
+	}
+
+	/**
+	 * Converts as many lanes as the narrower of the two types holds.
+	 *
+	 * Every ConvertTo body reads its operand's lanes lowest first. A lane of
+	 * the answer it has nothing for gets a zero. One rule therefore covers the
+	 * widening bodies and the narrowing ones alike.
+	 *
+	 * constrained_float_to_int () converts a lane going to an integer, so an
+	 * operand out of range gives the same bytes at every tier.
+	 */
+	template <LaneConvert kind>
+	static BuiltinResult convert_lanes (MethodLLVMEmitter &emitter,
+	                                    llvm::IRBuilder<> &builder, MonoMethod *method)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		auto *from = llvm::dyn_cast<llvm::FixedVectorType> (value->getType ());
+		auto *to = llvm::dyn_cast<llvm::FixedVectorType> (return_type (emitter));
+		std::optional<Lane> lane = lane_of (method);
+
+		if (from == nullptr || to == nullptr || !lane)
+			return std::nullopt;
+		if (to->getElementType ()->isFloatingPointTy ()
+		    != (kind == LaneConvert::floating))
+			return std::nullopt;
+		if (kind != LaneConvert::floating && !lane_is_float (*lane))
+			return std::nullopt;
+
+		unsigned lanes =
+			std::min (from->getNumElements (), to->getNumElements ());
+		llvm::Value *source = first_lanes (builder, value, lanes);
+		llvm::FixedVectorType *narrow =
+			llvm::FixedVectorType::get (to->getElementType (), lanes);
+		llvm::Value *converted = nullptr;
+
+		switch (kind) {
+		case LaneConvert::floating:
+			converted = lane_is_float (*lane)
+			                    ? builder.CreateFPCast (source, narrow)
+			            : lane_is_signed (*lane)
+			                    ? builder.CreateSIToFP (source, narrow)
+			                    : builder.CreateUIToFP (source, narrow);
+			break;
+
+		case LaneConvert::rounded: {
+			// System.Math.Round takes a double, so a float lane widens
+			// before it rounds and the answer comes off the double.
+			llvm::FixedVectorType *wide = llvm::FixedVectorType::get (
+				llvm::Type::getDoubleTy (context (emitter)), lanes);
+			llvm::Value *rounded = builder.CreateIntrinsic (
+				llvm::Intrinsic::roundeven, { wide },
+				{ builder.CreateFPCast (source, wide) });
+
+			converted = constrained_float_to_int (builder, rounded, narrow, true);
+			break;
+		}
+
+		case LaneConvert::truncated:
+			converted = constrained_float_to_int (builder, source, narrow, true);
+			break;
+		}
+
+		builder.CreateRet (zero_filled (builder, converted, to->getNumElements ()));
+		return llvm::Error::success ();
+	}
+
+	/**
+	 * Sums the absolute differences of each half into lanes 0 and 4.
+	 *
+	 * This is not psadbw. The body reads its first operand through a byte
+	 * pointer and its second through an sbyte one. A lane of 0xff is therefore
+	 * 255 on the left and -1 on the right.
+	 *
+	 * The lanes the body never assigns keep the zero the answer was made with.
+	 */
+	static BuiltinResult absolute_differences (MethodLLVMEmitter &emitter,
+	                                           llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		std::optional<std::pair<llvm::Value *, llvm::Value *>> args =
+			operands (emitter);
+		auto *to = llvm::dyn_cast<llvm::FixedVectorType> (return_type (emitter));
+
+		if (!args || to == nullptr)
+			return std::nullopt;
+
+		llvm::FixedVectorType *type = type_of (args->first);
+
+		if (!type->getElementType ()->isIntegerTy (8) || type->getNumElements () != 16)
+			return std::nullopt;
+		if (!to->getElementType ()->isIntegerTy (16) || to->getNumElements () != 8)
+			return std::nullopt;
+
+		// The widest difference is 383, so llvm.abs never meets the int32 whose
+		// negation does not fit and its poison operand stays false.
+		unsigned width = type->getNumElements () / 2;
+		llvm::FixedVectorType *wide = integer_lanes (type, 32);
+		llvm::Value *difference =
+			builder.CreateSub (builder.CreateZExt (args->first, wide),
+		                           builder.CreateSExt (args->second, wide));
+		llvm::Value *absolute = builder.CreateIntrinsic (
+			llvm::Intrinsic::abs, { wide }, { difference, builder.getInt1 (false) });
+		llvm::Value *answer = llvm::Constant::getNullValue (to);
+		llvm::FixedVectorType *half =
+			llvm::FixedVectorType::get (builder.getInt32Ty (), width);
+
+		for (unsigned i = 0; i < 2; ++i) {
+			llvm::SmallVector<int, 8> mask;
+
+			for (unsigned lane = 0; lane < width; ++lane)
+				mask.push_back ((int) (i * width + lane));
+
+			llvm::Value *sum = builder.CreateIntrinsic (
+				llvm::Intrinsic::vector_reduce_add, { half },
+				{ builder.CreateShuffleVector (absolute, mask) });
+
+			answer = builder.CreateInsertElement (
+				answer, builder.CreateTrunc (sum, to->getElementType ()),
+				i * (to->getNumElements () / 2));
+		}
+
+		builder.CreateRet (answer);
+		return llvm::Error::success ();
+	}
+
+	/// The lane that field of selector names, offset by base.
+	static llvm::Value *selected_lane (llvm::IRBuilder<> &builder, llvm::Value *selector,
+	                                   unsigned field, unsigned width, unsigned base)
+	{
+		llvm::Type *type = selector->getType ();
+		llvm::Value *index = builder.CreateAnd (
+			builder.CreateLShr (selector,
+		                            llvm::ConstantInt::get (type, field * width)),
+			llvm::ConstantInt::get (type, (1u << width) - 1));
+
+		if (base == 0)
+			return index;
+
+		return builder.CreateAdd (index, llvm::ConstantInt::get (type, base));
+	}
+
+	/**
+	 * Answers each lane with the one a field of the selector names. The low
+	 * half comes from the first operand and the high half from the second.
+	 *
+	 * The selector is a parameter rather than a constant, so this is a read at
+	 * a computed index. That is what the managed body does through its element
+	 * pointer. A caller passing a constant leaves one shufflevector once the
+	 * body folds into it.
+	 *
+	 * The field is two bits wide for a four-lane operand and one for a
+	 * two-lane one. The mask in front of it keeps every index in range.
+	 */
+	static BuiltinResult shuffle_pair (MethodLLVMEmitter &emitter,
+	                                   llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		std::optional<std::pair<llvm::Value *, llvm::Value *>> args =
+			operands (emitter);
+		llvm::Value *selector = argument (emitter, 2);
+
+		if (!args || !selector->getType ()->isIntegerTy (32))
+			return std::nullopt;
+
+		llvm::FixedVectorType *type = type_of (args->first);
+		unsigned lanes = type->getNumElements ();
+
+		if (lanes != 2 && lanes != 4)
+			return std::nullopt;
+
+		unsigned width = lanes == 4 ? 2u : 1u;
+		llvm::Value *answer = llvm::PoisonValue::get (type);
+
+		for (unsigned i = 0; i < lanes; ++i) {
+			llvm::Value *from = i < lanes / 2 ? args->first : args->second;
+
+			answer = builder.CreateInsertElement (
+				answer,
+				builder.CreateExtractElement (
+					from,
+					selected_lane (builder, selector, i, width, 0)),
+				i);
+		}
+
+		builder.CreateRet (answer);
+		return llvm::Error::success ();
+	}
+
+	/// Answers the window's four lanes with the ones the selector names, and
+	/// every other lane with the operand's own.
+	template <ShuffleWindow window>
+	static BuiltinResult shuffle_window (MethodLLVMEmitter &emitter,
+	                                     llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *selector = argument (emitter, 1);
+		auto *type = llvm::dyn_cast<llvm::FixedVectorType> (value->getType ());
+
+		if (type == nullptr || !selector->getType ()->isIntegerTy (32))
+			return std::nullopt;
+		if (type->getNumElements () != (window == ShuffleWindow::whole ? 4u : 8u))
+			return std::nullopt;
+
+		unsigned base = window == ShuffleWindow::high ? 4u : 0u;
+		llvm::Value *answer = window == ShuffleWindow::whole
+		                              ? (llvm::Value *) llvm::PoisonValue::get (type)
+		                              : value;
+
+		for (unsigned i = 0; i < 4; ++i)
+			answer = builder.CreateInsertElement (
+				answer,
+				builder.CreateExtractElement (
+					value,
+					selected_lane (builder, selector, i, 2, base)),
+				base + i);
+
+		builder.CreateRet (answer);
+		return llvm::Error::success ();
+	}
+
+	/**
+	 * Asks the cache for the line the argument points at.
+	 *
+	 * The managed body is empty, and these methods exist for a compiler to
+	 * recognize rather than for anything the body does. A prefetch reaches no
+	 * value the program can read, so the empty body and this one answer alike.
+	 *
+	 * locality is llvm.prefetch's, where 3 is the whole hierarchy and 0 is
+	 * non-temporal, which is the order the four names run in.
+	 */
+	template <unsigned locality>
+	static BuiltinResult prefetch (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                               MonoMethod *)
+	{
+		llvm::Value *address = argument (emitter, 0);
+
+		if (!address->getType ()->isPointerTy () || !return_type (emitter)->isVoidTy ())
+			return std::nullopt;
+
+		builder.CreateIntrinsic (llvm::Intrinsic::prefetch, { address->getType () },
+		                         { address, builder.getInt32 (0),
+		                           builder.getInt32 (locality), builder.getInt32 (1) });
+		builder.CreateRetVoid ();
+		return llvm::Error::success ();
+	}
+
+	/// Answers with the SSE levels this backend's target machine has.
+	///
+	/// The managed body answers AccelMode.None whatever the target is, which is
+	/// why this row is the one that keeps the method off its own IL.
+	static BuiltinResult acceleration_mode (MethodLLVMEmitter &emitter,
+	                                        llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Type *answer = return_type (emitter);
+
+		if (!answer->isIntegerTy ())
+			return std::nullopt;
+
+		builder.CreateRet (llvm::ConstantInt::get (answer, host_acceleration_mode ()));
+		return llvm::Error::success ();
+	}
 };
 
 namespace {
@@ -791,6 +1139,11 @@ constexpr ClassKey vector8us { "Mono.Simd", "Mono.Simd", "Vector8us" };
 constexpr ClassKey vector16sb { "Mono.Simd", "Mono.Simd", "Vector16sb" };
 constexpr ClassKey vector16b { "Mono.Simd", "Mono.Simd", "Vector16b" };
 constexpr ClassKey operations { "Mono.Simd", "Mono.Simd", "VectorOperations" };
+constexpr ClassKey simd_runtime { "Mono.Simd", "Mono.Simd", "SimdRuntime" };
+
+/// The ten structs, each of which declares the prefetch surface itself.
+constexpr ClassKey structs[] = { vector4f,  vector2d, vector4i,  vector4ui, vector2l,
+	                         vector2ul, vector8s, vector8us, vector16sb, vector16b };
 
 // il_agrees is true throughout, because every managed body here computes what
 // its row computes and tier 0 goes on running it.
@@ -961,6 +1314,30 @@ const BuiltinBody simd_table[] = {
 	{ operations, "DuplicateLow", "V", true, simd_lowering, S::permute<0, 0, 2, 2> },
 	{ operations, "DuplicateHigh", "V", true, simd_lowering, S::permute<1, 1, 3, 3> },
 
+	// One row for each shuffle shape rather than for each overload. The lane
+	// count sets the field width, and the operand's type sets the window.
+	{ operations, "Shuffle", "VVS", true, simd_lowering, S::shuffle_pair },
+	{ operations, "Shuffle", "VS", true, simd_lowering,
+	  S::shuffle_window<S::ShuffleWindow::whole> },
+	{ operations, "ShuffleLow", "VS", true, simd_lowering,
+	  S::shuffle_window<S::ShuffleWindow::low> },
+	{ operations, "ShuffleHigh", "VS", true, simd_lowering,
+	  S::shuffle_window<S::ShuffleWindow::high> },
+
+	{ operations, "SumOfAbsoluteDifferences", "VV", true, simd_lowering,
+	  S::absolute_differences },
+
+	// ConvertToFloat and ConvertToDouble each cover two source types, and the
+	// two rows below them cover the four bodies that answer with an integer.
+	{ operations, "ConvertToFloat", "V", true, simd_lowering,
+	  S::convert_lanes<S::LaneConvert::floating> },
+	{ operations, "ConvertToDouble", "V", true, simd_lowering,
+	  S::convert_lanes<S::LaneConvert::floating> },
+	{ operations, "ConvertToInt", "V", true, simd_lowering,
+	  S::convert_lanes<S::LaneConvert::rounded> },
+	{ operations, "ConvertToIntTruncated", "V", true, simd_lowering,
+	  S::convert_lanes<S::LaneConvert::truncated> },
+
 	{ operations, "PackWithSignedSaturation", "VV", true, simd_lowering,
 	  S::pack<false> },
 	{ operations, "SignedPackWithSignedSaturation", "VV", true, simd_lowering,
@@ -969,6 +1346,22 @@ const BuiltinBody simd_table[] = {
 	  S::pack<true> },
 	{ operations, "SignedPackWithUnsignedSaturation", "VV", true, simd_lowering,
 	  S::pack<true> },
+
+	{ simd_runtime, "get_AccelMode", "", false, simd_lowering, S::acceleration_mode },
+};
+
+/// The four prefetches, which every struct above declares under one name each.
+///
+/// The `ref` overload and the pointer one take the same body, and a pointer is
+/// an S either way. One row of each name covers both.
+const struct {
+	std::string_view name;
+	BuiltinResult (*emit) (MethodLLVMEmitter &, llvm::IRBuilder<> &, MonoMethod *);
+} prefetches[] = {
+	{ "PrefetchTemporalAllCacheLevels", S::prefetch<3> },
+	{ "PrefetchTemporal1stLevelCache", S::prefetch<2> },
+	{ "PrefetchTemporal2ndLevelCache", S::prefetch<1> },
+	{ "PrefetchNonTemporal", S::prefetch<0> },
 };
 
 } // namespace
@@ -976,7 +1369,19 @@ const BuiltinBody simd_table[] = {
 llvm::ArrayRef<BuiltinBody>
 simd_bodies ()
 {
-	return simd_table;
+	static const std::vector<BuiltinBody> rows = [] {
+		std::vector<BuiltinBody> made (std::begin (simd_table),
+		                               std::end (simd_table));
+
+		for (const ClassKey &klass : structs)
+			for (const auto &entry : prefetches)
+				made.push_back ({ klass, entry.name, "S", true,
+				                  simd_lowering, entry.emit });
+
+		return made;
+	} ();
+
+	return rows;
 }
 
 } // namespace mono

@@ -13,6 +13,7 @@
 #include "intrinsics.hpp"
 
 #include "../runtime/options.hpp"
+#include "float-convert.hpp"
 #include "method-to-llvm.hpp"
 #include "simd-emit.hpp"
 
@@ -40,11 +41,9 @@ enum class Lane {
 };
 
 Lane
-lane_of (MonoMethod *method)
+lane_of_class (MonoClass *klass)
 {
-	MonoClass *klass = method->klass;
-
-	if (!mono_class_is_ginst (klass))
+	if (klass == nullptr || !mono_class_is_ginst (klass))
 		return Lane::other;
 
 	MonoGenericInst *inst = mono_class_get_generic_class (klass)->context.class_inst;
@@ -69,6 +68,27 @@ lane_of (MonoMethod *method)
 	default:
 		return Lane::other;
 	}
+}
+
+Lane
+lane_of (MonoMethod *method)
+{
+	return lane_of_class (method->klass);
+}
+
+/// The lane of the Vector<T> parameter index names.
+///
+/// The conversions below are declared on the non-generic Vector, so the type
+/// argument the answer turns on is the parameter's rather than the class's.
+Lane
+lane_of_parameter (MonoMethod *method, int index)
+{
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+	if (sig == nullptr || index >= sig->param_count)
+		return Lane::other;
+
+	return lane_of_class (mono_class_from_mono_type_internal (sig->params[index]));
 }
 
 /// The arithmetic a row applies to its two operands.
@@ -478,7 +498,162 @@ struct SimdVectorTEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
+	/// Each lane converted to the answer's own float type.
+	static BuiltinResult to_floating (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                  MonoMethod *method)
+	{
+		llvm::FixedVectorType *from = vector_argument (emitter, 0);
+		auto *to = llvm::dyn_cast<llvm::FixedVectorType> (return_type (emitter));
+		Lane lane = lane_of_parameter (method, 0);
+
+		if (from == nullptr || to == nullptr)
+			return std::nullopt;
+		if (!to->getElementType ()->isFloatingPointTy ()
+		    || from->getNumElements () != to->getNumElements ())
+			return std::nullopt;
+		if (lane != Lane::signed_integer && lane != Lane::unsigned_integer)
+			return std::nullopt;
+
+		llvm::Value *value = argument (emitter, 0);
+
+		builder.CreateRet (lane == Lane::signed_integer
+		                           ? builder.CreateSIToFP (value, to)
+		                           : builder.CreateUIToFP (value, to));
+		return llvm::Error::success ();
+	}
+
+	/// Each lane truncated toward zero into the answer's own integer type.
+	///
+	/// The managed body casts inside `unchecked`, so an operand outside the
+	/// answer's range gives whatever the conversion instruction leaves. The
+	/// three helpers below are what make that the same value at every tier.
+	template <bool is_signed>
+	static BuiltinResult to_integer (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                 MonoMethod *)
+	{
+		llvm::FixedVectorType *from = vector_argument (emitter, 0);
+		auto *to = llvm::dyn_cast<llvm::FixedVectorType> (return_type (emitter));
+
+		if (from == nullptr || to == nullptr)
+			return std::nullopt;
+		if (!from->getElementType ()->isFloatingPointTy ()
+		    || !to->getElementType ()->isIntegerTy ()
+		    || from->getNumElements () != to->getNumElements ())
+			return std::nullopt;
+
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *converted;
+
+		if (is_signed)
+			converted = constrained_float_to_int (builder, value, to, true);
+		else if (to->getScalarSizeInBits () == 64)
+			converted = float_to_uint64 (builder, value, to);
+		else
+			converted = float_to_uint32_or_narrower (builder, value, to);
+
+		builder.CreateRet (converted);
+		return llvm::Error::success ();
+	}
+
+	/// Both operands' lanes cast into the answer's own element, the first
+	/// operand's lanes first.
+	static BuiltinResult narrow (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                             MonoMethod *)
+	{
+		llvm::FixedVectorType *from = vector_arguments (emitter, 2);
+		auto *to = llvm::dyn_cast<llvm::FixedVectorType> (return_type (emitter));
+
+		if (from == nullptr || to == nullptr)
+			return std::nullopt;
+		if (to->getNumElements () != from->getNumElements () * 2
+		    || to->getScalarSizeInBits () * 2 != from->getScalarSizeInBits ())
+			return std::nullopt;
+
+		llvm::FixedVectorType *half = llvm::FixedVectorType::get (
+			to->getElementType (), from->getNumElements ());
+		llvm::SmallVector<int, 16> mask;
+
+		for (unsigned i = 0; i < to->getNumElements (); ++i)
+			mask.push_back ((int) i);
+
+		builder.CreateRet (builder.CreateShuffleVector (
+			cast_lanes (builder, argument (emitter, 0), half),
+			cast_lanes (builder, argument (emitter, 1), half), mask));
+		return llvm::Error::success ();
+	}
+
+	/// The operand's two halves cast into the wider lane, written through the
+	/// two byrefs behind it.
+	static BuiltinResult widen (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                            MonoMethod *method)
+	{
+		llvm::FixedVectorType *from = vector_argument (emitter, 0);
+		Lane lane = lane_of_parameter (method, 0);
+
+		if (from == nullptr || !return_type (emitter)->isVoidTy ())
+			return std::nullopt;
+		if (from->getNumElements () % 2 != 0 || lane == Lane::other)
+			return std::nullopt;
+
+		llvm::Type *element = from->getElementType ();
+		llvm::Type *wider =
+			element->isFloatTy ()
+				? llvm::Type::getDoubleTy (element->getContext ())
+			: element->isIntegerTy ()
+				? llvm::Type::getIntNTy (element->getContext (),
+			                                 element->getScalarSizeInBits () * 2)
+				: nullptr;
+
+		if (wider == nullptr)
+			return std::nullopt;
+
+		unsigned half = from->getNumElements () / 2;
+		llvm::FixedVectorType *to = llvm::FixedVectorType::get (wider, half);
+		llvm::Value *value = argument (emitter, 0);
+
+		for (unsigned i = 0; i < 2; ++i) {
+			llvm::SmallVector<int, 8> mask;
+
+			for (unsigned j = 0; j < half; ++j)
+				mask.push_back ((int) (i * half + j));
+
+			llvm::Value *lanes = builder.CreateShuffleVector (value, mask);
+
+			// A Vector<T> is aligned well past its element, so the
+			// element's own alignment is a floor rather than a claim.
+			builder.CreateAlignedStore (
+				widen_lanes (builder, lanes, to, lane),
+				argument (emitter, 1 + i),
+				llvm::Align (wider->getScalarSizeInBits () / 8));
+		}
+
+		builder.CreateRetVoid ();
+		return llvm::Error::success ();
+	}
+
 private:
+	/// value with each lane cast into to's narrower element.
+	static llvm::Value *cast_lanes (llvm::IRBuilder<> &builder, llvm::Value *value,
+	                                llvm::FixedVectorType *to)
+	{
+		if (to->getElementType ()->isFloatingPointTy ())
+			return builder.CreateFPTrunc (value, to);
+
+		return builder.CreateTrunc (value, to);
+	}
+
+	/// value with each lane cast into to's wider element.
+	static llvm::Value *widen_lanes (llvm::IRBuilder<> &builder, llvm::Value *value,
+	                                 llvm::FixedVectorType *to, Lane lane)
+	{
+		if (lane == Lane::floating)
+			return builder.CreateFPExt (value, to);
+		if (lane == Lane::signed_integer)
+			return builder.CreateSExt (value, to);
+
+		return builder.CreateZExt (value, to);
+	}
+
 	/// op applied to lhs and rhs in lane's own arithmetic.
 	template <Arithmetic op>
 	static llvm::Value *apply (llvm::IRBuilder<> &builder, Lane lane, llvm::Value *lhs,
@@ -506,6 +681,9 @@ namespace {
 
 /// Vector`1 is declared in corlib. System.Numerics.Vectors only forwards it.
 constexpr ClassKey vector_t = { nullptr, "System.Numerics", "Vector`1" };
+
+/// The non-generic Vector beside it, which declares the conversions.
+constexpr ClassKey vector_statics = { nullptr, "System.Numerics", "Vector" };
 
 const BuiltinBody simd_vector_t_table[] = {
 	{ vector_t, "op_Addition", "VV", true, simd_lowering,
@@ -562,6 +740,24 @@ const BuiltinBody simd_vector_t_table[] = {
 	  SimdVectorTEmitters::square_root },
 	{ vector_t, "DotProduct", "VV", true, simd_lowering,
 	  SimdVectorTEmitters::dot_product },
+
+	// Narrow, Widen and the conversions are declared on the non-generic
+	// Vector rather than on Vector<T>, so they carry a class key of their own.
+	{ vector_statics, "ConvertToSingle", "V", true, simd_lowering,
+	  SimdVectorTEmitters::to_floating },
+	{ vector_statics, "ConvertToDouble", "V", true, simd_lowering,
+	  SimdVectorTEmitters::to_floating },
+	{ vector_statics, "ConvertToInt32", "V", true, simd_lowering,
+	  SimdVectorTEmitters::to_integer<true> },
+	{ vector_statics, "ConvertToInt64", "V", true, simd_lowering,
+	  SimdVectorTEmitters::to_integer<true> },
+	{ vector_statics, "ConvertToUInt32", "V", true, simd_lowering,
+	  SimdVectorTEmitters::to_integer<false> },
+	{ vector_statics, "ConvertToUInt64", "V", true, simd_lowering,
+	  SimdVectorTEmitters::to_integer<false> },
+
+	{ vector_statics, "Narrow", "VV", true, simd_lowering, SimdVectorTEmitters::narrow },
+	{ vector_statics, "Widen", "VSS", true, simd_lowering, SimdVectorTEmitters::widen },
 };
 
 } // namespace

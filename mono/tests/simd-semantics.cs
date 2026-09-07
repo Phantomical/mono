@@ -743,6 +743,20 @@ class SimdSemantics
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_ConvDbl (int r) { return Bytes (VectorOperations.ConvertToDouble (V4fA[r])); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_Ctor4 (int r) { return Bytes (new Vector4f (FE[r % FE.Length], FE[(r + 1) % FE.Length], FE[(r + 2) % FE.Length], FE[(r + 3) % FE.Length])); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_CtorSplat (int r) { return Bytes (new Vector4f (FE[r % FE.Length])); }
+
+	// A prefetch answers nothing, so what this checks is that asking for one
+	// leaves the vector beside it alone and faults on no address.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static byte[] K_V4f_Prefetch (int r)
+	{
+		Vector4f v = V4fA[r];
+
+		Vector4f.PrefetchNonTemporal (ref v);
+		Vector4f.PrefetchTemporalAllCacheLevels (ref v);
+		Vector4f.PrefetchTemporal1stLevelCache (ref v);
+		Vector4f.PrefetchTemporal2ndLevelCache (ref v);
+		return Bytes (v);
+	}
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_Index (int r) { return BitConverter.GetBytes (V4fA[r][r % 4]); }
 
 	static void CheckVector4f ()
@@ -789,6 +803,7 @@ class SimdSemantics
 
 		RunKernelOnly (f, "Vector4f ctor(4)", "K_V4f_Ctor4", K_V4f_Ctor4, 4);
 		RunKernelOnly (f, "Vector4f ctor(splat)", "K_V4f_CtorSplat", K_V4f_CtorSplat, 4);
+		RunKernelOnly (f, "Vector4f prefetch", "K_V4f_Prefetch", K_V4f_Prefetch, 4);
 		RunKernelOnly (f, "Vector4f indexer get", "K_V4f_Index", K_V4f_Index, 4);
 	}
 
@@ -933,6 +948,11 @@ class SimdSemantics
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V2d_CtorSplat (int r) { return Bytes (new Vector2d (DE[r % DE.Length])); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V2d_Index (int r) { return BitConverter.GetBytes (V2dA[r][r % 2]); }
 
+	// A two-lane Shuffle selects through one-bit fields of a plain int rather
+	// than the two-bit fields of a ShuffleSel. 2 takes lane 0 of the first
+	// operand and lane 1 of the second, so it tells the two fields apart.
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V2d_Shuf2 (int r) { return Bytes (VectorOperations.Shuffle (V2dA[r], V2dB[r], 2)); }
+
 	static void CheckVector2d ()
 	{
 		string f = "Mono.Simd";
@@ -965,6 +985,8 @@ class SimdSemantics
 		RunUnary<Vector2d, Vector4i> (f, "Vector2d.ConvertToInt", "K_V2d_ConvInt", K_V2d_ConvInt, vo.GetMethod ("ConvertToInt", new[] { t }), V2dA, Bytes, 4);
 		RunUnary<Vector2d, Vector4i> (f, "Vector2d.ConvertToIntTruncated", "K_V2d_ConvIntTr", K_V2d_ConvIntTr, vo.GetMethod ("ConvertToIntTruncated", new[] { t }), V2dA, Bytes, 4);
 		RunUnary<Vector2d, Vector4f> (f, "Vector2d.ConvertToFloat", "K_V2d_ConvFloat", K_V2d_ConvFloat, vo.GetMethod ("ConvertToFloat", new[] { t }), V2dA, Bytes, 4);
+		RunTernary<Vector2d, Vector2d, int, Vector2d> (f, "Vector2d.Shuffle(2)", "K_V2d_Shuf2", K_V2d_Shuf2,
+			vo.GetMethod ("Shuffle", new[] { t, t, typeof (int) }), V2dA, V2dB, 2, Bytes, 8);
 
 		RunKernelOnly (f, "Vector2d ctor(2)", "K_V2d_Ctor2", K_V2d_Ctor2, 8);
 		RunKernelOnly (f, "Vector2d ctor(splat)", "K_V2d_CtorSplat", K_V2d_CtorSplat, 8);
@@ -1717,6 +1739,38 @@ class SimdSemantics
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUI_Abs (int r) { return Bytes (System.Numerics.Vector.Abs<uint> (VUIA[r])); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VUL_Abs (int r) { return Bytes (System.Numerics.Vector.Abs<ulong> (VULA[r])); }
 
+	// The conversions cast each lane inside `unchecked`, so a source outside
+	// the answer's range is whatever the conversion instruction leaves. FE and
+	// DE carry both infinities, both NaN signs and each width's own extremes,
+	// which is the whole of that boundary.
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_I2Single (int r) { return Bytes (System.Numerics.Vector.ConvertToSingle (VIA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_UI2Single (int r) { return Bytes (System.Numerics.Vector.ConvertToSingle (VUIA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_L2Double (int r) { return Bytes (System.Numerics.Vector.ConvertToDouble (VLA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_UL2Double (int r) { return Bytes (System.Numerics.Vector.ConvertToDouble (VULA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_F2I32 (int r) { return Bytes (System.Numerics.Vector.ConvertToInt32 (VFA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_F2UI32 (int r) { return Bytes (System.Numerics.Vector.ConvertToUInt32 (VFA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_D2I64 (int r) { return Bytes (System.Numerics.Vector.ConvertToInt64 (VDA[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_D2UI64 (int r) { return Bytes (System.Numerics.Vector.ConvertToUInt64 (VDA[r])); }
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_NarrowS (int r) { return Bytes (System.Numerics.Vector.Narrow (VSA[r], VSB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_NarrowUS (int r) { return Bytes (System.Numerics.Vector.Narrow (VUSA[r], VUSB[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_NarrowD (int r) { return Bytes (System.Numerics.Vector.Narrow (VDA[r], VDB[r])); }
+
+	// Widen answers through two byrefs rather than a return value, so its two
+	// halves are compared as one buffer and it has no delegate arm.
+	static byte[] BothHalves<T> (Vector<T> low, Vector<T> high) where T : struct
+	{
+		byte[] a = Bytes (low), b = Bytes (high), r = new byte[a.Length + b.Length];
+
+		Array.Copy (a, 0, r, 0, a.Length);
+		Array.Copy (b, 0, r, a.Length, b.Length);
+		return r;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_WidenSB (int r) { Vector<short> lo, hi; System.Numerics.Vector.Widen (VSBA[r], out lo, out hi); return BothHalves (lo, hi); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_WidenB (int r) { Vector<ushort> lo, hi; System.Numerics.Vector.Widen (VBA[r], out lo, out hi); return BothHalves (lo, hi); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VT_WidenF (int r) { Vector<double> lo, hi; System.Numerics.Vector.Widen (VFA[r], out lo, out hi); return BothHalves (lo, hi); }
+
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VI2F (int r) { return Bytes ((Vector<float>) VIA[r]); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VF2I (int r) { return Bytes ((Vector<int>) VFA[r]); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_VL2B (int r) { return Bytes ((Vector<byte>) VLA[r]); }
@@ -1900,6 +1954,27 @@ class SimdSemantics
 		RunUnary<Vector<float>, Vector<int>> (f, "Vector<float>->Vector<int>", "K_VF2I", K_VF2I, Explicit (tvf, typeof (Vector<int>)), VFA, Bytes, 1);
 		RunUnary<Vector<long>, Vector<byte>> (f, "Vector<long>->Vector<byte>", "K_VL2B", K_VL2B, Explicit (typeof (Vector<long>), typeof (Vector<byte>)), VLA, Bytes, 1);
 		RunUnary<Vector<byte>, Vector<long>> (f, "Vector<byte>->Vector<long>", "K_VB2L", K_VB2L, Explicit (typeof (Vector<byte>), typeof (Vector<long>)), VBA, Bytes, 1);
+
+		Type vec = typeof (System.Numerics.Vector);
+
+		RunUnary<Vector<int>, Vector<float>> (f, "Vector.ConvertToSingle(int)", "K_VT_I2Single", K_VT_I2Single, vec.GetMethod ("ConvertToSingle", new[] { typeof (Vector<int>) }), VIA, Bytes, 4);
+		RunUnary<Vector<uint>, Vector<float>> (f, "Vector.ConvertToSingle(uint)", "K_VT_UI2Single", K_VT_UI2Single, vec.GetMethod ("ConvertToSingle", new[] { typeof (Vector<uint>) }), VUIA, Bytes, 4);
+		RunUnary<Vector<long>, Vector<double>> (f, "Vector.ConvertToDouble(long)", "K_VT_L2Double", K_VT_L2Double, vec.GetMethod ("ConvertToDouble", new[] { typeof (Vector<long>) }), VLA, Bytes, 8);
+		RunUnary<Vector<ulong>, Vector<double>> (f, "Vector.ConvertToDouble(ulong)", "K_VT_UL2Double", K_VT_UL2Double, vec.GetMethod ("ConvertToDouble", new[] { typeof (Vector<ulong>) }), VULA, Bytes, 8);
+		RunUnary<Vector<float>, Vector<int>> (f, "Vector.ConvertToInt32", "K_VT_F2I32", K_VT_F2I32, vec.GetMethod ("ConvertToInt32", new[] { tvf }), VFA, Bytes, 4);
+		RunUnary<Vector<float>, Vector<uint>> (f, "Vector.ConvertToUInt32", "K_VT_F2UI32", K_VT_F2UI32, vec.GetMethod ("ConvertToUInt32", new[] { tvf }), VFA, Bytes, 4);
+		RunUnary<Vector<double>, Vector<long>> (f, "Vector.ConvertToInt64", "K_VT_D2I64", K_VT_D2I64, vec.GetMethod ("ConvertToInt64", new[] { tvd }), VDA, Bytes, 8);
+		RunUnary<Vector<double>, Vector<ulong>> (f, "Vector.ConvertToUInt64", "K_VT_D2UI64", K_VT_D2UI64, vec.GetMethod ("ConvertToUInt64", new[] { tvd }), VDA, Bytes, 8);
+
+		Type tvs = typeof (Vector<short>), tvus = typeof (Vector<ushort>);
+
+		RunBinary<Vector<short>, Vector<short>, Vector<sbyte>> (f, "Vector.Narrow(short)", "K_VT_NarrowS", K_VT_NarrowS, vec.GetMethod ("Narrow", new[] { tvs, tvs }), VSA, VSB, Bytes, 1);
+		RunBinary<Vector<ushort>, Vector<ushort>, Vector<byte>> (f, "Vector.Narrow(ushort)", "K_VT_NarrowUS", K_VT_NarrowUS, vec.GetMethod ("Narrow", new[] { tvus, tvus }), VUSA, VUSB, Bytes, 1);
+		RunBinary<Vector<double>, Vector<double>, Vector<float>> (f, "Vector.Narrow(double)", "K_VT_NarrowD", K_VT_NarrowD, vec.GetMethod ("Narrow", new[] { tvd, tvd }), VDA, VDB, Bytes, 4);
+
+		RunKernelOnly (f, "Vector.Widen(sbyte)", "K_VT_WidenSB", K_VT_WidenSB, 2);
+		RunKernelOnly (f, "Vector.Widen(byte)", "K_VT_WidenB", K_VT_WidenB, 2);
+		RunKernelOnly (f, "Vector.Widen(float)", "K_VT_WidenF", K_VT_WidenF, 8);
 	}
 
 	// A lane divisor of zero makes op_Division throw. "Threw" is a result the

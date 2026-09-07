@@ -19,6 +19,7 @@
 #include <mono/metadata/loader.h>
 #include <mono/metadata/metadata.h>
 
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/InstIterator.h>
@@ -52,6 +53,27 @@ const char *const horizontal_add =
 	"Mono.Simd.VectorOperations:HorizontalAdd(Mono.Simd.Vector4f,Mono.Simd.Vector4f)";
 const char *const equality =
 	"Mono.Simd.Vector4f:op_Equality(Mono.Simd.Vector4f,Mono.Simd.Vector4f)";
+
+const char *const paired_shuffle =
+	"Mono.Simd.VectorOperations:Shuffle(Mono.Simd.Vector4f,Mono.Simd.Vector4f,"
+	"Mono.Simd.ShuffleSel)";
+const char *const whole_shuffle =
+	"Mono.Simd.VectorOperations:Shuffle(Mono.Simd.Vector4f,Mono.Simd.ShuffleSel)";
+const char *const high_shuffle =
+	"Mono.Simd.VectorOperations:ShuffleHigh(Mono.Simd.Vector8s,Mono.Simd.ShuffleSel)";
+const char *const absolute_differences =
+	"Mono.Simd.VectorOperations:SumOfAbsoluteDifferences(Mono.Simd.Vector16b,"
+	"Mono.Simd.Vector16sb)";
+const char *const non_temporal_prefetch =
+	"Mono.Simd.Vector4f:PrefetchNonTemporal(Mono.Simd.Vector4f&)";
+const char *const acceleration_mode = "Mono.Simd.SimdRuntime:get_AccelMode";
+const char *const aligned_load = "Mono.Simd.Vector4f:LoadAligned(Mono.Simd.Vector4f&)";
+const char *const truncating_conversion =
+	"Mono.Simd.VectorOperations:ConvertToIntTruncated(Mono.Simd.Vector4f)";
+const char *const rounding_conversion =
+	"Mono.Simd.VectorOperations:ConvertToInt(Mono.Simd.Vector4f)";
+const char *const narrowing_conversion =
+	"Mono.Simd.VectorOperations:ConvertToFloat(Mono.Simd.Vector2d)";
 
 // Every op_Explicit Vector4f declares takes one Vector4f and differs only in
 // what it answers with, so a signature does not pick one out either. Each is
@@ -331,6 +353,143 @@ TEST_F (SimdBodies, EqualityReducesTheLaneCompare)
 	EXPECT_EQ (compared.count ("zext i1"), 1u) << compared.text ();
 	EXPECT_TRUE (compared.function->getReturnType ()->isIntegerTy ())
 		<< compared.text ();
+}
+
+// The selector is a parameter, so the lane each field names is known only at
+// run time and the read is an extractelement at a computed index. The low half
+// of the answer comes from the first operand and the high half from the second.
+TEST_F (SimdBodies, PairedShuffleReadsBothOperandsAtAComputedLane)
+{
+	const Translation &shuffled = translate ("Mono.Simd", paired_shuffle);
+
+	ASSERT_TRUE (shuffled.error.empty ()) << shuffled.error;
+	ASSERT_NE (shuffled.function, nullptr);
+
+	EXPECT_EQ (shape_of (*shuffled.function).calls, 0u) << shuffled.text ();
+	EXPECT_EQ (shuffled.count ("extractelement <4 x float>"), 4u) << shuffled.text ();
+	EXPECT_EQ (shuffled.count ("insertelement <4 x float>"), 4u) << shuffled.text ();
+	EXPECT_EQ (shuffled.count ("and i32"), 4u) << shuffled.text ();
+}
+
+// ShuffleHigh writes the four high lanes and copies the four low ones, so the
+// answer it builds on is the operand rather than a poison vector.
+TEST_F (SimdBodies, HighShuffleBuildsOnTheOperandItWasGiven)
+{
+	const Translation &shuffled = translate ("Mono.Simd", high_shuffle);
+	const Translation &whole = translate ("Mono.Simd", whole_shuffle);
+
+	ASSERT_TRUE (shuffled.error.empty ()) << shuffled.error;
+	ASSERT_NE (shuffled.function, nullptr);
+	ASSERT_TRUE (whole.error.empty ()) << whole.error;
+	ASSERT_NE (whole.function, nullptr);
+
+	EXPECT_EQ (shuffled.count ("extractelement <8 x i16>"), 4u) << shuffled.text ();
+	EXPECT_EQ (shuffled.count ("insertelement <8 x i16>"), 4u) << shuffled.text ();
+	EXPECT_EQ (shuffled.count ("add i32"), 4u) << shuffled.text ();
+	EXPECT_EQ (shuffled.count ("poison"), 0u) << shuffled.text ();
+	EXPECT_EQ (whole.count ("poison"), 1u) << whole.text ();
+}
+
+// The managed body reads its first operand through a byte pointer and its
+// second through an sbyte one, which is what psadbw does not do.
+TEST_F (SimdBodies, AbsoluteDifferencesReadOneOperandSigned)
+{
+	const Translation &summed = translate ("Mono.Simd", absolute_differences);
+
+	ASSERT_TRUE (summed.error.empty ()) << summed.error;
+	ASSERT_NE (summed.function, nullptr);
+
+	EXPECT_EQ (summed.count ("zext <16 x i8>"), 1u) << summed.text ();
+	EXPECT_EQ (summed.count ("sext <16 x i8>"), 1u) << summed.text ();
+	EXPECT_EQ (summed.count ("llvm.abs.v16i32"), 1u) << summed.text ();
+	EXPECT_EQ (summed.count ("llvm.vector.reduce.add.v8i32"), 2u) << summed.text ();
+	EXPECT_EQ (summed.count ("insertelement <8 x i16>"), 2u) << summed.text ();
+}
+
+// A plain fptosi is poison out of range, which LLVM folds to zero where it can
+// see the operand and leaves as the hardware answer where it cannot.
+TEST_F (SimdBodies, TruncatingConversionUsesTheConstrainedIntrinsic)
+{
+	const Translation &converted = translate ("Mono.Simd", truncating_conversion);
+
+	ASSERT_TRUE (converted.error.empty ()) << converted.error;
+	ASSERT_NE (converted.function, nullptr);
+
+	EXPECT_EQ (converted.count ("experimental.constrained.fptosi.v4i32.v4f32"), 1u)
+		<< converted.text ();
+	EXPECT_EQ (converted.count ("roundeven"), 0u) << converted.text ();
+	EXPECT_TRUE (converted.function->hasFnAttribute (llvm::Attribute::StrictFP))
+		<< converted.text ();
+}
+
+// ConvertToInt rounds through System.Math.Round, which takes a double, so a
+// float lane widens before it rounds.
+TEST_F (SimdBodies, RoundingConversionRoundsAtDoubleWidth)
+{
+	const Translation &converted = translate ("Mono.Simd", rounding_conversion);
+
+	ASSERT_TRUE (converted.error.empty ()) << converted.error;
+	ASSERT_NE (converted.function, nullptr);
+
+	EXPECT_EQ (converted.count ("fpext <4 x float>"), 1u) << converted.text ();
+	EXPECT_EQ (converted.count ("llvm.roundeven.v4f64"), 1u) << converted.text ();
+	EXPECT_EQ (converted.count ("experimental.constrained.fptosi.v4i32.v4f64"), 1u)
+		<< converted.text ();
+}
+
+// Vector2d holds two lanes and Vector4f four, so the body writes a zero into
+// each lane it has nothing to convert for.
+TEST_F (SimdBodies, WideningConversionZeroFillsTheLanesTheBodyDoesNotWrite)
+{
+	const Translation &converted = translate ("Mono.Simd", narrowing_conversion);
+
+	ASSERT_TRUE (converted.error.empty ()) << converted.error;
+	ASSERT_NE (converted.function, nullptr);
+
+	EXPECT_EQ (shape_of (*converted.function).calls, 0u) << converted.text ();
+	EXPECT_EQ (converted.count ("fptrunc <2 x double>"), 1u) << converted.text ();
+	EXPECT_EQ (converted.count ("zeroinitializer"), 1u) << converted.text ();
+}
+
+// The managed body is empty and exists for a compiler to recognize. A prefetch
+// reaches no value the program can read, so the row leaves every answer alone.
+TEST_F (SimdBodies, PrefetchAsksTheCacheAndAnswersNothing)
+{
+	const Translation &asked = translate ("Mono.Simd", non_temporal_prefetch);
+
+	ASSERT_TRUE (asked.error.empty ()) << asked.error;
+	ASSERT_NE (asked.function, nullptr);
+
+	EXPECT_EQ (asked.count ("llvm.prefetch"), 1u) << asked.text ();
+	EXPECT_EQ (asked.count ("i32 0, i32 0, i32 1"), 1u) << asked.text ();
+	EXPECT_TRUE (asked.function->getReturnType ()->isVoidTy ()) << asked.text ();
+}
+
+// AccelMode's managed body answers None whatever the target is, so this is the
+// one SIMD method that must not run its own IL at any tier.
+TEST_F (SimdBodies, AccelModeReplacesItsOwnIl)
+{
+	MonoMethod *method = find_method ("Mono.Simd", acceleration_mode);
+
+	ASSERT_NE (method, nullptr);
+	EXPECT_TRUE (builtin_body_replaces_il (method));
+
+	const Translation &asked = translate ("Mono.Simd", acceleration_mode);
+
+	ASSERT_TRUE (asked.error.empty ()) << asked.error;
+	ASSERT_NE (asked.function, nullptr);
+	EXPECT_EQ (shape_of (*asked.function).instructions, 1u) << asked.text ();
+}
+
+// LoadAligned's managed body is a copy through a byref, which the translator
+// already writes as one vector load. A row could only add an alignment the
+// body does not claim, so there is none.
+TEST_F (SimdBodies, AlignedLoadIsLeftOnItsOwnIl)
+{
+	MonoMethod *method = find_method ("Mono.Simd", aligned_load);
+
+	ASSERT_NE (method, nullptr);
+	EXPECT_EQ (builtin_body_for (method), nullptr);
 }
 
 } // namespace

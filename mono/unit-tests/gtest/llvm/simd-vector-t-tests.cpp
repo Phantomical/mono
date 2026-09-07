@@ -29,6 +29,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -119,6 +120,40 @@ vector_of (MonoClass *element)
 	return mono_class_bind_generic_parameters (definition, 1, arguments, FALSE);
 }
 
+/// The static of that name on the non-generic Vector whose first parameter is
+/// Vector<element>, or null where corlib declares no such method.
+///
+/// The conversions overload on the source's element alone, so a name and an
+/// arity pick out neither of a pair.
+MonoMethod *
+conversion_of (const char *name, MonoClass *element)
+{
+	ERROR_DECL (lookup);
+	MonoClass *klass = mono_class_from_name_checked (mono_get_corlib (),
+	                                                 "System.Numerics", "Vector", lookup);
+
+	mono_error_cleanup (lookup);
+
+	MonoClass *wanted = vector_of (element);
+
+	if (klass == nullptr || wanted == nullptr)
+		return nullptr;
+
+	gpointer iter = nullptr;
+
+	while (MonoMethod *method = mono_class_get_methods (klass, &iter)) {
+		MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+		if (strcmp (method->name, name) != 0 || sig == nullptr
+		    || sig->param_count < 1)
+			continue;
+		if (mono_class_from_mono_type_internal (sig->params[0]) == wanted)
+			return method;
+	}
+
+	return nullptr;
+}
+
 class VectorTBodies : public TranslatorTest {
 protected:
 	/// Translate Vector<element>'s method of that name and arity.
@@ -138,6 +173,22 @@ protected:
 		if (method == nullptr)
 			g_error ("no %s of %d parameters on Vector`1", name, params);
 
+		return translate_method (method, name);
+	}
+
+	/// Translate the conversion of that name over Vector<element>.
+	const Translation &translate_conversion (const char *name, MonoClass *element)
+	{
+		MonoMethod *method = conversion_of (name, element);
+
+		if (method == nullptr)
+			g_error ("no %s over that element on Vector", name);
+
+		return translate_method (method, name);
+	}
+
+	const Translation &translate_method (MonoMethod *method, const char *name)
+	{
 		auto owned = std::make_unique<Translation> ();
 		Translation &result = *owned;
 
@@ -282,6 +333,86 @@ TEST_F (VectorTBodies, ALoweredMemberStillRunsItsOwnIl)
 
 	ASSERT_NE (method, nullptr);
 	EXPECT_FALSE (builtin_body_replaces_il (method));
+}
+
+// Both overloads answer with <4 x float> from <4 x i32>, so the LLVM types say
+// nothing about the sign. The source's own type argument is what decides it.
+TEST_F (VectorTBodies, ConvertToSingleTakesTheSourcesOwnSign)
+{
+	const Translation &from_signed =
+		translate_conversion ("ConvertToSingle", mono_get_int32_class ());
+	const Translation &from_unsigned =
+		translate_conversion ("ConvertToSingle", mono_get_uint32_class ());
+
+	ASSERT_TRUE (from_signed.error.empty ()) << from_signed.error;
+	ASSERT_TRUE (from_unsigned.error.empty ()) << from_unsigned.error;
+
+	EXPECT_EQ (from_signed.count ("sitofp <4 x i32>"), 1u) << from_signed.text ();
+	EXPECT_EQ (from_unsigned.count ("uitofp <4 x i32>"), 1u) << from_unsigned.text ();
+}
+
+// Every unsigned target of 32 bits or fewer fits inside a signed int64, so the
+// conversion goes through that width rather than asking for an unsigned one.
+TEST_F (VectorTBodies, ConvertToUInt32GoesThroughTheSignedWidth)
+{
+	const Translation &converted =
+		translate_conversion ("ConvertToUInt32", mono_get_single_class ());
+
+	ASSERT_TRUE (converted.error.empty ()) << converted.error;
+	ASSERT_NE (converted.function, nullptr);
+
+	EXPECT_EQ (converted.count ("experimental.constrained.fptosi.v4i64.v4f32"), 1u)
+		<< converted.text ();
+	EXPECT_EQ (converted.count ("trunc <4 x i64>"), 1u) << converted.text ();
+	EXPECT_EQ (converted.count ("fptoui"), 0u) << converted.text ();
+}
+
+// amd64 has no unsigned conversion this wide, so a value from 2^63 up comes
+// back through the low half. The test is "below 2^63", which a NaN fails, and
+// that is what makes a NaN answer zero the way mono_fconv_u8 () does.
+TEST_F (VectorTBodies, ConvertToUInt64TestsBelowTwoToTheSixtyThird)
+{
+	const Translation &converted =
+		translate_conversion ("ConvertToUInt64", mono_get_double_class ());
+
+	ASSERT_TRUE (converted.error.empty ()) << converted.error;
+	ASSERT_NE (converted.function, nullptr);
+
+	EXPECT_EQ (converted.count ("fcmp olt <2 x double>"), 1u) << converted.text ();
+	EXPECT_EQ (converted.count ("fsub <2 x double>"), 1u) << converted.text ();
+	EXPECT_EQ (shape_of (*converted.function).selects, 2u) << converted.text ();
+}
+
+TEST_F (VectorTBodies, NarrowConcatenatesTwoCastHalves)
+{
+	const Translation &narrowed =
+		translate_conversion ("Narrow", mono_get_int16_class ());
+
+	ASSERT_TRUE (narrowed.error.empty ()) << narrowed.error;
+	ASSERT_NE (narrowed.function, nullptr);
+
+	EXPECT_EQ (shape_of (*narrowed.function).calls, 0u) << narrowed.text ();
+	EXPECT_EQ (narrowed.count ("trunc <8 x i16>"), 2u) << narrowed.text ();
+	EXPECT_EQ (narrowed.count ("shufflevector"), 1u) << narrowed.text ();
+}
+
+// The two halves are widened by the source's own sign and written through the
+// byrefs the caller passed, so the body answers with nothing.
+TEST_F (VectorTBodies, WidenFillsBothOutputsByTheSourcesSign)
+{
+	const Translation &from_signed =
+		translate_conversion ("Widen", mono_get_sbyte_class ());
+	const Translation &from_unsigned =
+		translate_conversion ("Widen", mono_get_byte_class ());
+
+	ASSERT_TRUE (from_signed.error.empty ()) << from_signed.error;
+	ASSERT_TRUE (from_unsigned.error.empty ()) << from_unsigned.error;
+
+	EXPECT_EQ (from_signed.count ("sext <8 x i8>"), 2u) << from_signed.text ();
+	EXPECT_EQ (from_signed.count ("store <8 x i16>"), 2u) << from_signed.text ();
+	EXPECT_EQ (from_unsigned.count ("zext <8 x i8>"), 2u) << from_unsigned.text ();
+	EXPECT_TRUE (from_unsigned.function->getReturnType ()->isVoidTy ())
+		<< from_unsigned.text ();
 }
 
 } // namespace
