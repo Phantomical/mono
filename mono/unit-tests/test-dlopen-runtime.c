@@ -39,7 +39,22 @@ main (int argc, char **argv)
 
 #ifdef HOST_WIN32
 	{
-		HMODULE handle = LoadLibraryA (argv [1]);
+		char *p;
+		HMODULE handle;
+
+		/* CMake hands this test a forward-slash path. The flag below
+		 * can't find the DLL's own directory from one, and fails exactly
+		 * as if it had been left off. */
+		for (p = argv [1]; *p; p++)
+			if (*p == '/')
+				*p = '\\';
+
+		/* Plain LoadLibrary searches the calling exe's own directory for
+		 * an import, not the target DLL's. vcpkg's zlib sits beside
+		 * monosgen-2.0.dll and goes unfound without this -- the Windows
+		 * counterpart to $ORIGIN above. */
+		handle = LoadLibraryExA (argv [1], NULL,
+			LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR);
 
 		if (handle == NULL) {
 			fprintf (stderr, "LoadLibrary (%s) failed: %lu\n", argv [1],
