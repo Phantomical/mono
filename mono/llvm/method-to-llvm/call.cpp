@@ -231,6 +231,23 @@ MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
 	if (!coerced)
 		return coerced.takeError ();
 
+#ifdef HOST_WIN32
+	if (!native && win64_indirect (*type)) {
+		// convert_method_signature () declared this parameter as a pointer,
+		// the convention mono_arch_get_call_info () also chose for the
+		// classic tier-0 compiler (win64_indirect (), hidden-return.hpp).
+		// This call makes the private copy that convention promises the
+		// callee and passes its address.
+		llvm::Expected<llvm::Value *> slot = vtype_slot (destination, native);
+
+		if (!slot)
+			return slot.takeError ();
+
+		copy_vtype (builder, *slot, *coerced, destination, native);
+		return *slot;
+	}
+#endif
+
 	return materialize (builder, *coerced, destination, native);
 }
 
