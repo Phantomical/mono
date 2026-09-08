@@ -83,6 +83,7 @@
 
 #include "mini-gc.h"
 #include "debugger-agent.h"
+#include "../jit-dump-tier0.h"
 #include "llvmonly-runtime.h"
 #include "llvm-runtime.h"
 #include "../../llvm/runtime.h"
@@ -4236,9 +4237,22 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	if (cfg->verbose_level >= 2) {
 		char *id =  mono_method_full_name (cfg->method, TRUE);
 		g_print ("\n*** ASM for %s ***\n", id);
-		mono_disassemble_code (cfg, cfg->native_code, cfg->code_len, id + 3);
+		mono_disassemble_code (cfg, cfg->native_code, cfg->code_len, id + 3, stdout);
 		g_print ("***\n\n");
 		g_free (id);
+	}
+
+	{
+		MonoTier0AsmDump *dump = mono_tier0_asm_dump_open (cfg->method);
+
+		if (dump != NULL) {
+			char *id = mono_method_full_name (cfg->method, TRUE);
+
+			mono_disassemble_code (cfg, cfg->native_code, cfg->code_len, id + 3,
+			                       mono_tier0_asm_dump_stream (dump));
+			g_free (id);
+			mono_tier0_asm_dump_close (dump);
+		}
 	}
 
 	if (!cfg->compile_aot && !(flags & JIT_FLAG_DISCARD_RESULTS)) {

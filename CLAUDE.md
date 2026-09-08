@@ -265,12 +265,15 @@ Tracing:
   sections, so there is no source-level stepping. Off by default, because it keeps a
   copy of every object alive for as long as the method.
 
-Dumping. Both engines print through `mono/mini/jit-dump.hpp`, so one variable selects
-the stages and one filter selects the methods:
+Dumping. Both compiled tiers and the interpreter print through
+`mono/mini/jit-dump.hpp`, so one variable selects the stages and one filter selects the
+methods. The classic tier-0 compiler is C, so it crosses into that C++ code through the
+small boundary `mono/mini/jit-dump-tier0.h` declares, the same shape `runtime.h` gives
+the backend:
 - `MONO_JIT_DUMP=<points>` — the stages to print, separated by `;` or `,`. `all` names
   every one. A name nothing matches is reported on stderr with the list of names. The
   points are `il`, `mint`, `unopt-ir`, `tier1-ir`, `tier2-inlined-ir`, `tier2-ir`,
-  `tier1-asm` and `tier2-asm`.
+  `tier1-asm`, `tier2-asm` and `tier0-asm`.
 - `MONO_JIT_DUMP_FILTER=<substr>` — dump only the methods whose name contains this. Every
   point matches it against the same string, `Class:Method (argtypes)@0xADDR`, so a filter
   that selects a method at one point selects it at all of them. Unset takes every method.
@@ -299,6 +302,12 @@ What each point prints:
   which is the half no offline `llc` run reproduces. Intel syntax, which `jit.cpp` asks
   for as a default; `--llvm-opt=-x86-asm-syntax=att` gets AT&T back. It costs a second
   codegen over a clone, so the published code is untouched.
+- `tier0-asm` — the code the classic tier-0 compiler emits, disassembled through
+  `objdump` the way `MONO_VERBOSE_METHOD` always has been
+  (`mono_disassemble_code ()`, `mono/mini/tier0/helpers.c`), with mono's own basic-block
+  labels and call-site names layered over what `objdump` printed. `MONO_VERBOSE_METHOD`
+  still prints this to stdout on its own, at `cfg->verbose_level >= 2`; this point is
+  the same disassembly on `MONO_JIT_DUMP_FILTER` and `MONO_JIT_DUMP_DIR`'s terms instead.
 
 **An IR point prints a module, not a function.** Each dump holds the method's body, the
 bodies an inliner folded into it, and the declarations, the globals and the metadata

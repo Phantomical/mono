@@ -209,7 +209,7 @@ disasm_branch_target (const char *line, int *repl_start, int *repl_end, guint64 
  * them. cfg may be NULL (trampoline disassembly) — only the label pass runs.
  */
 static void
-annotate_disassembly (FILE *fp, MonoCompile *cfg, int size)
+annotate_disassembly (FILE *out, FILE *fp, MonoCompile *cfg, int size)
 {
 	GPtrArray *lines = g_ptr_array_new ();
 	GHashTable *instr_offsets = g_hash_table_new (NULL, NULL);      /* set of real insn offsets */
@@ -302,7 +302,7 @@ annotate_disassembly (FILE *fp, MonoCompile *cfg, int size)
 
 		off = disasm_line_offset (line);
 		if (off < 0) {
-			printf ("%s\n", line);
+			fprintf (out, "%s\n", line);
 			continue;
 		}
 
@@ -312,9 +312,9 @@ annotate_disassembly (FILE *fp, MonoCompile *cfg, int size)
 			if (lp) {
 				gpointer bp = g_hash_table_lookup (bb_at, GINT_TO_POINTER (off));
 				if (bp)
-					printf ("L%d:\t\t\t\t; BB%d\n", GPOINTER_TO_INT (lp) - 1, GPOINTER_TO_INT (bp) - 1);
+					fprintf (out, "L%d:\t\t\t\t; BB%d\n", GPOINTER_TO_INT (lp) - 1, GPOINTER_TO_INT (bp) - 1);
 				else
-					printf ("L%d:\n", GPOINTER_TO_INT (lp) - 1);
+					fprintf (out, "L%d:\n", GPOINTER_TO_INT (lp) - 1);
 			}
 		}
 
@@ -325,11 +325,11 @@ annotate_disassembly (FILE *fp, MonoCompile *cfg, int size)
 			gpointer lp = g_hash_table_lookup (off2label, GINT_TO_POINTER ((int) tgt));
 			if (lp) {
 				/* Local branch: operand -> L<n>, keep the raw offset as a comment. */
-				printf ("%.*sL%d\t\t; 0x%x\n", rs, line, GPOINTER_TO_INT (lp) - 1, (int) tgt);
+				fprintf (out, "%.*sL%d\t\t; 0x%x\n", rs, line, GPOINTER_TO_INT (lp) - 1, (int) tgt);
 				continue;
 			}
 			/* target in range but not a known label: leave as-is */
-			printf ("%s\n", line);
+			fprintf (out, "%s\n", line);
 			continue;
 		}
 		if (has_target) {
@@ -337,18 +337,18 @@ annotate_disassembly (FILE *fp, MonoCompile *cfg, int size)
 			 * relocated to 0); replace it with the authoritative name if we have
 			 * one, else leave objdump's text untouched. */
 			if (name)
-				printf ("%.*s<target>\t; %s\n", rs, line, name);
+				fprintf (out, "%.*s<target>\t; %s\n", rs, line, name);
 			else
-				printf ("%s\n", line);
+				fprintf (out, "%s\n", line);
 			continue;
 		}
 
 		/* No symbolized operand. Tier-0 indirect call sites may still carry a
 		 * name in patch_info (e.g. "call *%rax"): append it. */
 		if (name)
-			printf ("%s\t; %s\n", line, name);
+			fprintf (out, "%s\t; %s\n", line, name);
 		else
-			printf ("%s\n", line);
+			fprintf (out, "%s\n", line);
 	}
 
 	{
@@ -375,11 +375,12 @@ annotate_disassembly (FILE *fp, MonoCompile *cfg, int size)
  * \param cfg compilation context
  * \param code a pointer to the code
  * \param size the code size in bytes
+ * \param out where the disassembly is written
  *
- * Disassemble to code to stdout.
+ * Disassemble the code to \p out.
  */
 void
-mono_disassemble_code (MonoCompile *cfg, guint8 *code, int size, char *id)
+mono_disassemble_code (MonoCompile *cfg, guint8 *code, int size, char *id, FILE *out)
 {
 #ifndef DISABLE_LOGGING
 	GHashTable *offset_to_bb_hash = NULL;
@@ -546,7 +547,7 @@ mono_disassemble_code (MonoCompile *cfg, guint8 *code, int size, char *id)
 	{
 		FILE *dis = popen (cmd, "r");
 		if (dis) {
-			annotate_disassembly (dis, cfg, size);
+			annotate_disassembly (out, dis, cfg, size);
 			pclose (dis);
 		} else {
 			unused = system (cmd);

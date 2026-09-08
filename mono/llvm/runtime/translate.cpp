@@ -68,6 +68,18 @@ optimized_ir_point (JitTier tier)
 	return tier == JitTier::tier2 ? DumpPoint::tier2_ir : DumpPoint::tier1_ir;
 }
 
+/// Whether this method's IL was already printed by its own tier-0 engine, so
+/// printing it again here would be a duplicate.
+///
+/// Only the interpreter's tier 0 dumps IL of its own, in transform.cpp. The
+/// classic compiler's tier 0 does not, and runs_at_tier0 () alone cannot tell
+/// the two apart - it says only that a tier 0 exists for the method.
+static bool
+il_dumped_at_tier0 (MonoMethod *method)
+{
+	return runs_at_tier0 (method) && !runs_classic_at_tier0 (method);
+}
+
 static void
 dump_ir (DumpPoint point, const Module &module, StringRef entry, StringRef name)
 {
@@ -237,7 +249,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	// A method that starts interpreted had its IL printed there, and printing it
 	// again here says nothing new. This leaves one dump for each method, from
 	// whichever engine reached it first.
-	if (!runs_at_tier0 (method) && dumping (DumpPoint::il, dumped.c_str ())) {
+	if (!il_dumped_at_tier0 (method) && dumping (DumpPoint::il, dumped.c_str ())) {
 		DumpDestination destination (DumpPoint::il, dumped.c_str ());
 
 		if (destination.stream () != nullptr)
@@ -622,7 +634,7 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 			set_dump_name (*member->body, member->dumped);
 
 		/* One dump for each method: see the single-method path. */
-		if (!runs_at_tier0 (member->method)
+		if (!il_dumped_at_tier0 (member->method)
 		    && dumping (DumpPoint::il, member->dumped.c_str ())) {
 			DumpDestination destination (DumpPoint::il, member->dumped.c_str ());
 

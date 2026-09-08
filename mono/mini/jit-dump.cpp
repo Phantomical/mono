@@ -8,6 +8,8 @@
 
 #include "jit-dump.hpp"
 
+#include "jit-dump-tier0.h"
+
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -61,6 +63,7 @@ const PointNames points[] = {
 	{ DumpPoint::tier2_ir, "tier2-ir", "ll" },
 	{ DumpPoint::tier1_asm, "tier1-asm", "s" },
 	{ DumpPoint::tier2_asm, "tier2-asm", "s" },
+	{ DumpPoint::tier0_asm, "tier0-asm", "s" },
 };
 
 const PointNames &
@@ -558,3 +561,36 @@ dump_il (FILE *out, MonoMethod *method, MonoMethodHeader *header)
 }
 
 } // namespace mono
+
+MonoTier0AsmDump *
+mono_tier0_asm_dump_open (MonoMethod *method)
+{
+	if (!mono::any_dump_point_enabled ())
+		return nullptr;
+
+	std::string name = mono::dump_name (method);
+
+	if (!mono::dumping (mono::DumpPoint::tier0_asm, name.c_str ()))
+		return nullptr;
+
+	auto *destination = new mono::DumpDestination (mono::DumpPoint::tier0_asm, name.c_str ());
+
+	if (destination->stream () == nullptr) {
+		delete destination;
+		return nullptr;
+	}
+
+	return reinterpret_cast<MonoTier0AsmDump *> (destination);
+}
+
+FILE *
+mono_tier0_asm_dump_stream (MonoTier0AsmDump *dump)
+{
+	return reinterpret_cast<mono::DumpDestination *> (dump)->stream ();
+}
+
+void
+mono_tier0_asm_dump_close (MonoTier0AsmDump *dump)
+{
+	delete reinterpret_cast<mono::DumpDestination *> (dump);
+}
