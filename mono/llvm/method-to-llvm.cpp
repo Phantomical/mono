@@ -880,6 +880,13 @@ MethodLLVMEmitter::emit ()
 		return declr.takeError ();
 
 	function = declr.get ();
+
+	// AggressiveInlining is a hint, not a mandate, so this widens the tier-2
+	// cost model's threshold rather than forcing the fold with AlwaysInline.
+	// passes/inline-cost.cpp already reads InlineHint that way for any callee.
+	if (method->iflags & METHOD_IMPL_ATTRIBUTE_AGGRESSIVE_INLINING)
+		function->addFnAttr (llvm::Attribute::InlineHint);
+
 	resolve_call_instrumentation ();
 	code = cfg->header->code;
 	code_size = cfg->header->code_size;
