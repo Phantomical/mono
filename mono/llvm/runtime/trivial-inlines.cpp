@@ -33,28 +33,19 @@ namespace mono {
 namespace {
 
 struct Shape {
-	/// The method the single call site names, null when the body calls nothing.
+	/// Null when the body calls nothing.
 	MonoMethod *forwards_to = nullptr;
 };
 
-/// Whether an opcode keeps the body it is in out of the pre-pass.
-///
-/// A body holding none of these is left to is_small_and_clause_free (), which is
-/// what bounds the cost. Nothing on this list is here for cost: the opcodes it
-/// permits already emit a branch and a throw, because ldfld reaches its field
-/// through emit_null_check () (method-to-llvm/fields.cpp), and box allocates.
-/// What the list protects is the one-line shape shape_of () walks, and the frame
-/// the fold takes away.
+/// Whether an opcode keeps its body out of the shape-test pre-pass. A body
+/// holding none of these is left to is_small_and_clause_free (), which bounds
+/// the cost.
 bool
-declines_a_fold (MonoOpcodeEnum op)
+blocks_a_fold (MonoOpcodeEnum op)
 {
 	switch (op) {
-	/*
-	 * Control flow. shape_of () walks the IL forward once and reads a
-	 * terminator as the end of the body, so a second edge is a shape it cannot
-	 * describe. br and br.s are here as well: the fallthrough case is the
-	 * caller's, which reads the displacement.
-	 */
+	// match_trivial_shape () walks the IL once and stops at a terminator, so
+	// any of these gives the body a second edge it cannot describe.
 	case MONO_CEE_BR:
 	case MONO_CEE_BR_S:
 	case MONO_CEE_BRFALSE:
@@ -89,29 +80,23 @@ declines_a_fold (MonoOpcodeEnum op)
 	case MONO_CEE_RETHROW:
 	case MONO_CEE_JMP:
 
-	// A call the shape test cannot name a target for, so the one-call rule
-	// cannot hold it.
+	// No target to check the one-call rule against.
 	case MONO_CEE_CALLI:
-	// A tail call hands the frame over, and the folded copy is standing in that
-	// frame.
+	// Hands the frame to the callee; the folded copy stands in for it.
 	case MONO_CEE_TAIL_:
 
-	/*
-	 * The frame. Each of these describes the frame the body runs in, which the
-	 * fold replaces with the caller's.
-	 */
 	case MONO_CEE_ARGLIST:
-	// emit_user_break () calls a helper that walks the stack for a managed
-	// frame to report the break against, and asserts that it finds one.
+	// emit_user_break () walks the stack for a managed frame to report
+	// against, and asserts that it finds one.
 	case MONO_CEE_BREAK:
-	// A typedref is frame-shaped.
+	// Names a location in the frame it was made in.
 	case MONO_CEE_MKREFANY:
 	case MONO_CEE_REFANYVAL:
 	case MONO_CEE_REFANYTYPE:
-	// An alloca folded into a caller lives as long as that caller's frame.
+	// Would live as long as the caller's frame instead of the callee's.
 	case MONO_CEE_LOCALLOC:
-	// Publishes a thunk and asks for a compile that lands at tier 0. That is a
-	// tiering side effect rather than a value.
+	// Publishes a thunk and asks for a compile that lands at tier 0, a
+	// side effect rather than a value.
 	case MONO_CEE_LDFTN:
 	case MONO_CEE_LDVIRTFTN:
 		return true;
@@ -121,22 +106,19 @@ declines_a_fold (MonoOpcodeEnum op)
 }
 
 bool
-enters_a_method (MonoOpcodeEnum op)
+is_call_opcode (MonoOpcodeEnum op)
 {
 	return op == MONO_CEE_CALL || op == MONO_CEE_CALLVIRT || op == MONO_CEE_NEWOBJ;
 }
 
-/// Whether the translator answers a call to target out of the array it is made
-/// on.
+/// Whether the translator answers a call to target out of the array it is
+/// made on, such as Array.GetUpperBound ().
 bool
-answers_the_shape_of_an_array (MonoMethod *target)
+is_array_shape_accessor (MonoMethod *target)
 {
-	/*
-	 * The class comes first because the signature does not: parsing one
-	 * resolves the types it names, and a body the pre-pass walks can name a
-	 * method whose parameter type is missing on purpose. That resolution is the
-	 * caller's to make, at the site the IL puts it at.
-	 */
+	// The class comes first because the signature does not: parsing one
+	// resolves the types it names, and a body the pre-pass walks can name a
+	// method whose parameter type is missing on purpose.
 	if (target->klass != mono_defaults.array_class)
 		return false;
 
@@ -147,10 +129,10 @@ answers_the_shape_of_an_array (MonoMethod *target)
 }
 
 bool
-branches_to_the_next (const unsigned char *code, MonoOpcodeEnum op, size_t operand)
+is_fallthrough_branch (const unsigned char *code, MonoOpcodeEnum op, size_t operand)
 {
-	// A displacement is counted from the instruction behind the branch, so zero
-	// is that instruction.
+	// A displacement is counted from the instruction behind the branch, so
+	// zero targets that same instruction.
 	if (op == MONO_CEE_BR_S)
 		return (int8_t) code[operand] == 0;
 	if (op == MONO_CEE_BR)
@@ -159,10 +141,10 @@ branches_to_the_next (const unsigned char *code, MonoOpcodeEnum op, size_t opera
 	return false;
 }
 
-/// Returns the method's shape when its IL is one straight line. The line holds
-/// at most one call, not counting the ones answers_the_shape_of_an_array ()
-/// names, declines_a_fold () names what it may not hold, and its terminator is
-/// the last IL byte. Returns nullopt otherwise.
+/// Returns the method's shape when its IL is one straight line: at most one
+/// call, not counting a call is_array_shape_accessor () names, nothing
+/// blocks_a_fold () refuses, and a terminator on the last IL byte. Returns
+/// nullopt otherwise.
 ///
 /// These are the shapes worth folding in without weighing them:
 ///
@@ -188,12 +170,8 @@ branches_to_the_next (const unsigned char *code, MonoOpcodeEnum op, size_t opera
 ///   ldarg.0  ldarg.1  sizeof T     step a pointer by an element
 ///   conv.i  mul  add
 ///   ret
-///
-/// One line is what the shape test is for. It bounds the walk below, and it
-/// leaves the method with one terminator. What the line costs is the size
-/// limit's question rather than this one's.
 std::optional<Shape>
-shape_of (MonoMethod *method, MonoMethodHeader *header)
+match_trivial_shape (MonoMethod *method, MonoMethodHeader *header)
 {
 	const unsigned char *code = header->code;
 	size_t size = header->code_size;
@@ -222,21 +200,17 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 			return shape;
 		}
 
-		if (enters_a_method (op)) {
+		if (is_call_opcode (op)) {
 			MonoMethod *target =
 				il_call_target (method, il_read_u32 (code + operand));
 
 			if (target == nullptr)
 				return std::nullopt;
 
-			/*
-			 * A site answered out of the array, which the one-call rule has
-			 * no frame to hold. Array.GetUpperBound () is the body this lets
-			 * through: two of these sites and arithmetic. Folding it in is
-			 * what puts a caller's literal dimension where
-			 * fold_array_shapes () reads it.
-			 */
-			if (answers_the_shape_of_an_array (target)) {
+			// An array-shape call has no frame for the one-call rule to
+			// hold, so it does not count against it. Array.GetUpperBound ()
+			// is the body this lets through: two of these and arithmetic.
+			if (is_array_shape_accessor (target)) {
 				at = next;
 				continue;
 			}
@@ -245,35 +219,104 @@ shape_of (MonoMethod *method, MonoMethodHeader *header)
 				return std::nullopt;
 
 			shape.forwards_to = target;
-		} else if (declines_a_fold (op)
+		} else if (blocks_a_fold (op)
 		           // A C# compiler ends a value-returning method with
 		           // stloc.0, a branch to the next instruction, ldloc.0,
 		           // then ret. Letting that one branch through as a
 		           // fallthrough keeps such a getter or forwarder on one
 		           // line.
-		           && !branches_to_the_next (code, op, operand)) {
+		           && !is_fallthrough_branch (code, op, operand)) {
 			return std::nullopt;
 		}
 
 		at = next;
 	}
 
-	// The IL ran off its own end without reaching a terminator.
 	return std::nullopt;
 }
 
-// How far the walk below follows a chain of forwarders. Longer than any chain
-// worth following, and each link costs a header.
+/// How far forwards_into_a_cycle () follows a chain of forwarders. Longer
+/// than any chain worth following, and each link costs a header.
 constexpr int max_links = 8;
 
-/// Whether target reaches itself through the forwarder chain shape_of ()
-/// describes.
-///
-/// A recursive body is one no inliner can fold the call out of, so the pre-pass
-/// declines it however small it is. Direct recursion and a cycle through other
-/// forwarders read the same here.
+/// Decides which of a caller's callees are worth folding in without weighing
+/// them, and how much more of that translation this compile still has budget
+/// for. materialize_trivial_callees () builds what this approves and moves
+/// the caller's sites onto it.
+class TrivialInlineAdvisor {
+public:
+	TrivialInlineAdvisor (MonoDomain *domain, InlineScope &scope, uint32_t il_limit)
+	    : domain_ (domain), scope_ (scope), il_limit_ (il_limit),
+	      fanout_limit_ (trivial_inline_fanout_limit ()),
+	      instance_budget_ (trivial_inline_instance_budget ()),
+	      instances_left_ (instance_budget_)
+	{
+	}
+
+	/// Whether callee is worth the cost of fetching its header and weighing
+	/// its shape. sites is how many of the caller's call sites name it, and
+	/// rebuild says a copy for it already stands elsewhere in this compile.
+	bool worth_a_copy (MonoMethod *callee, unsigned sites, bool rebuild) const;
+
+	/// Whether callee's header is one of the shapes this pre-pass folds in
+	/// without weighing it.
+	bool fits_the_shape (MonoMethod *callee, MonoMethodHeader *header) const;
+
+	/// Records that a copy built for sites call sites was kept.
+	void charge (unsigned sites)
+	{
+		if (instance_budget_ != 0)
+			instances_left_ -= sites;
+	}
+
+private:
+	/// Whether target reaches itself through the forwarder chain
+	/// match_trivial_shape () describes. A recursive body is one no inliner
+	/// can fold the call out of, however small it is, so direct recursion
+	/// and a cycle through other forwarders both refuse here.
+	bool forwards_into_a_cycle (MonoMethod *target) const;
+
+	MonoDomain *domain_;
+	InlineScope &scope_;
+	uint32_t il_limit_;
+	uint32_t fanout_limit_;
+	uint32_t instance_budget_;
+	uint32_t instances_left_;
+};
+
 bool
-forwards_into_a_cycle (MonoMethod *target, MonoDomain *domain)
+TrivialInlineAdvisor::worth_a_copy (MonoMethod *callee, unsigned sites, bool rebuild) const
+{
+	// materialize_inline_copy () charges scope_.budget.trivial only the
+	// first time it takes a method in, so a rebuild spends none of it.
+	if (!rebuild && scope_.budget.trivial == 0)
+		return false;
+
+	// Reaching here always means a fresh copy is about to be built and its
+	// sites duplicated, rebuild or not, so both limits below gate every one
+	// of these rather than only a first-time fold.
+	if (fanout_limit_ != 0 && sites > fanout_limit_)
+		return false;
+	if (instance_budget_ != 0 && sites > instances_left_)
+		return false;
+
+	return may_fold (domain_, callee);
+}
+
+bool
+TrivialInlineAdvisor::fits_the_shape (MonoMethod *callee, MonoMethodHeader *header) const
+{
+	// A body the backend writes itself is never translated from its IL, so
+	// none of the checks below apply to it.
+	if (written_by_the_backend (callee))
+		return true;
+
+	return is_small_and_clause_free (header, il_limit_)
+	       && match_trivial_shape (callee, header) && !forwards_into_a_cycle (callee);
+}
+
+bool
+TrivialInlineAdvisor::forwards_into_a_cycle (MonoMethod *target) const
 {
 	SmallPtrSet<MonoMethod *, max_links> seen;
 
@@ -285,7 +328,7 @@ forwards_into_a_cycle (MonoMethod *target, MonoDomain *domain)
 			return false;
 
 		ERROR_DECL (metadata_error);
-		MinimalCompile cfg (target, domain, metadata_error);
+		MinimalCompile cfg (target, domain_, metadata_error);
 		MonoMethodHeader *header = cfg.get ()->header;
 
 		if (header == nullptr) {
@@ -293,12 +336,13 @@ forwards_into_a_cycle (MonoMethod *target, MonoDomain *domain)
 			return false;
 		}
 
-		// A body the shape test declines ends the chain. It keeps its own call
-		// sites, so a cycle behind it is one the pre-pass never folds through.
+		// A body the shape test declines ends the chain here: it keeps its
+		// own call sites, so a cycle behind it is one the pre-pass never
+		// folds through.
 		if (header->num_clauses != 0)
 			return false;
 
-		std::optional<Shape> shape = shape_of (target, header);
+		std::optional<Shape> shape = match_trivial_shape (target, header);
 
 		if (!shape)
 			return false;
@@ -306,17 +350,15 @@ forwards_into_a_cycle (MonoMethod *target, MonoDomain *domain)
 		target = shape->forwards_to;
 	}
 
-	/*
-	 * A cycle longer than this walk is still caught at the site move.
-	 * copy_reaches () keeps a site on its call when the copy it would move to
-	 * already reaches the caller, so giving up here costs nothing.
-	 */
+	// A cycle longer than this walk is still caught at the site move:
+	// copy_reaches () keeps a site on its call when the copy it would move
+	// to already reaches the caller, so giving up here costs nothing.
 	return false;
 }
 
 /// A copy belongs to the one compile that asked for it. Another body in the
-/// module keeps the declaration and reaches the published entry, until its own
-/// compile folds a copy of its own.
+/// module keeps the declaration and reaches the published entry, until its
+/// own compile folds a copy of its own.
 void
 redirect_calls (Function &caller, Function &from, Function &to)
 {
@@ -331,15 +373,15 @@ redirect_calls (Function &caller, Function &from, Function &to)
 void
 trace_inline (MonoMethod *callee, MonoMethod *caller)
 {
-	char *host = mono_method_full_name (caller, TRUE);
-	char *what = mono_method_full_name (callee, TRUE);
+	char *caller_name = mono_method_full_name (caller, TRUE);
+	char *callee_name = mono_method_full_name (callee, TRUE);
 
 	MONO_LOCK (jit_trace_mutex ())
 	{
-		fprintf (stderr, "[llvm-jit] folding %s into %s\n", what, host);
+		fprintf (stderr, "[llvm-jit] folding %s into %s\n", callee_name, caller_name);
 	}
-	g_free (what);
-	g_free (host);
+	g_free (callee_name);
+	g_free (caller_name);
 }
 
 } // namespace
@@ -350,59 +392,40 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
                              ModuleTypes &types, InlineScope &scope,
                              ResolveExternals resolve)
 {
-	uint32_t limit = trivial_inline_il_limit ();
+	uint32_t il_limit = trivial_inline_il_limit ();
 
-	if (limit == 0 || folding_off_for_seq_points ())
+	if (il_limit == 0 || folding_off_for_seq_points ())
 		return;
 
-	// A body the module now holds, and the method it belongs to. A body reached
-	// through another one is folded into that one first, so the pair is what a
-	// trace has to name.
 	struct Candidate {
 		MonoMethod *method;
 		llvm::Function *body;
 
-		/// Folds between this body and root. Zero is root itself.
+		/// Folds between this candidate and root. Zero is root itself.
 		unsigned depth;
 	};
 
 	SmallVector<Candidate, 8> pending { { root, &body, 0 } };
 
-	// The methods whose copy the resolution below refused. scope.folded keeps an
-	// entry naming a copy that has gone. A later site for one of these asks for
-	// a copy again and meets the same failure.
+	// Methods a fresh copy already failed to resolve, so a later site for
+	// the same callee does not retry it.
 	SmallPtrSet<MonoMethod *, 4> unresolved;
 
-	// The budget bounds what the loop translates rather than how far it walks.
-	// A body it can no longer fold into still has sites to move onto the copies
-	// this root holds already.
-	/*
-	 * Least deep first. The worklist is drained from the front, so every body
-	 * one remove from root is translated before any body behind it, and a budget
-	 * that runs out drops the deepest candidates rather than whichever chain
-	 * the walk happened to go down.
-	 */
-	uint32_t fanout_limit = trivial_inline_fanout_limit ();
+	TrivialInlineAdvisor advisor (domain, scope, il_limit);
 
-	// instances_left tracks what instance_budget bounds: the sites spent
-	// building a fresh copy so far, summed across every callee this root
-	// has built one for rather than per callee the way fanout_limit is. A
-	// site that redirects onto a copy that already stands costs nothing
-	// further, so it is not counted here again.
-	uint32_t instance_budget = trivial_inline_instance_budget ();
-	uint32_t instances_left = instance_budget;
-
+	// Least deep first: the worklist is drained from the front, so a budget
+	// that runs out drops the deepest candidates rather than whichever chain
+	// the walk happened to go down.
 	for (size_t next = 0; next < pending.size (); ++next) {
-		auto [into, caller, depth] = pending[next];
+		auto [caller_method, caller_body, depth] = pending[next];
 
-		// called keeps the order caller's own instructions name each
+		// called keeps the order caller_body's instructions name each
 		// declaration in, so a budget that runs out drops the same
-		// candidates on every compile of this body rather than whichever
-		// ones a hash happens to visit first.
+		// candidates on every compile of this body.
 		SmallVector<Function *, 8> called;
 		SmallDenseMap<Function *, unsigned, 8> sites_of;
 
-		for (Instruction &i : instructions (*caller)) {
+		for (Instruction &i : instructions (*caller_body)) {
 			auto *site = dyn_cast<CallBase> (&i);
 			Function *decl =
 				site != nullptr ? site->getCalledFunction () : nullptr;
@@ -414,71 +437,44 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 		}
 
 		for (Function *decl : called) {
-			// How many of caller's own sites call decl, which is how many
-			// times AlwaysInlinerPass duplicates a copy folded in for it.
+			// Each of decl's sites gets its own copy once AlwaysInlinerPass
+			// folds it in, so the budgets below scale with this.
 			unsigned sites = sites_of[decl];
 			MonoMethod *callee = marked_method (*decl);
 
 			if (callee == nullptr || unresolved.contains (callee))
 				continue;
 
-			/*
-			 * A copy belongs to the root rather than to the caller that
-			 * asked for it, so these sites reach the one that stands. This
-			 * is ahead of the budget because a redirect translates nothing:
-			 * a root that has spent its budget still moves its sites over.
-			 */
 			bool rebuild = already_folded (scope, callee);
 
 			if (rebuild) {
-				// root has a body rather than a copy, and a copy of root
-				// folded back into root has no end.
+				// Folding root back into itself would recurse forever.
 				if (callee == scope.root)
 					continue;
 
 				Function *standing = folded_copy_in (scope, callee, module);
 
-				/*
-				 * A copy stands, so these sites reach it instead of the
-				 * published entry. One that already reaches caller keeps
-				 * its call: the two would fold into each other otherwise.
-				 */
+				// Ahead of the advisor: redirecting to a standing copy
+				// costs no translation, so it happens even once the
+				// budget is spent.
 				if (standing != nullptr) {
-					if (!copy_reaches (*standing, *caller)) {
+					// A copy that already reaches caller_body keeps its
+					// call: the two would fold into each other otherwise.
+					if (!copy_reaches (*standing, *caller_body)) {
 						g_assert (standing->getFunctionType ()
 						          == decl->getFunctionType ());
-						redirect_calls (*caller, *decl, *standing);
+						redirect_calls (*caller_body, *decl, *standing);
 					}
 
 					continue;
 				}
 
-				/*
-				 * No copy stands here, so fall through and build one. The
-				 * pipeline erases a copy once it has folded every call to
-				 * it, and a copy made for a candidate belongs to that
-				 * candidate's module, so a root meets this on the ordinary
-				 * path rather than a rare one.
-				 */
+				// The pipeline can erase a standing copy once every call
+				// to it is folded, so reaching here for a rebuild is
+				// ordinary rather than a bug to guard against.
 			}
 
-			// A rebuild is free, so a spent budget stops the new methods
-			// below it rather than the whole scan.
-			if (!rebuild && scope.budget.trivial == 0)
-				continue;
-
-			// A rebuild onto a copy that stands redirects and returns above,
-			// spending nothing further. Reaching here always means a fresh
-			// copy is about to be built and its sites duplicated, whether or
-			// not this callee was folded once already, so both limits below
-			// gate every one of these rather than only a first-time fold.
-			if (fanout_limit != 0 && sites > fanout_limit)
-				continue;
-
-			if (instance_budget != 0 && sites > instances_left)
-				continue;
-
-			if (!may_fold (domain, callee))
+			if (!advisor.worth_a_copy (callee, sites, rebuild))
 				continue;
 
 			ERROR_DECL (metadata_error);
@@ -490,16 +486,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 				continue;
 			}
 
-			// The three tests below all read the callee's IL. A body the
-			// backend writes itself is never translated from that IL, so
-			// none of them apply.
-			bool reads_its_il = !written_by_the_backend (callee);
-
-			if (reads_its_il && !is_small_and_clause_free (header, limit))
-				continue;
-			if (reads_its_il && !shape_of (callee, header))
-				continue;
-			if (reads_its_il && forwards_into_a_cycle (callee, domain))
+			if (!advisor.fits_the_shape (callee, header))
 				continue;
 
 			size_t before = externals.size ();
@@ -511,14 +498,11 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			if (copy == nullptr)
 				continue;
 
-			/*
-			 * A class the copy names may fail to load, and the program is owed
-			 * that failure at the call rather than at root's entry. The call
-			 * can sit inside a try whose catch is written for it. Taking the
-			 * copy back off leaves the call on the callee's thunk, where the
-			 * callee's own compile raises it. root then keeps the body it
-			 * would have had, clauses and all.
-			 */
+			// A class the copy names may fail to load; that failure
+			// belongs at the call, inside whatever try wraps it, not at
+			// root's entry. Erasing the copy leaves the call on the
+			// callee's thunk, so the callee's own compile raises it there
+			// instead.
 			if (Error err = resolve (ArrayRef (externals).drop_front (before))) {
 				consumeError (std::move (err));
 				externals.resize (before);
@@ -528,34 +512,24 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			}
 
 			if (is_jit_trace_enabled ())
-				trace_inline (callee, into);
+				trace_inline (callee, caller_method);
 
-			// A shared body is entered with its context in a register and a
-			// call to it is not, which is the one shape these two disagree
-			// on. may_fold () refuses that callee, and a mismatch that got
-			// through here calls the copy with the wrong arguments.
+			// A shared body is entered with its context in a register,
+			// and a call to it is not -- the one shape these two
+			// disagree on. may_fold () refuses that callee, so a mismatch
+			// here means the copy would run with the wrong arguments.
 			g_assert (copy->getFunctionType () == decl->getFunctionType ());
 
-			redirect_calls (*caller, *decl, *copy);
+			redirect_calls (*caller_body, *decl, *copy);
+			advisor.charge (sites);
 
-			if (instance_budget != 0)
-				instances_left -= sites;
-
-			// These shapes have nothing to weigh, so the pipeline folds them
-			// rather than a cost model.
+			// These shapes have nothing to weigh, so the pipeline folds
+			// them rather than a cost model.
 			copy->addFnAttr (Attribute::AlwaysInline);
 
-			/*
-			 * A rebuild is a body this root has already walked, so its own
-			 * callees were weighed the first time. Walking it again reaches
-			 * past what the first fold decided and spends the budget on
-			 * methods that fold deeper rather than on the sites in hand.
-			 *
-			 * The depth bound is how far past root the loop follows a chain
-			 * of forwarders. It drains least deep first, so the bound decides
-			 * where the count left over goes rather than what the first folds
-			 * are.
-			 */
+			// A rebuild already had its own callees weighed the first time
+			// this root walked it, so walking it again would spend budget
+			// deeper rather than on the sites in hand.
 			if (!rebuild && depth + 1 < trivial_inline_depth_limit ())
 				pending.push_back ({ callee, copy, depth + 1 });
 		}
