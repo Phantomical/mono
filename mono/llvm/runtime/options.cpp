@@ -685,16 +685,6 @@ wrapper_runs_at_tier0 (MonoMethod *method, bool for_classic)
 	    || method->wrapper_type == MONO_WRAPPER_WRITE_BARRIER)
 		return false;
 
-	// common_call_trampoline () (`mono/mini/mini-trampolines.c`) resolves a
-	// delegate-invoke wrapper through mono_jit_compile_method (), the same
-	// thunk any other method's first vtable-slot resolution gets, and it
-	// promotes normally afterward. Refused pending a correctness sweep of
-	// what classic generates for it - not yet run, unlike the sweep
-	// pinvoke3.exe, winx64structs.exe and cominterop.exe give the
-	// interop-entry refusal below.
-	if (method->wrapper_type == MONO_WRAPPER_DELEGATE_INVOKE)
-		return false;
-
 	/*
 	 * A gsharedvt wrapper's own signature keeps the type parameter its
 	 * shared call site is generic over, and classic mini's mono_method_to_ir
@@ -733,6 +723,20 @@ wrapper_runs_at_tier0 (MonoMethod *method, bool for_classic)
 	// out of stack. Boehm is where this shows, because SGen's managed
 	// allocator keeps the hot path off the icall.
 	if (method->wrapper_type == MONO_WRAPPER_MANAGED_TO_NATIVE)
+		return false;
+
+	/*
+	 * common_call_trampoline () (`mono/mini/mini-trampolines.c`) resolves a
+	 * delegate-invoke wrapper through mono_jit_compile_method (), the same
+	 * thunk any other method's first vtable-slot resolution gets, so classic
+	 * publishes it the same way as any other wrapper past this point.
+	 * mono/tests/delegate-invoke-shapes.cs and vtable-slot-targets.cs gate
+	 * every dispatch shape this wrapper answers - static, instance, virtual,
+	 * closed static, open instance, multicast, and a null delegate's own
+	 * throw - and the full tier-0 corpus passes with the refusal lifted for
+	 * classic. Nothing here has run that sweep against the interpreter.
+	 */
+	if (method->wrapper_type == MONO_WRAPPER_DELEGATE_INVOKE)
 		return false;
 
 	if (info == nullptr)
