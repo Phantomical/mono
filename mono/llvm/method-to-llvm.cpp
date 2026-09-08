@@ -2123,24 +2123,9 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 		if (!ltyper)
 			return ltyper.takeError ();
 		auto ltype = ltyper.get ();
-		unsigned at = natural_parameter_index (i, function);
-
-#ifdef HOST_WIN32
-		if (!native && win64_indirect (ltype)) {
-			// convert_method_signature () declared this parameter as a
-			// pointer to the caller's own copy, per win64_indirect ()
-			// (hidden-return.hpp). This function reads and writes through
-			// it directly.
-			args.push_back ({
-				.alloca = function->getArg (at),
-				.type = mtype,
-				.native = native,
-			});
-			continue;
-		}
-#endif
 
 		auto alloca = builder.CreateAlloca (ltype, nullptr, names[i]);
+		unsigned at = natural_parameter_index (i, function);
 
 		alloca->setAlignment (type_alignment (mtype, native));
 		builder.CreateAlignedStore (function->getArg (at), alloca, alloca->getAlign ());

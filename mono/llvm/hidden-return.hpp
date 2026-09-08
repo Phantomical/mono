@@ -117,64 +117,13 @@ count_return_registers (llvm::Type *t, ReturnRegisters &use)
 	}
 }
 
-/// Adds t's own byte width to *size, recursing into a struct or array as
-/// count_return_registers () does. Every struct here is a packed
-/// struct_for_layout () body, so the total needs no padding adjustment.
-inline void
-add_byte_width (llvm::Type *t, uint64_t &size)
-{
-	if (auto *st = llvm::dyn_cast<llvm::StructType> (t)) {
-		for (llvm::Type *element : st->elements ())
-			add_byte_width (element, size);
-		return;
-	}
-
-	if (auto *at = llvm::dyn_cast<llvm::ArrayType> (t)) {
-		for (uint64_t i = 0; i < at->getNumElements (); ++i)
-			add_byte_width (at->getElementType (), size);
-		return;
-	}
-
-	size += t->isPointerTy () ? 8 : (t->getPrimitiveSizeInBits () + 7) / 8;
-}
-
 } // namespace detail
-
-#ifdef HOST_WIN32
-
-// The Microsoft convention never splits an aggregate across registers. A
-// value of this shape travels as itself only when its whole size is 1, 2, 4
-// or 8 bytes. Anything else travels through a pointer instead: to a hidden
-// return slot for a return, and to a private copy for a parameter.
-//
-// mono_arch_get_call_info () (MONO_WIN64_VALUE_TYPE_FITS_REG, arch-amd64.c)
-// applies that same rule for the classic tier-0 compiler, deciding how a
-// call's caller reads this signature. The two engines have to agree: a
-// caller commits to a convention when it is compiled, before either knows
-// which one compiles the callee.
-inline bool
-win64_indirect (llvm::Type *type)
-{
-	// Only an aggregate is ever flattened. Everything else has its own register.
-	if (!type->isStructTy () && !type->isArrayTy ())
-		return false;
-
-	uint64_t size = 0;
-
-	detail::add_byte_width (type, size);
-	return size != 1 && size != 2 && size != 4 && size != 8;
-}
-
-#endif
 
 /// Whether a return of type is handed back through a hidden pointer rather than
 /// in the return registers.
 inline bool
 returns_by_hidden_pointer (llvm::Type *type)
 {
-#ifdef HOST_WIN32
-	return win64_indirect (type);
-#else
 	// Only an aggregate is ever flattened. Everything else has its own register.
 	if (!type->isStructTy () && !type->isArrayTy ())
 		return false;
@@ -183,7 +132,6 @@ returns_by_hidden_pointer (llvm::Type *type)
 
 	detail::count_return_registers (type, use);
 	return use.exhausted;
-#endif
 }
 
 /// Which parameter of a prototype of count parameters is the hidden return

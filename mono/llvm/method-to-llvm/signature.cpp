@@ -816,19 +816,7 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig, bool nati
 
 		if (!converted)
 			return converted.takeError ();
-
-		/*
-		 * A native signature is lowered again by MonoAbiPass once the
-		 * optimization pipeline has run (arch/amd64/mono-abi.cpp), against
-		 * the real Microsoft convention. Rewriting the type here as well
-		 * would hand that pass a parameter it did not declare.
-		 */
-#ifdef HOST_WIN32
-		if (!native && win64_indirect (*converted))
-			params.push_back (pointer_type (context ()));
-		else
-#endif
-			params.push_back (*converted);
+		params.push_back (*converted);
 	}
 
 	// The variable part of a vararg call travels in the cookie buffer that
