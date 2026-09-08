@@ -356,6 +356,8 @@ mono_gc_base_cleanup (void)
 static MonoObject* mono_gc_alloc_obj_specific_atomic (MonoVTable *vtable);
 static MonoObject* mono_gc_alloc_obj_specific_typed (MonoVTable *vtable);
 static MonoObject* mono_gc_alloc_obj_specific_conservative (MonoVTable *vtable);
+static MonoArray* mono_gc_alloc_vector_specific_atomic (MonoVTable *vtable, uintptr_t n);
+static MonoArray* mono_gc_alloc_vector_specific_conservative (MonoVTable *vtable, uintptr_t n);
 
 void
 mono_gc_init_icalls (void)
@@ -363,6 +365,8 @@ mono_gc_init_icalls (void)
 	mono_register_jit_icall (mono_gc_alloc_obj_specific_atomic, mono_icall_sig_object_ptr, FALSE);
 	mono_register_jit_icall (mono_gc_alloc_obj_specific_typed, mono_icall_sig_object_ptr, FALSE);
 	mono_register_jit_icall (mono_gc_alloc_obj_specific_conservative, mono_icall_sig_object_ptr, FALSE);
+	mono_register_jit_icall (mono_gc_alloc_vector_specific_atomic, mono_icall_sig_object_ptr_int32, FALSE);
+	mono_register_jit_icall (mono_gc_alloc_vector_specific_conservative, mono_icall_sig_object_ptr_int32, FALSE);
 }
 
 /**
@@ -1147,34 +1151,38 @@ mono_gc_alloc_pinned_vector (MonoVTable *vtable, size_t size, uintptr_t max_leng
 	return mono_gc_alloc_vector (vtable, size, max_length);
 }
 
-MonoArray*
-mono_gc_alloc_vector (MonoVTable *vtable, size_t size, uintptr_t max_length)
+static MonoArray*
+alloc_vector_atomic (MonoVTable *vtable, size_t size)
 {
-	MonoArray *obj;
+	MonoArray *obj = (MonoArray *)GC_MALLOC_ATOMIC (size);
 
-	if (!m_class_has_references (vtable->klass)) {
-		obj = (MonoArray *)GC_MALLOC_ATOMIC (size);
-		if (G_UNLIKELY (!obj))
-			return NULL;
+	if (G_UNLIKELY (!obj))
+		return NULL;
 
-		obj->obj.vtable = vtable;
-		obj->obj.synchronisation = NULL;
+	obj->obj.vtable = vtable;
+	obj->obj.synchronisation = NULL;
 
-		memset (mono_object_get_data ((MonoObject*)obj), 0, size - MONO_ABI_SIZEOF (MonoObject));
-	} else if (vtable->klass->element_class->valuetype && 
-		vtable->klass->element_class->gc_descr != GC_NO_DESCRIPTOR &&
-		vtable->domain == mono_get_root_domain () /* &&
-		max_length > 50 */) {
-		obj = (MonoArray *)GC_gcj_vector_malloc (size, vtable);
-		if (G_UNLIKELY (!obj))
-			return NULL;
-	} else {
-		obj = (MonoArray *)GC_MALLOC (size);
-		if (G_UNLIKELY (!obj))
-			return NULL;
+	memset (mono_object_get_data ((MonoObject*)obj), 0, size - MONO_ABI_SIZEOF (MonoObject));
+	return obj;
+}
 
-		obj->obj.vtable = vtable;
-	}
+static MonoArray*
+alloc_vector_conservative (MonoVTable *vtable, size_t size)
+{
+	MonoArray *obj = (MonoArray *)GC_MALLOC (size);
+
+	if (G_UNLIKELY (!obj))
+		return NULL;
+
+	obj->obj.vtable = vtable;
+	return obj;
+}
+
+static MonoArray*
+finish_alloc_vector (MonoArray *obj, uintptr_t max_length)
+{
+	if (G_UNLIKELY (!obj))
+		return NULL;
 
 	obj->max_length = max_length;
 
@@ -1182,6 +1190,71 @@ mono_gc_alloc_vector (MonoVTable *vtable, size_t size, uintptr_t max_length)
 		MONO_PROFILER_RAISE (gc_allocation, (&obj->obj));
 
 	return obj;
+}
+
+MonoArray*
+mono_gc_alloc_vector (MonoVTable *vtable, size_t size, uintptr_t max_length)
+{
+	if (!m_class_has_references (vtable->klass))
+		return finish_alloc_vector (alloc_vector_atomic (vtable, size), max_length);
+
+	if (vtable->klass->element_class->valuetype &&
+		vtable->klass->element_class->gc_descr != GC_NO_DESCRIPTOR &&
+		vtable->domain == mono_get_root_domain () /* &&
+		max_length > 50 */)
+		return finish_alloc_vector ((MonoArray *)GC_gcj_vector_malloc (size, vtable), max_length);
+
+	return finish_alloc_vector (alloc_vector_conservative (vtable, size), max_length);
+}
+
+// See mono_gc_alloc_vector_shape ()'s declaration in gc-internals.h for what
+// GENERIC covers.
+MonoGCAllocShape
+mono_gc_alloc_vector_shape (MonoClass *array_class)
+{
+	if (!m_class_has_references (array_class))
+		return MONO_GC_ALLOC_SHAPE_ATOMIC;
+	if (!m_class_is_valuetype (m_class_get_element_class (array_class)))
+		return MONO_GC_ALLOC_SHAPE_CONSERVATIVE;
+	return MONO_GC_ALLOC_SHAPE_GENERIC;
+}
+
+typedef MonoArray* (*AllocVectorFn) (MonoVTable *vtable, size_t size);
+
+// mono_array_new_specific_internal ()'s own byte-length, overflow and OOM
+// checks, for a caller with no MonoError of its own to hand it.
+static MonoArray*
+alloc_vector_specific (MonoVTable *vtable, uintptr_t n, AllocVectorFn alloc)
+{
+	ERROR_DECL (error);
+	MonoArray *arr = NULL;
+	uintptr_t byte_len;
+
+	if (G_UNLIKELY (n > MONO_ARRAY_MAX_INDEX)) {
+		mono_error_set_generic_error (error, "System", "OverflowException", "");
+	} else if (!mono_array_calc_byte_len (vtable->klass, n, &byte_len)) {
+		mono_error_set_out_of_memory (error, "Could not allocate %i bytes", MONO_ARRAY_MAX_SIZE);
+	} else {
+		arr = finish_alloc_vector (alloc (vtable, byte_len), n);
+
+		if (G_UNLIKELY (!arr))
+			mono_error_set_out_of_memory (error, "Could not allocate %" G_GSIZE_FORMAT "d bytes", (gsize) byte_len);
+	}
+
+	mono_error_set_pending_exception (error);
+	return arr;
+}
+
+static MonoArray*
+mono_gc_alloc_vector_specific_atomic (MonoVTable *vtable, uintptr_t n)
+{
+	return alloc_vector_specific (vtable, n, alloc_vector_atomic);
+}
+
+static MonoArray*
+mono_gc_alloc_vector_specific_conservative (MonoVTable *vtable, uintptr_t n)
+{
+	return alloc_vector_specific (vtable, n, alloc_vector_conservative);
 }
 
 MonoArray*

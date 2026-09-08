@@ -1082,6 +1082,30 @@ array_extent (bool answers_null, MonoClass *array, llvm::Value *length)
 
 } // namespace
 
+namespace {
+
+/// The icall mono_gc_alloc_vector_shape () names for a shape it answers.
+///
+/// GENERIC and TYPED never come back from it: TYPED is an object shape, and
+/// GENERIC already has its own icall at the call site.
+MonoJitICallId
+icall_for_vector_alloc_shape (MonoGCAllocShape shape)
+{
+	switch (shape) {
+	case MONO_GC_ALLOC_SHAPE_ATOMIC:
+		return MONO_JIT_ICALL_mono_gc_alloc_vector_specific_atomic;
+	case MONO_GC_ALLOC_SHAPE_CONSERVATIVE:
+		return MONO_JIT_ICALL_mono_gc_alloc_vector_specific_conservative;
+	case MONO_GC_ALLOC_SHAPE_GENERIC:
+	case MONO_GC_ALLOC_SHAPE_TYPED:
+		break;
+	}
+
+	llvm_unreachable ("unhandled MonoGCAllocShape in icall_for_vector_alloc_shape");
+}
+
+} // namespace
+
 /// Allocates an array of length elements and answers it. array must be a
 /// szarray class, and length an integer of any width.
 ///
@@ -1134,8 +1158,16 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 		(*fast)->addRetAttr (llvm::Attribute::NonNull);
 		serves = *fast;
 	} else {
+		// mono_gc_get_managed_array_allocator () answers null under Boehm,
+		// which has no managed allocator of its own. A shape this settles
+		// still skips mono_gc_alloc_vector ()'s own dispatch, through the
+		// icall that shape names.
+		MonoGCAllocShape shape = mono_gc_alloc_vector_shape (array);
+
 		llvm::Expected<llvm::Function *> slow =
-			icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_array_new_specific);
+			shape == MONO_GC_ALLOC_SHAPE_GENERIC
+				? icall_wrapper_decl (MONO_JIT_ICALL_ves_icall_array_new_specific)
+				: icall_wrapper_decl (icall_for_vector_alloc_shape (shape));
 
 		if (!slow)
 			return slow.takeError ();

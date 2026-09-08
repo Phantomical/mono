@@ -170,6 +170,16 @@ mono_gc_alloc_handle_obj (MonoVTable *vtable, gsize size);
 MonoArray*
 mono_gc_alloc_vector (MonoVTable *vtable, size_t size, uintptr_t max_length);
 
+/// Answers array_class's shape without allocating.
+///
+/// array_class must be a single-dimensional, zero-based array class. TYPED
+/// never comes back, because an array carries no descriptor of its own.
+/// GENERIC covers a value-type element: its shape also depends on which
+/// domain does the allocating, a fact this cannot see ahead of one. It also
+/// covers a collector, such as SGen, that answers this question nowhere.
+MonoGCAllocShape
+mono_gc_alloc_vector_shape (MonoClass *array_class);
+
 MonoArray*
 mono_gc_alloc_pinned_vector (MonoVTable *vtable, size_t size, uintptr_t max_length);
 

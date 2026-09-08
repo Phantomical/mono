@@ -966,6 +966,14 @@ mono_gc_alloc_obj_shape (MonoClass *klass)
 	return MONO_GC_ALLOC_SHAPE_GENERIC;
 }
 
+// SGen's own fast path is mono_gc_get_managed_array_allocator (), not a
+// shape of mono_gc_alloc_vector (), so every class answers GENERIC here.
+MonoGCAllocShape
+mono_gc_alloc_vector_shape (MonoClass *array_class)
+{
+	return MONO_GC_ALLOC_SHAPE_GENERIC;
+}
+
 MonoObject*
 mono_gc_alloc_mature (MonoVTable *vtable, size_t size)
 {

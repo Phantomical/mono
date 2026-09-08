@@ -199,6 +199,8 @@ MONO_JIT_ICALL (mono_gc_alloc_obj_specific_conservative) \
 MONO_JIT_ICALL (mono_gc_alloc_obj_specific_typed) \
 MONO_JIT_ICALL (mono_gc_alloc_string) \
 MONO_JIT_ICALL (mono_gc_alloc_vector) \
+MONO_JIT_ICALL (mono_gc_alloc_vector_specific_atomic) \
+MONO_JIT_ICALL (mono_gc_alloc_vector_specific_conservative) \
 MONO_JIT_ICALL (mono_gc_wbarrier_generic_nostore_internal) \
 MONO_JIT_ICALL (mono_gc_wbarrier_generic_store_internal) \
 MONO_JIT_ICALL (mono_gc_wbarrier_range_copy) \
