@@ -1955,4 +1955,20 @@ MonoBackend::stub_for (MonoMethod *method, MonoDomain *domain)
 	return published_entry (**published);
 }
 
+llvm::Expected<void *>
+MonoBackend::thunk_for (MonoMethod *method, MonoDomain *domain)
+{
+	llvm::Expected<DomainState *> state = this->state (domain);
+
+	if (!state)
+		return state.takeError ();
+
+	llvm::Expected<MonoDomainMethod *> published = publish (**state, method);
+
+	if (!published)
+		return published.takeError ();
+
+	return (*published)->thunk.code ();
+}
+
 } // namespace mono

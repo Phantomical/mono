@@ -107,6 +107,12 @@ public:
 	/// native code is called without the runtime being asked again.
 	llvm::Expected<void *> stub_for (MonoMethod *method, MonoDomain *domain);
 
+	/// The thunk for \p method, publishing it if the domain has not seen it.
+	///
+	/// Unlike stub_for (), this never answers with \p method's interop
+	/// entry, even if it has one.
+	llvm::Expected<void *> thunk_for (MonoMethod *method, MonoDomain *domain);
+
 	/// The address that stands for dm's method: the entry native code is
 	/// handed, or the thunk in front of the body. Call it with no lock on dm
 	/// held.

@@ -46,6 +46,14 @@ void *mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *domain, Mono
 /// Returns NULL and sets the error if the method cannot be published.
 void *mono_llvm_jit_stub_for (MonoMethod *method, MonoDomain *domain, MonoError *error);
 
+/// Returns the thunk for this method, allocating one if not already created,
+/// without answering with its interop entry even if it has one. Use this
+/// for an ordinary managed call. mono_llvm_jit_stub_for () is for an address
+/// handed to native code or to another engine.
+///
+/// Returns NULL and sets the error if the method cannot be published.
+void *mono_llvm_jit_thunk_for (MonoMethod *method, MonoDomain *domain, MonoError *error);
+
 /// Stops background compiling and waits for whatever is already running.
 ///
 /// Call this at the top of runtime shutdown. A background compile reads

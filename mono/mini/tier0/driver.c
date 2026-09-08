@@ -2186,7 +2186,7 @@ mono_resolve_patch_target (MonoMethod *method, MonoDomain *domain, guint8 *code,
 		break;
 	}
 	case MONO_PATCH_INFO_METHOD_JUMP:
-		target = mono_llvm_jit_stub_for (patch_info->data.method, domain, error);
+		target = mono_llvm_jit_thunk_for (patch_info->data.method, domain, error);
 		if (!is_ok (error))
 			return NULL;
 		break;
@@ -2198,9 +2198,9 @@ mono_resolve_patch_target (MonoMethod *method, MonoDomain *domain, guint8 *code,
 			// MONO_WRAPPER_WRITE_BARRIER callee through
 			// mono_jit_compile_method_with_opt (), which asserts a MonoJitInfo
 			// for the callee that mini_jit_info_table_find () excludes as a
-			// trampoline. mono_llvm_jit_stub_for () returns the callee's thunk
+			// trampoline. mono_llvm_jit_thunk_for () returns the callee's thunk
 			// directly, without running that assert.
-			target = mono_llvm_jit_stub_for (patch_info->data.method, domain, error);
+			target = mono_llvm_jit_thunk_for (patch_info->data.method, domain, error);
 			if (!is_ok (error))
 				return NULL;
 		}

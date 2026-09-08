@@ -691,20 +691,6 @@ wrapper_runs_at_tier0 (MonoMethod *method, bool for_classic)
 		return false;
 
 	/*
-	 * publishes_interop_entry () names a wrapper native code enters through
-	 * a C-convention address. The interpreter's entry is not that shape.
-	 * The classic compiler fails a different way: this wrapper's own call
-	 * to the attributed method it wraps asks published_entry () for that
-	 * method's address. published_entry () answers by recompiling this same
-	 * wrapper, which mono_codegen () is already resolving patches for on
-	 * the same thread. The second compile recurses into the first and
-	 * overflows the stack. test-unmanaged-callers-only.cpp's
-	 * PublishesACEntry case reproduces it.
-	 */
-	if (publishes_interop_entry (method))
-		return false;
-
-	/*
 	 * A gsharedvt wrapper's own signature keeps the type parameter its
 	 * shared call site is generic over, and classic mini's mono_method_to_ir
 	 * () (`mono/mini/tier0/method-to-ir.c`) asserts that a method it
@@ -716,6 +702,17 @@ wrapper_runs_at_tier0 (MonoMethod *method, bool for_classic)
 	MonoMethodSignature *sig = mono_method_signature_internal (method);
 
 	if (sig != nullptr && sig->has_type_parameters)
+		return false;
+
+	/*
+	 * publishes_interop_entry () names a wrapper native code enters through a
+	 * C-convention address. mono_llvm_jit_thunk_for () already keeps such a
+	 * wrapper's own call to the method it wraps from recompiling the wrapper
+	 * mid-compile, but classic still corrupts a marshaled struct crossing this
+	 * entry: pinvoke3.exe's test_0_marshal_struct_delegate, winx64structs.exe
+	 * and cominterop.exe all fail under it.
+	 */
+	if (publishes_interop_entry (method))
 		return false;
 
 	WrapperInfo *info = mono_marshal_get_wrapper_info (method);

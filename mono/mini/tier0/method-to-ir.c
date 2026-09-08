@@ -8062,7 +8062,7 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 			/*
 			 * A synchronized wrapper's call to the method it locks names that
 			 * method directly, with no dummy marker standing in for it.
-			 * mono_llvm_jit_stub_for () resolves a callee by identity alone, so
+			 * mono_llvm_jit_thunk_for () resolves a callee by identity alone, so
 			 * nothing here re-wraps it back into this method and recurses.
 			 */
 

@@ -102,6 +102,18 @@ mono_llvm_jit_stub_for (MonoMethod *method, MonoDomain *target_domain, MonoError
 	return finish ((*backend)->stub_for (method, target_domain), error);
 }
 
+void *
+mono_llvm_jit_thunk_for (MonoMethod *method, MonoDomain *target_domain, MonoError *error)
+{
+	error_init (error);
+
+	llvm::Expected<mono::MonoBackend *> backend = mono::MonoBackend::get ();
+
+	if (!backend)
+		return finish (backend.takeError (), error);
+	return finish ((*backend)->thunk_for (method, target_domain), error);
+}
+
 void
 mono_llvm_jit_stop_compiling (void)
 {

@@ -440,7 +440,7 @@ can_enter_interp (MonoCompile *cfg, MonoMethod *method, gboolean virtual_)
  *
  * The lock is not in the flagged method's body. mono_marshal_get_synchronized_wrapper ()
  * builds a wrapper that enters the monitor, calls the body and exits through a finally.
- * mono_llvm_jit_stub_for () publishes a thunk for whatever method a MONO_PATCH_INFO_METHOD
+ * mono_llvm_jit_thunk_for () publishes a thunk for whatever method a MONO_PATCH_INFO_METHOD
  * patch names. A direct call therefore has to name the wrapper here, or the body runs
  * with no lock held.
  *
