@@ -69,6 +69,10 @@ cmake_install.cmake
 config.h
 releases
 
+# vcpkg manifest mode installs here by default, next to vcpkg.json rather
+# than under build/.
+/vcpkg_installed/
+
 # Left behind by the autotools builds this tree used to have, and by the
 # submodules under external/ that still use them.
 Makefile.in
