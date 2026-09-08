@@ -661,47 +661,10 @@ interp_tier0_enabled ()
 	return tier0_enabled () && !(classic.enabled && classic.substring == nullptr);
 }
 
-/*
- * Whether a wrapper of this kind can run at tier 0.
- *
- * A wrapper carries IL of its own, so most kinds interpret like an ordinary
- * method, and generate_code () (`mono/interp/transform/transform.cpp`) refuses
- * the opcodes the interpreter does not implement. The refusals below are each
- * about how the body is entered rather than what it holds.
- *
- * Native code enters through a C-convention entry, which
- * publishes_interop_entry () names. The interpreter's entry is not that shape.
- *
- * The allocator and the write barrier are handed out as raw entries rather than
- * through a thunk. SGen identifies a thread suspended in one by resolving the
- * address through the jit-info table. Nothing redirectable stands between them
- * and their callers, so tier 0 has no way out for them.
- *
- * The marshalling that crosses between the engines is its own entry. An
- * interp_in wrapper is how compiled code reaches the interpreter, and a
- * gsharedvt_out_sig wrapper is how an interpreted caller reaches compiled code.
- * interp_lmf and gsharedvt_in_sig cross the same two ways. To interpret any of
- * them skips the crossing it exists to make.
- *
- * The gsharedvt_in and gsharedvt_out wrappers are not in the list.
- * compile_special () (`mono/mini/mini-runtime.c`) answers both with an arch
- * trampoline before any of this runs, and their IL is one ret.
- *
- * A managed-to-native wrapper is refused because the interpreter needs some of
- * them to run at all. Interpreting the wrapper for the array-allocation icall
- * makes the interpreter allocate an array, which calls that same wrapper, and
- * the thread runs out of stack. Boehm is where this shows, because SGen's
- * managed allocator keeps the hot path off the icall.
- *
- * A delegate-invoke wrapper is refused because a multicast delegate's Invoke
- * reaches it through a class vtable slot, and that slot is not a thunk.
- * common_call_trampoline () (`mono/mini/mini-trampolines.c`) patches it once,
- * on the slot's first call, to whatever this answers, and never revisits it.
- * A later compile through the shared body redirects this method's own thunk,
- * but the slot never reads it, so tier 0 has no way out for it either.
- */
+/// Whether a wrapper of this kind can run at tier 0, given which engine tier
+/// 0 is for this method (\p for_classic).
 static bool
-wrapper_runs_at_tier0 (MonoMethod *method)
+wrapper_runs_at_tier0 (MonoMethod *method, bool for_classic)
 {
 	/*
 	 * A dynamic method carries IL of its own, and the interpreter's transform
@@ -716,23 +679,67 @@ wrapper_runs_at_tier0 (MonoMethod *method)
 	if (method->wrapper_type == MONO_WRAPPER_DYNAMIC_METHOD)
 		return true;
 
+	// The allocator and the write barrier hand out a raw address instead of a
+	// thunk, and SGen finds a suspended thread through the jit-info table. A
+	// delegate-invoke wrapper is reached through a vtable slot instead:
+	// common_call_trampoline () (`mono/mini/mini-trampolines.c`) patches it
+	// once and never revisits it. Whichever engine compiles one of the three
+	// first is stuck with it, because nothing redirects the caller afterward.
+	if (method->wrapper_type == MONO_WRAPPER_ALLOC
+	    || method->wrapper_type == MONO_WRAPPER_WRITE_BARRIER
+	    || method->wrapper_type == MONO_WRAPPER_DELEGATE_INVOKE)
+		return false;
+
+	/*
+	 * publishes_interop_entry () names a wrapper native code enters through
+	 * a C-convention address. The interpreter's entry is not that shape.
+	 * The classic compiler fails a different way: this wrapper's own call
+	 * to the attributed method it wraps asks published_entry () for that
+	 * method's address. published_entry () answers by recompiling this same
+	 * wrapper, which mono_codegen () is already resolving patches for on
+	 * the same thread. The second compile recurses into the first and
+	 * overflows the stack. test-unmanaged-callers-only.cpp's
+	 * PublishesACEntry case reproduces it.
+	 */
 	if (publishes_interop_entry (method))
 		return false;
 
-	if (method->wrapper_type == MONO_WRAPPER_ALLOC
-	    || method->wrapper_type == MONO_WRAPPER_WRITE_BARRIER
-	    || method->wrapper_type == MONO_WRAPPER_MANAGED_TO_NATIVE
-	    || method->wrapper_type == MONO_WRAPPER_DELEGATE_INVOKE)
+	/*
+	 * A gsharedvt wrapper's own signature keeps the type parameter its
+	 * shared call site is generic over, and classic mini's mono_method_to_ir
+	 * () (`mono/mini/tier0/method-to-ir.c`) asserts that a method it
+	 * compiles carries none. The same signature can reach here off a
+	 * managed-to-native wrapper too, for a P/Invoke this compile only
+	 * reached through a gsharedvt caller. The check is on the shape, not
+	 * the wrapper kind that happened to carry it.
+	 */
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+	if (sig != nullptr && sig->has_type_parameters)
 		return false;
 
 	WrapperInfo *info = mono_marshal_get_wrapper_info (method);
 
+	// The classic compiler publishes the rest through the ordinary thunk,
+	// like any other method. Every refusal past this point is about what
+	// only interpreting gets wrong.
+	if (for_classic)
+		return true;
+
+	// Interpreting the array-allocation icall wrapper makes the interpreter
+	// allocate an array, which calls the same wrapper and runs the thread
+	// out of stack. Boehm is where this shows, because SGen's managed
+	// allocator keeps the hot path off the icall.
+	if (method->wrapper_type == MONO_WRAPPER_MANAGED_TO_NATIVE)
+		return false;
+
 	if (info == nullptr)
 		return true;
 
+	// An interp_in wrapper is how compiled code reaches the interpreter, and
+	// interp_lmf carries the frame that crossing needs. To interpret either
+	// skips the crossing it exists to make.
 	switch (info->subtype) {
-	case WRAPPER_SUBTYPE_GSHAREDVT_IN_SIG:
-	case WRAPPER_SUBTYPE_GSHAREDVT_OUT_SIG:
 	case WRAPPER_SUBTYPE_INTERP_IN:
 	case WRAPPER_SUBTYPE_INTERP_LMF:
 		return false;
@@ -763,7 +770,8 @@ runs_at_tier0 (MonoMethod *method)
 	if (implemented_outside_il (method) || builtin_body_replaces_il (method))
 		return false;
 
-	if (method->wrapper_type != MONO_WRAPPER_NONE && !wrapper_runs_at_tier0 (method))
+	if (method->wrapper_type != MONO_WRAPPER_NONE
+	    && !wrapper_runs_at_tier0 (method, runs_classic_at_tier0 (method)))
 		return false;
 
 	if (setting.substring == nullptr)
