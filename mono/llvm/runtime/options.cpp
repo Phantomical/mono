@@ -680,14 +680,19 @@ wrapper_runs_at_tier0 (MonoMethod *method, bool for_classic)
 		return true;
 
 	// The allocator and the write barrier hand out a raw address instead of a
-	// thunk, and SGen finds a suspended thread through the jit-info table. A
-	// delegate-invoke wrapper is reached through a vtable slot instead:
-	// common_call_trampoline () (`mono/mini/mini-trampolines.c`) patches it
-	// once and never revisits it. Whichever engine compiles one of the three
-	// first is stuck with it, because nothing redirects the caller afterward.
+	// thunk, and SGen finds a suspended thread through the jit-info table.
 	if (method->wrapper_type == MONO_WRAPPER_ALLOC
-	    || method->wrapper_type == MONO_WRAPPER_WRITE_BARRIER
-	    || method->wrapper_type == MONO_WRAPPER_DELEGATE_INVOKE)
+	    || method->wrapper_type == MONO_WRAPPER_WRITE_BARRIER)
+		return false;
+
+	// common_call_trampoline () (`mono/mini/mini-trampolines.c`) resolves a
+	// delegate-invoke wrapper through mono_jit_compile_method (), the same
+	// thunk any other method's first vtable-slot resolution gets, and it
+	// promotes normally afterward. Refused pending a correctness sweep of
+	// what classic generates for it - not yet run, unlike the sweep
+	// pinvoke3.exe, winx64structs.exe and cominterop.exe give the
+	// interop-entry refusal below.
+	if (method->wrapper_type == MONO_WRAPPER_DELEGATE_INVOKE)
 		return false;
 
 	/*
