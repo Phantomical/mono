@@ -2,10 +2,16 @@
  * Tests for returns_by_hidden_pointer (), which decides whether the translator
  * spells a return's pointer out as an `sret` parameter.
  *
- * The convention being restated is LLVM's own, so what these assert is which
- * aggregates RetCC_X86_64_C brings back in registers. Every case here was read
- * off `llc` at llvmorg-22.1.8 rather than off place_return (), which states the
- * same convention in arch/amd64/ and is what these have to agree with.
+ * Two conventions, one function. On Windows it restates
+ * MONO_WIN64_VALUE_TYPE_FITS_REG (arch-amd64.c), the rule the classic tier-0
+ * compiler applies for the same signature. Every case below is a size that
+ * rule does or does not fit in one register.
+ *
+ * Everywhere else it restates LLVM's own RetCC_X86_64_C, so what these assert
+ * is which aggregates that convention brings back in registers. Every case
+ * here was read off `llc` at llvmorg-22.1.8 rather than off place_return (),
+ * which states the same convention in arch/amd64/ and is what these have to
+ * agree with.
  *
  * A shape called returnable that LLVM demotes costs nothing: LLVM invents the
  * pointer itself. A shape called returnable that LLVM brings back on the x87
@@ -34,6 +40,36 @@ leaves (Type *leaf, unsigned count)
 
 	return StructType::get (leaf->getContext (), elements);
 }
+
+#ifdef HOST_WIN32
+
+TEST (HiddenReturn, ThePowersOfTwoUpToAMachineWordFit)
+{
+	LLVMContext ctx;
+	Type *i8 = Type::getInt8Ty (ctx);
+
+	EXPECT_FALSE (returns_by_hidden_pointer (leaves (i8, 1)));
+	EXPECT_FALSE (returns_by_hidden_pointer (leaves (i8, 2)));
+	EXPECT_TRUE (returns_by_hidden_pointer (leaves (i8, 3)));
+	EXPECT_FALSE (returns_by_hidden_pointer (leaves (i8, 4)));
+	EXPECT_TRUE (returns_by_hidden_pointer (leaves (i8, 6)));
+	EXPECT_FALSE (returns_by_hidden_pointer (leaves (i8, 8)));
+}
+
+TEST (HiddenReturn, NoSizeAboveAMachineWordFits)
+{
+	LLVMContext ctx;
+	Type *i64 = Type::getInt64Ty (ctx);
+
+	// ReadOnlySpan<char>'s shape: a pointer and a length, 12 bytes. Neither
+	// leaf alone crosses a machine word, but Windows never splits an
+	// aggregate across two return registers the way SysV does.
+	EXPECT_TRUE (returns_by_hidden_pointer (
+		StructType::get (ctx, { PointerType::getUnqual (ctx), Type::getInt32Ty (ctx) })));
+	EXPECT_TRUE (returns_by_hidden_pointer (leaves (i64, 2)));
+}
+
+#else
 
 TEST (HiddenReturn, AScalarIsNeverDemoted)
 {
@@ -121,5 +157,7 @@ TEST (HiddenReturn, AnExtendedPrecisionFloatIsDemoted)
 
 	EXPECT_TRUE (returns_by_hidden_pointer (leaves (Type::getX86_FP80Ty (ctx), 1)));
 }
+
+#endif /* HOST_WIN32 */
 
 } // namespace
