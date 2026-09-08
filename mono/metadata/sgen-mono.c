@@ -958,6 +958,14 @@ mono_gc_alloc_pinned_obj (MonoVTable *vtable, size_t size)
 	return obj;
 }
 
+// SGen's own fast path is mono_gc_get_managed_allocator (), not a shape of
+// mono_gc_alloc_obj (), so every class answers GENERIC here.
+MonoGCAllocShape
+mono_gc_alloc_obj_shape (MonoClass *klass)
+{
+	return MONO_GC_ALLOC_SHAPE_GENERIC;
+}
+
 MonoObject*
 mono_gc_alloc_mature (MonoVTable *vtable, size_t size)
 {

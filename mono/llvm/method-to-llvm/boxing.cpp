@@ -27,6 +27,27 @@ extern "C" {
 #include <optional>
 
 namespace mono {
+namespace {
+
+/// The icall mono_gc_alloc_obj_shape () names for a non-GENERIC shape.
+MonoJitICallId
+icall_for_alloc_shape (MonoGCAllocShape shape)
+{
+	switch (shape) {
+	case MONO_GC_ALLOC_SHAPE_ATOMIC:
+		return MONO_JIT_ICALL_mono_gc_alloc_obj_specific_atomic;
+	case MONO_GC_ALLOC_SHAPE_TYPED:
+		return MONO_JIT_ICALL_mono_gc_alloc_obj_specific_typed;
+	case MONO_GC_ALLOC_SHAPE_CONSERVATIVE:
+		return MONO_JIT_ICALL_mono_gc_alloc_obj_specific_conservative;
+	case MONO_GC_ALLOC_SHAPE_GENERIC:
+		break;
+	}
+
+	llvm_unreachable ("unhandled non-GENERIC MonoGCAllocShape");
+}
+
+} // namespace
 
 llvm::Expected<llvm::Function *>
 MethodLLVMEmitter::object_new_decl ()
@@ -131,12 +152,25 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 		(*fast)->addRetAttr (llvm::Attribute::NonNull);
 		serves = *fast;
 	} else {
-		llvm::Expected<llvm::Function *> slow = object_new_decl ();
+		// mono_gc_get_managed_allocator () answers null under Boehm, which has
+		// no managed allocator of its own. A class whose shape is not GENERIC
+		// still skips mono_gc_alloc_obj ()'s own dispatch, through the icall
+		// that shape names.
+		MonoGCAllocShape shape =
+			size != 0 ? mono_gc_alloc_obj_shape (klass) : MONO_GC_ALLOC_SHAPE_GENERIC;
 
-		if (!slow)
-			return slow.takeError ();
+		llvm::Expected<llvm::Function *> chosen =
+			shape == MONO_GC_ALLOC_SHAPE_GENERIC
+				? object_new_decl ()
+				: icall_wrapper_decl (icall_for_alloc_shape (shape));
 
-		serves = *slow;
+		if (!chosen)
+			return chosen.takeError ();
+
+		if (shape != MONO_GC_ALLOC_SHAPE_GENERIC)
+			(*chosen)->addRetAttr (llvm::Attribute::NoAlias);
+
+		serves = *chosen;
 	}
 
 	llvm::Value *object = emit_protected_call (

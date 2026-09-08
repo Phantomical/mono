@@ -42,6 +42,7 @@
 #include <mono/utils/mono-compiler.h>
 #include <mono/utils/unlocked.h>
 #include <mono/metadata/icall-decl.h>
+#include <mono/metadata/icall-signatures.h>
 
 #if HAVE_BOEHM_GC
 
@@ -352,9 +353,16 @@ mono_gc_base_cleanup (void)
 	GC_set_finalizer_notifier (NULL);
 }
 
+static MonoObject* mono_gc_alloc_obj_specific_atomic (MonoVTable *vtable);
+static MonoObject* mono_gc_alloc_obj_specific_typed (MonoVTable *vtable);
+static MonoObject* mono_gc_alloc_obj_specific_conservative (MonoVTable *vtable);
+
 void
 mono_gc_init_icalls (void)
 {
+	mono_register_jit_icall (mono_gc_alloc_obj_specific_atomic, mono_icall_sig_object_ptr, FALSE);
+	mono_register_jit_icall (mono_gc_alloc_obj_specific_typed, mono_icall_sig_object_ptr, FALSE);
+	mono_register_jit_icall (mono_gc_alloc_obj_specific_conservative, mono_icall_sig_object_ptr, FALSE);
 }
 
 /**
@@ -1013,11 +1021,54 @@ mono_gc_set_heap_verifier_callback (UnityHeapVerifierCallback callback)
 }
 #endif
 
+static MonoObject*
+alloc_obj_atomic (MonoVTable *vtable, size_t size)
+{
+	MonoObject *obj = (MonoObject *)GC_MALLOC_ATOMIC (size);
+
+	if (G_UNLIKELY (!obj))
+		return NULL;
+
+	obj->vtable = vtable;
+	obj->synchronisation = NULL;
+
+	memset (mono_object_get_data (obj), 0, size - MONO_ABI_SIZEOF (MonoObject));
+	return obj;
+}
+
+static MonoObject*
+alloc_obj_typed (MonoVTable *vtable, size_t size)
+{
+	return (MonoObject *)GC_GCJ_MALLOC (size, vtable);
+}
+
+static MonoObject*
+alloc_obj_conservative (MonoVTable *vtable, size_t size)
+{
+	MonoObject *obj = (MonoObject *)GC_MALLOC (size);
+
+	if (G_UNLIKELY (!obj))
+		return NULL;
+
+	obj->vtable = vtable;
+	return obj;
+}
+
+static MonoObject*
+finish_alloc_obj (MonoObject *obj)
+{
+	if (G_UNLIKELY (!obj))
+		return NULL;
+
+	if (G_UNLIKELY (mono_profiler_allocations_enabled ()))
+		MONO_PROFILER_RAISE (gc_allocation, (obj));
+
+	return obj;
+}
+
 MonoObject*
 mono_gc_alloc_obj (MonoVTable *vtable, size_t size)
 {
-	MonoObject *obj;
-
 #ifdef HEAP_VALIDATION_FREQUENCY
 	if (unity_heap_validation_callback && validate_frequency > 0 && (++counter % validate_frequency) == 0)
 	{
@@ -1028,31 +1079,66 @@ mono_gc_alloc_obj (MonoVTable *vtable, size_t size)
 	}
 #endif
 
-	if (!m_class_has_references (vtable->klass)) {
-		obj = (MonoObject *)GC_MALLOC_ATOMIC (size);
-		if (G_UNLIKELY (!obj))
-			return NULL;
+	if (!m_class_has_references (vtable->klass))
+		return finish_alloc_obj (alloc_obj_atomic (vtable, size));
+	if (vtable->gc_descr != GC_NO_DESCRIPTOR)
+		return finish_alloc_obj (alloc_obj_typed (vtable, size));
+	return finish_alloc_obj (alloc_obj_conservative (vtable, size));
+}
 
-		obj->vtable = vtable;
-		obj->synchronisation = NULL;
+// gc-internals.h documents what GENERIC means here.
+MonoGCAllocShape
+mono_gc_alloc_obj_shape (MonoClass *klass)
+{
+	if (mono_class_has_finalizer (klass) || m_class_has_weak_fields (klass)
+	    || mono_class_is_marshalbyref (klass) || mono_class_is_com_object (klass))
+		return MONO_GC_ALLOC_SHAPE_GENERIC;
 
-		memset (mono_object_get_data (obj), 0, size - MONO_ABI_SIZEOF (MonoObject));
-	} else if (vtable->gc_descr != GC_NO_DESCRIPTOR) {
-		obj = (MonoObject *)GC_GCJ_MALLOC (size, vtable);
-		if (G_UNLIKELY (!obj))
-			return NULL;
-	} else {
-		obj = (MonoObject *)GC_MALLOC (size);
-		if (G_UNLIKELY (!obj))
-			return NULL;
+	// mono_gc_alloc_obj () reads gc_descr off an already-built vtable. klass
+	// may not have one yet.
+	mono_class_compute_gc_descriptor (klass);
 
-		obj->vtable = vtable;
-	}
+	if (!m_class_has_references (klass))
+		return MONO_GC_ALLOC_SHAPE_ATOMIC;
+	if (m_class_get_gc_descr (klass) != GC_NO_DESCRIPTOR)
+		return MONO_GC_ALLOC_SHAPE_TYPED;
+	return MONO_GC_ALLOC_SHAPE_CONSERVATIVE;
+}
 
-	if (G_UNLIKELY (mono_profiler_allocations_enabled ()))
-		MONO_PROFILER_RAISE (gc_allocation, (obj));
+typedef MonoObject* (*AllocObjFn) (MonoVTable *vtable, size_t size);
 
+// object_new_common_tail ()'s own OOM report, for a caller with no MonoError
+// of its own to hand it.
+static MonoObject*
+alloc_obj_specific (MonoVTable *vtable, AllocObjFn alloc)
+{
+	ERROR_DECL (error);
+	int32_t size = m_class_get_instance_size (vtable->klass);
+	MonoObject *obj = finish_alloc_obj (alloc (vtable, size));
+
+	if (G_UNLIKELY (!obj))
+		mono_error_set_out_of_memory (error, "Could not allocate %i bytes", size);
+
+	mono_error_set_pending_exception (error);
 	return obj;
+}
+
+static MonoObject*
+mono_gc_alloc_obj_specific_atomic (MonoVTable *vtable)
+{
+	return alloc_obj_specific (vtable, alloc_obj_atomic);
+}
+
+static MonoObject*
+mono_gc_alloc_obj_specific_typed (MonoVTable *vtable)
+{
+	return alloc_obj_specific (vtable, alloc_obj_typed);
+}
+
+static MonoObject*
+mono_gc_alloc_obj_specific_conservative (MonoVTable *vtable)
+{
+	return alloc_obj_specific (vtable, alloc_obj_conservative);
 }
 
 MonoArray*

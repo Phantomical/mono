@@ -145,6 +145,25 @@ G_EXTERN_C
 MonoObject*
 mono_gc_alloc_obj (MonoVTable *vtable, size_t size);
 
+/// The GC allocation shape of a class.
+typedef enum {
+	MONO_GC_ALLOC_SHAPE_GENERIC = 0,
+	MONO_GC_ALLOC_SHAPE_ATOMIC,
+	MONO_GC_ALLOC_SHAPE_TYPED,
+	MONO_GC_ALLOC_SHAPE_CONSERVATIVE,
+} MonoGCAllocShape;
+
+/// Answers klass's shape without allocating.
+///
+/// GENERIC covers a klass whose allocation still needs
+/// object_new_common_tail ()'s own work: a finalizer, a weak field, or a
+/// remoting or COM proxy. It also covers a collector, such as SGen, that
+/// answers this question nowhere. A caller holding a non-GENERIC answer can
+/// skip mono_gc_alloc_obj ()'s own dispatch and call the matching allocator
+/// directly.
+MonoGCAllocShape
+mono_gc_alloc_obj_shape (MonoClass *klass);
+
 MonoObjectHandle
 mono_gc_alloc_handle_obj (MonoVTable *vtable, gsize size);
 

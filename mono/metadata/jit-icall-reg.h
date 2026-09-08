@@ -194,6 +194,9 @@ MONO_JIT_ICALL (mono_free_lparray) \
 MONO_JIT_ICALL (mono_fstore_r4) \
 MONO_JIT_ICALL (mono_ftnptr_to_delegate) \
 MONO_JIT_ICALL (mono_gc_alloc_obj) \
+MONO_JIT_ICALL (mono_gc_alloc_obj_specific_atomic) \
+MONO_JIT_ICALL (mono_gc_alloc_obj_specific_conservative) \
+MONO_JIT_ICALL (mono_gc_alloc_obj_specific_typed) \
 MONO_JIT_ICALL (mono_gc_alloc_string) \
 MONO_JIT_ICALL (mono_gc_alloc_vector) \
 MONO_JIT_ICALL (mono_gc_wbarrier_generic_nostore_internal) \
