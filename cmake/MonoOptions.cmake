@@ -26,6 +26,15 @@ endif()
 option(MONO_ENABLE_SGEN   "Build the SGen collector and mono-sgen"   ON)
 option(MONO_ENABLE_BOEHM  "Build the Boehm collector and mono-boehm" ON)
 
+# A Unity player resolves its embedded runtime by a fixed name,
+# libmonobdwgc-2.0.so, rather than monosgen-2.0 or monoboehm-2.0. This builds
+# the SGen collector a second time under that name, alongside the ordinary
+# monosgen-2.0 and monoboehm-2.0. The result can then be dropped into an
+# existing player's embedded-runtime folder in place of its own Boehm build.
+option(MONO_UNITY_SGEN_AS_BDWGC
+       "Also build the SGen runtime as libmonobdwgc-2.0, Unity's embedded-runtime name"
+       OFF)
+
 # --- the LLVM tier ----------------------------------------------------------
 # The autotools spelling was --with-llvm=<prefix>; --enable-llvm on its own was
 # an error.  Same rule here: point MONO_LLVM_PREFIX at an LLVM install (or leave

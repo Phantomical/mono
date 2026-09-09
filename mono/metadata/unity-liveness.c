@@ -12,6 +12,9 @@
 #if defined(HAVE_SGEN_GC)
 void sgen_stop_world (int generation, gboolean serial_collection);
 void sgen_restart_world (int generation, gboolean serial_collection);
+void sgen_gc_lock (void);
+void sgen_gc_unlock (void);
+gboolean sgen_is_world_stopped (void);
 #elif defined(HAVE_BOEHM_GC)
 /* GC_stop_world_external/GC_start_world_external come from mono/utils/gc_wrapper.h's <gc.h> */
 #else
@@ -66,6 +69,8 @@ struct _LivenessState {
 	guint traverse_depth; // track recursion. Prevent stack overflow by limiting recursion
 
 	WorldStateChanged on_world_started;
+
+	gboolean heap_validation_skipped_gchandles;
 };
 
 static custom_growable_block_array * block_array_create(LivenessState *state)
@@ -182,14 +187,26 @@ MONO_API void mono_unity_liveness_calculation_end(LivenessState *state);
 MONO_API void mono_unity_liveness_calculation_from_root(MonoObject *root, LivenessState *state);
 MONO_API void mono_unity_liveness_calculation_from_statics(LivenessState *state);
 MONO_API void mono_unity_heap_validation_from_statics(LivenessState* state);
+MONO_API gboolean mono_unity_heap_validation_gchandles_skipped(LivenessState* state);
+
+#if defined(HAVE_SGEN_GC)
+/* Bit 0 of the vtable word is SGen's own forwarding tag (sgen-gc.h), so
+ * marking or clearing it outside a stopped world can be read back as a
+ * forwarding pointer into the object's own vtable. */
+#define ASSERT_WORLD_STOPPED() g_assert (sgen_is_world_stopped ())
+#else
+#define ASSERT_WORLD_STOPPED() do { } while (0)
+#endif
 
 #define MARK_OBJ(obj)                                                       \
 	do {                                                                    \
+		ASSERT_WORLD_STOPPED ();                                           \
 		(obj)->vtable = (MonoVTable *)(((gsize) (obj)->vtable) | (gsize)1); \
 	} while (0)
 
 #define CLEAR_OBJ(obj)                                                       \
 	do {                                                                     \
+		ASSERT_WORLD_STOPPED ();                                            \
 		(obj)->vtable = (MonoVTable *)(((gsize) (obj)->vtable) & ~(gsize)1); \
 	} while (0)
 
@@ -695,6 +712,7 @@ void mono_unity_liveness_calculation_from_statics(LivenessState *liveness_state)
 	mono_filter_objects(liveness_state);
 }
 
+#if HAVE_BOEHM_GC
 static void gchandle_process(void *data, void *user_data)
 {
 	MonoObject *target = data;
@@ -703,7 +721,6 @@ static void gchandle_process(void *data, void *user_data)
 	mono_add_and_validate_object(target, liveness_state);
 }
 
-#if HAVE_BOEHM_GC
 extern void
 mono_gc_strong_handle_foreach(GFunc func, gpointer user_data);
 #endif
@@ -744,9 +761,12 @@ void mono_unity_heap_validation_from_statics(LivenessState *liveness_state)
 	mono_reset_state(liveness_state);
 
 #if HAVE_BOEHM_GC
+	liveness_state->heap_validation_skipped_gchandles = FALSE;
 	mono_gc_strong_handle_foreach(gchandle_process, liveness_state);
 #else
-	g_assert_not_reached();
+	// SGen has no mono_gc_strong_handle_foreach, so this skips the gchandle
+	// walk. The thread-static and class-static walks below still run.
+	liveness_state->heap_validation_skipped_gchandles = TRUE;
 #endif
 
 	g_hash_table_foreach(domain->special_static_fields, foreach_thread_static_field, liveness_state);
@@ -801,6 +821,18 @@ void mono_unity_heap_validation_from_statics(LivenessState *liveness_state)
 	mono_traverse_and_validate_objects(liveness_state);
 	//Filter objects and call callback to register found objects
 	//mono_filter_objects (liveness_state);
+}
+
+/**
+ * mono_unity_heap_validation_gchandles_skipped:
+ *
+ * Whether the gchandle root set was left out of the most recent
+ * mono_unity_heap_validation_from_statics() call on @state, which SGen does
+ * because it has no mono_gc_strong_handle_foreach().
+ */
+gboolean mono_unity_heap_validation_gchandles_skipped(LivenessState* state)
+{
+	return state->heap_validation_skipped_gchandles;
 }
 
 /**
@@ -868,6 +900,10 @@ void mono_unity_liveness_free_struct(LivenessState *state)
 void mono_unity_liveness_stop_gc_world (void)
 {
 #if defined(HAVE_SGEN_GC)
+	/* sgen_stop_world()/sgen_restart_world() require the GC lock held for
+	 * as long as the world stays stopped, the same contract
+	 * mono_gc_stop_world()/mono_gc_restart_world() keep in sgen-mono.c. */
+	sgen_gc_lock ();
 	sgen_stop_world (0, FALSE);
 #elif defined(HAVE_BOEHM_GC)
 	GC_stop_world_external ();
@@ -880,6 +916,7 @@ void mono_unity_liveness_start_gc_world (void)
 {
 #if defined(HAVE_SGEN_GC)
 	sgen_restart_world (0, FALSE);
+	sgen_gc_unlock ();
 #elif defined(HAVE_BOEHM_GC)
 	GC_start_world_external ();
 #else

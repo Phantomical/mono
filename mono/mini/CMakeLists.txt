@@ -192,9 +192,18 @@ function(_mono_add_runtime_library name)
   install(TARGETS ${name} LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 endfunction()
 
+if(MONO_UNITY_SGEN_AS_BDWGC AND NOT (MONO_ENABLE_SGEN AND MONO_ENABLE_LIBRARIES))
+  message(WARNING
+    "MONO_UNITY_SGEN_AS_BDWGC is ON but MONO_ENABLE_SGEN and MONO_ENABLE_LIBRARIES "
+    "are not both ON, so no libmonobdwgc-2.0 will be built.")
+endif()
+
 if(MONO_ENABLE_SGEN AND MONO_ENABLE_LIBRARIES)
   _mono_add_runtime_library(monosgen-2.0 OBJECTS ${MONO_SGEN_OBJECTS})
 
+  if(MONO_UNITY_SGEN_AS_BDWGC)
+    _mono_add_runtime_library(monobdwgc-2.0 OBJECTS ${MONO_SGEN_OBJECTS})
+  endif()
 endif()
 if(MONO_ENABLE_BOEHM AND MONO_ENABLE_LIBRARIES)
   _mono_add_runtime_library(monoboehm-2.0 OBJECTS ${MONO_BOEHM_OBJECTS} EXTRA monogc)

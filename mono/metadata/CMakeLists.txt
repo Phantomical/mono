@@ -148,15 +148,15 @@ endif()
 set(metadata_gc_sources
   gc-stats.c
   gc.c
-  monitor.c)
+  monitor.c
+  # Unity's object-graph walk. It branches on HAVE_SGEN_GC/HAVE_BOEHM_GC
+  # itself, so both variants compile it.
+  unity-liveness.c)
 
 set(metadata_boehm_sources
   null-gc.c
   null-gc-handles.c
-  boehm-gc.c
-  # Unity's object-graph walk.  The source has an SGen arm as well, but only
-  # the Boehm variant compiles it.
-  unity-liveness.c)
+  boehm-gc.c)
 
 set(metadata_sgen_sources
   sgen-bridge.c
