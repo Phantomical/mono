@@ -26,7 +26,7 @@ set(MONO_LLVM_TEST_SOURCES
     escape-tests.cpp promote-alloc-tests.cpp constant-values-tests.cpp
     one-file-vfs-tests.cpp hidden-return-tests.cpp inline-save-lmf-tests.cpp
     fold-empty-finally-tests.cpp simd-tests.cpp simd-numerics-tests.cpp
-    simd-vector-t-tests.cpp)
+    simd-vector-t-tests.cpp instrprof-writer-race-tests.cpp)
 
 if(MONO_CORPUS_ENABLED)
   # RELATIVE, because mono_corpus_il resolves its source against the current

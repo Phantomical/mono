@@ -1408,6 +1408,15 @@ locate_counters (ArrayRef<ProfileCounters> layout, const uint64_t *counters,
 	return found;
 }
 
+/*
+ * llvm::ValueProfData::serializeFrom () writes through a file-scope closure
+ * with no lock and no thread_local (llvm/lib/ProfileData/InstrProf.cpp). Two
+ * threads racing there can read each other's InstrProfRecord after it has
+ * gone out of scope. This mutex keeps the compile queue's workers out of
+ * writer.write* () one at a time.
+ */
+static std::mutex g_instrprof_writer_mutex;
+
 std::vector<uint8_t>
 build_profile (ArrayRef<ProfileCounters> counters)
 {
@@ -1427,7 +1436,11 @@ build_profile (ArrayRef<ProfileCounters> counters)
 		                  [] (Error err) { consumeError (std::move (err)); });
 	}
 
-	std::unique_ptr<MemoryBuffer> written = writer.writeBuffer ();
+	std::unique_ptr<MemoryBuffer> written;
+	{
+		std::lock_guard<std::mutex> lock (g_instrprof_writer_mutex);
+		written = writer.writeBuffer ();
+	}
 
 	if (!written)
 		return {};
