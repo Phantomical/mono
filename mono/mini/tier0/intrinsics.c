@@ -825,9 +825,20 @@ mini_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSign
 		return ins;
 	}
 
-	if (!(cfg->opt & MONO_OPT_INTRINS))
-		return NULL;
+	/* Required regardless of MONO_OPT_INTRINS: Unsafe's IL bodies throw NotImplementedException. */
+	if (in_corlib &&
+		!strcmp (cmethod_klass_name_space, "Internal.Runtime.CompilerServices") &&
+		!strcmp (cmethod_klass_name, "Unsafe")) {
+		return emit_unsafe_intrinsics (cfg, cmethod, fsig, args);
+	}
+	if (!strcmp (cmethod_klass_name_space, "System.Runtime.CompilerServices") &&
+		!strcmp (cmethod_klass_name, "Unsafe") &&
+		(in_corlib || !strcmp (cmethod_klass_image->assembly->aname.name, "System.Runtime.CompilerServices.Unsafe"))) {
+		return emit_unsafe_intrinsics (cfg, cmethod, fsig, args);
+	}
 
+	/* Required regardless of MONO_OPT_INTRINS: get_Chars and get_Length are
+	 * extern/InternalCall with no icall registered, so nothing else implements them. */
 	if (cmethod->klass == mono_defaults.string_class) {
 		if (strcmp (cmethod->name, "get_Chars") == 0 && fsig->param_count + fsig->hasthis == 2) {
 			int dreg = alloc_ireg (cfg);
@@ -843,19 +854,19 @@ mini_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSign
 			}
 #else
 			index_reg = args [1]->dreg;
-#endif	
+#endif
 			MONO_EMIT_BOUNDS_CHECK (cfg, args [0]->dreg, MonoString, length, index_reg, FALSE);
 
 #if defined(TARGET_X86) || defined(TARGET_AMD64)
 			EMIT_NEW_X86_LEA (cfg, ins, args [0]->dreg, index_reg, 1, MONO_STRUCT_OFFSET (MonoString, chars));
 			add_reg = ins->dreg;
-			EMIT_NEW_LOAD_MEMBASE (cfg, ins, OP_LOADU2_MEMBASE, dreg, 
+			EMIT_NEW_LOAD_MEMBASE (cfg, ins, OP_LOADU2_MEMBASE, dreg,
 								   add_reg, 0);
 #else
 			int mult_reg = alloc_preg (cfg);
 			MONO_EMIT_NEW_BIALU_IMM (cfg, OP_SHL_IMM, mult_reg, index_reg, 1);
 			MONO_EMIT_NEW_BIALU (cfg, OP_PADD, add_reg, mult_reg, args [0]->dreg);
-			EMIT_NEW_LOAD_MEMBASE (cfg, ins, OP_LOADU2_MEMBASE, dreg, 
+			EMIT_NEW_LOAD_MEMBASE (cfg, ins, OP_LOADU2_MEMBASE, dreg,
 								   add_reg, MONO_STRUCT_OFFSET (MonoString, chars));
 #endif
 			mini_type_from_op (cfg, ins, NULL, NULL);
@@ -870,9 +881,13 @@ mini_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSign
 			cfg->flags |= MONO_CFG_NEEDS_DECOMPOSE;
 
 			return ins;
-		} else 
-			return NULL;
-	} else if (cmethod->klass == mono_defaults.object_class) {
+		}
+	}
+
+	if (!(cfg->opt & MONO_OPT_INTRINS))
+		return NULL;
+
+	if (cmethod->klass == mono_defaults.object_class) {
 		if (strcmp (cmethod->name, "GetType") == 0 && fsig->param_count + fsig->hasthis == 1) {
 			int dreg = alloc_ireg_ref (cfg);
 			int vt_reg = alloc_preg (cfg);
@@ -2003,14 +2018,6 @@ mini_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSign
 			   !strcmp (cmethod_klass_name_space, "System") &&
 			   (!strcmp (cmethod_klass_name, "Span`1") || !strcmp (cmethod_klass_name, "ReadOnlySpan`1"))) {
 		return emit_span_intrinsics (cfg, cmethod, fsig, args);
-	} else if (in_corlib &&
-			   !strcmp (cmethod_klass_name_space, "Internal.Runtime.CompilerServices") &&
-			   !strcmp (cmethod_klass_name, "Unsafe")) {
-		return emit_unsafe_intrinsics (cfg, cmethod, fsig, args);
-	} else if (!strcmp (cmethod_klass_name_space, "System.Runtime.CompilerServices") &&
-			   !strcmp (cmethod_klass_name, "Unsafe") &&
-			   (in_corlib || !strcmp (cmethod_klass_image->assembly->aname.name, "System.Runtime.CompilerServices.Unsafe"))) {
-		return emit_unsafe_intrinsics (cfg, cmethod, fsig, args);
 	} else if (in_corlib &&
 			   !strcmp (cmethod_klass_name_space, "System.Runtime.CompilerServices") &&
 			   !strcmp (cmethod_klass_name, "JitHelpers")) {
