@@ -3739,19 +3739,21 @@ static void print_tids (gpointer key, gpointer value, gpointer user)
 	g_message ("Waiting for: %p", key);
 }
 
-struct wait_data 
+struct wait_data
 {
 	MonoThreadHandle *handles[MONO_W32HANDLE_MAXIMUM_WAIT_OBJECTS];
 	MonoInternalThread *threads[MONO_W32HANDLE_MAXIMUM_WAIT_OBJECTS];
 	guint32 num;
 };
 
-static void
+#define MONO_THREADS_SHUTDOWN_ABORT_TIMEOUT_MS 5000
+
+static MonoThreadInfoWaitRet
 wait_for_tids (struct wait_data *wait, guint32 timeout, gboolean check_state_change)
 {
 	guint32 i;
 	MonoThreadInfoWaitRet ret;
-	
+
 	THREAD_DEBUG (g_message("%s: %d threads to wait for in this batch", __func__, wait->num));
 
 	/* Add the thread state change event, so it wakes
@@ -3767,9 +3769,9 @@ wait_for_tids (struct wait_data *wait, guint32 timeout, gboolean check_state_cha
 	if (ret == MONO_THREAD_INFO_WAIT_RET_FAILED) {
 		/* See the comment in build_wait_tids() */
 		THREAD_DEBUG (g_message ("%s: Wait failed", __func__));
-		return;
+		return ret;
 	}
-	
+
 	for( i = 0; i < wait->num; i++)
 		mono_threads_close_thread_handle (wait->handles [i]);
 
@@ -3783,6 +3785,8 @@ wait_for_tids (struct wait_data *wait, guint32 timeout, gboolean check_state_cha
 			g_error ("%s: failed to call mono_thread_detach_internal on thread %p, InternalThread: %p", __func__, internal->tid, internal);
 		mono_threads_unlock ();
 	}
+
+	return ret;
 }
 
 static void build_wait_tids (gpointer key, gpointer value, gpointer user)
@@ -3989,10 +3993,11 @@ mono_thread_manage_internal (void)
 	 * Under netcore, we don't abort any threads, just exit.
 	 * This is not a problem since we don't do runtime cleanup either.
 	 */
-	/* 
+	/*
 	 * Remove everything but the finalizer thread and self.
 	 * Also abort all the background threads
 	 * */
+	gboolean gave_up_on_a_thread = FALSE;
 	do {
 		THREAD_DEBUG (g_message ("%s: abort phase", __func__));
 
@@ -4007,10 +4012,25 @@ mono_thread_manage_internal (void)
 
 		THREAD_DEBUG (g_message ("%s: wait->num is now %d", __func__, wait->num));
 		if (wait->num > 0) {
-			/* Something to wait for */
-			wait_for_tids (wait, MONO_INFINITE_WAIT, FALSE);
+			/*
+			 * A signal that catches a thread outside managed code arms an
+			 * interrupt token. Only the thread's next interruptible wait
+			 * consumes it, so a thread that keeps running compiled code
+			 * never signals this wait. Bound it, so such a thread cannot
+			 * keep shutdown waiting forever.
+			 */
+			if (wait_for_tids (wait, MONO_THREADS_SHUTDOWN_ABORT_TIMEOUT_MS, FALSE) == MONO_THREAD_INFO_WAIT_RET_TIMEOUT)
+				gave_up_on_a_thread = TRUE;
 		}
 	} while (wait->num > 0);
+
+	/*
+	 * mono_runtime_cleanup () requires that no thread still runs managed
+	 * code, and the timeout above can leave one doing exactly that. Exit
+	 * here instead of returning into it.
+	 */
+	if (gave_up_on_a_thread)
+		exit (mono_environment_exitcode_get ());
 #endif
 	
 	/* 

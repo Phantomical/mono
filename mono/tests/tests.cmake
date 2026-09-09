@@ -305,6 +305,7 @@ set(MONO_TESTS_CS_SRC
   main-returns-abort-resetabort.cs
   main-returns-background-abort-resetabort.cs
   main-returns-background-resetabort.cs
+  main-returns-background-tight-loop.cs
   main-returns-background.cs
   main-returns-background-change.cs
   main-returns.cs

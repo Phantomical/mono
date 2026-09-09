@@ -317,6 +317,15 @@ mono_runtime_suite(runtime-tasklets-boehm TESTS tasklets.exe GC boehm
 mono_runtime_suite(runtime-tasklets-tier0 LABEL tier0 TESTS tasklets.exe GC sgen
                    ENV "MONO_TEST_TASKLETS=run")
 
+# Regression test for a shutdown hang: mono_thread_manage_internal ()'s abort
+# phase used to wait forever for a background thread that a suspend signal
+# never caught inside managed code. main-returns-background-tight-loop.exe is
+# already in the general corpus above at its 300s budget. This copy's 150s
+# catches a hang in minutes instead of the 900s the original bug ran to.
+mono_runtime_suite(runtime-shutdown-background-abort
+                   TESTS main-returns-background-tight-loop.exe
+                   TIMEOUT 150)
+
 # The whole corpus at the default tier: each method starts in the classic
 # compiler and the hot ones are compiled by the backend underneath it, so the
 # two engines are in one process and a method can change engine while its
