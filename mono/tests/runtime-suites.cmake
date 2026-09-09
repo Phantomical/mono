@@ -98,6 +98,21 @@ function(mono_runtime_suite name)
   if(NOT ARG_TESTS)
     return()
   endif()
+
+  # A TESTS entry nothing builds fails at run time instead of at configure
+  # time. GENERATED is the property CMake sets on every add_custom_command ()
+  # OUTPUT, however it was produced, so this needs no list of its own.
+  foreach(_t IN LISTS ARG_TESTS)
+    if(_t MATCHES "\\.(exe|dll)$")
+      get_source_file_property(_t_generated "${CMAKE_CURRENT_BINARY_DIR}/${_t}" GENERATED)
+      if(NOT _t_generated)
+        message(FATAL_ERROR
+          "mono_runtime_suite(${name}): '${_t}' is not built by any "
+          "add_custom_command () in this directory.")
+      endif()
+    endif()
+  endforeach()
+
   if(NOT ARG_GC)
     set(ARG_GC ${_mono_gcs})
   else()

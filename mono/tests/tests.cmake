@@ -269,7 +269,6 @@ set(MONO_TESTS_CS_SRC
   tier0-classic-ret-regs.cs
   tier0-classic-unsafe-mov.cs
   tier0-classic-class-init.cs
-  tier0-classic-threshold-zero.cs
   tier0-classic-vret-spill.cs
   tier0-classic-union-abi.cs
   tier0-classic-open-callee.cs
@@ -1013,6 +1012,13 @@ set(MONO_TESTS_TIER_PINNED_IL_SRC
   bug-unity-2.il
 )
 
+# A classic tier-0 body pinned there by a threshold of zero. No general suite
+# combines a classic body with that threshold, so this suite is the only place
+# the test compiles.
+set(MONO_TESTS_TIER0_CLASSIC_PINNED_SRC
+  tier0-classic-threshold-zero.cs
+)
+
 # The tier-2 cost model, which needs its root to gather counts at tier 1 and
 # then be compiled at tier 2 exactly once. A threshold of zero leaves the body
 # instrumented and counting while it never promotes on its own, so the compile
@@ -1254,11 +1260,6 @@ set(MONO_TESTS_TAILCALL_IL_SRC
 # Known-failing or not-applicable tests, excluded from every suite.
 # automake accumulated this from three lists that overlapped; deduplicated.
 set(MONO_TESTS_DISABLED
-  # Asserts the tier a classic body is left at, which needs a threshold of
-  # zero. Its own suite is where it gets one; no general suite sets it. Named
-  # directly there, so this only keeps it out of the suites built from the
-  # corpus.
-  tier0-classic-threshold-zero.exe
   delegate-async-exception.exe
   bug-348522.2.exe
   bug-459094.exe
