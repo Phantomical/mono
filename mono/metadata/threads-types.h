@@ -158,6 +158,9 @@ mono_thread_manage_internal (void);
 typedef struct {
   MonoRefCount ref;
   MonoCoopMutex *synch_cs;
+  /* MonoThread's layout mirrors managed System.Threading.Thread's
+   * outside ENABLE_NETCORE, so a native-only field goes here instead. */
+  gpointer wrapper_pinning_ref;
 } MonoLongLivedThreadData;
 
 void mono_threads_install_cleanup (MonoThreadCleanupFunc func);

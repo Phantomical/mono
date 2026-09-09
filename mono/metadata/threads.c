@@ -962,6 +962,24 @@ mono_thread_attach_internal (MonoThread *thread, gboolean force_attach, gboolean
 
 	THREAD_DEBUG (g_message ("%s: Attached thread ID %" G_GSIZE_FORMAT " (handle %p)", __func__, internal->tid, internal->handle));
 
+	/*
+	 * mono_thread_current () re-derives the MonoThread wrapper from a
+	 * managed slot on every call, so nothing inside the runtime keeps a
+	 * stale pointer to it. This pin exists only for an embedder that
+	 * caches the pointer mono_thread_attach () returns in memory that no
+	 * conservative scan reaches. It is skipped under ENABLE_NETCORE,
+	 * where MonoThread and MonoInternalThread are the same allocation
+	 * and thread_pinning_ref already pins it.
+	 */
+#ifndef ENABLE_NETCORE
+#if !defined(HAVE_BOEHM_GC)
+	if (mono_gc_is_moving ()) {
+		internal->longlived->wrapper_pinning_ref = thread;
+		MONO_GC_REGISTER_ROOT_PINNING (internal->longlived->wrapper_pinning_ref, MONO_ROOT_SOURCE_THREADING, NULL, "Thread Wrapper Pinning Reference");
+	}
+#endif
+#endif
+
 	return TRUE;
 
 fail:
@@ -1115,7 +1133,16 @@ mono_thread_detach_internal (MonoInternalThread *thread)
 		MONO_GC_UNREGISTER_ROOT (thread->thread_pinning_ref);
 		thread->thread_pinning_ref = NULL;
 	}
-#endif	
+#endif
+
+#ifndef ENABLE_NETCORE
+#if !defined(HAVE_BOEHM_GC)
+	if (mono_gc_is_moving ()) {
+		MONO_GC_UNREGISTER_ROOT (thread->longlived->wrapper_pinning_ref);
+		thread->longlived->wrapper_pinning_ref = NULL;
+	}
+#endif
+#endif
 
 	/* There is no more any guarantee that `thread` is alive */
 	mono_memory_barrier ();
