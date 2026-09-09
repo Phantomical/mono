@@ -198,9 +198,35 @@ TEST (InterpEntry, HiddenReturnPointerSitsBehindTheReceiver)
 	EXPECT_TRUE (layout.has_this);
 	EXPECT_EQ (layout.this_greg, 0u);
 	EXPECT_EQ ((int) layout.ret.kind, (int) ReturnPlan::Kind::Hidden);
-	EXPECT_EQ (layout.ret.hidden_greg, 1u);
+	EXPECT_EQ ((int) layout.ret.hidden.file, (int) ArgPiece::File::Greg);
+	EXPECT_EQ (layout.ret.hidden.at, 1u);
 	ASSERT_EQ (layout.args.size (), 1u);
 	expect_at (layout.args[0], ArgPlan::Where::Greg, 2);
+}
+
+// The sixteen one-byte fields spend every integer parameter register, so the
+// hidden return pointer behind them lands on the stack instead.
+// mono/tests/tier0-classic-vret-spill.cs gates the same shape end to end.
+TEST (InterpEntry, HiddenReturnPointerCanSpillToTheStack)
+{
+	LLVMContext ctx;
+	Type *ptr = PointerType::get (ctx, 0);
+	Type *i8 = Type::getInt8Ty (ctx);
+	std::vector<Type *> fields (16, i8);
+	StructType *wide = StructType::get (ctx, fields, /*isPacked=*/true);
+	Prototype shape (Type::getVoidTy (ctx), { wide, ptr });
+
+	shape.sret (1, wide);
+
+	Signature sig (false, { false });
+	InterpEntryLayout layout = plan (shape, sig);
+
+	EXPECT_EQ ((int) layout.ret.kind, (int) ReturnPlan::Kind::Hidden);
+	EXPECT_EQ ((int) layout.ret.hidden.file, (int) ArgPiece::File::Stack);
+
+	// Six one-byte leaves fill the integer registers. The other ten each take
+	// an eight-byte stack slot ahead of the pointer's own.
+	EXPECT_EQ (layout.ret.hidden.at, 10u * 8u);
 }
 
 TEST (InterpEntry, AStructIsFlattenedOneFieldPerRegister)

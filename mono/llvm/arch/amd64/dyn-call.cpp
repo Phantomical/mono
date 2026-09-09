@@ -37,6 +37,7 @@
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Module.h>
+#include <llvm/Support/ErrorHandling.h>
 
 #include <cstring>
 
@@ -85,16 +86,8 @@ plan_dyn_call (Function *shape, MonoMethodSignature *sig)
 	for (unsigned p = 0; p < params; ++p) {
 		if (p == hidden_at) {
 			Leaf leaf { 0, type->getParamType (p) };
-			ArgPiece piece = assign.place (leaf, dl);
 
-			/*
-			 * Only ever parameter 0 or 1, so the integer file cannot have run
-			 * out underneath it.
-			 */
-			if (piece.file != ArgPiece::File::Greg)
-				return unsupported ("a hidden return pointer that missed a "
-				                    "register");
-			plan->ret.hidden_greg = piece.at;
+			plan->ret.hidden = assign.place (leaf, dl);
 			continue;
 		}
 
@@ -204,8 +197,18 @@ dyn_call (const DynCallPlan &plan, void *target, void **args, void *ret, void *f
 		}
 	}
 
-	if (plan.ret.kind == ReturnPlan::Kind::Hidden)
-		f->gregs[plan.ret.hidden_greg] = (uint64_t) ret;
+	if (plan.ret.kind == ReturnPlan::Kind::Hidden) {
+		switch (plan.ret.hidden.file) {
+		case ArgPiece::File::Greg:
+			f->gregs[plan.ret.hidden.at] = (uint64_t) ret;
+			break;
+		case ArgPiece::File::Stack:
+			memcpy ((uint8_t *) f->stack + plan.ret.hidden.at, &ret, sizeof (ret));
+			break;
+		case ArgPiece::File::Freg:
+			llvm_unreachable ("a pointer assigned to an SSE register");
+		}
+	}
 
 	mono_llvm_dyn_call_thunk (f, target);
 

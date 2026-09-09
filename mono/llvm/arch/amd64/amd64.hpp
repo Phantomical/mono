@@ -159,7 +159,7 @@ struct ArgPlan {
 ///
 /// Shared by both directions of the seam: plan_interp_entry () plans a return
 /// arriving this way, and dyn-call.cpp's plan_dyn_call () plans one leaving
-/// it. hidden_greg names the same register either direction reads or writes.
+/// it. hidden names the same slot either direction reads or writes.
 struct ReturnPlan {
 	enum class Kind : uint8_t {
 		None,      ///< the method returns nothing
@@ -168,8 +168,9 @@ struct ReturnPlan {
 	};
 
 	Kind kind = Kind::None;
-	uint32_t hidden_greg = 0; ///< which register the caller's pointer travels in
-	uint32_t size = 0;        ///< how many bytes the value is, when Registers
+	/// Where the hidden return pointer travels, when Kind == Hidden.
+	ArgPiece hidden;
+	uint32_t size = 0; ///< how many bytes the value is, when Registers
 	std::vector<ArgPiece> pieces;
 };
 

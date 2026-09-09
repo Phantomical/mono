@@ -187,22 +187,13 @@ plan_interp_entry (Function *shape, MonoMethodSignature *sig)
 	InterpEntryLayout layout;
 	LeafAssigner assign;
 	std::vector<ArgPlan> plans (natural);
-	unsigned hidden_greg = 0;
+	ArgPiece hidden_piece;
 
 	for (unsigned p = 0; p < params; ++p) {
 		if (p == hidden_at) {
 			Leaf leaf { 0, type->getParamType (p) };
-			ArgPiece piece = assign.place (leaf, dl);
 
-			/*
-			 * Only ever parameter 0 or 1, so the integer file cannot have run
-			 * out underneath it, and the runtime's trampolines read it out of a
-			 * register.
-			 */
-			if (piece.file != ArgPiece::File::Greg)
-				return unsupported ("a hidden return pointer that missed a "
-				                    "register");
-			hidden_greg = piece.at;
+			hidden_piece = assign.place (leaf, dl);
 			continue;
 		}
 
@@ -230,7 +221,7 @@ plan_interp_entry (Function *shape, MonoMethodSignature *sig)
 
 	if (hidden != nullptr) {
 		layout.ret.kind = ReturnPlan::Kind::Hidden;
-		layout.ret.hidden_greg = hidden_greg;
+		layout.ret.hidden = hidden_piece;
 	} else {
 		Expected<ReturnPlan> ret = place_return (type->getReturnType (), dl);
 
@@ -341,7 +332,7 @@ mono_llvm_interp_entry_from_context (mono::MonoDomainMethod *published, InterpAr
 	case ReturnPlan::Kind::None:
 		break;
 	case ReturnPlan::Kind::Hidden:
-		res = (void *) ctx->gregs[layout.ret.hidden_greg];
+		res = *(void **) piece_address (layout.ret.hidden, ctx);
 		break;
 	case ReturnPlan::Kind::Registers:
 		res = scratch.data () + layout.ret_scratch;

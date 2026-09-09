@@ -779,6 +779,13 @@ mono_runtime_suite(runtime-tier0-classic-vret-spill-all
                    TESTS tier0-classic-vret-spill.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=1 --llvm-opt=-mono-tier1-threshold=0")
 
+# The same shape again, with the interpreter as tier 0 rather than the classic
+# compiler: plan_interp_entry () and plan_dyn_call () plan the hidden pointer's
+# spilled slot instead of mono_arch_get_call_info ().
+mono_runtime_suite(runtime-interp-tier0-vret-spill LABEL interp
+                   TESTS tier0-classic-vret-spill.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0 --llvm-opt=-mono-tier1-threshold=0")
+
 # An explicit layout whose overlapping fields the two engines have to resolve
 # the same way, passed across the seam both bare and behind a field of its own.
 mono_runtime_suite(runtime-tier0-classic-union-abi

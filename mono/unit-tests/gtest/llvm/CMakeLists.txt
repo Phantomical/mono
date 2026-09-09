@@ -14,7 +14,7 @@ endif()
 set(MONO_LLVM_TEST_SOURCES
     thunk-tests.cpp jitlink-memory-tests.cpp mono-lsda-tests.cpp gdb-jit-tests.cpp
     harness.cpp translator-tests.cpp jit-tests.cpp compiler-tests.cpp
-    compile-queue-tests.cpp interp-entry-tests.cpp perf-eh-frame-tests.cpp
+    compile-queue-tests.cpp interp-entry-tests.cpp dyn-call-tests.cpp perf-eh-frame-tests.cpp
     unwind-records-tests.cpp unwind-transcode-tests.cpp mono-unwind-decode-tests.cpp
     inline-copies-tests.cpp
     profile-counters-tests.cpp profile-counter-promoter-tests.cpp
