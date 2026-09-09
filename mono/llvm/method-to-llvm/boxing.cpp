@@ -156,8 +156,18 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 		// no managed allocator of its own. A class whose shape is not GENERIC
 		// still skips mono_gc_alloc_obj ()'s own dispatch, through the icall
 		// that shape names.
-		MonoGCAllocShape shape =
-			size != 0 ? mono_gc_alloc_obj_shape (klass) : MONO_GC_ALLOC_SHAPE_GENERIC;
+		//
+		// mono_gc_alloc_obj_shape () walks klass's own fields to build a GC
+		// bitmap. A shared body's klass carries the gshared VAR/MVAR
+		// placeholders that make vtable_for () (fields.cpp) answer null for
+		// the same klass. GENERIC instead reads the shape off the vtable
+		// this call resolved through the RGCTX.
+		bool shape_known = !depends_on_context (klass) && !mono_class_is_gtd (klass)
+		                   && !mono_class_is_open_constructed_type (
+			                   m_class_get_byval_arg (klass));
+		MonoGCAllocShape shape = size != 0 && shape_known
+			? mono_gc_alloc_obj_shape (klass)
+			: MONO_GC_ALLOC_SHAPE_GENERIC;
 
 		llvm::Expected<llvm::Function *> chosen =
 			shape == MONO_GC_ALLOC_SHAPE_GENERIC

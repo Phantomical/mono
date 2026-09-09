@@ -1162,7 +1162,17 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 		// which has no managed allocator of its own. A shape this settles
 		// still skips mono_gc_alloc_vector ()'s own dispatch, through the
 		// icall that shape names.
-		MonoGCAllocShape shape = mono_gc_alloc_vector_shape (array);
+		//
+		// mono_gc_alloc_vector_shape () reads array's element class. A shared
+		// body's array class carries the gshared VAR/MVAR placeholder that
+		// makes vtable_for () (fields.cpp) answer null for the same array.
+		// GENERIC instead reads the shape off the vtable this call resolved
+		// through the RGCTX.
+		bool shape_known = !depends_on_context (array) && !mono_class_is_gtd (array)
+		                   && !mono_class_is_open_constructed_type (
+			                   m_class_get_byval_arg (array));
+		MonoGCAllocShape shape =
+			shape_known ? mono_gc_alloc_vector_shape (array) : MONO_GC_ALLOC_SHAPE_GENERIC;
 
 		llvm::Expected<llvm::Function *> slow =
 			shape == MONO_GC_ALLOC_SHAPE_GENERIC

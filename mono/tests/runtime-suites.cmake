@@ -884,6 +884,15 @@ mono_runtime_suite(runtime-class-guard TESTS class-devirt.exe
 mono_runtime_suite(runtime-class-guard-off TESTS class-devirt.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-classes=0")
 
+# gshared-boehm-alloc-shape.cs's shared bodies have to reach the backend on
+# their first call, which the default tier never does: classic tier 0 builds
+# a vtable through mono_class_vtable () instead of asking either allocation
+# site for a shape. The `gshared` suite runs this corpus at the default
+# tier, so it is not this arm's negative control -- neither one reaches the
+# code this gates.
+mono_runtime_suite(runtime-gshared-alloc-shape TESTS gshared-boehm-alloc-shape.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0")
+
 # The bonuses mono adds to the cost model. Two arms, on and off, the way
 # runtime-tier2-cost-trigger has it. The root drives its own compiles, so
 # self-promotion is off the way the costed suite has it, and the trivial
