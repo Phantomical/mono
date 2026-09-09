@@ -20,6 +20,10 @@
 #include <cstring>
 #include <cstdint>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 extern "C" {
 
 // ------------------------------------------------------------------ integers
@@ -222,6 +226,11 @@ interp_test_lookup (const char *name, int mode)
 	if (interp_test_symbol (name))
 		return 0;
 	errno = ENOENT;
+#ifdef _WIN32
+	// mono_marshal_set_last_error () (marshal.c) reads GetLastError () on
+	// Windows and errno everywhere else, so a Windows caller needs this too.
+	SetLastError (ENOENT);
+#endif
 	return -1;
 }
 }

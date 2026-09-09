@@ -21,7 +21,13 @@ endif()
 # The runner
 # Native methods for the P/Invoke tests.
 add_executable(interp-test-runner runner.cpp native.cpp)
-set_target_properties(interp-test-runner PROPERTIES ENABLE_EXPORTS TRUE)
+# ENABLE_EXPORTS alone reaches DllImport ("__Internal") on ELF, where every
+# global symbol is already visible to dlsym (). PE has no such default, so
+# native.cpp's callees need this too - CMake's substitute for a .def file
+# naming them all.
+set_target_properties(interp-test-runner PROPERTIES
+  ENABLE_EXPORTS TRUE
+  WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
 
 target_include_directories(interp-test-runner PRIVATE
   "${CMAKE_BINARY_DIR}"
