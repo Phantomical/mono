@@ -92,6 +92,24 @@ plan_dyn_call (Function *shape, MonoMethodSignature *sig)
 		}
 
 		unsigned i = p < hidden_at ? p : p - 1;
+
+#ifdef HOST_WIN32
+		/*
+		 * A struct too wide for a register travels behind a pointer this
+		 * shape declares directly (win64_indirect (), hidden-return.hpp).
+		 * The interpreter's own storage for the argument holds the value
+		 * itself, not a pointer to it, so there is no address here to put
+		 * in the register - the same shape flatten () already refuses a
+		 * vector argument for.
+		 */
+		bool receiver = sig->hasthis && i == 0;
+
+		if (!receiver && !sig->params[i - sig->hasthis]->byref
+		    && MONO_TYPE_ISSTRUCT (sig->params[i - sig->hasthis])
+		    && type->getParamType (p)->isPointerTy ())
+			return unsupported ("a value type argument passed through a hidden pointer");
+#endif
+
 		SmallVector<Leaf, 4> leaves;
 
 		if (Error err = flatten (type->getParamType (p), 0, dl, leaves))
