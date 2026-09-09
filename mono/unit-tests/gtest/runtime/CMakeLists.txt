@@ -74,7 +74,7 @@ mono_unit_test_cases(test-mono-linked-list-set test-mono-linked-list-set "*")
 mono_add_unit_test(test-mono-runtime RUNTIME SOURCES
   harness.cpp test-mono-callspec.cpp test-mono-string.cpp test-path.cpp
   test-function-pointer.cpp test-detour.cpp test-icall.cpp
-  test-unmanaged-callers-only.cpp)
+  test-unmanaged-callers-only.cpp test-arch-amd64.cpp)
 mono_unit_test_cases(test-mono-runtime test-mono-callspec "Callspec.*")
 mono_unit_test_cases(test-mono-runtime test-mono-string   "MonoStringTest.*")
 mono_unit_test_cases(test-mono-runtime test-path          "MonoPath.*")
@@ -83,6 +83,7 @@ mono_unit_test_cases(test-mono-runtime test-detour        "MethodDetour.*")
 mono_unit_test_cases(test-mono-runtime test-icall         "NoWrapperIcall.*")
 mono_unit_test_cases(test-mono-runtime test-unmanaged-callers-only
                      "UnmanagedCallersOnly.*")
+mono_unit_test_cases(test-mono-runtime test-arch-amd64    "ArchAmd64.*")
 
 # The cases above that read a tier-0 caller's behaviour, again with the
 # interpreter as tier 0. The default arms run the classic compiler there, and

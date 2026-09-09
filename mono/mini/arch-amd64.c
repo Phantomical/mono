@@ -1358,6 +1358,22 @@ add_valuetype (MonoMethodSignature *sig, ArgInfo *ainfo, MonoType *type,
 #endif /* !TARGET_WIN32 */
 }
 
+#ifdef TARGET_WIN32
+/*
+ * The float param registers and other param registers must be the same index
+ * on Windows x64: a float argument still burns the general-purpose register
+ * at its own position, since the two files are read at parallel slots.
+ */
+static void inline
+sync_win64_param_reg_files (guint32 *gr, guint32 *fr)
+{
+	if (*gr > *fr)
+		*fr = *gr;
+	else if (*fr > *gr)
+		*gr = *fr;
+}
+#endif
+
 /* Places sig's parameter i. */
 static void
 add_parameter (MonoMethodSignature *sig, CallInfo *cinfo, int i, guint32 *gr,
@@ -1367,11 +1383,7 @@ add_parameter (MonoMethodSignature *sig, CallInfo *cinfo, int i, guint32 *gr,
 	MonoType *ptype;
 
 #ifdef TARGET_WIN32
-	/* The float param registers and other param registers must be the same index on Windows x64.*/
-	if (*gr > *fr)
-		*fr = *gr;
-	else if (*fr > *gr)
-		*gr = *fr;
+	sync_win64_param_reg_files (gr, fr);
 #endif
 
 	ptype = mini_get_underlying_type (sig->params [i]);
@@ -1637,6 +1649,15 @@ mono_arch_get_call_info (MonoMemPool *mp, MonoMethodSignature *sig)
 			add_general (&gr, &stack_size, &cinfo->sig_cookie);
 			cookie_placed = TRUE;
 		}
+#ifdef TARGET_WIN32
+		/*
+		 * add_parameter () above already synced before classifying that
+		 * first argument, not after: a floating-point one leaves gr behind
+		 * fr, and the bare add_general () below never goes through
+		 * add_parameter () to pick that resync up on its own.
+		 */
+		sync_win64_param_reg_files (&gr, &fr);
+#endif
 		add_general (&gr, &stack_size, &cinfo->ret);
 		if (cinfo->ret.storage == ArgOnStack) {
 			/*
