@@ -4,7 +4,6 @@
  */
 
 #include "method-to-llvm.hpp"
-#include "passes/vtable-func.hpp"
 #include "util/bitfield.hpp"
 
 // class-internals.h brings in jit-icall-reg.h, which has no include guard.
@@ -19,6 +18,7 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/MDBuilder.h>
+#include <llvm/IR/Metadata.h>
 
 #include <string_view>
 
@@ -317,10 +317,21 @@ MethodLLVMEmitter::emit_element_type (MonoIrBuilder &builder, MonoMethod *callee
 	// is the exception: its own vtable takes `type` after the memory barrier,
 	// which leaves a window where the field is null. mono_type_get_object_checked ()
 	// tests the field for that reason and this follows it.
+	//
+	// vtable_type_decl () is marked Speculatable, which is only sound when its
+	// vtable argument is provably non-null. Here it comes from domain_vtables,
+	// which can genuinely be null. The optimizer speculated the read past the
+	// null check anyway, crashing on that arm. A plain load carries no such
+	// license.
 	builder.SetInsertPoint (read);
 
-	llvm::Value *answered =
-		builder.CreateCall (vtable_type_decl (*module), { vtable }, "element_type");
+	llvm::LoadInst *answered = builder.CreateAlignedLoad (
+		ptr,
+		builder.CreateGEP (builder.getInt8Ty (), vtable,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, type))),
+		align, "element_type");
+	answered->setMetadata (llvm::LLVMContext::MD_invariant_load,
+	                       llvm::MDNode::get (context (), {}));
 
 	builder.CreateCondBr (builder.CreateIsNotNull (answered), done, declined);
 

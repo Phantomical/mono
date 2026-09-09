@@ -252,6 +252,7 @@ set(MONO_TESTS_CS_SRC
   invariant-static.cs
   vtable-fold.cs
   reflection-element-type.cs
+  reflection-element-type-domain.cs
   tier2-narrow-arg.cs
   tier2-loop-unswitch.cs
   managed-thread-id.cs
