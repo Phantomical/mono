@@ -95,13 +95,25 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 		return llvm::Error::success ();
 	}
 
-	llvm::Expected<llvm::Value *> returned =
-		materialize (builder, *value, ret, native_signature ());
+	// A held-in-memory return whose registers a Windows convention coerced
+	// (see win64_register_coercion ()) is read back as that coerced type
+	// directly: it is the same bytes, and it is what the declaration promised
+	// its callers rather than the natural struct materialize () would load.
+	llvm::Value *returned;
 
-	if (!returned)
-		return returned.takeError ();
+	if (held_in_memory (ret)) {
+		returned = builder.CreateAlignedLoad (function->getReturnType (), *value,
+		                                      type_alignment (ret, native_signature ()));
+	} else {
+		llvm::Expected<llvm::Value *> materialized =
+			materialize (builder, *value, ret, native_signature ());
 
-	builder.CreateRet (*returned);
+		if (!materialized)
+			return materialized.takeError ();
+		returned = *materialized;
+	}
+
+	builder.CreateRet (returned);
 	return llvm::Error::success ();
 }
 

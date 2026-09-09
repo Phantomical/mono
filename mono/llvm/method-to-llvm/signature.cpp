@@ -806,6 +806,11 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig, bool nati
 	if (!ret)
 		return ret.takeError ();
 
+#ifdef HOST_WIN32
+	if (!native)
+		*ret = win64_register_coercion (*ret);
+#endif
+
 	std::vector<llvm::Type *> params;
 
 	if (sig->hasthis)
@@ -826,6 +831,12 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig, bool nati
 #ifdef HOST_WIN32
 		if (!native && win64_indirect (*converted))
 			params.push_back (pointer_type (context ()));
+		else if (!native)
+			// LLVM sizes a register argument by scalar leaves, the same as
+			// a register return, so a padded aggregate needs the coercion
+			// applied to *ret above (win64_register_coercion (),
+			// hidden-return.hpp).
+			params.push_back (win64_register_coercion (*converted));
 		else
 #endif
 			params.push_back (*converted);

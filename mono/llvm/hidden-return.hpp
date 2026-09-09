@@ -165,6 +165,29 @@ win64_indirect (llvm::Type *type)
 	return size != 1 && size != 2 && size != 4 && size != 8;
 }
 
+/// The type a Windows return or by-value argument travels as, given that
+/// win64_indirect (type) says it fits in one register.
+///
+/// LLVM sizes a register return or argument by an aggregate's scalar leaves,
+/// the rule System V uses, not by win64_indirect ()'s total-size test. A
+/// padded field is an extra leaf, so a shape that fits by size can still
+/// exhaust LLVM's leaf budget and fall back to a hidden pointer that
+/// mono_arch_get_call_info () (arch-amd64.c) never agreed to. Coercing the
+/// aggregate to a same-width integer leaves LLVM exactly one leaf to size.
+inline llvm::Type *
+win64_register_coercion (llvm::Type *type)
+{
+	if (win64_indirect (type))
+		return type;
+	if (!type->isStructTy () && !type->isArrayTy ())
+		return type;
+
+	uint64_t size = 0;
+
+	detail::add_byte_width (type, size);
+	return llvm::IntegerType::get (type->getContext (), size * 8);
+}
+
 #endif
 
 /// Whether a return of type is handed back through a hidden pointer rather than

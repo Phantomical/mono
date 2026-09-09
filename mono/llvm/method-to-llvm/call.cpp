@@ -246,6 +246,15 @@ MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
 		copy_vtype (builder, *slot, *coerced, destination, native);
 		return *slot;
 	}
+
+	// A held-in-memory argument whose register convert_method_signature ()
+	// coerced (win64_register_coercion (), hidden-return.hpp) is read back
+	// as that coerced type directly: it is the same bytes, and it is what
+	// the callee's declaration actually asks for, rather than the natural
+	// struct materialize () would load.
+	if (!native && held_in_memory (destination))
+		return builder.CreateAlignedLoad (win64_register_coercion (*type), *coerced,
+		                                  type_alignment (destination, native));
 #endif
 
 	return materialize (builder, *coerced, destination, native);
