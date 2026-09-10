@@ -74,7 +74,8 @@ mono_unit_test_cases(test-mono-linked-list-set test-mono-linked-list-set "*")
 mono_add_unit_test(test-mono-runtime RUNTIME SOURCES
   harness.cpp test-mono-callspec.cpp test-mono-string.cpp test-path.cpp
   test-function-pointer.cpp test-detour.cpp test-icall.cpp
-  test-unmanaged-callers-only.cpp test-arch-amd64.cpp)
+  test-unmanaged-callers-only.cpp test-arch-amd64.cpp
+  test-unity-pinned-alloc.cpp)
 mono_unit_test_cases(test-mono-runtime test-mono-callspec "Callspec.*")
 mono_unit_test_cases(test-mono-runtime test-mono-string   "MonoStringTest.*")
 mono_unit_test_cases(test-mono-runtime test-path          "MonoPath.*")
@@ -84,6 +85,15 @@ mono_unit_test_cases(test-mono-runtime test-icall         "NoWrapperIcall.*")
 mono_unit_test_cases(test-mono-runtime test-unmanaged-callers-only
                      "UnmanagedCallersOnly.*")
 mono_unit_test_cases(test-mono-runtime test-arch-amd64    "ArchAmd64.*")
+mono_unit_test_cases(test-mono-runtime test-unity-pinned-alloc
+                     "UnityPinnedAlloc.*")
+
+# mono_gc_base_init () reads MONO_DISABLE_UNITY_PINNED_ALLOC once per
+# process, so RoutingRespectsKillSwitch needs a registration of its own to
+# run under it. The run above, with the variable unset, is the other arm.
+mono_unit_test_cases(test-mono-runtime test-unity-pinned-alloc-disabled
+                     "UnityPinnedAlloc.RoutingRespectsKillSwitch"
+                     ENV "MONO_DISABLE_UNITY_PINNED_ALLOC=1")
 
 # The cases above that read a tier-0 caller's behaviour, again with the
 # interpreter as tier 0. The default arms run the classic compiler there, and
@@ -157,6 +167,7 @@ if(MONO_ENABLE_MCS_BUILD)
   _mono_test_assembly(unmanaged-callers-only.exe
                       "${CMAKE_CURRENT_SOURCE_DIR}/unmanaged-callers-only.cs")
   _mono_test_assembly(remset-missing.exe "${CMAKE_CURRENT_SOURCE_DIR}/remset-missing.cs")
+  _mono_test_assembly(unity-pinned-alloc.exe "${CMAKE_CURRENT_SOURCE_DIR}/unity-pinned-alloc.cs")
   _mono_test_assembly(test-embed.exe "${CMAKE_SOURCE_DIR}/samples/embed/test.cs")
   _mono_test_assembly(test-embed-invoke-cs.exe "${CMAKE_SOURCE_DIR}/samples/embed/invoke.cs")
 
@@ -166,6 +177,7 @@ if(MONO_ENABLE_MCS_BUILD)
     "${CMAKE_CURRENT_BINARY_DIR}/icall.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/unmanaged-callers-only.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/remset-missing.exe"
+    "${CMAKE_CURRENT_BINARY_DIR}/unity-pinned-alloc.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed-invoke-cs.exe")
   mono_tools_runtime_depends(unit-test-assemblies)

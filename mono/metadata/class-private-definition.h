@@ -84,6 +84,11 @@ struct _MonoClass {
 	guint has_failure : 1; /* See mono_class_get_exception_data () for a MonoErrorBoxed with the details */
 	guint has_weak_fields : 1; /* class has weak reference fields */
 	guint has_dim_conflicts : 1; /* Class has conflicting default interface methods */
+	/* derives from UnityEngine.Object. Unity pins every instance of this
+	 * hierarchy for its whole lifetime, so allocation routes to the major
+	 * heap's pinned space instead of the nursery. Set at load, the way
+	 * is_com_object is. */
+	guint is_unity_object : 1;
 
 	MonoClass  *parent;
 	MonoClass  *nested_in;

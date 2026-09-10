@@ -58,6 +58,8 @@ static guint64 los_array_remsets;
 static gboolean conservative_stack_mark = FALSE;
 /* If set, check that there are no references to the domain left at domain unload */
 gboolean sgen_mono_xdomain_checks = FALSE;
+/* mono_gc_base_init () clears this if MONO_DISABLE_UNITY_PINNED_ALLOC is set. */
+static gboolean unity_pinned_alloc_enabled = TRUE;
 
 /* Functions supplied by the runtime to be called by the GC */
 static MonoGCCallbacks gc_callbacks;
@@ -939,7 +941,9 @@ mono_gc_clear_domain (MonoDomain * domain)
 MonoObject*
 mono_gc_alloc_obj (MonoVTable *vtable, size_t size)
 {
-	MonoObject *obj = sgen_alloc_obj (vtable, size);
+	MonoObject *obj = G_UNLIKELY (unity_pinned_alloc_enabled && m_class_is_unity_object (vtable->klass))
+		? sgen_alloc_obj_pinned (vtable, size)
+		: sgen_alloc_obj (vtable, size);
 
 	if (G_UNLIKELY (mono_profiler_allocations_enabled ()) && obj)
 		MONO_PROFILER_RAISE (gc_allocation, (obj));
@@ -1118,6 +1122,15 @@ mono_gc_get_managed_allocator (MonoClass *klass, gboolean for_box, gboolean know
 	if (known_instance_size && ALIGN_TO (m_class_get_instance_size (klass), SGEN_ALLOC_ALIGN) >= SGEN_MAX_SMALL_OBJ_SIZE)
 		return NULL;
 	if (mono_class_has_finalizer (klass) || mono_class_is_marshalbyref (klass) || m_class_has_weak_fields (klass))
+		return NULL;
+	/*
+	 * Not redundant with mono_gc_alloc_obj ()'s own check. The managed
+	 * allocator returned for another class bumps tlab_next inline and calls
+	 * mono_gc_alloc_obj () only once its TLAB is exhausted. Without this
+	 * decline, a pinned class would get one, and its ordinary allocations
+	 * would skip that check for good.
+	 */
+	if (unity_pinned_alloc_enabled && m_class_is_unity_object (klass))
 		return NULL;
 	if (m_class_get_rank (klass))
 		return NULL;
@@ -3262,6 +3275,9 @@ mono_gc_base_init (void)
 {
 	if (gc_inited)
 		return;
+
+	if (g_hasenv ("MONO_DISABLE_UNITY_PINNED_ALLOC"))
+		unity_pinned_alloc_enabled = FALSE;
 
 	mono_counters_init ();
 
