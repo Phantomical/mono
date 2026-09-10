@@ -924,6 +924,13 @@ mono_runtime_suite(runtime-class-guard-off TESTS class-devirt.exe
 mono_runtime_suite(runtime-gshared-alloc-shape TESTS gshared-boehm-alloc-shape.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0")
 
+# boehm-domain-alloc-shape.cs's allocation has to reach the backend on its
+# first call, in the second AppDomain it runs the test in, which the default
+# tier does not: classic tier 0 builds a vtable through mono_class_vtable ()
+# instead of asking emit_object_alloc () for a shape.
+mono_runtime_suite(runtime-boehm-domain-alloc-shape TESTS boehm-domain-alloc-shape.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0")
+
 # The bonuses mono adds to the cost model. Two arms, on and off, the way
 # runtime-tier2-cost-trigger has it. The root drives its own compiles, so
 # self-promotion is off the way the costed suite has it, and the trivial

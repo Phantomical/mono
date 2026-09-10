@@ -7,6 +7,7 @@
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-abi-details.h"
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/domain-internals.h"
 #include "mono/metadata/exception-internals.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
@@ -168,6 +169,15 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 		MonoGCAllocShape shape = size != 0 && shape_known
 			? mono_gc_alloc_obj_shape (klass)
 			: MONO_GC_ALLOC_SHAPE_GENERIC;
+
+		// mono_class_create_runtime_vtable () (object.c) nulls a non-root
+		// domain's vtable descriptor for Boehm, so GC_GCJ_MALLOC () would trace
+		// this object's fields as if it had none. mono_gc_alloc_obj_shape ()
+		// cannot see that: it answers TYPED from klass's own descriptor, which
+		// the domain never touches.
+		if (shape == MONO_GC_ALLOC_SHAPE_TYPED && cfg->domain != mono_get_root_domain ()
+		    && !mono_dont_free_domains)
+			shape = MONO_GC_ALLOC_SHAPE_CONSERVATIVE;
 
 		llvm::Expected<llvm::Function *> chosen =
 			shape == MONO_GC_ALLOC_SHAPE_GENERIC

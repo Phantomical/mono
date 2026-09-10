@@ -248,6 +248,7 @@ set(MONO_TESTS_CS_SRC
   array-native-int-cast.cs
   class-devirt.cs
   gshared-boehm-alloc-shape.cs
+  boehm-domain-alloc-shape.cs
   phi-devirt.cs
   invariant-static.cs
   vtable-fold.cs
