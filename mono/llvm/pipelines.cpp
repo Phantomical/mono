@@ -247,7 +247,7 @@ MonoPipelineTuningOptions::MonoPipelineTuningOptions ()
 }
 
 MonoPipelineTuningOptions
-MonoPipelineTuningOptions::forTier1 ()
+MonoPipelineTuningOptions::tier1 ()
 {
 	MonoPipelineTuningOptions options;
 
@@ -258,7 +258,7 @@ MonoPipelineTuningOptions::forTier1 ()
 }
 
 MonoPipelineTuningOptions
-MonoPipelineTuningOptions::forTier2 ()
+MonoPipelineTuningOptions::tier2 ()
 {
 	MonoPipelineTuningOptions options;
 

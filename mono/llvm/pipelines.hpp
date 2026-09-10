@@ -47,27 +47,20 @@ OneFileFS::CurrentFileGuard pushProfile (OneFileFS &fs, llvm::ArrayRef<uint8_t> 
 /// not build for the same one.
 class MonoPipelineTuningOptions : public llvm::PipelineTuningOptions {
 public:
-	/// The defaults llvm::PipelineTuningOptions constructs itself with.
-	///
-	/// These are not what LLVM builds an O2 or O3 pipeline with. It raises
-	/// LoopVectorization and SLPVectorization from the level in
-	/// setupOptionsForPipelineAlias (), a function local to PassBuilder.cpp, so
-	/// a builder of ours starts from these whatever level it goes on to build
-	/// for. SLPVectorization starts off. Prefer a tier's own settings below.
+	/// Default tuning options. Use the tier1 or tier2 options below for the
+	/// tier-specific options.
 	MonoPipelineTuningOptions ();
 
 	/// The settings each tier's builder is made with.
-	static MonoPipelineTuningOptions forTier1 ();
-	static MonoPipelineTuningOptions forTier2 ();
+	static MonoPipelineTuningOptions tier1 ();
+	static MonoPipelineTuningOptions tier2 ();
 
-	/// Whether a tier-1 body gathers counts and a tier-2 body is laid out
-	/// against them. Off leaves both tiers on the static frequencies.
+	/// If true we add profiling counters to tier1 and use them for PGO in tier2.
 	bool EnablePGO = true;
 
-	/// Whether a tier-1 body carries the counter that asks for tier 2.
+	/// Is promotion from tier1 to tier2 enabled?
 	///
-	/// Separate from EnablePGO: a body can promote off a plain entry count with
-	/// no profile behind it, and turning the profile off must not stop it.
+	/// Without this, everything stays at tier 1 forever.
 	bool EnablePromotion = true;
 };
 

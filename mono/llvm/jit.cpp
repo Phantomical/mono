@@ -1252,7 +1252,7 @@ ThreadPipelines::tier1 ()
 		return *tier1_;
 
 	Tier &tier = tier1_.emplace (instrument_context);
-	MonoPipelineTuningOptions options = MonoPipelineTuningOptions::forTier1 ();
+	MonoPipelineTuningOptions options = MonoPipelineTuningOptions::tier1 ();
 
 	/*
 	 * With tier 2 off, a body neither counts its entries nor gathers a profile:
@@ -1285,7 +1285,7 @@ ThreadPipelines::tier2 ()
 
 	Tier &tier = tier2_.emplace (instrument_context);
 	MonoPassBuilder pb (&tier2_target_machine (), profile_fs.get (), &tier.pic,
-	                    MonoPipelineTuningOptions::forTier2 ());
+	                    MonoPipelineTuningOptions::tier2 ());
 
 	pb.registerModuleAnalyses (tier.mam);
 	pb.registerCGSCCAnalyses (tier.cgam);
