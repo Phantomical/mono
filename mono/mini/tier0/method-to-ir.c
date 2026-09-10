@@ -6869,7 +6869,12 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 		gboolean wants_seq_point;
 
 		if (sym_seq_points)
-			wants_seq_point = mono_bitset_test_fast (seq_point_locs, ip - header->code);
+			/*
+			 * mono_bitset_test_fast () gives the masked chunk, not a boolean.
+			 * gboolean is 32 bits, so without the compare every offset whose
+			 * bit sits above 32 in its chunk reads as unset.
+			 */
+			wants_seq_point = mono_bitset_test_fast (seq_point_locs, ip - header->code) != 0;
 		else if (cfg->gen_sdb_seq_points || cfg->prof_coverage)
 			wants_seq_point = at_stack_empty;
 		else
