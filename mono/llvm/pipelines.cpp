@@ -239,26 +239,20 @@ addAnnotationRemarksPass (llvm::ModulePassManager &MPM)
 }
 } // namespace
 
-MonoPipelineTuningOptions::MonoPipelineTuningOptions () = default;
+MonoPipelineTuningOptions::MonoPipelineTuningOptions () 
+{
+	// We actually benefit quite a bit from reusing analyses. Also, our modules
+	// are small so the memory savings is minor.
+	EagerlyInvalidateAnalyses = false;
+}
 
 MonoPipelineTuningOptions
 MonoPipelineTuningOptions::forTier1 ()
 {
 	MonoPipelineTuningOptions options;
 
-	// What LLVM sets these to below O2. Tier 1 builds at O1 and is where nearly
-	// all code stays, so what a vectorizer costs it is compile latency.
 	options.LoopVectorization = false;
 	options.SLPVectorization = false;
-
-	// Off, against LLVM's own default: it blanket-clears every function
-	// analysis after each function-pass adaptor regardless of what the
-	// adaptor's own pipeline actually preserved. That caution is for a
-	// long-lived module; this one is thrown away whole once the compile
-	// finishes (Tier::forget_analyses ()), and off is what lets an
-	// analysis such as MemorySSA survive from one pass to the next
-	// instead of being rebuilt for it.
-	options.EagerlyInvalidateAnalyses = false;
 
 	return options;
 }
@@ -268,17 +262,11 @@ MonoPipelineTuningOptions::forTier2 ()
 {
 	MonoPipelineTuningOptions options;
 
-	// What LLVM sets these to at O3. It raises them from the level in a
-	// function local to PassBuilder.cpp, so tier 2 sets them itself. The
-	// optimization stage in buildTier2Pipeline () is what reads them.
 	options.LoopVectorization = true;
 	options.SLPVectorization = true;
 
 	// leaving this as true causes link errors
 	options.CallGraphProfile = false;
-
-	// The same reason forTier1 () turns this off.
-	options.EagerlyInvalidateAnalyses = false;
 
 	return options;
 }
