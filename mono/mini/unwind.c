@@ -755,11 +755,11 @@ mono_unwind_frame (guint8 *unwind_info, guint32 unwind_info_len,
 
 #if defined (HAVE_DL_ITERATE_PHDR) && defined (HAVE_LINK_H)
 #define HAVE_NATIVE_UNWIND 1
+#elif defined (HOST_WIN32)
+#define HAVE_NATIVE_UNWIND 1
 #endif
 
 #ifdef HAVE_NATIVE_UNWIND
-
-#include <link.h>
 
 /*
  * Unwinding one frame of a C function the runtime itself is built from.
@@ -769,17 +769,21 @@ mono_unwind_frame (guint8 *unwind_info, guint32 unwind_info_len,
  * reached the same way - without leaving an LMF behind. A thread suspended in
  * one of those has an instruction pointer no MonoJitInfo covers and nothing
  * standing for the managed frame underneath it, so a walk that starts there
- * ends there and reports no frames at all. The frame is described, just not by
- * anything mono wrote: it is in the image's own .eh_frame.
+ * ends there and reports no frames at all. The frame is described, but not by
+ * anything mono wrote: it is in the image's own unwind info.
  *
- * This has to run against a suspended thread, so nothing here allocates or
- * takes a lock. The images are snapshotted once, and the CFI program is copied
- * onto the caller's stack rather than into a buffer someone has to own.
- *
- * Whatever this cannot make sense of - an encoding it does not read, an
- * operation mono_unwind_frame () does not implement - is a FALSE, which leaves
- * the walk exactly where it was without it.
+ * Whatever this cannot make sense of is a FALSE, which leaves the walk
+ * exactly where it was without it.
  */
+
+#if defined (HAVE_DL_ITERATE_PHDR) && defined (HAVE_LINK_H)
+
+#include <link.h>
+
+// The lookup below has to run against a suspended thread, so nothing here
+// allocates or takes a lock. The images are snapshotted once, and the CFI
+// program is copied onto the caller's stack rather than into a buffer someone
+// has to own.
 
 typedef struct {
 	guint8 *start, *end;
@@ -1143,6 +1147,62 @@ mono_unwind_native_frame (guint8 *ip, mono_unwind_reg_t *regs, int nregs,
 	return mono_unwind_frame (buf, len, code, code + code_len, ip, NULL, regs, nregs,
 	                          save_locations, save_locations_len, out_cfa);
 }
+
+#elif defined (HOST_WIN32)
+
+#include <mono/utils/mono-context.h>
+
+#include <windows.h>
+
+static void
+native_unwind_init (void)
+{
+}
+
+static void
+native_unwind_cleanup (void)
+{
+}
+
+// RtlLookupFunctionEntry reads a loaded module's own unwind data, so this
+// needs no image table of its own the way the ELF arm above does.
+gboolean
+mono_unwind_native_frame (guint8 *ip, mono_unwind_reg_t *regs, int nregs,
+                          host_mgreg_t **save_locations, int save_locations_len,
+                          guint8 **out_cfa)
+{
+	MonoContext mctx;
+	CONTEXT win_ctx;
+	DWORD64 image_base;
+	PRUNTIME_FUNCTION func;
+	PVOID handler_data;
+	DWORD64 establisher_frame;
+
+	func = RtlLookupFunctionEntry ((DWORD64) (gsize) ip, &image_base, NULL);
+	if (!func)
+		return FALSE;
+
+	memset (&mctx, 0, sizeof (mctx));
+	memcpy (mctx.gregs, regs, (nregs < AMD64_NREG ? nregs : AMD64_NREG) * sizeof (host_mgreg_t));
+	mctx.gregs [AMD64_RIP] = (host_mgreg_t) (gsize) ip;
+
+	memset (&win_ctx, 0, sizeof (win_ctx));
+	win_ctx.ContextFlags = CONTEXT_FULL;
+	mono_monoctx_to_sigctx (&mctx, &win_ctx);
+
+	RtlVirtualUnwind (UNW_FLAG_NHANDLER, image_base, (DWORD64) (gsize) ip, func,
+	                  &win_ctx, &handler_data, &establisher_frame, NULL);
+
+	mono_sigctx_to_monoctx (&win_ctx, &mctx);
+	memcpy (regs, mctx.gregs, (nregs < AMD64_NREG ? nregs : AMD64_NREG) * sizeof (host_mgreg_t));
+
+	// RtlVirtualUnwind returns the CFA in the context's own stack pointer.
+	// establisher_frame names the frame's exception scope instead, not the CFA.
+	*out_cfa = (guint8 *) (gsize) win_ctx.Rsp;
+	return TRUE;
+}
+
+#endif
 
 #else
 
