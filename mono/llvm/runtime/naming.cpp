@@ -64,7 +64,7 @@ wants_unbox_entry (MonoMethod *method, MonoMethodSignature *sig)
 }
 
 bool
-publishes_interop_entry (MonoMethod *method)
+is_exposed_to_native_code (MonoMethod *method)
 {
 	if (mono_method_is_unmanaged_callers_only (method))
 		return true;
@@ -78,7 +78,7 @@ publishes_interop_entry (MonoMethod *method)
 bool
 publishes_unbox_entry (MonoMethod *method)
 {
-	return !implemented_outside_il (method)
+	return !is_external_method (method)
 	       && wants_unbox_entry (method, mono_method_signature_internal (method));
 }
 

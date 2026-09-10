@@ -381,7 +381,7 @@ method_overrides_registered ()
 }
 
 MonoMethod *
-registered_override_for (MonoMethod *method)
+get_method_override (MonoMethod *method)
 {
 	if (!method_overrides_registered ())
 		return nullptr;

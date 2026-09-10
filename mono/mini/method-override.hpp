@@ -41,7 +41,7 @@ bool method_overrides_registered ();
 /// Returns an instantiation for an instantiation: the override is written
 /// against the target's generic definition, and is inflated here with the
 /// target's own type arguments.
-MonoMethod *registered_override_for (MonoMethod *method);
+MonoMethod *get_method_override (MonoMethod *method);
 
 } // namespace mono
 

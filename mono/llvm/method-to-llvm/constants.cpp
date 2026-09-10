@@ -259,7 +259,7 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 	llvm::Constant *value = address_symbol (identity_symbol (name, image), interned);
 
 	g_free (name);
-	mark_ldstr_reference (*llvm::cast<llvm::GlobalValue> (value), interned);
+	set_ldstr (*llvm::cast<llvm::GlobalValue> (value), interned);
 	push_stack (value, m_class_get_byval_arg (mono_defaults.string_class));
 	return llvm::Error::success ();
 }

@@ -57,7 +57,7 @@ vtable_class (const Value *v)
 {
 	const auto *global = dyn_cast<GlobalVariable> (strip_casts (v));
 
-	return global != nullptr ? marked_class (*global) : nullptr;
+	return global != nullptr ? get_class (*global) : nullptr;
 }
 
 /// Removes site, which must return nothing - the same call every user of

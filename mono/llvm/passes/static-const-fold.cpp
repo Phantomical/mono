@@ -116,7 +116,7 @@ ldstr_length_constant (const LoadInst &load)
 	    || offset.getSExtValue () != MONO_STRUCT_OFFSET (MonoString, length))
 		return nullptr;
 
-	MonoString *literal = marked_ldstr (*block);
+	MonoString *literal = get_ldstr (*block);
 
 	if (literal == nullptr)
 		return nullptr;

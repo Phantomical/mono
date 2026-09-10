@@ -137,7 +137,7 @@ struct Parsed {
 		}
 
 		if (vtable_class != nullptr)
-			mark_class_reference (*module->getNamedGlobal ("vtable"), vtable_class);
+			set_class (*module->getNamedGlobal ("vtable"), vtable_class);
 
 		std::string complaint;
 		raw_string_ostream out (complaint);
@@ -429,7 +429,7 @@ struct AllocationModule {
 
 		auto *vtable = new GlobalVariable (*module, Type::getInt8Ty (*context), false,
 		                                   GlobalValue::ExternalLinkage, nullptr, "vtable");
-		mark_class_reference (*vtable, klass);
+		set_class (*vtable, klass);
 
 		caller = Function::Create (FunctionType::get (ptr, {}, false),
 		                           GlobalValue::ExternalLinkage, "caller", module.get ());

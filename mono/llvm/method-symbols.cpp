@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <optional>
+#include <type_traits>
 
 #include <glib.h>
 
@@ -61,7 +62,7 @@ constexpr StringRef method_pointer_attribute = "mono-method-pointer";
 
 /// The pointer \p name carries on \p value, or nothing where it carries none.
 std::optional<uintptr_t>
-pointer_marker (const GlobalValue &value, StringRef name)
+get_attached_address (const GlobalValue &value, StringRef name)
 {
 	StringRef printed;
 
@@ -85,7 +86,7 @@ pointer_marker (const GlobalValue &value, StringRef name)
 }
 
 void
-mark_pointer (GlobalValue &value, StringRef name, const void *pointer)
+attach_address (GlobalValue &value, StringRef name, const void *pointer)
 {
 	char printed[32];
 
@@ -98,81 +99,81 @@ mark_pointer (GlobalValue &value, StringRef name, const void *pointer)
 }
 
 std::optional<MonoMethod *>
-marker_of (const GlobalValue &value)
+get_attached_method (const GlobalValue &value)
 {
-	std::optional<uintptr_t> address = pointer_marker (value, method_attribute);
-
+	auto address = get_attached_address(value, method_attribute);
 	if (!address)
 		return std::nullopt;
-	return reinterpret_cast<MonoMethod *> (*address);
+
+	return reinterpret_cast<MonoMethod*>(*address);
 }
 
 } // namespace
 
 void
-mark_method_reference (GlobalValue &value, MonoMethod *method)
+set_method (GlobalValue &value, MonoMethod *method)
 {
-	mark_pointer (value, method_attribute, method);
+	attach_address (value, method_attribute, method);
 }
 
 MonoMethod *
-marked_method (const GlobalValue &value)
+get_method (const GlobalValue &value)
 {
-	return marker_of (value).value_or (nullptr);
+	return get_attached_method (value).value_or (nullptr);
 }
 
 void
-mark_class_reference (GlobalValue &value, MonoClass *klass)
+set_class (GlobalValue &value, MonoClass *klass)
 {
-	mark_pointer (value, class_attribute, klass);
+	attach_address (value, class_attribute, klass);
 }
 
 MonoClass *
-marked_class (const GlobalValue &value)
+get_class (const GlobalValue &value)
 {
-	std::optional<uintptr_t> address = pointer_marker (value, class_attribute);
+	std::optional<uintptr_t> address = get_attached_address (value, class_attribute);
 
 	return address ? reinterpret_cast<MonoClass *> (*address) : nullptr;
 }
 
 void
-mark_statics_reference (GlobalValue &value, MonoClass *klass)
+set_statics_class (GlobalValue &value, MonoClass *klass)
 {
-	mark_pointer (value, statics_class_attribute, klass);
+	attach_address (value, statics_class_attribute, klass);
 }
 
 MonoClass *
-marked_statics_class (const GlobalValue &value)
+get_statics_class (const GlobalValue &value)
 {
-	std::optional<uintptr_t> address = pointer_marker (value, statics_class_attribute);
+	std::optional<uintptr_t> address = get_attached_address (value, statics_class_attribute);
 
 	return address ? reinterpret_cast<MonoClass *> (*address) : nullptr;
 }
 
 void
-mark_ldstr_reference (GlobalValue &value, MonoString *interned)
+set_ldstr (GlobalValue &value, MonoString *interned)
 {
-	mark_pointer (value, ldstr_attribute, interned);
+	attach_address (value, ldstr_attribute, interned);
 }
 
 MonoString *
-marked_ldstr (const GlobalValue &value)
+get_ldstr (const GlobalValue &value)
 {
-	std::optional<uintptr_t> address = pointer_marker (value, ldstr_attribute);
+	std::optional<uintptr_t> address = get_attached_address (value, ldstr_attribute);
 
 	return address ? reinterpret_cast<MonoString *> (*address) : nullptr;
 }
 
 void
-mark_method_pointer (GlobalValue &value, MonoMethod *method)
+set_method_pointer (GlobalValue &value, MonoMethod *method)
 {
-	mark_pointer (value, method_pointer_attribute, method);
+	attach_address (value, method_pointer_attribute, method);
 }
 
 MonoMethod *
-marked_method_pointer (const GlobalValue &value)
+get_method_pointer (const GlobalValue &value)
 {
-	std::optional<uintptr_t> address = pointer_marker (value, method_pointer_attribute);
+	std::optional<uintptr_t> address = get_attached_address (value, method_pointer_attribute);
 
 	return address ? reinterpret_cast<MonoMethod *> (*address) : nullptr;
 }
@@ -184,7 +185,7 @@ marked_method_pointer (const GlobalValue &value)
 /// An IR use moves with a rename on its own. A name written into a string does
 /// not, and without this the pass that reads it back would look for a function
 /// that no longer answers to that name.
-void
+static void
 follow_renames (Module &m, const StringMap<std::string> &renames)
 {
 	if (renames.empty ())
@@ -211,8 +212,7 @@ follow_renames (Module &m, const StringMap<std::string> &renames)
 }
 
 Error
-bind_method_symbols (Module &m,
-                     function_ref<Expected<std::string> (MonoMethod *)> name_of)
+bind_method_symbols (Module &m, function_ref<Expected<std::string> (MonoMethod *)> name_of)
 {
 	SmallVector<GlobalValue *, 16> marked;
 
@@ -243,7 +243,7 @@ bind_method_symbols (Module &m,
 		if (!value->isDeclaration ())
 			continue;
 
-		std::optional<MonoMethod *> marker = marker_of (*value);
+		std::optional<MonoMethod *> marker = get_attached_method (*value);
 
 		if (!marker)
 			continue;

@@ -102,7 +102,7 @@ tested_class (const CallBase *site)
 {
 	auto *global = dyn_cast<GlobalValue> (site->getArgOperand (1));
 
-	return global != nullptr ? marked_class (*global) : nullptr;
+	return global != nullptr ? get_class (*global) : nullptr;
 }
 
 Value *

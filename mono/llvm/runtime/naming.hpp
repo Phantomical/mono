@@ -58,7 +58,7 @@ std::string display_name (MonoMethod *method, llvm::StringRef symbol);
 /// pinvoke declaration, or a method the runtime implements itself. A
 /// wrapper is never one of these, even when it wraps such a method,
 /// because it always carries IL of its own.
-bool implemented_outside_il (MonoMethod *method);
+bool is_external_method (MonoMethod *method);
 
 /// Whether a call can ever reach a method with a boxed receiver, so that it
 /// wants an unboxing entry beside its ordinary one.
@@ -84,7 +84,7 @@ bool wants_unbox_entry (MonoMethod *method, MonoMethodSignature *sig);
 /// compile, a stub, and the address an ldftn takes. Where the interpreter is
 /// the whole engine it publishes the entry itself, and
 /// interp_create_method_pointer () is what decides there.
-bool publishes_interop_entry (MonoMethod *method);
+bool is_exposed_to_native_code (MonoMethod *method);
 
 /// Whether this engine gives a method an unboxing entry of its own, and so a
 /// stub to publish it through. A method not implemented in IL is entered

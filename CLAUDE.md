@@ -1011,12 +1011,12 @@ the line may not hold, and it is a denylist rather than an allowlist: control fl
 the opcodes that describe the frame the body runs in. A body that reaches itself through
 the forwarder chain is refused too, because no inliner takes that call away. The rest is
 the size limit's question, and `--llvm-opt=-mono-inline-il-limit` bounds it. A candidate
-must also pass gates that are about correctness rather than cost (`may_fold ()`,
+must also pass gates that are about correctness rather than cost (`is_inlinable ()`,
 `runtime/inline-scope.cpp`): no wrapper, no dynamic method, no clauses, no `NoInlining`
 on the callee, no shared body, no call instrumentation, and nothing at all while
 `gen-seq-points` is on. It also refuses a callee something else owns the entry of: a
 detour or an override on the record, and an override the *table* holds
-(`registered_override_for ()`), which is the one that catches a declared override before
+(`get_method_override ()`), which is the one that catches a declared override before
 anything has asked for the method's record and installed it.
 
 **A host that starts the debugger agent turns every fold off.**
@@ -1078,10 +1078,10 @@ call sites by the block counts the profile gave them, hottest first. Each candid
 translated on demand. `ProfileInliner` (`runtime/profile-inlines.cpp`) is what the pass
 asks, because the pass itself names no metadata, so a site the gates or `getInlineCost`
 refuse costs nothing but the questions. A candidate arrives with its own trivial callees
-already folded in. Everything past `may_fold ()` is a correctness gate of its own: no
+already folded in. Everything past `is_inlinable ()` is a correctness gate of its own: no
 clauses, and inside `--llvm-opt=-mono-inline-cost-il-limit` bytes of IL.
 `NoInlining` on a call target is not one of the gates: the mark says
-do not fold that target, which `may_fold ()` already enforces. A caller with no profile still
+do not fold that target, which `is_inlinable ()` already enforces. A caller with no profile still
 inlines, off the static frequencies BFI falls back to.
 
 **The `getInlineCost ()` it calls is a copy of LLVM's**, `passes/inline-cost.cpp`, taken
@@ -1161,7 +1161,7 @@ its own, and a stack walk over its frame finds nothing.
 no thunk, so redirecting the method's entry misses it. Each method's record names the
 methods that folded it in (`note_folded_into ()`), and `install_detour ()` takes each of
 those entries back to the lazy resolver it started at, so the next call compiles the
-method again and `may_fold ()` keeps the copy out. Both compiled tiers run the pre-pass,
+method again and `is_inlinable ()` keeps the copy out. Both compiled tiers run the pre-pass,
 so an earlier body is no safer than the newest one — that is why the entry goes back past
 all of them rather than down one tier. `mono/tests/tier2-inline-override.cs` holds both
 arms. A thread already inside such a body stays there, because no on-stack replacement

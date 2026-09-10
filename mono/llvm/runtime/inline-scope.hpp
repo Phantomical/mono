@@ -118,7 +118,7 @@ bool folding_off_for_seq_points ();
 ///
 /// Correctness only. What a fold is worth is a separate question, and one this
 /// does not answer.
-bool may_fold (MonoDomain *domain, MonoMethod *callee);
+bool is_inlinable (MonoDomain *domain, MonoMethod *callee);
 
 /// Whether the backend writes the method's body itself, rather than
 /// translating its IL.
@@ -129,7 +129,7 @@ bool may_fold (MonoDomain *domain, MonoMethod *callee);
 /// fadd once translated. VectorOperations::CompareOrdered is 154 bytes, over
 /// the cost model's own 64-byte limit at a cold call site, and one vector
 /// compare once translated.
-bool written_by_the_backend (MonoMethod *method);
+bool is_builtin (MonoMethod *method);
 
 /// Whether a body of this shape can be translated in as an inline copy: no
 /// clauses at all, and at most il_limit bytes of IL.

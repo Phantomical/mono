@@ -45,7 +45,7 @@ static constexpr bool array_length_fits_int32 =
 	sizeof (mono_array_size_t) <= sizeof (int32_t);
 
 bool
-answers_array_shape (MonoMethod *target, MonoMethodSignature *sig)
+is_array_shape_builtin (MonoMethod *target, MonoMethodSignature *sig)
 {
 	if (target->klass != mono_defaults.array_class || !sig->hasthis)
 		return false;
@@ -469,7 +469,7 @@ MethodLLVMEmitter::method_symbol (MonoMethod *target)
 
 	// A pass that answers an interface site has the key and needs the method it
 	// stands for.
-	mark_method_pointer (*llvm::cast<llvm::GlobalValue> (symbolic), target);
+	set_method_pointer (*llvm::cast<llvm::GlobalValue> (symbolic), target);
 
 	return symbolic;
 }
@@ -665,7 +665,7 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 	// A no-wrapper icall takes the stub below instead. Its declaration names
 	// the C function, and a pointer that escapes into a delegate needs the jit
 	// info that only a published thunk registers.
-	if (implemented_outside_il (target) && c_entry_of (target) == nullptr)
+	if (is_external_method (target) && c_entry_of (target) == nullptr)
 		return create_method_decl (target);
 
 	/*
@@ -674,7 +674,7 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 	 * is left unmarked, which is what keeps bind_symbols () from renaming it
 	 * onto the published thunk beside it.
 	 */
-	if (publishes_interop_entry (target)) {
+	if (is_exposed_to_native_code (target)) {
 		char *name = mono_method_full_name (target, FALSE);
 		std::string symbol = identity_symbol (name, target) + "$entry";
 
@@ -700,7 +700,7 @@ MethodLLVMEmitter::code_address_symbol (MonoMethod *target)
 	llvm::Constant *address = extern_symbol (symbol);
 
 	record_external (symbol, ExternalSymbol::Kind::Code, target);
-	mark_method_reference (llvm::cast<llvm::GlobalValue> (*address), target);
+	set_method (llvm::cast<llvm::GlobalValue> (*address), target);
 	return address;
 }
 
@@ -809,7 +809,7 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	// another method this backend compiles qualifies. An indirect target or a
 	// runtime-implemented one crosses into C, and is lowered to a different
 	// prototype after the fact.
-	if (callee_method == nullptr || implemented_outside_il (callee_method))
+	if (callee_method == nullptr || is_external_method (callee_method))
 		return llvm::CallInst::TCK_None;
 
 	// A filter body is a function of its own over the parent's frame. Returning
@@ -1043,7 +1043,7 @@ MethodLLVMEmitter::emit_jmp (MonoIrBuilder &builder, uint32_t token)
 	if (innermost_try (offset) >= 0)
 		return invalid_il ("jmp cannot transfer control out of a protected block");
 	// A call into C lowers to a different prototype than this method's.
-	if (implemented_outside_il (callee_method))
+	if (is_external_method (callee_method))
 		return unsupported_il ("jmp to a runtime-implemented method");
 	if (method->save_lmf)
 		return unsupported_il ("jmp out of a frame that keeps an LMF");
@@ -1780,7 +1780,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		tail_kind = llvm::CallInst::TCK_None;
 
 	// A delegate's Invoke never arrives here: should_tail_call () refuses a
-	// method implemented_outside_il () answers for, and Invoke carries
+	// method is_external_method () answers for, and Invoke carries
 	// METHOD_IMPL_ATTRIBUTE_RUNTIME. So the mark describe_site () writes for one
 	// only ever lands on the protected call below, and keep_alive () is emitted
 	// on the one path that needs it.

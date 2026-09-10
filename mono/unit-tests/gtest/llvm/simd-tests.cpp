@@ -239,7 +239,7 @@ TEST_F (SimdBodies, TheAddOperatorIsOverThePrePassIlLimit)
 	mono_method_header_get_code (header, &size, nullptr);
 
 	EXPECT_GT (size, trivial_inline_il_limit ());
-	EXPECT_TRUE (written_by_the_backend (method));
+	EXPECT_TRUE (is_builtin (method));
 }
 
 // Turning the lowering off puts the operator back on its own IL, which is what
@@ -250,7 +250,7 @@ TEST_F (SimdBodies, LoweringOffPutsTheAddOperatorBackUnderTheLimit)
 	MonoMethod *method = find_method ("Mono.Simd", vector_add);
 
 	ASSERT_NE (method, nullptr);
-	EXPECT_FALSE (written_by_the_backend (method));
+	EXPECT_FALSE (is_builtin (method));
 }
 
 // C# shifts a short as an int and casts back, so the count is masked to 31 and

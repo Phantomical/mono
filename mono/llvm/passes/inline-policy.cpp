@@ -195,19 +195,19 @@ erasable_allocation (const Value *v)
 /// Whether a call to \p callee is a shape no round of this compile folds. A
 /// use that passes an allocation to it is then a way out for the pointer.
 ///
-/// A cheap approximation of may_fold () (`runtime/inline-scope.cpp`) from the
-/// declaration alone. A noreturn callee, an unmarked declaration -- a builtin
-/// or an icall with no wrapper of its own -- or a NoInlining method all count
-/// as won't fold here. So does every wrapper, coarser than may_fold () sorts
-/// them. Refusing more than may_fold () does only costs a caller-side bonus,
-/// never the erasure the callee-side test still guards.
+/// A cheap approximation of is_inlinable () from the declaration alone. A
+/// noreturn callee, an unmarked declaration -- a builtin or an icall with no
+/// wrapper of its own -- or a NoInlining method all count as won't fold here.
+/// So does every wrapper, coarser than is_inlinable () sorts them. Refusing
+/// more than is_inlinable () does only costs a caller-side bonus, never the
+/// erasure the callee-side test still guards.
 bool
 call_wont_fold (const Function &callee)
 {
 	if (callee.doesNotReturn ())
 		return true;
 
-	MonoMethod *method = marked_method (callee);
+	MonoMethod *method = get_method (callee);
 
 	if (method == nullptr)
 		return true;
@@ -642,7 +642,7 @@ folded_type_test (CallBase &call, SettledValue settled)
 		return nullptr;
 
 	auto *named = dyn_cast<GlobalValue> (call.getArgOperand (1));
-	MonoClass *target = named != nullptr ? marked_class (*named) : nullptr;
+	MonoClass *target = named != nullptr ? get_class (*named) : nullptr;
 	Value *object = call.getArgOperand (0);
 	std::pair<MonoClass *, bool> held =
 		settled_class (object, *call.getFunction (), settled);

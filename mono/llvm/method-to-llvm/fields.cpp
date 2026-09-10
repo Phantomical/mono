@@ -345,12 +345,12 @@ MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 	// A pass that answers a dispatch site has the vtable and needs the class. A
 	// pass that answers a type test has the class the test names.
 	if (kind == ExternalSymbol::Kind::VTable || kind == ExternalSymbol::Kind::Class)
-		mark_class_reference (*llvm::cast<llvm::GlobalValue> (symbolic), klass);
+		set_class (*llvm::cast<llvm::GlobalValue> (symbolic), klass);
 
 	// A pass that reads what an initonly static holds has the block and the
 	// offset, and needs the class to find the field.
 	if (kind == ExternalSymbol::Kind::Statics)
-		mark_statics_reference (*llvm::cast<llvm::GlobalValue> (symbolic), klass);
+		set_statics_class (*llvm::cast<llvm::GlobalValue> (symbolic), klass);
 
 	return symbolic;
 }

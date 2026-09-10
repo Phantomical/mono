@@ -237,7 +237,7 @@ tested_class (const CallBase *site, const ConstantValues &values)
 {
 	const GlobalValue *global = values.global (site->getArgOperand (1));
 
-	return global != nullptr ? marked_class (*global) : nullptr;
+	return global != nullptr ? get_class (*global) : nullptr;
 }
 
 /// Folds what it can of the sites in \p f that call the declaration \p name.

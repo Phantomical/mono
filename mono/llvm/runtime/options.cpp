@@ -700,14 +700,14 @@ wrapper_runs_at_tier0 (MonoMethod *method, bool for_classic)
 		return false;
 
 	/*
-	 * publishes_interop_entry () names a wrapper native code enters through a
+	 * is_exposed_to_native_code () names a wrapper native code enters through a
 	 * C-convention address. mono_llvm_jit_thunk_for () already keeps such a
 	 * wrapper's own call to the method it wraps from recompiling the wrapper
 	 * mid-compile, but classic still corrupts a marshaled struct crossing this
 	 * entry: pinvoke3.exe's test_0_marshal_struct_delegate, winx64structs.exe
 	 * and cominterop.exe all fail under it.
 	 */
-	if (publishes_interop_entry (method))
+	if (is_exposed_to_native_code (method))
 		return false;
 
 	WrapperInfo *info = mono_marshal_get_wrapper_info (method);
@@ -773,7 +773,7 @@ runs_at_tier0 (MonoMethod *method)
 	if (!setting.enabled || mono_ee_features.force_use_interpreter)
 		return false;
 
-	if (implemented_outside_il (method) || builtin_body_replaces_il (method))
+	if (is_external_method (method) || builtin_body_replaces_il (method))
 		return false;
 
 	if (method->wrapper_type != MONO_WRAPPER_NONE

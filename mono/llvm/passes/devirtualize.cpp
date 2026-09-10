@@ -299,7 +299,7 @@ dispatched_at (CallBase *site, MonoClass *klass, Lookup lookup,
 	}
 
 	const GlobalValue *key = values.global (site->getArgOperand (2));
-	MonoMethod *asked = key != nullptr ? marked_method_pointer (*key) : nullptr;
+	MonoMethod *asked = key != nullptr ? get_method_pointer (*key) : nullptr;
 
 	// The key is the last argument, and what the call enters is the method's own
 	// prototype, which does not have it.
@@ -346,7 +346,7 @@ MonoMethod *
 site_target (const CallBase *site, Lookup lookup, const ConstantValues &values)
 {
 	const GlobalValue *vtable = values.global (site->getArgOperand (0));
-	MonoClass *klass = vtable != nullptr ? marked_class (*vtable) : nullptr;
+	MonoClass *klass = vtable != nullptr ? get_class (*vtable) : nullptr;
 	const auto *index =
 		dyn_cast_or_null<ConstantInt> (values.value (site->getArgOperand (1)));
 
@@ -357,7 +357,7 @@ site_target (const CallBase *site, Lookup lookup, const ConstantValues &values)
 		return slot_target (klass, static_cast<int32_t> (index->getSExtValue ()));
 
 	const GlobalValue *key = values.global (site->getArgOperand (2));
-	MonoMethod *asked = key != nullptr ? marked_method_pointer (*key) : nullptr;
+	MonoMethod *asked = key != nullptr ? get_method_pointer (*key) : nullptr;
 
 	if (asked == nullptr)
 		return nullptr;

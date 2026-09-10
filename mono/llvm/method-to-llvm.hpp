@@ -1366,7 +1366,7 @@ MonoMethod *icall_wrapper_target (MonoMethod *method);
 ///
 /// A site that names a dimension can still end up as a call:
 /// lower_array_shapes () puts back the ones whose dimension it cannot read.
-bool answers_array_shape (MonoMethod *target, MonoMethodSignature *sig);
+bool is_array_shape_builtin (MonoMethod *target, MonoMethodSignature *sig);
 
 /// Which element accessor on System.Array target is, or nothing when it is
 /// neither. sig is the signature the call site was written against.

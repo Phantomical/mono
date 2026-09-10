@@ -50,7 +50,7 @@ delegate_ctor_target (MonoClass *klass, MonoMethodSignature *sig,
 
 	auto *symbol = llvm::dyn_cast<llvm::GlobalValue> (address->getPointerOperand ());
 
-	return symbol != nullptr ? marked_method (*symbol) : nullptr;
+	return symbol != nullptr ? get_method (*symbol) : nullptr;
 }
 
 } // namespace

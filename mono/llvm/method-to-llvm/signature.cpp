@@ -372,7 +372,7 @@ carry_parameter_extensions (llvm::CallBase *call, MonoMethodSignature *sig, unsi
 }
 
 bool
-implemented_outside_il (MonoMethod *method)
+is_external_method (MonoMethod *method)
 {
 	/*
 	 * A wrapper carries its own IL body, whatever native code or icall it
@@ -1127,7 +1127,7 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 		function->setDoesNotThrow ();
 	} else {
 		record_external (full_name, ExternalSymbol::Kind::Code, method);
-		mark_method_reference (*function, method);
+		set_method (*function, method);
 	}
 
 	if (llvm::Attribute::AttrKind ext = integer_extension (sig->ret);

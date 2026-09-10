@@ -53,7 +53,7 @@ nameable (MonoMethod *target)
 
 	// An icall, a pinvoke or a runtime-implemented method is declared in the C
 	// convention, which is not the shape the site calls with.
-	if (implemented_outside_il (target))
+	if (is_external_method (target))
 		return nullptr;
 
 	/*
@@ -89,7 +89,7 @@ entry_for (Module &m, MonoMethod *target, FunctionType *shape, const CompileStat
 	Function *decl = Function::Create (shape, GlobalValue::ExternalLinkage,
 	                                   "mono_direct_" + identity_of (target), &m);
 
-	mark_method_reference (*decl, target);
+	set_method (*decl, target);
 
 	/*
 	 * decl is not this function's any more. Naming folds it into a declaration

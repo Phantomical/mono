@@ -55,8 +55,8 @@ ProfileInliner::folded (Function &caller, Function &callee, const InlineCost &co
 	if (!is_jit_trace_enabled ())
 		return;
 
-	MonoMethod *into = marked_method (caller);
-	MonoMethod *what = marked_method (callee);
+	MonoMethod *into = get_method (caller);
+	MonoMethod *what = get_method (callee);
 
 	if (into == nullptr || what == nullptr)
 		return;
@@ -86,8 +86,8 @@ ProfileInliner::declined (Function &caller, Function &callee, const InlineCost &
 	if (!is_jit_trace_enabled ())
 		return;
 
-	MonoMethod *into = marked_method (caller);
-	MonoMethod *what = marked_method (callee);
+	MonoMethod *into = get_method (caller);
+	MonoMethod *what = get_method (callee);
 
 	if (into == nullptr || what == nullptr)
 		return;
@@ -130,7 +130,7 @@ ProfileInliner::bind_and_resolve (Module &module, size_t from, size_t to)
 ArrayRef<uint8_t>
 ProfileInliner::profile_for (Function &decl)
 {
-	MonoMethod *callee = marked_method (decl);
+	MonoMethod *callee = get_method (decl);
 
 	if (callee == nullptr)
 		return {};
@@ -173,7 +173,7 @@ Function *
 ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHeat> heat,
                              const CallBase &call)
 {
-	MonoMethod *callee = marked_method (decl);
+	MonoMethod *callee = get_method (decl);
 
 	if (callee == nullptr)
 		return nullptr;
@@ -230,8 +230,8 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 		return nullptr;
 	}
 
-	if (!may_fold (target_.domain, callee)) {
-		trace_refusal (scope_, callee, "may_fold () refuses it");
+	if (!is_inlinable (target_.domain, callee)) {
+		trace_refusal (scope_, callee, "is_inlinable () refuses it");
 		return nullptr;
 	}
 
@@ -246,7 +246,7 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 		return nullptr;
 	}
 
-	bool fits = written_by_the_backend (callee)
+	bool fits = is_builtin (callee)
 	            || (fold_clause_bearing_callees () ? is_small_enough (header, limit)
 	                                              : is_small_and_clause_free (header, limit));
 

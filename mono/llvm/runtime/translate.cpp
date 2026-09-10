@@ -114,7 +114,7 @@ translate_and_compile (const TranslationTarget &target, MonoMethod *method,
 	if (is_array_accessor (method))
 		method = mono_marshal_get_array_accessor_wrapper (method);
 
-	if (implemented_outside_il (method)) {
+	if (is_external_method (method)) {
 		ERROR_DECL (compile_error);
 		void *code = mono_jit_compile_method (method, compile_error);
 
@@ -519,7 +519,7 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 		return one_by_one ();
 
 	for (MonoMethod *method : methods) {
-		if (implemented_outside_il (method) || method->dynamic)
+		if (is_external_method (method) || method->dynamic)
 			return one_by_one ();
 
 		// The wrapper it compiles as is a method of its own.

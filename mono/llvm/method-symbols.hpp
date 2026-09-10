@@ -44,19 +44,19 @@ constexpr std::string_view filter_body_suffix = "$filter";
 /// engine emitted it.
 std::string method_display_name (MonoMethod *method);
 
-void mark_method_reference (llvm::GlobalValue &value, MonoMethod *method);
+void set_method (llvm::GlobalValue &value, MonoMethod *method);
 
 /// Returns the method \p value stands for, or null when it carries no marker.
-MonoMethod *marked_method (const llvm::GlobalValue &value);
+MonoMethod *get_method (const llvm::GlobalValue &value);
 
 /// The same for a symbol that stands for one class's run-time structure.
 ///
 /// The engine resolves such a symbol by name, so the mark is not what makes it
 /// resolve. It is there for a pass, which has the symbol and needs the class.
-void mark_class_reference (llvm::GlobalValue &value, MonoClass *klass);
+void set_class (llvm::GlobalValue &value, MonoClass *klass);
 
 /// Returns the class \p value stands for, or null when it carries no marker.
-MonoClass *marked_class (const llvm::GlobalValue &value);
+MonoClass *get_class (const llvm::GlobalValue &value);
 
 /// The same for a symbol that stands for the block holding one class's static
 /// fields.
@@ -64,17 +64,17 @@ MonoClass *marked_class (const llvm::GlobalValue &value);
 /// A mark of its own rather than the one above, because the two state different
 /// relations between the same two pointers. That one names the class a symbol
 /// *is*, and this one names the class whose statics a block *holds*.
-void mark_statics_reference (llvm::GlobalValue &value, MonoClass *klass);
+void set_statics_class (llvm::GlobalValue &value, MonoClass *klass);
 
 /// Returns the class whose statics \p value holds, or null when it carries no
 /// marker.
-MonoClass *marked_statics_class (const llvm::GlobalValue &value);
+MonoClass *get_statics_class (const llvm::GlobalValue &value);
 
 /// The same for a symbol that stands for one interned string literal.
-void mark_ldstr_reference (llvm::GlobalValue &value, MonoString *interned);
+void set_ldstr (llvm::GlobalValue &value, MonoString *interned);
 
 /// Returns the string \p value stands for, or null when it carries no marker.
-MonoString *marked_ldstr (const llvm::GlobalValue &value);
+MonoString *get_ldstr (const llvm::GlobalValue &value);
 
 /// The same for a symbol that holds the MonoMethod itself rather than the
 /// method's code.
@@ -83,10 +83,10 @@ MonoString *marked_ldstr (const llvm::GlobalValue &value);
 /// renames what that one marks to the symbol the method's *code* is published
 /// under, and a key that named code would send the wrong word to whatever reads
 /// it.
-void mark_method_pointer (llvm::GlobalValue &value, MonoMethod *method);
+void set_method_pointer (llvm::GlobalValue &value, MonoMethod *method);
 
 /// Returns the method \p value holds, or null when it carries no such marker.
-MonoMethod *marked_method_pointer (const llvm::GlobalValue &value);
+MonoMethod *get_method_pointer (const llvm::GlobalValue &value);
 
 /// Renames every marked declaration in \p m to what \p name_of calls that
 /// method, leaving the module referring only to symbols the engine publishes.

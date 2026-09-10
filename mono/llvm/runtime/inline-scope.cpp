@@ -34,7 +34,7 @@ namespace mono {
 
 /// Whether a wrapper can run in the frame of the method that takes it in.
 ///
-/// Correctness only, like may_fold () around it. What a fold is worth is the
+/// Correctness only, like is_inlinable () around it. What a fold is worth is the
 /// cost model's question, and it is not priced the same as an ordinary callee:
 /// the frame work below arrives with the body and none of it is in the IL the
 /// model weighs.
@@ -50,7 +50,7 @@ namespace mono {
 /// So what this answers no for is the wrappers whose frame is the thing they
 /// exist to make.
 static bool
-wrapper_may_fold (MonoMethod *callee)
+is_inlinable_wrapper (MonoMethod *callee)
 {
 	if (callee->wrapper_type == MONO_WRAPPER_NONE)
 		return true;
@@ -61,7 +61,7 @@ wrapper_may_fold (MonoMethod *callee)
 	 * test above them reads the pinvoke flag on a signature and
 	 * mono/metadata/marshal.c is what sets that.
 	 */
-	if (publishes_interop_entry (callee))
+	if (is_exposed_to_native_code (callee))
 		return false;
 
 	switch (callee->wrapper_type) {
@@ -124,9 +124,9 @@ folding_off_for_seq_points ()
 }
 
 bool
-may_fold (MonoDomain *domain, MonoMethod *callee)
+is_inlinable (MonoDomain *domain, MonoMethod *callee)
 {
-	if (!wrapper_may_fold (callee))
+	if (!is_inlinable_wrapper (callee))
 		return false;
 
 	// A dynamic method is freed on its own. A copy of its body folded into a
@@ -135,7 +135,7 @@ may_fold (MonoDomain *domain, MonoMethod *callee)
 		return false;
 
 	// No IL of its own to translate.
-	if (implemented_outside_il (callee))
+	if (is_external_method (callee))
 		return false;
 
 	if ((callee->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0)
@@ -158,7 +158,7 @@ may_fold (MonoDomain *domain, MonoMethod *callee)
 	 * folding the IL of a method something is about to replace bakes in the body
 	 * the replacement is there to remove.
 	 */
-	if (registered_override_for (callee) != nullptr)
+	if (get_method_override (callee) != nullptr)
 		return false;
 
 	/*
@@ -205,7 +205,7 @@ is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_limit)
 }
 
 bool
-written_by_the_backend (MonoMethod *method)
+is_builtin (MonoMethod *method)
 {
 	return builtin_body_for (method) != nullptr;
 }

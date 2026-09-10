@@ -340,7 +340,7 @@ method_override_for (MonoDomain *domain, MonoMethod *method)
 	 * table rather than building the record keeps a caller that only wants to
 	 * name its callee from carving a thunk for every call site it reads.
 	 */
-	return registered_override_for (method);
+	return get_method_override (method);
 }
 
 void
@@ -425,7 +425,7 @@ domain_method_get (MonoDomain *domain, MonoMethod *method)
 	 * interpreter, which reads the table too.
 	 */
 	if (dm && method_overrides_registered () && (*dm)->claim_override_check ())
-		if (MonoMethod *replacement = registered_override_for (method))
+		if (MonoMethod *replacement = get_method_override (method))
 			mono_install_method_override (method, domain, replacement);
 
 	return dm;

@@ -29,7 +29,7 @@ namespace mono {
 bool
 bindable (MonoDomain *owner, MonoMethod *method)
 {
-	return mono_domain_get () == owner || implemented_outside_il (method);
+	return mono_domain_get () == owner || is_external_method (method);
 }
 
 Expected<void *>

@@ -184,7 +184,7 @@ public:
 
 	/// Takes the entry of every method that folded a copy of this one in back
 	/// to its lazy resolver. The next call to one of them compiles it again,
-	/// and may_fold () keeps the copy out that time.
+	/// and is_inlinable () keeps the copy out that time.
 	///
 	/// A thread already inside such a body stays there, since there is no
 	/// on-stack replacement here. So this decides what later calls enter rather

@@ -34,7 +34,7 @@ namespace {
 
 struct Shape {
 	/// Null when the body calls nothing.
-	MonoMethod *forwards_to = nullptr;
+	MonoMethod *call = nullptr;
 };
 
 /// Whether an opcode keeps its body out of the shape-test pre-pass. A body
@@ -124,8 +124,8 @@ is_array_shape_accessor (MonoMethod *target)
 
 	MonoMethodSignature *sig = mono_method_signature_internal (target);
 
-	return sig != nullptr && answers_array_shape (target, sig)
-	       && implemented_outside_il (target);
+	return sig != nullptr && is_array_shape_builtin (target, sig)
+	       && is_external_method (target);
 }
 
 bool
@@ -215,10 +215,10 @@ match_trivial_shape (MonoMethod *method, MonoMethodHeader *header)
 				continue;
 			}
 
-			if (shape.forwards_to != nullptr)
+			if (shape.call != nullptr)
 				return std::nullopt;
 
-			shape.forwards_to = target;
+			shape.call = target;
 		} else if (blocks_a_fold (op)
 		           // A C# compiler ends a value-returning method with
 		           // stloc.0, a branch to the next instruction, ldloc.0,
@@ -300,7 +300,7 @@ TrivialInlineAdvisor::worth_a_copy (MonoMethod *callee, unsigned sites, bool reb
 	if (instance_budget_ != 0 && sites > instances_left_)
 		return false;
 
-	return may_fold (domain_, callee);
+	return is_inlinable (domain_, callee);
 }
 
 bool
@@ -308,7 +308,7 @@ TrivialInlineAdvisor::fits_the_shape (MonoMethod *callee, MonoMethodHeader *head
 {
 	// A body the backend writes itself is never translated from its IL, so
 	// none of the checks below apply to it.
-	if (written_by_the_backend (callee))
+	if (is_builtin (callee))
 		return true;
 
 	return is_small_and_clause_free (header, il_limit_)
@@ -324,7 +324,7 @@ TrivialInlineAdvisor::forwards_into_a_cycle (MonoMethod *target) const
 		if (!seen.insert (target).second)
 			return true;
 
-		if (implemented_outside_il (target))
+		if (is_external_method (target))
 			return false;
 
 		ERROR_DECL (metadata_error);
@@ -347,7 +347,7 @@ TrivialInlineAdvisor::forwards_into_a_cycle (MonoMethod *target) const
 		if (!shape)
 			return false;
 
-		target = shape->forwards_to;
+		target = shape->call;
 	}
 
 	// A cycle longer than this walk is still caught at the site move:
@@ -440,7 +440,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			// Each of decl's sites gets its own copy once AlwaysInlinerPass
 			// folds it in, so the budgets below scale with this.
 			unsigned sites = sites_of[decl];
-			MonoMethod *callee = marked_method (*decl);
+			MonoMethod *callee = get_method (*decl);
 
 			if (callee == nullptr || unresolved.contains (callee))
 				continue;
@@ -516,7 +516,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 
 			// A shared body is entered with its context in a register,
 			// and a call to it is not -- the one shape these two
-			// disagree on. may_fold () refuses that callee, so a mismatch
+			// disagree on. is_inlinable () refuses that callee, so a mismatch
 			// here means the copy would run with the wrong arguments.
 			g_assert (copy->getFunctionType () == decl->getFunctionType ());
 

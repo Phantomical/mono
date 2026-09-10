@@ -263,7 +263,7 @@ allocation_class (const CallBase &site)
 	if (vtable == nullptr)
 		return nullptr;
 
-	MonoClass *klass = marked_class (*vtable);
+	MonoClass *klass = get_class (*vtable);
 
 	if (klass == nullptr
 	    || mono_class_is_marshalbyref (klass) || mono_class_is_com_object (klass))
@@ -401,7 +401,7 @@ initonly_static_field (const Value *v)
 	if (block == nullptr || offset.isNegative () || !offset.isSignedIntN (32))
 		return { nullptr, 0 };
 
-	MonoClass *klass = marked_statics_class (*block);
+	MonoClass *klass = get_statics_class (*block);
 
 	if (klass == nullptr)
 		return { nullptr, 0 };

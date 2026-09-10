@@ -573,7 +573,7 @@ MonoBackend::attach_interop (MonoDomainMethod &dm)
 {
 	MonoMethod *method = dm.method;
 
-	if (!publishes_interop_entry (method))
+	if (!is_exposed_to_native_code (method))
 		return llvm::Error::success ();
 
 	llvm::Expected<MonoBackend *> backend = get ();
@@ -924,7 +924,7 @@ shared_form (MonoMethod *method)
 	 * it refuses an open one as a containing type that is not fully
 	 * instantiated - see mono_jit_compile_method_with_opt ().
 	 */
-	if (implemented_outside_il (method))
+	if (is_external_method (method))
 		return nullptr;
 
 	/*
@@ -1936,7 +1936,7 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 llvm::Expected<void *>
 MonoBackend::published_entry (MonoDomainMethod &dm)
 {
-	if (!publishes_interop_entry (dm.method))
+	if (!is_exposed_to_native_code (dm.method))
 		return dm.thunk.code ();
 
 	if (!mono_method_is_unmanaged_callers_only (dm.method))

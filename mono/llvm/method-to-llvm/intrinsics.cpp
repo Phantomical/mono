@@ -49,7 +49,7 @@ struct BuiltinEmitters {
 	static BuiltinResult array_rank (MethodLLVMEmitter &emitter,
 	                                 llvm::IRBuilder<> &builder, const BuiltinCall &call)
 	{
-		if (!answers_array_shape (call.callee, call.sig))
+		if (!is_array_shape_builtin (call.callee, call.sig))
 			return std::nullopt;
 
 		return emitter.emit_array_rank (builder);
@@ -58,7 +58,7 @@ struct BuiltinEmitters {
 	static BuiltinResult array_length (MethodLLVMEmitter &emitter,
 	                                   llvm::IRBuilder<> &builder, const BuiltinCall &call)
 	{
-		if (!answers_array_shape (call.callee, call.sig))
+		if (!is_array_shape_builtin (call.callee, call.sig))
 			return std::nullopt;
 
 		return emitter.emit_array_total_length (builder);
@@ -68,7 +68,7 @@ struct BuiltinEmitters {
 	                                      llvm::IRBuilder<> &builder,
 	                                      const BuiltinCall &call)
 	{
-		if (!answers_array_shape (call.callee, call.sig))
+		if (!is_array_shape_builtin (call.callee, call.sig))
 			return std::nullopt;
 
 		return emitter.emit_array_dimension (builder, call.callee, false);
@@ -78,7 +78,7 @@ struct BuiltinEmitters {
 	                                        llvm::IRBuilder<> &builder,
 	                                        const BuiltinCall &call)
 	{
-		if (!answers_array_shape (call.callee, call.sig))
+		if (!is_array_shape_builtin (call.callee, call.sig))
 			return std::nullopt;
 
 		return emitter.emit_array_dimension (builder, call.callee, true);
