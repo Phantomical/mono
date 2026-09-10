@@ -56,10 +56,19 @@ constexpr uint64_t kRundownEndKeyword = 0x100;
 constexpr uint32_t kEventControlCodeEnableProvider = 1;
 constexpr uint32_t kEventControlCodeCaptureState = 2;
 
-// The tier bits a MethodLoadVerbose_V2 event carries. ClrEtwAll.man reserves
-// 0x80 to 0x200 for them and names no values, so these are the consumer's
-// numbering. codeversion.h's OptimizationTier is a different enum with
-// different values.
+// Maps jinfo's tier to CoreCLR's PrepareCodeConfig::JitOptimizationTier
+// (vm/method.hpp), which is what the MethodFlags tier field holds:
+//
+//   0  Unknown
+//   1  MinOptJitted      classic tier 0, which compiles at a fixed minimal
+//                        optimization mask
+//   3  QuickJitted       tier 1, tier 2 off
+//   4  OptimizedTier1    tier 2
+//   6  InstrumentedTier  tier 1, tier 2 on - every tier-1 body is instrumented
+//                        to gather the counts tier 2 compiles against
+//
+// PerfView renders 6 as QuickJittedInstrumented, which is TraceEvent's name for
+// the same value.
 uint32_t
 clr_tier (MonoJitInfo *jinfo)
 {
