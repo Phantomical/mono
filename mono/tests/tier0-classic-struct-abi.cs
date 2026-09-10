@@ -327,6 +327,33 @@ public class StructAbiFast {
 		StructAbiCheck.Truth (w + "MakeSNest", StructAbiClassic.MakeSNest (11).Ok (11));
 		StructAbiCheck.Truth (w + "MakeS32Behind", StructAbiClassic.MakeS32Behind (11, "label").a == "label");
 	}
+
+	// The only tier1-compiled caller into StructAbiInterp in this file, so the
+	// only one that crosses through interp-entry.cpp rather than call.cpp's
+	// ordinary compiled convention.
+	public static void DriveInterp ()
+	{
+		const string w = "tier1 -> interp ";
+
+		StructAbiCheck.Answer (w + "TakeS4", StructAbiInterp.TakeS4 (StructAbiCheck.Tag, StructAbiValues.A4, StructAbiCheck.Tail));
+		StructAbiCheck.Answer (w + "TakeS8i", StructAbiInterp.TakeS8i (StructAbiCheck.Tag, StructAbiValues.A8i, StructAbiCheck.Tail));
+		StructAbiCheck.Answer (w + "TakeS8f", StructAbiInterp.TakeS8f (StructAbiCheck.Tag, StructAbiValues.A8f, StructAbiCheck.Tail));
+		StructAbiCheck.Answer (w + "TakeS16", StructAbiInterp.TakeS16 (StructAbiCheck.Tag, StructAbiValues.A16, StructAbiCheck.Tail));
+		StructAbiCheck.Answer (w + "TakeS32", StructAbiInterp.TakeS32 (StructAbiCheck.Tag, StructAbiValues.A32, StructAbiCheck.Tail));
+		StructAbiCheck.Answer (w + "TakeSPad", StructAbiInterp.TakeSPad (StructAbiCheck.Tag, StructAbiValues.APad, StructAbiCheck.Tail));
+		StructAbiCheck.Answer (w + "TakeSNest", StructAbiInterp.TakeSNest (StructAbiCheck.Tag, StructAbiValues.ANest, StructAbiCheck.Tail));
+		StructAbiCheck.Answer (w + "TakeSEmpty", StructAbiInterp.TakeSEmpty (StructAbiCheck.Tag, StructAbiValues.AEmpty, StructAbiCheck.Tail));
+		StructAbiCheck.Answer (w + "TakeMix", StructAbiInterp.TakeMix (StructAbiCheck.Tag, StructAbiValues.A8i, StructAbiValues.A8f, StructAbiValues.A16, StructAbiValues.A32, StructAbiValues.APad, 2.5, "g", StructAbiCheck.Tail));
+
+		StructAbiCheck.Truth (w + "MakeS4", StructAbiInterp.MakeS4 (11).Ok (11));
+		StructAbiCheck.Truth (w + "MakeS8i", StructAbiInterp.MakeS8i (11).Ok (11));
+		StructAbiCheck.Truth (w + "MakeS8f", StructAbiInterp.MakeS8f (11).Ok (11));
+		StructAbiCheck.Truth (w + "MakeS16", StructAbiInterp.MakeS16 (11).Ok (11));
+		StructAbiCheck.Truth (w + "MakeS32", StructAbiInterp.MakeS32 (11).Ok (11));
+		StructAbiCheck.Truth (w + "MakeSPad", StructAbiInterp.MakeSPad (11).Ok (11));
+		StructAbiCheck.Truth (w + "MakeSNest", StructAbiInterp.MakeSNest (11).Ok (11));
+		StructAbiCheck.Truth (w + "MakeS32Behind", StructAbiInterp.MakeS32Behind (11, "label").a == "label");
+	}
 }
 
 public class StructAbiInterp {
@@ -602,7 +629,7 @@ public class Tier0ClassicStructAbiTest {
 		"TakeS4", "TakeS8i", "TakeS8f", "TakeS16", "TakeS32", "TakeSPad",
 		"TakeSNest", "TakeSEmpty", "TakeMix", "MakeS4", "MakeS8i", "MakeS8f",
 		"MakeS16", "MakeS32", "MakeSPad", "MakeSNest", "MakeS32Behind",
-		"DriveClassic",
+		"DriveClassic", "DriveInterp",
 	};
 
 	static bool promote (string name)
@@ -666,6 +693,7 @@ public class Tier0ClassicStructAbiTest {
 		enter_classic ("DriveDelegates");
 
 		StructAbiFast.DriveClassic ();
+		StructAbiFast.DriveInterp ();
 
 		if (StructAbiCheck.Failures != 0) {
 			Console.WriteLine ("FAIL: {0} boundaries disagreed",

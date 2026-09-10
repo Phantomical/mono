@@ -200,6 +200,21 @@ plan_interp_entry (Function *shape, MonoMethodSignature *sig)
 		unsigned i = p < hidden_at ? p : p - 1;
 		bool receiver = sig->hasthis && i == 0;
 		bool byref = !receiver && sig->params[i - sig->hasthis]->byref;
+
+#ifdef HOST_WIN32
+		/*
+		 * A struct too wide for a register travels behind a pointer this
+		 * shape declares directly (win64_indirect (), hidden-return.hpp), to
+		 * a private copy the caller already made. The interpreter wants that
+		 * pointer, the same as it wants a genuine byref's, not the slot
+		 * holding it.
+		 */
+		if (!receiver && !sig->params[i - sig->hasthis]->byref
+		    && MONO_TYPE_ISSTRUCT (sig->params[i - sig->hasthis])
+		    && type->getParamType (p)->isPointerTy ())
+			byref = true;
+#endif
+
 		Expected<ArgPlan> plan = place_parameter (type->getParamType (p), byref,
 		                                          assign, dl, layout.pieces);
 

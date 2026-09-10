@@ -71,6 +71,11 @@ public:
 		return reinterpret_cast<MonoMethodSignature *> (storage_.data ());
 	}
 
+	/// Marks parameter `at` as a value type, the way MONO_TYPE_ISSTRUCT reads
+	/// it. TYPEDBYREF is the one value-type tag that needs no MonoClass, which
+	/// this fixture has none of.
+	void mark_struct (unsigned at) { types_[at].type = MONO_TYPE_TYPEDBYREF; }
+
 private:
 	std::vector<uint8_t> storage_;
 	std::vector<MonoType> types_;
@@ -374,6 +379,31 @@ TEST (InterpEntry, AByrefParameterIsMarked)
 	EXPECT_TRUE (layout.args[0].byref);
 	EXPECT_FALSE (layout.args[1].byref);
 }
+
+#ifdef HOST_WIN32
+
+TEST (InterpEntry, WindowsIndirectStructWantsThePointerNotTheSlot)
+{
+	LLVMContext ctx;
+	Type *ptr = PointerType::get (ctx, 0);
+	Prototype shape (Type::getVoidTy (ctx), { ptr, ptr });
+	Signature sig (false, { false, false });
+
+	// Parameter 0 is a struct too wide for a register (win64_indirect ()),
+	// declared as a bare pointer to the caller's own private copy - the same
+	// shape signature.cpp gives one. Parameter 1 is an ordinary reference,
+	// pointer-typed for an unrelated reason, and is the negative control: it
+	// must not pick up the same treatment.
+	sig.mark_struct (0);
+
+	InterpEntryLayout layout = plan (shape, sig);
+
+	ASSERT_EQ (layout.args.size (), 2u);
+	EXPECT_TRUE (layout.args[0].byref);
+	EXPECT_FALSE (layout.args[1].byref);
+}
+
+#endif
 
 TEST (InterpEntry, ARegisterReturnIsScatteredAcrossBothFiles)
 {
