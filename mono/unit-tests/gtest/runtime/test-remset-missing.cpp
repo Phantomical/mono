@@ -34,6 +34,15 @@
 
 #include <gtest/gtest.h>
 
+#include <glib.h>
+
+#ifdef HOST_WIN32
+/* fdopen (), which the CRT declares here rather than in unistd.h. */
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
 #include <cstdio>
 #include <string>
 
@@ -42,6 +51,54 @@
 namespace {
 
 #define TESTPROG "remset-missing.exe"
+
+/// One capture of what the collector wrote to sgen_gc_debug_file.
+class DebugFileCapture {
+public:
+	DebugFileCapture ()
+	{
+		int fd = g_file_open_tmp ("sgen-remset-XXXXXX", &path_, nullptr);
+		if (fd < 0)
+			return;
+		file_ = fdopen (fd, "w+");
+	}
+
+	~DebugFileCapture ()
+	{
+		if (file_ != nullptr)
+			fclose (file_);
+		if (path_ != nullptr) {
+			g_unlink (path_);
+			g_free (path_);
+		}
+	}
+
+	FILE *file () const { return file_; }
+
+	/// What has been written so far, with the write position left at the end.
+	std::string text () const
+	{
+		if (file_ == nullptr)
+			return std::string ();
+
+		fflush (file_);
+
+		long end = ftell (file_);
+		if (end <= 0)
+			return std::string ();
+
+		std::string out ((size_t) end, '\0');
+		rewind (file_);
+		size_t got = fread (&out[0], 1, (size_t) end, file_);
+		out.resize (got);
+		fseek (file_, 0, SEEK_END);
+		return out;
+	}
+
+private:
+	FILE *file_ = nullptr;
+	char *path_ = nullptr;
+};
 
 TEST (RemsetMissing, PinnedTargetExcuseNeedsConfirming)
 {
@@ -101,19 +158,16 @@ TEST (RemsetMissing, PinnedTargetExcuseNeedsConfirming)
 	 * MONO_SGEN_STRICT_REMSET_CHECK confirms the miss, has to reach the
 	 * process's stderr, where check-remset-missing.sh reads it back.
 	 */
-	char *captured = nullptr;
-	size_t captured_size = 0;
-	FILE *capture = open_memstream (&captured, &captured_size);
+	DebugFileCapture capture;
+	ASSERT_NE (nullptr, capture.file ()) << "failed opening the capture file";
+
 	FILE *real_debug_file = sgen_gc_debug_file;
 
-	sgen_gc_debug_file = capture;
+	sgen_gc_debug_file = capture.file ();
 	mono_gc_collect (0);
-	fflush (capture);
 	sgen_gc_debug_file = real_debug_file;
 
-	std::string first_report (captured, captured_size);
-	fclose (capture);
-	free (captured);
+	std::string first_report = capture.text ();
 
 #ifdef SGEN_STRICT_REMSET_CHECK
 	EXPECT_EQ (std::string::npos, first_report.find ("not found in remsets"))
