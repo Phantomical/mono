@@ -3129,16 +3129,17 @@ mono_class_setup_parent (MonoClass *klass, MonoClass *parent)
 #endif
 
 		klass->delegate  = parent->delegate;
-		klass->is_unity_object = parent->is_unity_object;
+		klass->alloc_pinned = parent->alloc_pinned;
 
 		if (MONO_CLASS_IS_IMPORT (klass) || mono_class_is_com_object (parent))
 			mono_class_set_is_com_object (klass);
 
-		/* Matched by name only, not by image. Unity has shipped this
-		 * type from both UnityEngine.dll and UnityEngine.CoreModule.dll,
-		 * so an image check would miss one of them. */
+		/* UnityEngine.Object is matched by name only, not by image. Unity
+		 * has shipped this type from both UnityEngine.dll and
+		 * UnityEngine.CoreModule.dll, so an image check would miss one of
+		 * them. */
 		if (!strcmp (klass->name_space, "UnityEngine") && !strcmp (klass->name, "Object"))
-			klass->is_unity_object = 1;
+			klass->alloc_pinned = 1;
 
 		if (system_namespace) {
 #ifndef DISABLE_REMOTING

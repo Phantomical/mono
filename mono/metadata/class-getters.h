@@ -52,7 +52,7 @@ MONO_CLASS_GETTER(m_class_is_fields_inited, gboolean, , MonoClass, fields_inited
 MONO_CLASS_GETTER(m_class_has_failure, gboolean, , MonoClass, has_failure)
 MONO_CLASS_GETTER(m_class_has_weak_fields, gboolean, , MonoClass, has_weak_fields)
 MONO_CLASS_GETTER(m_class_has_dim_conflicts, gboolean, , MonoClass, has_dim_conflicts)
-MONO_CLASS_GETTER(m_class_is_unity_object, gboolean, , MonoClass, is_unity_object)
+MONO_CLASS_GETTER(m_class_alloc_pinned, gboolean, , MonoClass, alloc_pinned)
 MONO_CLASS_GETTER(m_class_get_parent, MonoClass *, , MonoClass, parent)
 MONO_CLASS_GETTER(m_class_get_nested_in, MonoClass *, ,  MonoClass, nested_in)
 MONO_CLASS_GETTER(m_class_get_image, MonoImage *, , MonoClass, image)

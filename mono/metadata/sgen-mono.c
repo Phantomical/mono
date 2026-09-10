@@ -941,7 +941,7 @@ mono_gc_clear_domain (MonoDomain * domain)
 MonoObject*
 mono_gc_alloc_obj (MonoVTable *vtable, size_t size)
 {
-	MonoObject *obj = G_UNLIKELY (unity_pinned_alloc_enabled && m_class_is_unity_object (vtable->klass))
+	MonoObject *obj = G_UNLIKELY (unity_pinned_alloc_enabled && m_class_alloc_pinned (vtable->klass))
 		? sgen_alloc_obj_pinned (vtable, size)
 		: sgen_alloc_obj (vtable, size);
 
@@ -1130,7 +1130,7 @@ mono_gc_get_managed_allocator (MonoClass *klass, gboolean for_box, gboolean know
 	 * decline, a pinned class would get one, and its ordinary allocations
 	 * would skip that check for good.
 	 */
-	if (unity_pinned_alloc_enabled && m_class_is_unity_object (klass))
+	if (unity_pinned_alloc_enabled && m_class_alloc_pinned (klass))
 		return NULL;
 	if (m_class_get_rank (klass))
 		return NULL;

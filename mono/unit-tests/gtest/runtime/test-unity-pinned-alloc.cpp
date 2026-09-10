@@ -3,7 +3,7 @@
  * subclass's allocation to the major heap's pinned space.
  *
  * A UnityEngine.Object-derived class is a positive control for that routing.
- * It fails if is_unity_object stops reaching mono_gc_alloc_obj () or
+ * It fails if alloc_pinned stops reaching mono_gc_alloc_obj () or
  * mono_gc_get_managed_allocator (), the two places that decide it.
  */
 
@@ -103,10 +103,10 @@ TEST_F (UnityPinnedAlloc, ClassBitFollowsHierarchy)
 	ASSERT_NE (nullptr, control);
 	ASSERT_NE (nullptr, through_generic);
 
-	EXPECT_TRUE (m_class_is_unity_object (derived));
-	EXPECT_TRUE (m_class_is_unity_object (grandchild));
-	EXPECT_FALSE (m_class_is_unity_object (control));
-	EXPECT_TRUE (m_class_is_unity_object (through_generic));
+	EXPECT_TRUE (m_class_alloc_pinned (derived));
+	EXPECT_TRUE (m_class_alloc_pinned (grandchild));
+	EXPECT_FALSE (m_class_alloc_pinned (control));
+	EXPECT_TRUE (m_class_alloc_pinned (through_generic));
 }
 
 /*
@@ -119,7 +119,7 @@ TEST_F (UnityPinnedAlloc, GenericInstanceClassBitFollowsHierarchy)
 {
 	MonoObject *instance = invoke_no_args ("UnityPinnedAllocHost", "MakeGenericInstance");
 	ASSERT_NE (nullptr, instance);
-	EXPECT_TRUE (m_class_is_unity_object (mono_object_class (instance)));
+	EXPECT_TRUE (m_class_alloc_pinned (mono_object_class (instance)));
 }
 
 TEST_F (UnityPinnedAlloc, NativeAllocationIsPinned)
@@ -202,7 +202,7 @@ TEST_F (UnityPinnedAlloc, RoutingRespectsKillSwitch)
 	ASSERT_NE (nullptr, klass);
 
 	// The bit stays set either way. Only the routing below is gated.
-	EXPECT_TRUE (m_class_is_unity_object (klass));
+	EXPECT_TRUE (m_class_alloc_pinned (klass));
 
 	ERROR_DECL (error);
 	MonoObject *derived = mono_object_new_checked (domain, klass, error);
