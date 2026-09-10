@@ -3294,7 +3294,7 @@ calc_il_offset (MonoDomain *domain, MonoJitInfo *ji, MonoMethod *method, int nat
 	 * completely unrelated offset.
 	 */
 	if (ji && ji->llvm_side_body)
-		return ji->no_il_offsets ? -1 : mono_jit_info_lookup_il_offset (ji, native_offset);
+		return mono_jit_info_lookup_il_offset (ji, native_offset);
 
 	if (is_top_frame) {
 		SeqPoint sp;

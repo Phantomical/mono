@@ -2853,7 +2853,6 @@ create_jit_info (MonoCompile *cfg, MonoMethod *method_to_compile)
 
 	if (COMPILE_LLVM (cfg)) {
 		jinfo->from_llvm = TRUE;
-		jinfo->no_il_offsets = cfg->n_il_offsets == 0;
 		jinfo->llvm_inline_frames = cfg->llvm_inline_frames;
 		jinfo->n_llvm_inline_frames = cfg->n_llvm_inline_frames;
 	}

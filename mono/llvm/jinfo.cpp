@@ -790,14 +790,6 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 
 	jinfo->llvm_side_body = header == nullptr;
 	jinfo->llvm_abi_thunk = kind == CodeKind::AbiThunk;
-	/*
-	 * Reading the classic JIT's mapping instead is not an option: it is keyed by
-	 * MonoMethod, not by body, so it cannot tell this body's offsets from
-	 * another body's. This one is recovered from this body's own line table, so
-	 * it says "unknown" only when there was nothing to recover - a method
-	 * compiled without debug info, e.g. an interop thunk.
-	 */
-	jinfo->no_il_offsets = n_seq_points == 0;
 
 	if (n_seq_points > 0) {
 		MonoILOffsetEntry *map =

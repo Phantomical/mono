@@ -290,19 +290,15 @@ mono_get_seq_point_for_native_offset (MonoDomain *domain, MonoMethod *method, gi
  */
 
 /*
- * Places a frame's native offset in the IL. Returns -1 when the body has no
- * IL-offset map.
+ * Places a frame's native offset in the IL. Returns -1 when nothing this body
+ * carries places it.
  */
 int
 mono_jinfo_get_il_offset (MonoDomain *domain, MonoJitInfo *ji, guint32 native_offset)
 {
-	if (ji->from_llvm)
-		return ji->no_il_offsets ? -1 : mono_jit_info_lookup_il_offset (ji, native_offset);
-
 	if (ji->is_interp)
 		return mini_get_interp_callbacks ()->il_offset_from_native_offset (domain, jinfo_get_method (ji), native_offset);
 
-	// A classic tier-0 body, which carries the same per-body map the LLVM tiers do.
 	if (ji->n_il_offsets > 0)
 		return mono_jit_info_lookup_il_offset (ji, native_offset);
 
@@ -1334,9 +1330,6 @@ mono_jinfo_frame_count (MonoJitInfo *ji, guint32 native_offset)
 {
 	MonoLLVMInlineFrame *inlined;
 
-	if (!ji->from_llvm || ji->no_il_offsets)
-		return 1;
-
 	return 1 + (int) mono_jit_info_llvm_inline_frames (ji, native_offset, &inlined);
 }
 
@@ -1357,9 +1350,6 @@ mono_jinfo_inline_frame (MonoJitInfo *ji, guint32 native_offset, int index, Mono
 {
 	MonoLLVMInlineFrame *inlined;
 	guint32 n_inlined;
-
-	if (!ji->from_llvm || ji->no_il_offsets)
-		return FALSE;
 
 	n_inlined = mono_jit_info_llvm_inline_frames (ji, native_offset, &inlined);
 	if (index < 0 || (guint32) index >= n_inlined)
@@ -1755,18 +1745,13 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 		if (frame.type == FRAME_TYPE_TRAMPOLINE)
 			goto next;
 
-		/* See the ji->no_il_offsets comment in ves_icall_get_trace () - a body the
-		 * per-method mappings don't describe has no IL offset to report. */
-		if ((unwind_options & MONO_UNWIND_LOOKUP_IL_OFFSET) && frame.ji && !frame.ji->no_il_offsets) {
+		if ((unwind_options & MONO_UNWIND_LOOKUP_IL_OFFSET) && frame.ji) {
 			MonoDebugSourceLocation *source = NULL;
 
-			if (frame.ji->from_llvm) {
+			if (frame.ji->n_il_offsets > 0) {
 				/*
-				 * Neither mapping below is safe for a tier-1 frame - both are
-				 * keyed by MonoMethod and would describe a different body's
-				 * code layout (see the no_il_offsets comment in
-				 * create_jit_info ()). Its own per-body map has no file/line,
-				 * only an IL offset.
+				 * This body's own map, which neither mapping below can stand in
+				 * for - see MonoILOffsetEntry.
 				 */
 				il_offset = mono_jit_info_lookup_il_offset (frame.ji, frame.native_offset);
 			} else if (frame.type == FRAME_TYPE_INTERP) {
@@ -2387,8 +2372,7 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 			actual_method = jmethod;
 		} else {
 			actual_method = get_method_from_stack_frame (ji, get_generic_info_from_stack_frame (ji, &ctx));
-			if (ji->from_llvm && !ji->no_il_offsets)
-				il_offset = mono_jit_info_lookup_il_offset (ji, frame.native_offset);
+			il_offset = mono_jit_info_lookup_il_offset (ji, frame.native_offset);
 		}
 	}
 
