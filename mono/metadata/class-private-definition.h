@@ -84,8 +84,8 @@ struct _MonoClass {
 	guint has_failure : 1; /* See mono_class_get_exception_data () for a MonoErrorBoxed with the details */
 	guint has_weak_fields : 1; /* class has weak reference fields */
 	guint has_dim_conflicts : 1; /* Class has conflicting default interface methods */
-	/* Requests that instances allocate in the major heap's pinned space
-	 * instead of the nursery. Something outside the runtime pins them all
+	/* Instances allocate in the major heap's pinned space instead of
+	 * the nursery. Something outside the runtime pins them all
 	 * for their whole lifetime anyway. Inherited from the parent and set
 	 * at a root class by a namespace-and-name match, both inside
 	 * mono_class_setup_parent (). A new root goes there too. */

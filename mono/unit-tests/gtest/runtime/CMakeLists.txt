@@ -88,13 +88,6 @@ mono_unit_test_cases(test-mono-runtime test-arch-amd64    "ArchAmd64.*")
 mono_unit_test_cases(test-mono-runtime test-unity-pinned-alloc
                      "UnityPinnedAlloc.*")
 
-# mono_gc_base_init () reads MONO_DISABLE_UNITY_PINNED_ALLOC once per
-# process, so RoutingRespectsKillSwitch needs a registration of its own to
-# run under it. The run above, with the variable unset, is the other arm.
-mono_unit_test_cases(test-mono-runtime test-unity-pinned-alloc-disabled
-                     "UnityPinnedAlloc.RoutingRespectsKillSwitch"
-                     ENV "MONO_DISABLE_UNITY_PINNED_ALLOC=1")
-
 # The cases above that read a tier-0 caller's behaviour, again with the
 # interpreter as tier 0. The default arms run the classic compiler there, and
 # the two engines answer some of these differently: an interpreted caller

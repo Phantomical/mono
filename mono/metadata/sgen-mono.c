@@ -58,8 +58,6 @@ static guint64 los_array_remsets;
 static gboolean conservative_stack_mark = FALSE;
 /* If set, check that there are no references to the domain left at domain unload */
 gboolean sgen_mono_xdomain_checks = FALSE;
-/* mono_gc_base_init () clears this if MONO_DISABLE_UNITY_PINNED_ALLOC is set. */
-static gboolean unity_pinned_alloc_enabled = TRUE;
 
 /* Functions supplied by the runtime to be called by the GC */
 static MonoGCCallbacks gc_callbacks;
@@ -941,7 +939,7 @@ mono_gc_clear_domain (MonoDomain * domain)
 MonoObject*
 mono_gc_alloc_obj (MonoVTable *vtable, size_t size)
 {
-	MonoObject *obj = G_UNLIKELY (unity_pinned_alloc_enabled && m_class_alloc_pinned (vtable->klass))
+	MonoObject *obj = G_UNLIKELY (m_class_alloc_pinned (vtable->klass))
 		? sgen_alloc_obj_pinned (vtable, size)
 		: sgen_alloc_obj (vtable, size);
 
@@ -1130,7 +1128,7 @@ mono_gc_get_managed_allocator (MonoClass *klass, gboolean for_box, gboolean know
 	 * decline, a pinned class would get one, and its ordinary allocations
 	 * would skip that check for good.
 	 */
-	if (unity_pinned_alloc_enabled && m_class_alloc_pinned (klass))
+	if (m_class_alloc_pinned (klass))
 		return NULL;
 	if (m_class_get_rank (klass))
 		return NULL;
@@ -3275,9 +3273,6 @@ mono_gc_base_init (void)
 {
 	if (gc_inited)
 		return;
-
-	if (g_hasenv ("MONO_DISABLE_UNITY_PINNED_ALLOC"))
-		unity_pinned_alloc_enabled = FALSE;
 
 	mono_counters_init ();
 

@@ -190,29 +190,4 @@ TEST_F (UnityPinnedAlloc, LlvmTierAllocationIsPinned)
 	EXPECT_TRUE (sgen_ptr_in_nursery ((char *) control));
 }
 
-/*
- * Two ctest registrations run this case, one with
- * MONO_DISABLE_UNITY_PINNED_ALLOC unset and one with it set
- * (CMakeLists.txt). It reads the variable back to know which arm it is in.
- */
-TEST_F (UnityPinnedAlloc, RoutingRespectsKillSwitch)
-{
-	MonoDomain *domain = mono_domain_get ();
-	MonoClass *klass = class_named ("", "Derived");
-	ASSERT_NE (nullptr, klass);
-
-	// The bit stays set either way. Only the routing below is gated.
-	EXPECT_TRUE (m_class_alloc_pinned (klass));
-
-	ERROR_DECL (error);
-	MonoObject *derived = mono_object_new_checked (domain, klass, error);
-	mono_error_assert_ok (error);
-	ASSERT_NE (nullptr, derived);
-
-	if (g_hasenv ("MONO_DISABLE_UNITY_PINNED_ALLOC"))
-		EXPECT_TRUE (sgen_ptr_in_nursery ((char *) derived));
-	else
-		EXPECT_FALSE (sgen_ptr_in_nursery ((char *) derived));
-}
-
 } // namespace
