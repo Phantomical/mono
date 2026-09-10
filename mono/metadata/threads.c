@@ -4016,19 +4016,22 @@ mono_thread_manage_internal (void)
 			 * A signal that catches a thread outside managed code arms an
 			 * interrupt token. Only the thread's next interruptible wait
 			 * consumes it, so a thread that keeps running compiled code
-			 * never signals this wait. Bound it, so such a thread cannot
-			 * keep shutdown waiting forever.
+			 * never signals this wait.
+			 *
+			 * wait_for_tids () leaves such a thread in the table, so the
+			 * next turn of this loop waits on it again. Leave the loop
+			 * instead.
 			 */
-			if (wait_for_tids (wait, MONO_THREADS_SHUTDOWN_ABORT_TIMEOUT_MS, FALSE) == MONO_THREAD_INFO_WAIT_RET_TIMEOUT)
+			if (wait_for_tids (wait, MONO_THREADS_SHUTDOWN_ABORT_TIMEOUT_MS, FALSE) == MONO_THREAD_INFO_WAIT_RET_TIMEOUT) {
 				gave_up_on_a_thread = TRUE;
+				break;
+			}
 		}
 	} while (wait->num > 0);
 
-	/*
-	 * mono_runtime_cleanup () requires that no thread still runs managed
-	 * code, and the timeout above can leave one doing exactly that. Exit
-	 * here instead of returning into it.
-	 */
+	// mono_runtime_cleanup () requires that no thread still runs managed code,
+	// and the timeout above can leave one doing exactly that. Exit here instead
+	// of returning into it.
 	if (gave_up_on_a_thread)
 		exit (mono_environment_exitcode_get ());
 #endif
