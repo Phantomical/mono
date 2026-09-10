@@ -129,6 +129,12 @@ MonoDomainMethod::take_thunk ()
 	return thunk;
 }
 
+// MonoJitInfo::tier is 4 bits wide. tier2 is the widest tier a body carries:
+// MonoTier::detoured is an entry state, not a body's tier, and attach_body ()
+// below never writes it.
+static_assert (static_cast<unsigned> (MonoTier::tier2) <= 0xF,
+              "MonoTier no longer fits MonoJitInfo::tier");
+
 void
 MonoDomainMethod::attach_body (MonoTier tier, void *code, MonoJitInfo *jinfo)
 {
@@ -140,6 +146,9 @@ MonoDomainMethod::attach_body (MonoTier tier, void *code, MonoJitInfo *jinfo)
 		else
 			bodies_.pop_back ();
 	}
+
+	if (jinfo != nullptr)
+		jinfo->tier = static_cast<unsigned> (tier);
 
 	bodies_.push_back (MonoMethodBody { tier, BodyState::current, code, jinfo });
 }

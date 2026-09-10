@@ -175,6 +175,12 @@ mono_llvm_jit_interp_tier0_enabled (void)
 	return mono::interp_tier0_enabled ();
 }
 
+mono_bool
+mono_llvm_jit_tier2_enabled (void)
+{
+	return mono::tier2_enabled ();
+}
+
 int32_t
 mono_llvm_jit_tier0_budget (MonoMethod *method)
 {

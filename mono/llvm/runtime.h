@@ -125,6 +125,10 @@ mono_bool mono_llvm_jit_tier0_enabled (void);
 /// compiler takes every tier-0 method.
 mono_bool mono_llvm_jit_interp_tier0_enabled (void);
 
+/// Whether tier 2 exists at all, which is what decides whether a tier-1 body
+/// carries profiling instrumentation. On by default.
+mono_bool mono_llvm_jit_tier2_enabled (void);
+
 /// What a method's tier-0 counter starts at, or zero if it never promotes.
 ///
 /// A call takes mono_llvm_jit_tier0_entry_weight () off that count and one turn

@@ -381,6 +381,14 @@ struct _MonoJitInfo {
 	guint32    llvm_abi_thunk : 1;
 
 	/*
+	 * The tier that compiled this body, as a mono::MonoTier. Zero is what
+	 * code no tier owns keeps: a trampoline, an entry thunk, a filter body,
+	 * the deferred-error stub. Never MonoTier::detoured, which names an
+	 * entry state rather than a body's tier and does not fit these 4 bits.
+	 */
+	guint32    tier : 4;
+
+	/*
 	 * This body's own native_offset -> il_offset map, present (n_llvm_seq_points > 0)
 	 * only for a tier-1 body whose translation actually recovered one - see
 	 * MonoLLVMSeqPoint above. Allocated out of the same mem_manager as this MonoJitInfo,
