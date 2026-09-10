@@ -30,6 +30,7 @@
 #include <mono/llvm/runtime.h>
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/domain-internals.h>
+#include <mono/metadata/loader.h>
 
 // The two payload computations below take no ETW session and no HOST_WIN32,
 // which is what lets mono/unit-tests/gtest/runtime/test-etw-profiler.cpp call
@@ -126,6 +127,12 @@ etw_body_il_map (MonoJitInfo *jinfo, uint32_t *il_offsets, uint32_t *native_offs
 	}
 
 	return count;
+}
+
+char *
+etw_method_namespace (MonoMethod *method)
+{
+	return mono_type_get_full_name (mono_method_get_class (method));
 }
 
 EtwRundownPass
@@ -328,43 +335,43 @@ method_load (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo, EventKi
 
 	MonoClass *klass = mono_method_get_class (method);
 	char *signature = mono_signature_get_desc (mono_method_signature_internal (method), TRUE);
-	char *full_class_name = g_strdup_printf ("%s.%s", m_class_get_name (klass), mono_method_get_name (method));
-	const char *name_space = m_class_get_name_space (klass);
+	char *class_full_name = mono::etw_method_namespace (method);
+	const char *method_name = mono_method_get_name (method);
 	gpointer code_start = mono_jit_info_get_code_start (jinfo);
 	int code_size = mono_jit_info_get_code_size (jinfo);
 	MonoImage *image = mono_class_get_image (klass);
 	uint32_t method_token = mono_unity_method_get_token (method);
 	uint32_t method_flags = mono::etw_method_flags (method, jinfo);
 
-	gunichar2 *namespace_utf16 = u8to16 (name_space);
-	gunichar2 *full_class_name_utf16 = u8to16 (full_class_name);
+	gunichar2 *namespace_utf16 = u8to16 (class_full_name);
+	gunichar2 *method_name_utf16 = u8to16 (method_name);
 	gunichar2 *signature_utf16 = u8to16 (signature);
 
 	// An empty map is noise no consumer can use.
 	switch (kind) {
 	case EventKind::dc_start:
-		EventWriteMethodDCStartVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, method_flags, namespace_utf16, full_class_name_utf16, signature_utf16, 0, 0);
+		EventWriteMethodDCStartVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, method_flags, namespace_utf16, method_name_utf16, signature_utf16, 0, 0);
 		if (compressed_num_lines > 0)
 			EventWriteMethodDCStartILToNativeMap ((uint64_t)method, 0, 0, compressed_num_lines, il_offsets, native_offsets, 0);
 		break;
 	case EventKind::dc_end:
-		EventWriteMethodDCEndVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, method_flags, namespace_utf16, full_class_name_utf16, signature_utf16, 0, 0);
+		EventWriteMethodDCEndVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, method_flags, namespace_utf16, method_name_utf16, signature_utf16, 0, 0);
 		if (compressed_num_lines > 0)
 			EventWriteMethodDCEndILToNativeMap ((uint64_t)method, 0, 0, compressed_num_lines, il_offsets, native_offsets, 0);
 		break;
 	default:
 		// Always EventKind::load: method_load () is never called with ::unload.
-		EventWriteMethodLoadVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, method_flags, namespace_utf16, full_class_name_utf16, signature_utf16, 0, 0);
+		EventWriteMethodLoadVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, method_flags, namespace_utf16, method_name_utf16, signature_utf16, 0, 0);
 		if (compressed_num_lines > 0)
 			EventWriteMethodILToNativeMap ((uint64_t)method, 0, 0, compressed_num_lines, il_offsets, native_offsets, 0);
 		break;
 	}
 
 	g_free (signature_utf16);
-	g_free (full_class_name_utf16);
+	g_free (method_name_utf16);
 	g_free (namespace_utf16);
 	g_free (sourceFilePath);
-	g_free (full_class_name);
+	g_free (class_full_name);
 }
 
 struct JITEnumerationData {

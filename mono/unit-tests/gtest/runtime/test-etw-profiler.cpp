@@ -19,6 +19,9 @@
 #include <mono/metadata/appdomain.h>
 #include <mono/metadata/assembly.h>
 #include <mono/metadata/assembly-internals.h>
+#include <mono/metadata/debug-helpers.h>
+#include <mono/metadata/loader.h>
+#include <mono/metadata/marshal.h>
 #include <mono/metadata/object.h>
 #include <mono/utils/mono-error-internals.h>
 
@@ -35,7 +38,7 @@ namespace {
 
 MonoImage *g_image;
 
-class EtwProfiler : public ::testing::Test {
+class EtwProfilerBase : public ::testing::Test {
 public:
 	static void SetUpTestSuite ()
 	{
@@ -57,35 +60,30 @@ public:
 		g_image = mono_assembly_get_image_internal (assembly);
 	}
 
-	void SetUp () override
-	{
-		MONO_SKIP_WITHOUT_CLASS_LIBRARY ();
-
-		// The tier bits test needs a classic tier-0 body, which carries a jit
-		// info. It also promotes through tier 1 and tier 2 for real.
-		if (mono_llvm_jit_interp_tier0_enabled ())
-			GTEST_SKIP () << "the interpreter is tier 0 here, so this checks nothing";
-		if (!mono_llvm_jit_tier0_enabled ())
-			GTEST_SKIP () << "tier 0 is off in this configuration";
-		if (!mono_llvm_jit_tier2_enabled ())
-			GTEST_SKIP () << "tier 2 is off in this configuration";
-	}
-
 protected:
-	static MonoMethod *method_named (const char *name, int argc)
+	static MonoClass *class_named (const char *name)
 	{
 		ERROR_DECL (error);
-		MonoClass *klass = mono_class_from_name_checked (g_image, "", "Etw", error);
+		MonoClass *klass = mono_class_from_name_checked (g_image, "", name, error);
 
 		mono_error_assert_ok (error);
-		if (klass == nullptr)
-			return nullptr;
+		return klass;
+	}
 
+	static MonoMethod *method_of (MonoClass *klass, const char *name, int argc)
+	{
+		ERROR_DECL (error);
 		MonoMethod *found =
 			mono_class_get_method_from_name_checked (klass, name, argc, 0, error);
 
 		mono_error_assert_ok (error);
 		return found;
+	}
+
+	static MonoMethod *method_named (const char *name, int argc)
+	{
+		MonoClass *klass = class_named ("Etw");
+		return klass != nullptr ? method_of (klass, name, argc) : nullptr;
 	}
 
 	/* The one instantiation over string of a one-type-parameter method - see
@@ -104,6 +102,73 @@ protected:
 
 		mono_error_assert_ok (error);
 		return inflated;
+	}
+
+	/* A method of one reference instantiation of a generic class - mirrors
+	 * test-detour.cpp's class_method_over (). */
+	static MonoMethod *class_method_over (const char *type, const char *name, int argc,
+	                                      MonoClass *argument)
+	{
+		ERROR_DECL (error);
+		MonoClass *definition = class_named (type);
+
+		if (definition == nullptr)
+			return nullptr;
+
+		MonoType *arguments[1] = { m_class_get_byval_arg (argument) };
+		MonoGenericContext context;
+
+		memset (&context, 0, sizeof (context));
+		context.class_inst = mono_metadata_get_generic_inst (1, arguments);
+
+		MonoClass *inflated =
+			mono_class_inflate_generic_class_checked (definition, &context, error);
+
+		mono_error_assert_ok (error);
+		if (inflated == nullptr)
+			return nullptr;
+
+		return method_of (inflated, name, argc);
+	}
+
+	static MonoClass *nested_class_named (MonoClass *parent, const char *name)
+	{
+		void *iter = nullptr;
+		MonoClass *nested;
+
+		while ((nested = mono_class_get_nested_types (parent, &iter)) != nullptr) {
+			if (strcmp (m_class_get_name (nested), name) == 0)
+				return nested;
+		}
+		return nullptr;
+	}
+};
+
+class EtwProfiler : public EtwProfilerBase {
+public:
+	void SetUp () override
+	{
+		MONO_SKIP_WITHOUT_CLASS_LIBRARY ();
+
+		// The tier bits test needs a classic tier-0 body, which carries a jit
+		// info. It also promotes through tier 1 and tier 2 for real.
+		if (mono_llvm_jit_interp_tier0_enabled ())
+			GTEST_SKIP () << "the interpreter is tier 0 here, so this checks nothing";
+		if (!mono_llvm_jit_tier0_enabled ())
+			GTEST_SKIP () << "tier 0 is off in this configuration";
+		if (!mono_llvm_jit_tier2_enabled ())
+			GTEST_SKIP () << "tier 2 is off in this configuration";
+	}
+};
+
+/* The naming tests need only the loaded image and a method's metadata, so
+ * they run wherever the class libraries do - none of EtwProfiler's tier
+ * skips apply. */
+class EtwProfilerNaming : public EtwProfilerBase {
+public:
+	void SetUp () override
+	{
+		MONO_SKIP_WITHOUT_CLASS_LIBRARY ();
 	}
 };
 
@@ -172,6 +237,123 @@ TEST_F (EtwProfiler, GenericFlagSetOnlyForInflatedMethod)
 		<< "an instantiation is inflated";
 	EXPECT_FALSE (mono::etw_method_flags (definition, &jinfo) & 0x2)
 		<< "the generic method definition itself is not inflated";
+}
+
+/*
+ * A method on an ordinary top-level class: etw_method_namespace () carries
+ * the class alone, and the method's own bare name is the other half
+ * TraceLog.cs concatenates.
+ */
+TEST_F (EtwProfilerNaming, OrdinaryMethod)
+{
+	MonoMethod *method = method_named ("Probe", 1);
+	ASSERT_NE (nullptr, method);
+
+	char *ns = mono::etw_method_namespace (method);
+	EXPECT_STREQ ("Etw", ns);
+	g_free (ns);
+
+	EXPECT_STREQ ("Probe", mono_method_get_name (method));
+}
+
+/*
+ * A method on a nested class: the chain back to the top-level class has to
+ * survive, the way it does in mono_type_get_full_name () for any other
+ * reflection-shaped name.
+ */
+TEST_F (EtwProfilerNaming, NestedClassMethod)
+{
+	MonoClass *outer = class_named ("Etw");
+	ASSERT_NE (nullptr, outer);
+
+	MonoClass *nested = nested_class_named (outer, "Nested");
+	ASSERT_NE (nullptr, nested);
+
+	MonoMethod *method = method_of (nested, "Method", 1);
+	ASSERT_NE (nullptr, method);
+
+	char *ns = mono::etw_method_namespace (method);
+	EXPECT_STREQ ("Etw+Nested", ns);
+	g_free (ns);
+
+	EXPECT_STREQ ("Method", mono_method_get_name (method));
+}
+
+/*
+ * A method on a reference instantiation of a generic class: the type
+ * argument has to show up in etw_method_namespace ()'s result.
+ */
+TEST_F (EtwProfilerNaming, GenericClassInstantiationMethod)
+{
+	MonoMethod *method =
+		class_method_over ("Boxed`1", "Method", 1, mono_get_string_class ());
+	ASSERT_NE (nullptr, method);
+
+	char *ns = mono::etw_method_namespace (method);
+	EXPECT_STREQ ("Boxed`1[System.String]", ns);
+	g_free (ns);
+
+	EXPECT_STREQ ("Method", mono_method_get_name (method));
+}
+
+/*
+ * A generic method: etw_method_namespace () and mono_method_get_name () read
+ * off the declaring class and the bare method name. Neither changes with the
+ * method's own instantiation - CoreCLR's MethodName field carries no method
+ * type argument either, since MethodDesc::GetMethodInfoNoSig just calls
+ * GetName (). The signature is what still tells an instantiation apart from
+ * its definition.
+ */
+TEST_F (EtwProfilerNaming, GenericMethodNameIsTheSameAcrossInstantiations)
+{
+	MonoMethod *definition = method_named ("Generic", 1);
+	ASSERT_NE (nullptr, definition);
+
+	MonoMethod *inflated = instantiated_over_string (definition);
+	ASSERT_NE (nullptr, inflated);
+
+	char *definition_ns = mono::etw_method_namespace (definition);
+	char *inflated_ns = mono::etw_method_namespace (inflated);
+	EXPECT_STREQ ("Etw", definition_ns);
+	EXPECT_STREQ (definition_ns, inflated_ns);
+	g_free (definition_ns);
+	g_free (inflated_ns);
+
+	EXPECT_STREQ ("Generic", mono_method_get_name (definition));
+	EXPECT_STREQ ("Generic", mono_method_get_name (inflated));
+
+	char *definition_sig =
+		mono_signature_get_desc (mono_method_signature_internal (definition), TRUE);
+	char *inflated_sig =
+		mono_signature_get_desc (mono_method_signature_internal (inflated), TRUE);
+	EXPECT_STRNE (definition_sig, inflated_sig)
+		<< "the signature is the only field that still tells the two apart";
+	g_free (definition_sig);
+	g_free (inflated_sig);
+}
+
+/*
+ * A wrapper: mono_marshal_get_synchronized_wrapper () builds one over any
+ * method, without needing [MethodImpl (Synchronized)] on it. It keeps the
+ * target's own klass and name (mono_mb_new (), marshal.c), so naming a
+ * wrapper works the same as naming the method it wraps.
+ */
+TEST_F (EtwProfilerNaming, WrapperKeepsTheTargetsName)
+{
+	MonoMethod *target = method_named ("Probe", 1);
+	ASSERT_NE (nullptr, target);
+
+	MonoMethod *wrapper = mono_marshal_get_synchronized_wrapper (target);
+	ASSERT_NE (nullptr, wrapper);
+	ASSERT_NE (MONO_WRAPPER_NONE, wrapper->wrapper_type);
+
+	char *target_ns = mono::etw_method_namespace (target);
+	char *wrapper_ns = mono::etw_method_namespace (wrapper);
+	EXPECT_STREQ (target_ns, wrapper_ns);
+	g_free (target_ns);
+	g_free (wrapper_ns);
+
+	EXPECT_STREQ (mono_method_get_name (target), mono_method_get_name (wrapper));
 }
 
 /*

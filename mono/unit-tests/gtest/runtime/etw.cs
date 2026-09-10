@@ -33,8 +33,29 @@ public class Etw
 		return x;
 	}
 
+	/* A method whose declaring class is itself nested. */
+	public class Nested
+	{
+		[MethodImpl (MethodImplOptions.NoInlining)]
+		public static int Method (int x)
+		{
+			return x;
+		}
+	}
+
 	public static int Main ()
 	{
 		return 0;
+	}
+}
+
+/* A method on a reference instantiation of a generic class - test-detour.cs's
+ * Shared<T> is the same shape. */
+public class Boxed<T>
+{
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static T Method (T x)
+	{
+		return x;
 	}
 }

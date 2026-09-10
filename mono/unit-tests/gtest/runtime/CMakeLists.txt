@@ -92,7 +92,7 @@ mono_unit_test_cases(test-mono-runtime test-type-init-recursion
                      "TypeInitRecursion.*")
 mono_unit_test_cases(test-mono-runtime test-tier          "MethodTier.*")
 mono_unit_test_cases(test-mono-runtime test-etw-profiler
-                     "EtwProfiler.*:EtwProfilerPure.*")
+                     "EtwProfiler.*:EtwProfilerNaming.*:EtwProfilerPure.*")
 
 # The cases above that read a tier-0 caller's behaviour, again with the
 # interpreter as tier 0. The default arms run the classic compiler there, and
