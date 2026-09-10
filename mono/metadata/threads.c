@@ -3775,6 +3775,14 @@ struct wait_data
 
 #define MONO_THREADS_SHUTDOWN_ABORT_TIMEOUT_MS 5000
 
+/*
+ * Waits that have to time out in a row, none of them lowering the number of
+ * threads left, before shutdown gives up on those threads. A shutdown that is
+ * only slow can outlast a fixed budget on a loaded machine. What tells it from
+ * a thread nothing can reach is that its count keeps falling.
+ */
+#define MONO_THREADS_SHUTDOWN_ABORT_STALLED_WAITS 3
+
 static MonoThreadInfoWaitRet
 wait_for_tids (struct wait_data *wait, guint32 timeout, gboolean check_state_change)
 {
@@ -3887,16 +3895,25 @@ abort_threads (gpointer key, gpointer value, gpointer user)
 	if ((thread->flags & MONO_THREAD_FLAG_DONT_MANAGE))
 		return;
 
+	MonoThreadHandle *handle = mono_threads_open_thread_handle (thread->handle);
+
 	/* An abort is already pending on this thread, so request_thread_abort ()
 	 * refuses a second one and the walk reports a failure that did not happen.
 	 * Managed code sets ThreadState_AbortRequested with Thread.Abort (). A
 	 * thread that set ThreadState_Stopped is inside
 	 * mono_thread_detach_internal (). It waits there for the threads_mutex this
-	 * walk holds, so it cannot leave the table yet. */
-	if (thread->state & (ThreadState_AbortRequested | ThreadState_Stopped))
+	 * walk holds, so it cannot leave the table yet.
+	 *
+	 * The thread still has to be waited for. Left out of the list, it makes the
+	 * next walk return an empty list after a wait that timed out. The loop then
+	 * finishes with the thread still running managed code. */
+	if (thread->state & (ThreadState_AbortRequested | ThreadState_Stopped)) {
+		wait->handles [wait->num] = handle;
+		wait->threads [wait->num] = thread;
+		wait->num++;
 		return;
+	}
 
-	MonoThreadHandle *handle = mono_threads_open_thread_handle (thread->handle);
 	THREAD_DEBUG (g_print ("%s: Aborting id: %" G_GSIZE_FORMAT "\n", __func__, (gsize)thread->tid));
 	if (!mono_thread_internal_abort (thread, FALSE)) {
 		g_warning ("%s: Failed aborting id: %p, mono_thread_manage will ignore it\n", __func__, (void*)(intptr_t)(gsize)thread->tid);
@@ -4025,7 +4042,9 @@ mono_thread_manage_internal (void)
 	 * Also abort all the background threads
 	 * */
 	gboolean gave_up_on_a_thread = FALSE;
-	do {
+	guint32 fewest_left = G_MAXUINT32;
+	int stalled_waits = 0;
+	while (TRUE) {
 		THREAD_DEBUG (g_message ("%s: abort phase", __func__));
 
 		mono_threads_lock ();
@@ -4038,29 +4057,35 @@ mono_thread_manage_internal (void)
 		mono_threads_unlock ();
 
 		THREAD_DEBUG (g_message ("%s: wait->num is now %d", __func__, wait->num));
-		if (wait->num > 0) {
-			/*
-			 * A signal that catches a thread outside managed code arms an
-			 * interrupt token. Only the thread's next interruptible wait
-			 * consumes it, so a thread that keeps running compiled code
-			 * never signals this wait.
-			 *
-			 * wait_for_tids () leaves such a thread in the table, so the
-			 * next turn of this loop waits on it again. Leave the loop
-			 * instead.
-			 */
-			if (wait_for_tids (wait, MONO_THREADS_SHUTDOWN_ABORT_TIMEOUT_MS, FALSE) == MONO_THREAD_INFO_WAIT_RET_TIMEOUT) {
+		if (wait->num == 0)
+			break;
+
+		if (wait->num < fewest_left) {
+			fewest_left = wait->num;
+			stalled_waits = 0;
+		}
+
+		// A signal that catches a thread outside managed code arms an
+		// interrupt token. Only the thread's next interruptible wait consumes
+		// it, so a thread that keeps running compiled code never signals this
+		// wait, and the walk above sends it no second signal.
+		if (wait_for_tids (wait, MONO_THREADS_SHUTDOWN_ABORT_TIMEOUT_MS, FALSE) == MONO_THREAD_INFO_WAIT_RET_TIMEOUT) {
+			if (++stalled_waits >= MONO_THREADS_SHUTDOWN_ABORT_STALLED_WAITS) {
 				gave_up_on_a_thread = TRUE;
 				break;
 			}
 		}
-	} while (wait->num > 0);
+	}
 
 	// mono_runtime_cleanup () requires that no thread still runs managed code,
-	// and the timeout above can leave one doing exactly that. Exit here instead
-	// of returning into it.
-	if (gave_up_on_a_thread)
+	// and the waits above can leave one doing exactly that. Exit here instead
+	// of returning into it. Raise the shutdown-end event on the way out, the
+	// one mini_cleanup () would have raised: the debugger agent sends VM_DEATH
+	// from it, and the log profiler flushes its buffers.
+	if (gave_up_on_a_thread) {
+		MONO_PROFILER_RAISE (runtime_shutdown_end, ());
 		exit (mono_environment_exitcode_get ());
+	}
 #endif
 	
 	/* 
