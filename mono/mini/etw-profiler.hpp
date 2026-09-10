@@ -36,6 +36,22 @@ uint32_t etw_method_flags (MonoMethod *method, MonoJitInfo *jinfo);
 uint32_t etw_body_il_map (MonoJitInfo *jinfo, uint32_t *il_offsets,
                           uint32_t *native_offsets, uint32_t max_entries);
 
+/// The rundown pass(es) to run: start, end, or both.
+struct EtwRundownPass {
+	bool start = false;
+	bool end = false;
+};
+
+/// Which rundown pass(es) \p match_any_keyword asks for, per
+/// CLR-ETW-Generated.h: start for CLR_RUNDOWNSTART_KEYWORD (0x40), end for
+/// CLR_RUNDOWNEND_KEYWORD (0x100), either or both.
+///
+/// \p control_code has to be ENABLE_PROVIDER or CAPTURE_STATE, and
+/// \p is_rundown_provider has to be true - both carry the keyword the same
+/// way. Anything else answers with neither pass set.
+EtwRundownPass etw_rundown_pass (uint32_t control_code, uint64_t match_any_keyword,
+                                 bool is_rundown_provider);
+
 } // namespace mono
 
 #endif /* MONO_MINI_ETW_PROFILER_HPP */

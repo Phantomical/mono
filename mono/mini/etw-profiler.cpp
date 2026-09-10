@@ -44,6 +44,17 @@ constexpr uint32_t kMethodFlagsGeneric = 0x2;
 constexpr uint32_t kMethodFlagsSharedGenericCode = 0x4;
 constexpr uint32_t kMethodFlagsJitted = 0x8;
 
+// CLR-ETW-Generated.h's own CLR_RUNDOWNSTART_KEYWORD and
+// CLR_RUNDOWNEND_KEYWORD - asserted against that header's values below,
+// where HOST_WIN32 makes it available.
+constexpr uint64_t kRundownStartKeyword = 0x40;
+constexpr uint64_t kRundownEndKeyword = 0x100;
+
+// evntrace.h's EVENT_CONTROL_CODE_ENABLE_PROVIDER and
+// EVENT_CONTROL_CODE_CAPTURE_STATE, same reason.
+constexpr uint32_t kEventControlCodeEnableProvider = 1;
+constexpr uint32_t kEventControlCodeCaptureState = 2;
+
 // src/coreclr/vm/codeversion.h's own values, held fixed there to avoid
 // breaking event tracing. This backend has no OSR and profiles nothing
 // beyond mono_llvm_jit_tier2_enabled (), so five of its eight are all this
@@ -117,6 +128,22 @@ etw_body_il_map (MonoJitInfo *jinfo, uint32_t *il_offsets, uint32_t *native_offs
 	return count;
 }
 
+EtwRundownPass
+etw_rundown_pass (uint32_t control_code, uint64_t match_any_keyword, bool is_rundown_provider)
+{
+	EtwRundownPass pass;
+
+	if (!is_rundown_provider)
+		return pass;
+	if (control_code != kEventControlCodeEnableProvider
+	    && control_code != kEventControlCodeCaptureState)
+		return pass;
+
+	pass.start = (match_any_keyword & kRundownStartKeyword) != 0;
+	pass.end = (match_any_keyword & kRundownEndKeyword) != 0;
+	return pass;
+}
+
 } // namespace mono
 
 #if defined (HOST_WIN32)
@@ -143,6 +170,11 @@ etw_body_il_map (MonoJitInfo *jinfo, uint32_t *il_offsets, uint32_t *native_offs
 DECLSPEC_NOINLINE __inline VOID __stdcall Private_EventControlCallback (_In_ LPCGUID SourceId, _In_ ULONG ControlCode, _In_ UCHAR Level, _In_ ULONGLONG MatchAnyKeyword, _In_ ULONGLONG MatchAllKeyword, _In_opt_ PEVENT_FILTER_DESCRIPTOR FilterData, _Inout_opt_ PVOID CallbackContext);
 #define MCGEN_PRIVATE_ENABLE_CALLBACK_V2 Private_EventControlCallback
 #include "CLR-ETW-Generated.h"
+
+static_assert (mono::kRundownStartKeyword == CLR_RUNDOWNSTART_KEYWORD, "mirrors CLR-ETW-Generated.h");
+static_assert (mono::kRundownEndKeyword == CLR_RUNDOWNEND_KEYWORD, "mirrors CLR-ETW-Generated.h");
+static_assert (mono::kEventControlCodeEnableProvider == EVENT_CONTROL_CODE_ENABLE_PROVIDER, "mirrors evntrace.h");
+static_assert (mono::kEventControlCodeCaptureState == EVENT_CONTROL_CODE_CAPTURE_STATE, "mirrors evntrace.h");
 
 #define MAX_NUM_OFFSETS 7000
 #define ENABLE_VERBOSE_LOGGING 0
@@ -171,8 +203,11 @@ static gboolean is_initialized = FALSE;
 	#define ETW_PROFILER_LOG(str)
 #endif
 
+// Which flavour of an image/method event to emit.
+enum class EventKind { load, unload, dc_start, dc_end };
+
 static void
-image_event (MonoImage *image, gboolean is_rundown, gboolean is_unload)
+image_event (MonoImage *image, EventKind kind)
 {
 	if (!MICROSOFT_WINDOWS_DOTNETRUNTIME_PROVIDER_Context.IsEnabled && !MICROSOFT_WINDOWS_DOTNETRUNTIME_RUNDOWN_PROVIDER_Context.IsEnabled)	{
 		ETW_PROFILER_LOG ("Providers not enabled, skipping image_event");
@@ -195,7 +230,7 @@ image_event (MonoImage *image, gboolean is_rundown, gboolean is_unload)
 
 	// We only emit PDB info for loads *and* if the image is not a dynamic image (i.e. containing dynamic methods). This is becuase
 	// dynamic images do not represent an actual on-disk image and so don't have any PDB info (calling mono_ppdb_get_signature will lead to a crash)
-	if (!is_unload && !mono_image_is_dynamic (image))
+	if (kind != EventKind::unload && !mono_image_is_dynamic (image))
 		mono_ppdb_get_signature (image, &pdb_path, pe_guid, &pe_age, &pe_timestamp);
 
 	gunichar2 *image_path_utf16 = u8to16 (mono_image_get_filename (image));
@@ -203,12 +238,19 @@ image_event (MonoImage *image, gboolean is_rundown, gboolean is_unload)
 
 	MonoAssembly *assembly = mono_image_get_assembly (image);
 
-	if (is_rundown) {
+	switch (kind) {
+	case EventKind::dc_start:
+		EventWriteModuleDCStart_V2 ((uint64_t)image, (uint64_t)assembly, 0, 0, image_path_utf16, L"", 0, (GUID *)pe_guid, pe_age, pdb_path_utf16 == NULL ? L"" : pdb_path_utf16, &GUID_NULL, 0, L"");
+		break;
+	case EventKind::dc_end:
 		EventWriteModuleDCEnd_V2 ((uint64_t)image, (uint64_t)assembly, 0, 0, image_path_utf16, L"", 0, (GUID *)pe_guid, pe_age, pdb_path_utf16 == NULL ? L"" : pdb_path_utf16, &GUID_NULL, 0, L"");
-	} else if (is_unload) {
+		break;
+	case EventKind::unload:
 		EventWriteModuleUnload_V2 ((uint64_t)image, (uint64_t)assembly, 0, 0, image_path_utf16, L"", 0, (GUID *)pe_guid, pe_age, pdb_path_utf16 == NULL ? L"" : pdb_path_utf16, &GUID_NULL, 0, L"");
-	} else {
+		break;
+	case EventKind::load:
 		EventWriteModuleLoad_V2 ((uint64_t)image, (uint64_t)assembly, 0, 0, image_path_utf16, L"", 0, (GUID *)pe_guid, pe_age, pdb_path_utf16 == NULL ? L"" : pdb_path_utf16, &GUID_NULL, 0, L"");
+		break;
 	}
 
 	g_free (image_path_utf16);
@@ -218,17 +260,17 @@ image_event (MonoImage *image, gboolean is_rundown, gboolean is_unload)
 static void
 image_loaded (MonoProfiler *prof, MonoImage *image)
 {
-	image_event (image, FALSE, FALSE);
+	image_event (image, EventKind::load);
 }
 
 static void
 image_unloading (MonoProfiler *prof, MonoImage *image)
 {
-	image_event (image, FALSE, TRUE);
+	image_event (image, EventKind::unload);
 }
 
 static void
-method_load (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo, gboolean is_rundown)
+method_load (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo, EventKind kind)
 {
 	static __declspec(thread) unsigned int il_offsets[MAX_NUM_OFFSETS] = {0};
 	static __declspec(thread) unsigned int native_offsets[MAX_NUM_OFFSETS] = {0};
@@ -298,15 +340,24 @@ method_load (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo, gboolea
 	gunichar2 *full_class_name_utf16 = u8to16 (full_class_name);
 	gunichar2 *signature_utf16 = u8to16 (signature);
 
-	if (is_rundown) {
+	// An empty map is noise no consumer can use.
+	switch (kind) {
+	case EventKind::dc_start:
+		EventWriteMethodDCStartVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, method_flags, namespace_utf16, full_class_name_utf16, signature_utf16, 0, 0);
+		if (compressed_num_lines > 0)
+			EventWriteMethodDCStartILToNativeMap ((uint64_t)method, 0, 0, compressed_num_lines, il_offsets, native_offsets, 0);
+		break;
+	case EventKind::dc_end:
 		EventWriteMethodDCEndVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, method_flags, namespace_utf16, full_class_name_utf16, signature_utf16, 0, 0);
-		// An empty map is noise no consumer can use.
 		if (compressed_num_lines > 0)
 			EventWriteMethodDCEndILToNativeMap ((uint64_t)method, 0, 0, compressed_num_lines, il_offsets, native_offsets, 0);
-	} else {
+		break;
+	default:
+		// Always EventKind::load: method_load () is never called with ::unload.
 		EventWriteMethodLoadVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, method_flags, namespace_utf16, full_class_name_utf16, signature_utf16, 0, 0);
 		if (compressed_num_lines > 0)
 			EventWriteMethodILToNativeMap ((uint64_t)method, 0, 0, compressed_num_lines, il_offsets, native_offsets, 0);
+		break;
 	}
 
 	g_free (signature_utf16);
@@ -320,6 +371,7 @@ struct JITEnumerationData {
 	int mNumDomains;
 	int mNumAssemblies;
 	int mNumMethods;
+	mono::EtwRundownPass pass;
 };
 
 static void
@@ -336,7 +388,15 @@ method_jit_done (MonoProfiler *prof, MonoMethod *method, MonoJitInfo *jinfo)
 	if (mono_jit_info_get_method (jinfo) != method)
 		return;
 
-	method_load (mono_domain_get (), method, jinfo, FALSE);
+	/*
+	 * Right even on a compile-worker thread. That thread attaches to the
+	 * root domain, not jinfo's.
+	 *
+	 * MonoBackend::compile_bodies () (backend.cpp) publishes inside a
+	 * DomainScope over jinfo's own domain, and this raise runs inside
+	 * that scope.
+	 */
+	method_load (mono_domain_get (), method, jinfo, EventKind::load);
 }
 
 static void
@@ -346,7 +406,10 @@ on_enumerate_assembly (MonoAssembly *assembly, void *user_data)
 	enumerationData->mNumAssemblies++;
 
 	MonoImage *image = mono_assembly_get_image_internal (assembly);
-	image_event (image, TRUE, FALSE);
+	if (enumerationData->pass.start)
+		image_event (image, EventKind::dc_start);
+	if (enumerationData->pass.end)
+		image_event (image, EventKind::dc_end);
 }
 
 static void
@@ -355,7 +418,10 @@ on_enumerate_jit_method (MonoDomain *domain, MonoMethod *method, MonoJitInfo *ji
 	struct JITEnumerationData *enumerationData = (struct JITEnumerationData *)user_data;
 	enumerationData->mNumMethods++;
 
-	method_load (domain, method, jinfo, TRUE);
+	if (enumerationData->pass.start)
+		method_load (domain, method, jinfo, EventKind::dc_start);
+	if (enumerationData->pass.end)
+		method_load (domain, method, jinfo, EventKind::dc_end);
 }
 
 static void
@@ -372,15 +438,47 @@ on_enumerate_domain (MonoDomain *domain, void *user_data)
 }
 
 static void
-on_attach ()
+on_attach (mono::EtwRundownPass pass)
 {
 	ETW_PROFILER_LOG ("Enumerating JIT data...");
 
 	struct JITEnumerationData enumerationData;
 	memset (&enumerationData, 0, sizeof (enumerationData));
+	enumerationData.pass = pass;
 
-	// Iterate through each domain
+	if (pass.start)
+		EventWriteDCStartInit_V1 (0);
+	if (pass.end)
+		EventWriteDCEndInit_V1 (0);
+
+	/*
+	 * Synchronous, like CoreCLR's own rundown, even though Microsoft's
+	 * PENABLECALLBACK contract says not to block on a lock here.
+	 *
+	 * mono_unity_domain_foreach_locked () does hold one for this whole
+	 * walk: mono_domain_unload_mutex. That mutex has exactly one other
+	 * call site, unload_thread_main ()'s call to mono_domain_free ()
+	 * (appdomain.c, the thread mono_domain_try_unload () spawns to run
+	 * the unload). So what this walk excludes is an in-flight domain
+	 * unload, not an allocation, a JIT compile, or a thread attaching.
+	 *
+	 * mono_jit_info_table_foreach_internal () (jit-info.c) takes no lock
+	 * at all. It reads the table through the same hazard pointers a
+	 * concurrent publish uses.
+	 *
+	 * CoreCLR's own lock is not this narrow: dotnet/runtime#132757 found
+	 * its rundown holding the code-versioning lock for seconds on a
+	 * method-heavy process. That lock is one every JIT compile also
+	 * takes. This runtime's supported scenarios keep one domain for the
+	 * process's whole life, so the domain unload this lock excludes is
+	 * rare.
+	 */
 	mono_unity_domain_foreach_locked (on_enumerate_domain, &enumerationData);
+
+	if (pass.start)
+		EventWriteDCStartComplete_V1 (0);
+	if (pass.end)
+		EventWriteDCEndComplete_V1 (0);
 
 	ETW_PROFILER_LOG_ARGS ("Finished enumerating JIT data. Found %d domains, %d assemblies, %d methods", enumerationData.mNumDomains, enumerationData.mNumAssemblies, enumerationData.mNumMethods);
 }
@@ -390,18 +488,22 @@ DECLSPEC_NOINLINE __inline VOID __stdcall Private_EventControlCallback (_In_ LPC
 {
 	ETW_PROFILER_LOG_ARGS ("EventControlCallback (%d)", ControlCode);
 
-	switch (ControlCode) {
-	case EVENT_CONTROL_CODE_ENABLE_PROVIDER: {
-		gboolean isRegular = (CallbackContext == &MICROSOFT_WINDOWS_DOTNETRUNTIME_PROVIDER_Context);
-		gboolean isRundown = (CallbackContext == &MICROSOFT_WINDOWS_DOTNETRUNTIME_RUNDOWN_PROVIDER_Context);
-		ETW_PROFILER_LOG_ARGS("EventControlCallback -- IsInitialized: %s, IsRuntime: %s, IsRundown: %s", is_initialized ? "true" : "false", isRegular ? "true" : "false", isRundown ? "true" : "false");
-		if (is_initialized && CallbackContext == &MICROSOFT_WINDOWS_DOTNETRUNTIME_RUNDOWN_PROVIDER_Context) {
-			on_attach ();
-		}
-	} break;
-	default:
-		break;
-	};
+	// Windows can call this synchronously from inside EventRegister* (),
+	// for a session that already has the provider enabled, before
+	// is_initialized is set. There is nothing to walk yet.
+	if (!is_initialized)
+		return;
+
+	gboolean isRundown = (CallbackContext == &MICROSOFT_WINDOWS_DOTNETRUNTIME_RUNDOWN_PROVIDER_Context);
+	mono::EtwRundownPass pass =
+		mono::etw_rundown_pass ((uint32_t) ControlCode, (uint64_t) MatchAnyKeyword, isRundown);
+
+	ETW_PROFILER_LOG_ARGS ("EventControlCallback -- IsRundown: %s, StartPass: %s, EndPass: %s",
+	                       isRundown ? "true" : "false", pass.start ? "true" : "false",
+	                       pass.end ? "true" : "false");
+
+	if (pass.start || pass.end)
+		on_attach (pass);
 }
 
 void

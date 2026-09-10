@@ -286,3 +286,90 @@ TEST (EtwProfilerPure, ILMapRespectsCap)
 		EXPECT_EQ (i * 4, native[i]);
 	}
 }
+
+namespace {
+
+// evntrace.h's EVENT_CONTROL_CODE_ENABLE_PROVIDER and
+// EVENT_CONTROL_CODE_CAPTURE_STATE, mirrored the way etw-profiler.cpp's
+// own kEventControlCode* constants mirror them, plus
+// EVENT_CONTROL_CODE_DISABLE_PROVIDER (0), which has no counterpart there.
+constexpr uint32_t kEnableProvider = 1;
+constexpr uint32_t kCaptureState = 2;
+constexpr uint32_t kDisableProvider = 0;
+
+// CLR-ETW-Generated.h's own CLR_RUNDOWNSTART_KEYWORD and
+// CLR_RUNDOWNEND_KEYWORD.
+constexpr uint64_t kStartKeyword = 0x40;
+constexpr uint64_t kEndKeyword = 0x100;
+
+} // namespace
+
+TEST (EtwProfilerPure, RundownPassNoneWhenNeitherKeywordSet)
+{
+	mono::EtwRundownPass pass = mono::etw_rundown_pass (kEnableProvider, 0, true);
+
+	EXPECT_FALSE (pass.start);
+	EXPECT_FALSE (pass.end);
+}
+
+TEST (EtwProfilerPure, RundownPassStartOnly)
+{
+	mono::EtwRundownPass pass = mono::etw_rundown_pass (kEnableProvider, kStartKeyword, true);
+
+	EXPECT_TRUE (pass.start);
+	EXPECT_FALSE (pass.end);
+}
+
+TEST (EtwProfilerPure, RundownPassEndOnly)
+{
+	mono::EtwRundownPass pass = mono::etw_rundown_pass (kEnableProvider, kEndKeyword, true);
+
+	EXPECT_FALSE (pass.start);
+	EXPECT_TRUE (pass.end);
+}
+
+TEST (EtwProfilerPure, RundownPassBothWhenBothKeywordsSet)
+{
+	mono::EtwRundownPass pass =
+		mono::etw_rundown_pass (kEnableProvider, kStartKeyword | kEndKeyword, true);
+
+	EXPECT_TRUE (pass.start);
+	EXPECT_TRUE (pass.end);
+}
+
+/* CLR_RUNDOWNEND_KEYWORD is 0x100. 0x80 is CLR_ENDENUMERATION_KEYWORD
+ * (CLR-ETW-Generated.h), a different keyword etw_rundown_pass () does not
+ * read - this guards against confusing the two. */
+TEST (EtwProfilerPure, RundownPassIgnoresStaleKeyword)
+{
+	mono::EtwRundownPass pass = mono::etw_rundown_pass (kEnableProvider, 0x80, true);
+
+	EXPECT_FALSE (pass.start);
+	EXPECT_FALSE (pass.end);
+}
+
+TEST (EtwProfilerPure, RundownPassNoneOnRegularProvider)
+{
+	mono::EtwRundownPass pass =
+		mono::etw_rundown_pass (kEnableProvider, kStartKeyword | kEndKeyword, false);
+
+	EXPECT_FALSE (pass.start);
+	EXPECT_FALSE (pass.end);
+}
+
+TEST (EtwProfilerPure, RundownPassAlsoAnsweredForCaptureState)
+{
+	mono::EtwRundownPass pass = mono::etw_rundown_pass (kCaptureState, kEndKeyword, true);
+
+	EXPECT_FALSE (pass.start);
+	EXPECT_TRUE (pass.end);
+}
+
+TEST (EtwProfilerPure, RundownPassNoneOnDisableProvider)
+{
+	mono::EtwRundownPass pass =
+		mono::etw_rundown_pass (kDisableProvider, kStartKeyword | kEndKeyword, true);
+
+	EXPECT_FALSE (pass.start);
+	EXPECT_FALSE (pass.end);
+}
