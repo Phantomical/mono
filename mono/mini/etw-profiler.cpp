@@ -56,23 +56,21 @@ constexpr uint64_t kRundownEndKeyword = 0x100;
 constexpr uint32_t kEventControlCodeEnableProvider = 1;
 constexpr uint32_t kEventControlCodeCaptureState = 2;
 
-// src/coreclr/vm/codeversion.h's own values, held fixed there to avoid
-// breaking event tracing. This backend has no OSR and profiles nothing
-// beyond mono_llvm_jit_tier2_enabled (), so five of its eight are all this
-// ever reports.
+// The tier bits a MethodLoadVerbose_V2 event carries. ClrEtwAll.man reserves
+// 0x80 to 0x200 for them and names no values, so the names are the consumer's
+// own. etw-profiler.md has PerfView's.
 uint32_t
 clr_tier (MonoJitInfo *jinfo)
 {
 	switch (static_cast<MonoTier> (jinfo->tier)) {
 	case MonoTier::none:
-		return 0; /* Unknown */
+		return 0;
 	case MonoTier::tier0:
-		return 1; /* MinOptJitted */
+		return 1;
 	case MonoTier::tier1:
-		return mono_llvm_jit_tier2_enabled () ? 6 /* InstrumentedTier */
-		                                      : 3; /* QuickJitted */
+		return mono_llvm_jit_tier2_enabled () ? 6 : 3;
 	case MonoTier::tier2:
-		return 4; /* OptimizedTier1 */
+		return 4;
 	case MonoTier::interp:
 	case MonoTier::detoured:
 		break;

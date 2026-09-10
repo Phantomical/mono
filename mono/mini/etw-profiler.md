@@ -101,10 +101,10 @@ address, in this order and reading as `clr_tier ()` (`etw-profiler.cpp`) promise
 | tier 1, `-mono-tier2=0` | 3 | `QuickJitted` |
 | tier 2 | 4 | `OptimizedTier1` |
 
-The plan names the tier-1-with-tier-2-on string `InstrumentedTier`. TraceEvent's actual
-`OptimizationTier` enum (`ClrTraceEventParser.cs`) does not have a member by that name -
-value 6, the one this runtime sends for that case, is `QuickJittedInstrumented`. Look for
-`QuickJittedInstrumented` in the column, not `InstrumentedTier`.
+The strings are TraceEvent's `OptimizationTier` enum (`ClrTraceEventParser.cs`), which is
+what PerfView renders. `ClrEtwAll.man` reserves the bits and names no values.
+`codeversion.h`'s `OptimizationTier` is a different enum with a different numbering, so
+do not check the column against it.
 
 `Fib.fib` is a method on a top-level, non-generic class, so it is a check on tiering
 alone. Naming fidelity - the nested-class chain and a generic instantiation showing up
