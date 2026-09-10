@@ -107,6 +107,27 @@ mono_unit_test_cases(test-mono-embed test-mono-embed "*")
 mono_add_unit_test(test-embed-invoke SOURCES harness.cpp test-embed-invoke.cpp RUNTIME)
 mono_unit_test_cases(test-embed-invoke test-embed-invoke "*")
 
+# Its own binary: check-remset-consistency reads MONO_GC_DEBUG once at process
+# start, and test-mono-runtime's cases share one process.
+#
+# With MONO_SGEN_STRICT_REMSET_CHECK on, a confirmed miss aborts the process by
+# design. ctest counts a signal death as a failure before it reads
+# PASS_REGULAR_EXPRESSION at all (ctest 3.28), so check-remset-missing.sh
+# judges the outcome instead.
+mono_add_unit_test(test-remset-missing SOURCES harness.cpp test-remset-missing.cpp RUNTIME)
+if(MONO_SGEN_STRICT_REMSET_CHECK)
+  set(_remset_expect on)
+else()
+  set(_remset_expect off)
+endif()
+add_test(NAME test-remset-missing
+         COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/check-remset-missing.sh"
+                 "$<TARGET_FILE:test-remset-missing>" "${_remset_expect}"
+         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties(test-remset-missing PROPERTIES
+  ENVIRONMENT "MONO_GC_DEBUG=check-remset-consistency;MONO_PATH=${MONO_MCS_LIBDIR}/build"
+  SKIP_REGULAR_EXPRESSION "\\[  SKIPPED \\]")
+
 # The managed side of the tests that need one.
 if(MONO_ENABLE_MCS_BUILD)
   set(_class_dir "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
@@ -135,6 +156,7 @@ if(MONO_ENABLE_MCS_BUILD)
   _mono_test_assembly(icall.exe "${CMAKE_CURRENT_SOURCE_DIR}/icall.cs")
   _mono_test_assembly(unmanaged-callers-only.exe
                       "${CMAKE_CURRENT_SOURCE_DIR}/unmanaged-callers-only.cs")
+  _mono_test_assembly(remset-missing.exe "${CMAKE_CURRENT_SOURCE_DIR}/remset-missing.cs")
   _mono_test_assembly(test-embed.exe "${CMAKE_SOURCE_DIR}/samples/embed/test.cs")
   _mono_test_assembly(test-embed-invoke-cs.exe "${CMAKE_SOURCE_DIR}/samples/embed/invoke.cs")
 
@@ -143,6 +165,7 @@ if(MONO_ENABLE_MCS_BUILD)
     "${CMAKE_CURRENT_BINARY_DIR}/detour.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/icall.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/unmanaged-callers-only.exe"
+    "${CMAKE_CURRENT_BINARY_DIR}/remset-missing.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed-invoke-cs.exe")
   mono_tools_runtime_depends(unit-test-assemblies)

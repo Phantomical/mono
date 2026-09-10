@@ -157,6 +157,12 @@ const char* sgen_client_vtable_get_namespace (GCVTable vtable);
 const char* sgen_client_vtable_get_name (GCVTable vtable);
 
 /*
+ * Names the instance field at `offset` in `vtable`'s class or one of its
+ * ancestors, or returns NULL if none is declared there.
+ */
+const char* sgen_client_field_name_for_offset (GCVTable vtable, int offset);
+
+/*
  * Called before starting collections.  The world is already stopped.  No action is
  * necessary.
  */

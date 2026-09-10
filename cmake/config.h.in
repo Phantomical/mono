@@ -131,6 +131,9 @@
 /* Disable debug helpers in SGEN. */
 #cmakedefine DISABLE_SGEN_DEBUG_HELPERS 1
 
+/* Confirm a pinned target's missing remset across a collection before reporting it. */
+#cmakedefine SGEN_STRICT_REMSET_CHECK 1
+
 /* Disable gc bridge support in SGEN. */
 #cmakedefine DISABLE_SGEN_GC_BRIDGE 1
 

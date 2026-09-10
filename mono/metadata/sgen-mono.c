@@ -3107,6 +3107,26 @@ sgen_client_vtable_get_name (MonoVTable *vt)
 	return m_class_get_name (vt->klass);
 }
 
+const char*
+sgen_client_field_name_for_offset (MonoVTable *vt, int offset)
+{
+	MonoClass *klass;
+
+	for (klass = vt->klass; klass; klass = m_class_get_parent (klass)) {
+		gpointer iter = NULL;
+		MonoClassField *field;
+
+		while ((field = mono_class_get_fields_internal (klass, &iter))) {
+			if (field->type->attrs & (FIELD_ATTRIBUTE_STATIC | FIELD_ATTRIBUTE_HAS_FIELD_RVA))
+				continue;
+			if (field->offset == offset)
+				return mono_field_get_name (field);
+		}
+	}
+
+	return NULL;
+}
+
 /*
  * Initialization
  */

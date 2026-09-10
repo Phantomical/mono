@@ -150,20 +150,109 @@ sgen_describe_ptr (char *ptr)
 static gboolean missing_remsets;
 
 /*
- * We let a missing remset slide if the target object is pinned,
- * because the store might have happened but the remset not yet added,
- * but in that case the target must be pinned.  We might theoretically
- * miss some missing remsets this way, but it's very unlikely.
+ * A store a preemptive suspend interrupts before its barrier call leaves
+ * the stored value pinned as a stack root, with no remset added yet. That
+ * pin is what excuses the miss below in the default build.
  */
+#ifdef SGEN_STRICT_REMSET_CHECK
+
+typedef struct {
+	char *holder;
+	int offset;
+	char *target;
+	gint32 collection;
+} MissingRemsetCandidate;
+
+/*
+ * Caps the candidate table below. A triple that arrives once the table is
+ * full is dropped, so the miss it describes goes unreported.
+ */
+#define MAX_MISSING_REMSET_CANDIDATES 256
+
+static MissingRemsetCandidate missing_remset_candidates [MAX_MISSING_REMSET_CANDIDATES];
+static int missing_remset_candidate_count;
+
+/*
+ * A reference to a pinned target that is barriered keeps a remset entry.
+ * The scan that processes one re-adds it for as long as the target stays
+ * in the nursery (mono/sgen/sgen-marksweep-drain-gray-stack.h). It is
+ * remembered again at the very next collection, and HANDLE_PTR never sees
+ * it miss twice. An un-barriered store has no entry to re-add, so it
+ * misses every collection it survives. Seeing the same (holder, offset,
+ * target) at an earlier collection than this one rules out the excuse, so
+ * only that second sighting gets reported.
+ */
+static gboolean
+confirm_missing_remset_candidate (char *holder, int offset, char *target)
+{
+	gint32 collection = mono_atomic_load_i32 (&mono_gc_stats.minor_gc_count);
+	gboolean matched = FALSE, confirmed = FALSE;
+	int i, kept = 0;
+
+	for (i = 0; i < missing_remset_candidate_count; ++i) {
+		MissingRemsetCandidate c = missing_remset_candidates [i];
+
+		/*
+		 * A triple is three raw addresses, and both heaps recycle a
+		 * dead object's address for a later allocation. Keeping an
+		 * entry past the collection that can confirm it lets a
+		 * recycled holder and target match it by coincidence.
+		 */
+		if (collection - c.collection > 1)
+			continue;
+
+		if (c.holder == holder && c.offset == offset && c.target == target) {
+			matched = TRUE;
+			confirmed = c.collection < collection;
+			c.collection = collection;
+		}
+		missing_remset_candidates [kept++] = c;
+	}
+	missing_remset_candidate_count = kept;
+
+	if (!matched && kept < MAX_MISSING_REMSET_CANDIDATES) {
+		missing_remset_candidates [kept].holder = holder;
+		missing_remset_candidates [kept].offset = offset;
+		missing_remset_candidates [kept].target = target;
+		missing_remset_candidates [kept].collection = collection;
+		missing_remset_candidate_count = kept + 1;
+	}
+
+	return confirmed;
+}
+
+#define SGEN_PIN_EXCUSES_MISSING_REMSET(pinned, holder, offset, target) \
+	((pinned) && !confirm_missing_remset_candidate ((holder), (offset), (target)))
+#define SGEN_SHOULD_LOG_MISSING_REMSET(excused) (!(excused))
+#define SGEN_MISSING_REMSET_CONFIRMED(pinned, excused) ((pinned) && !(excused))
+#define SGEN_MISSING_REMSET_FIELD_NAME(vt, off) sgen_client_field_name_for_offset ((vt), (off))
+#else
+#define SGEN_PIN_EXCUSES_MISSING_REMSET(pinned, holder, offset, target) (pinned)
+#define SGEN_SHOULD_LOG_MISSING_REMSET(excused) TRUE
+#define SGEN_MISSING_REMSET_CONFIRMED(pinned, excused) FALSE
+#define SGEN_MISSING_REMSET_FIELD_NAME(vt, off) NULL
+#endif
+
 #undef HANDLE_PTR
 #define HANDLE_PTR(ptr,obj)	do {	\
 		if (*(ptr) && sgen_ptr_in_nursery ((char*)*(ptr))) {	\
 			if (!sgen_get_remset ()->find_address ((char*)(ptr)) && !sgen_cement_lookup (*(ptr))) { \
 				GCVTable __vt = SGEN_LOAD_VTABLE (obj);	\
+				ptrdiff_t __full_offset = (char*)(ptr) - (char*)(obj);	\
+				int __offset = (int) __full_offset;	\
 				gboolean is_pinned = object_is_pinned (*(ptr));	\
-				SGEN_LOG (0, "Oldspace->newspace reference %p at offset %ld in object %p (%s.%s) not found in remsets%s.", *(ptr), (long)((char*)(ptr) - (char*)(obj)), (obj), sgen_client_vtable_get_namespace (__vt), sgen_client_vtable_get_name (__vt), is_pinned ? ", but object is pinned" : ""); \
-				sgen_binary_protocol_missing_remset ((obj), __vt, (int) ((char*)(ptr) - (char*)(obj)), *(ptr), (gpointer)LOAD_VTABLE(*(ptr)), is_pinned); \
-				if (!is_pinned)				\
+				gboolean excused = SGEN_PIN_EXCUSES_MISSING_REMSET (is_pinned, (char*)(obj), __offset, (char*)*(ptr));	\
+				if (SGEN_SHOULD_LOG_MISSING_REMSET (excused)) {	\
+					const char *__field = SGEN_MISSING_REMSET_FIELD_NAME (__vt, __offset);	\
+					if (SGEN_MISSING_REMSET_CONFIRMED (is_pinned, excused) && __field)	\
+						SGEN_LOG (0, "Missing write barrier: %s.%s field '%s' at %p holds nursery object %p.", sgen_client_vtable_get_namespace (__vt), sgen_client_vtable_get_name (__vt), __field, (obj), *(ptr)); \
+					else if (SGEN_MISSING_REMSET_CONFIRMED (is_pinned, excused))	\
+						SGEN_LOG (0, "Missing write barrier: %s.%s offset %ld at %p holds nursery object %p.", sgen_client_vtable_get_namespace (__vt), sgen_client_vtable_get_name (__vt), (long)__full_offset, (obj), *(ptr)); \
+					else					\
+						SGEN_LOG (0, "Oldspace->newspace reference %p at offset %ld%s%s%s in object %p (%s.%s) not found in remsets%s.", *(ptr), (long)__full_offset, __field ? " (field " : "", __field ? __field : "", __field ? ")" : "", (obj), sgen_client_vtable_get_namespace (__vt), sgen_client_vtable_get_name (__vt), excused ? ", but object is pinned" : (is_pinned ? ", object is pinned but that does not excuse it" : "")); \
+					sgen_binary_protocol_missing_remset ((obj), __vt, __offset, *(ptr), (gpointer)LOAD_VTABLE(*(ptr)), is_pinned); \
+				}						\
+				if (!excused)				\
 					missing_remsets = TRUE;		\
 			}						\
 		}							\

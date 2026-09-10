@@ -35,6 +35,14 @@ option(MONO_UNITY_SGEN_AS_BDWGC
        "Also build the SGen runtime as libmonobdwgc-2.0, Unity's embedded-runtime name"
        OFF)
 
+# check-remset-consistency (MONO_GC_DEBUG) excuses a missing remset outright
+# when the target object is pinned. This narrows the excuse to a miss
+# confirmed across a collection boundary instead. See sgen-debug.c for why
+# that is safe.
+option(MONO_SGEN_STRICT_REMSET_CHECK
+       "Confirm a pinned target's missing remset across a collection before reporting it"
+       OFF)
+
 # --- the LLVM tier ----------------------------------------------------------
 # The autotools spelling was --with-llvm=<prefix>; --enable-llvm on its own was
 # an error.  Same rule here: point MONO_LLVM_PREFIX at an LLVM install (or leave
