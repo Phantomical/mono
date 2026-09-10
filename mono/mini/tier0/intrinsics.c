@@ -884,6 +884,21 @@ mini_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSign
 		}
 	}
 
+	/* Required regardless of MONO_OPT_INTRINS: Debugger.Break () has an empty
+	 * body, so this intrinsic is its whole implementation. */
+	if (in_corlib &&
+		!strcmp (cmethod_klass_name_space, "System.Diagnostics") &&
+		!strcmp (cmethod_klass_name, "Debugger") &&
+		!strcmp (cmethod->name, "Break") && fsig->param_count == 0) {
+		if (mini_should_insert_breakpoint (cfg->method)) {
+			ins = mono_emit_jit_icall (cfg, mono_debugger_agent_user_break, NULL);
+		} else {
+			MONO_INST_NEW (cfg, ins, OP_NOP);
+			MONO_ADD_INS (cfg->cbb, ins);
+		}
+		return ins;
+	}
+
 	if (!(cfg->opt & MONO_OPT_INTRINS))
 		return NULL;
 
@@ -1754,18 +1769,6 @@ mini_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSign
 
 		if (ins)
 			return ins;
-	} else if (in_corlib &&
-			(strcmp (cmethod_klass_name_space, "System.Diagnostics") == 0) &&
-			(strcmp (cmethod_klass_name, "Debugger") == 0)) {
-		if (!strcmp (cmethod->name, "Break") && fsig->param_count == 0) {
-			if (mini_should_insert_breakpoint (cfg->method)) {
-				ins = mono_emit_jit_icall (cfg, mono_debugger_agent_user_break, NULL);
-			} else {
-				MONO_INST_NEW (cfg, ins, OP_NOP);
-				MONO_ADD_INS (cfg->cbb, ins);
-			}
-			return ins;
-		}
 	} else if (in_corlib &&
 	        	(strcmp (cmethod_klass_name_space, "System") == 0) &&
 	        	(strcmp (cmethod_klass_name, "Environment") == 0)) {
