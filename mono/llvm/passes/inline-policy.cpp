@@ -198,9 +198,9 @@ erasable_allocation (const Value *v)
 /// A cheap approximation of is_inlinable () from the declaration alone. A
 /// noreturn callee, an unmarked declaration -- a builtin or an icall with no
 /// wrapper of its own -- or a NoInlining method all count as won't fold here.
-/// So does every wrapper, coarser than is_inlinable () sorts them. Refusing
-/// more than is_inlinable () does only costs a caller-side bonus, never the
-/// erasure the callee-side test still guards.
+/// So does every wrapper, though is_inlinable () lets all of them through.
+/// Refusing more than is_inlinable () does only costs a caller-side bonus,
+/// never the erasure the callee-side test still guards.
 bool
 call_wont_fold (const Function &callee)
 {

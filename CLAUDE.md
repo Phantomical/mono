@@ -1012,9 +1012,10 @@ the opcodes that describe the frame the body runs in. A body that reaches itself
 the forwarder chain is refused too, because no inliner takes that call away. The rest is
 the size limit's question, and `--llvm-opt=-mono-inline-il-limit` bounds it. A candidate
 must also pass gates that are about correctness rather than cost (`is_inlinable ()`,
-`runtime/inline-scope.cpp`): no wrapper, no dynamic method, no clauses, no `NoInlining`
+`runtime/inline-scope.cpp`): no dynamic method, no clauses, no `NoInlining`
 on the callee, no shared body, no call instrumentation, and nothing at all while
-`gen-seq-points` is on. It also refuses a callee something else owns the entry of: a
+`gen-seq-points` is on. A wrapper is not one of them, and folds like any other
+callee. It also refuses a callee something else owns the entry of: a
 detour or an override on the record, and an override the *table* holds
 (`get_method_override ()`), which is the one that catches a declared override before
 anything has asked for the method's record and installed it.
