@@ -23,10 +23,17 @@ them. Verified there:
 | `SupressNGen` | `OverrideAndSuppressNGenEvents` | 0x40000 |
 | `Loader` | `Loader` | 0x8 |
 
-`SupressNGen` (one p) is a real name, but it belongs to the *rundown* provider's own
-`Keywords` (`ClrRundownTraceEventParser.Keywords.SupressNGen`, same file, same 0x40000)
-- a different enum than the one `-ClrEvents:` reads. The regular provider's bit needs the
-longer spelling.
+`SupressNGen` (one p) is a real name, and it is not rundown-only. `ClrTraceEventParser.Keywords`
+- the regular provider's own enum, the one `-ClrEvents:` reads - defines `SupressNGen`
+itself, as a second name for the same 0x40000 bit as `OverrideAndSuppressNGenEvents`;
+`JITSymbols`, the composite this line is built to match, is written with the short
+spelling (`Jit | StopEnumeration | JittedMethodILToNativeMap | SupressNGen | Loader`).
+`ClrRundownTraceEventParser.Keywords` also defines its own `SupressNGen` at the same
+value, in the same file, but that is a second member of a different enum, not the only
+one. `-ClrEvents:SupressNGen` and `-ClrEvents:OverrideAndSuppressNGenEvents` parse to the
+same value (`ParseSimpleEnumValue`, `commandLine.cs`, matches an enum by member name), so
+the plan's original spelling was never wrong. The line below keeps the longer name; either
+one reaches the same bit.
 
 `src/PerfView/Utilities/commandLine.cs` is where the qualifier parser itself lives:
 `-Name:Value` and `/Name:Value` are both accepted (`arg[0] == '/'`), `:` and `=` are both
@@ -83,8 +90,8 @@ default - `-ShowOptimizationTiers` (`CommandLineArgs.cs`) has to be passed when 
 itself is launched, or turned on from the GUI, before opening the trace; the column is
 otherwise absent, not merely empty. Once it is on, `Fib.fib` has to appear as **three**
 rows sharing one method - `MethodLoadVerbose` fires once per body, and a promotion never
-retires the old one (`mono/tests/tier.cs`'s `EachSupersededBodyKeepsItsOwnTier`, exercised
-the same way by `MethodTier.EachSupersededBodyKeepsItsOwnTier`) - each at its own start
+retires the old one (`test-tier.cpp`'s `MethodTier.EachSupersededBodyKeepsItsOwnTier`) -
+each at its own start
 address, in this order and reading as `clr_tier ()` (`etw-profiler.cpp`) promises:
 
 | this runtime's tier | `MethodFlags` bits | the column reads |

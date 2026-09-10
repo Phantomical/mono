@@ -36,13 +36,14 @@ uint32_t etw_method_flags (MonoMethod *method, MonoJitInfo *jinfo);
 uint32_t etw_body_il_map (MonoJitInfo *jinfo, uint32_t *il_offsets,
                           uint32_t *native_offsets, uint32_t max_entries);
 
-/// The full name of \p method's declaring class - namespace, nested-class
-/// chain and generic instantiation included - for the ETW MethodNamespace
-/// field, the way CoreCLR's TypeString::AppendType fills it
-/// (MethodDesc::GetMethodInfoNoSig, vm/method.cpp). Pair it with
-/// mono_method_get_name () for MethodName: TraceLog.cs (TraceEvent) joins
-/// the two fields with "." on its own, so a class name in both doubles the
-/// namespace.
+/// Returns the full name of \p method's declaring class - namespace,
+/// nested-class chain and generic instantiation included - the way
+/// CoreCLR's TypeString::AppendType fills the ETW MethodNamespace field
+/// (MethodDesc::GetMethodInfoNoSig, vm/method.cpp).
+///
+/// Pair it with mono_method_get_name () for MethodName. TraceLog.cs
+/// (TraceEvent) joins the two fields with "." on its own, so a class name
+/// in both doubles the namespace.
 ///
 /// Allocates. The caller frees the result with g_free ().
 char *etw_method_namespace (MonoMethod *method);

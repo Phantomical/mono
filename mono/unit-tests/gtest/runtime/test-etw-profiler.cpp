@@ -300,9 +300,9 @@ TEST_F (EtwProfilerNaming, GenericClassInstantiationMethod)
  * A generic method: etw_method_namespace () and mono_method_get_name () read
  * off the declaring class and the bare method name. Neither changes with the
  * method's own instantiation - CoreCLR's MethodName field carries no method
- * type argument either, since MethodDesc::GetMethodInfoNoSig just calls
- * GetName (). The signature is what still tells an instantiation apart from
- * its definition.
+ * type argument either, since MethodDesc::GetMethodInfoNoSig calls GetName ()
+ * alone. The signature is what still tells an instantiation apart from its
+ * definition.
  */
 TEST_F (EtwProfilerNaming, GenericMethodNameIsTheSameAcrossInstantiations)
 {
@@ -335,8 +335,8 @@ TEST_F (EtwProfilerNaming, GenericMethodNameIsTheSameAcrossInstantiations)
 /*
  * A wrapper: mono_marshal_get_synchronized_wrapper () builds one over any
  * method, without needing [MethodImpl (Synchronized)] on it. It keeps the
- * target's own klass and name (mono_mb_new (), marshal.c), so naming a
- * wrapper works the same as naming the method it wraps.
+ * target's own klass and name (mono_mb_new (), method-builder.c), so naming
+ * a wrapper works the same as naming the method it wraps.
  */
 TEST_F (EtwProfilerNaming, WrapperKeepsTheTargetsName)
 {
