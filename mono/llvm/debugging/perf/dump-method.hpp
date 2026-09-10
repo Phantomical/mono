@@ -20,7 +20,7 @@ namespace mono::perf {
 
 /// Name a body the classic compiler emitted in the dump, under the name the
 /// same method's compiled tiers get, with the frame description that lets a
-/// profile unwind out of it.
+/// profile unwind out of it and the IL offset in effect at each address.
 ///
 /// Does nothing unless a dump is open, so a caller needs no guard of its own.
 void dump_method (MonoMethod *method, MonoJitInfo *jinfo);

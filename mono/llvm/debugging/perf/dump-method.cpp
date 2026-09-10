@@ -34,10 +34,22 @@ dump_method (MonoMethod *method, MonoJitInfo *jinfo)
 	if (decode_mono_unwind_ops (cfi, cfi_size, epilog_offset, fn.records))
 		described.push_back (std::move (fn));
 
+	/*
+	 * The body's own map is already what publish () asks a line table for:
+	 * ascending by offset and one row per offset. Nothing folds into a classic
+	 * body, so every row names the method itself.
+	 */
+	std::vector<DebugLine> lines;
+
+	lines.reserve (jinfo->n_il_offsets);
+	for (guint32 i = 0; i < jinfo->n_il_offsets; ++i)
+		lines.push_back ({jinfo->il_offsets [i].native_offset,
+		                  jinfo->il_offsets [i].il_offset, display});
+
 	/* The room is what mono_codegen () reserves past the body. */
 	publish (display.c_str (),
 	         {(const uint8_t *) jinfo->code_start, size, size + code_slack ()},
-	         std::move (described));
+	         std::move (described), std::move (lines));
 }
 
 namespace {
