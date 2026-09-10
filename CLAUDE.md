@@ -827,10 +827,16 @@ The charge that takes the count to zero or below calls `mono_tier0_spent ()`, wh
 the compile queue. A promotion that cannot be taken, such as one into a domain on its
 way out, does not happen. The method stays where it is and counts another threshold.
 
-A stack trace and the debugger read a classic body through the runtime's own tables:
-`mono_jinfo_get_il_offset ()` answers from the sequence points
-`mono_save_seq_point_info ()` hangs off the body's jit info, and a breakpoint goes
-through `mono_arch_set_breakpoint ()`'s patchable-site arm.
+A stack trace and the debugger read a classic body through the runtime's own tables.
+`mono_jinfo_get_il_offset ()` answers from `MonoJitInfo::il_offsets`, the per-body
+native-offset -> IL-offset map every compiled tier publishes: the LLVM back end builds
+it from the line table it emitted, and `mono_save_il_offset_map ()`
+(`tier0/seq-points.c`) builds a classic body's out of the sequence points codegen
+placed. The map rides in the jit info's own allocation, so it needs no separate
+freeing, and nothing about it is keyed by `MonoMethod` — which is what lets a method's
+several bodies each describe their own code. `mono_save_seq_point_info ()`'s compact
+table stays for the debugger, which needs the step-target links the map does not carry,
+and a breakpoint goes through `mono_arch_set_breakpoint ()`'s patchable-site arm.
 
 **The interpreter is the other tier-0 engine, and it runs nothing unless asked.**
 `-mono-tier0-classic=0` makes it tier 0 for every method, and a substring for the

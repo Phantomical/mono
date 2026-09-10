@@ -2770,6 +2770,7 @@ create_jit_info (MonoCompile *cfg, MonoMethod *method_to_compile)
 	MonoJitInfoFlags flags = JIT_INFO_NONE;
 	int num_clauses, num_holes = 0;
 	guint32 stack_size = 0;
+	size_t jinfo_size, il_map_offset = 0;
 
 	g_assert (method_to_compile == cfg->method);
 	header = cfg->header;
@@ -2821,41 +2822,40 @@ create_jit_info (MonoCompile *cfg, MonoMethod *method_to_compile)
 	else
 		num_clauses = header->num_clauses;
 
+	/*
+	 * The IL-offset map rides in the same allocation as the jit info, so a
+	 * dynamic method's map goes with the g_free () that releases the record. It
+	 * sits behind everything mono_jit_info_size () accounts for, so none of the
+	 * flag-driven tails move.
+	 */
+	jinfo_size = mono_jit_info_size (flags, num_clauses, num_holes);
+	if (cfg->n_il_offsets > 0) {
+		il_map_offset = ALIGN_TO (jinfo_size, sizeof (gpointer));
+		jinfo_size = il_map_offset + cfg->n_il_offsets * sizeof (MonoILOffsetEntry);
+	}
+
 	if (cfg->method->dynamic)
-		jinfo = (MonoJitInfo *)g_malloc0 (mono_jit_info_size (flags, num_clauses, num_holes));
+		jinfo = (MonoJitInfo *)g_malloc0 (jinfo_size);
 	else
-		jinfo = (MonoJitInfo *)mono_mem_manager_alloc0 (cfg->mem_manager, mono_jit_info_size (flags, num_clauses, num_holes));
+		jinfo = (MonoJitInfo *)mono_mem_manager_alloc0 (cfg->mem_manager, jinfo_size);
 	jinfo_try_holes_size += num_holes * sizeof (MonoTryBlockHoleJitInfo);
 
 	mono_jit_info_init (jinfo, cfg->method_to_register, cfg->native_code, cfg->code_len, flags, num_clauses, num_holes);
 	jinfo->domain_neutral = (cfg->opt & MONO_OPT_SHARED) != 0;
 
+	if (cfg->n_il_offsets > 0) {
+		MonoILOffsetEntry *map = (MonoILOffsetEntry *) ((char *) jinfo + il_map_offset);
+
+		memcpy (map, cfg->il_offsets, cfg->n_il_offsets * sizeof (MonoILOffsetEntry));
+		jinfo->il_offsets = map;
+		jinfo->n_il_offsets = cfg->n_il_offsets;
+	}
+
 	if (COMPILE_LLVM (cfg)) {
 		jinfo->from_llvm = TRUE;
-		/*
-		 * Neither of the runtime's native-offset -> IL-offset mappings is
-		 * produced by this backend: sequence points get their native offsets
-		 * from mono_add_seq_point (), and the symbol-file line table from
-		 * mono_debug_open_method ()/mono_debug_close_method () - all three only
-		 * ever run inside mono_codegen (), i.e. for a classic body. Both
-		 * mappings are keyed by MonoMethod, so under tiering a promoted method
-		 * still has the tier-0 body's mapping registered, and reading it with a
-		 * tier-1 native offset yields a plausible but fabricated IL offset.
-		 *
-		 * cfg->llvm_seq_points is a separate, per-body mapping that does not
-		 * have this problem - it hangs directly off this jinfo rather than being
-		 * looked up by MonoMethod - so when translation actually recovered one,
-		 * publish it here and let mini-exceptions.c report real IL offsets for
-		 * this body instead of "unknown".
-		 */
-		jinfo->no_il_offsets = TRUE;
-		if (cfg->n_llvm_seq_points > 0) {
-			jinfo->llvm_seq_points = cfg->llvm_seq_points;
-			jinfo->n_llvm_seq_points = cfg->n_llvm_seq_points;
-			jinfo->llvm_inline_frames = cfg->llvm_inline_frames;
-			jinfo->n_llvm_inline_frames = cfg->n_llvm_inline_frames;
-			jinfo->no_il_offsets = FALSE;
-		}
+		jinfo->no_il_offsets = cfg->n_il_offsets == 0;
+		jinfo->llvm_inline_frames = cfg->llvm_inline_frames;
+		jinfo->n_llvm_inline_frames = cfg->n_llvm_inline_frames;
 	}
 
 	if (cfg->gshared) {
@@ -4219,6 +4219,8 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 		mono_atomic_inc_i32 (&mono_jit_stats.methods_with_llvm);
 	else
 		mono_atomic_inc_i32 (&mono_jit_stats.methods_without_llvm);
+
+	mono_save_il_offset_map (cfg);
 
 	MONO_TIME_TRACK (mono_jit_stats.jit_create_jit_info, cfg->jit_info = create_jit_info (cfg, method_to_compile));
 

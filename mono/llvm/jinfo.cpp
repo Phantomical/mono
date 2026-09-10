@@ -721,7 +721,7 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	 */
 	size_t n_seq_points = compiled.il_lines.size ();
 	size_t map_offset = (size_t) ALIGN_TO (jinfo_size, sizeof (guint32));
-	size_t map_size = n_seq_points * sizeof (MonoLLVMSeqPoint);
+	size_t map_size = n_seq_points * sizeof (MonoILOffsetEntry);
 	/*
 	 * The folded bodies ride along behind the map, for the same reason and with
 	 * the same lifetime. A row whose offset names no row of the map is left out:
@@ -800,16 +800,16 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	jinfo->no_il_offsets = n_seq_points == 0;
 
 	if (n_seq_points > 0) {
-		MonoLLVMSeqPoint *map =
-			(MonoLLVMSeqPoint *) ((char *) jinfo + map_offset);
+		MonoILOffsetEntry *map =
+			(MonoILOffsetEntry *) ((char *) jinfo + map_offset);
 
 		for (size_t i = 0; i < n_seq_points; ++i) {
 			map[i].native_offset = compiled.il_lines[i].native_offset;
 			map[i].il_offset = compiled.il_lines[i].il_offset;
 		}
 
-		jinfo->llvm_seq_points = map;
-		jinfo->n_llvm_seq_points = (guint32) n_seq_points;
+		jinfo->il_offsets = map;
+		jinfo->n_il_offsets = (guint32) n_seq_points;
 	}
 
 	if (!inlined.empty ()) {

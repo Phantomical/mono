@@ -1103,12 +1103,12 @@ typedef struct MonoCompile {
 	guint32 llvm_ex_info_len;
 	int llvm_this_reg, llvm_this_offset;
 	/*
-	 * The native_offset -> il_offset map the LLVM backend recovered for this body,
-	 * copied verbatim onto jit_info->llvm_seq_points by create_jit_info (). NULL/0
-	 * if translation produced none.
+	 * This body's native_offset -> il_offset map, or NULL when it has none.
+	 * mono_save_il_offset_map () builds it and create_jit_info () copies it onto
+	 * jit_info->il_offsets.
 	 */
-	MonoLLVMSeqPoint *llvm_seq_points;
-	guint32 n_llvm_seq_points;
+	MonoILOffsetEntry *il_offsets;
+	guint32 n_il_offsets;
 	/* Copied onto jit_info->llvm_inline_frames by create_jit_info (). */
 	MonoLLVMInlineFrame *llvm_inline_frames;
 	guint32 n_llvm_inline_frames;
@@ -1745,6 +1745,7 @@ void mono_cfg_set_exception (MonoCompile *cfg, MonoExceptionType type);
 void mono_cfg_set_exception_invalid_program (MonoCompile *cfg, char *msg);
 void mono_update_jit_stats (MonoCompile *cfg);
 void mono_save_seq_point_info (MonoCompile *cfg, MonoJitInfo *jinfo);
+void mono_save_il_offset_map (MonoCompile *cfg);
 void mono_bb_deduplicate_op_il_seq_points (MonoCompile *cfg, MonoBasicBlock *bb);
 gboolean mini_gsharedvt_runtime_invoke_supported (MonoMethodSignature *sig);
 MonoCPUFeatures mini_get_cpu_features (MonoCompile* cfg);

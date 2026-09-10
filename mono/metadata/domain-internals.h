@@ -250,21 +250,21 @@ typedef enum {
 G_ENUM_FUNCTIONS (MonoJitInfoFlags)
 
 /*
- * One entry of a compiled body's native_offset -> il_offset map, as the LLVM
- * backend recovers it from the emitted debug info. Sorted ascending by
- * native_offset; see MonoJitInfo::llvm_seq_points below.
+ * One entry of a compiled body's native_offset -> il_offset map, sorted
+ * ascending by native_offset and one entry per native offset. See
+ * MonoJitInfo::il_offsets below. Both compiled tiers build one: the LLVM back
+ * end from the line table it emitted, the classic compiler from the sequence
+ * points it placed.
  *
- * Deliberately its own tiny format rather than the SeqPoint/MonoSeqPointInfo
- * machinery in seq-points.c: that table is keyed per MonoMethod, not per body,
- * so a tier-1 promotion racing a still-live tier-0 registration for the same
- * method can never win it a correct entry - see publish_seq_points () in
- * mono/llvm/jinfo.cpp. This one hangs directly off the MonoJitInfo it
- * describes, so there is nothing to collide with.
+ * Its own tiny format rather than the SeqPoint/MonoSeqPointInfo machinery,
+ * because that table is keyed per MonoMethod rather than per body, and under
+ * tiering a method has more than one body. This one hangs off the MonoJitInfo
+ * that describes the code it was built from.
  */
 typedef struct {
 	guint32 native_offset;
 	guint32 il_offset;
-} MonoLLVMSeqPoint;
+} MonoILOffsetEntry;
 
 /*
  * One frame of an inlined call chain covering a native offset of a tier-1 body:
@@ -273,10 +273,10 @@ typedef struct {
  *
  * depth 0 is the innermost body; increasing depth walks back out toward the
  * method that was compiled. That outermost method's own position is NOT here -
- * it is what MonoLLVMSeqPoint records, because a stack frame reported for the
+ * it is what MonoILOffsetEntry records, because a stack frame reported for the
  * compiled method has to name its own call site.
  *
- * A row's native_offset is the offset of the MonoLLVMSeqPoint row it belongs to
+ * A row's native_offset is the offset of the MonoILOffsetEntry row it belongs to
  * rather than any address of its own, which is what lets a lookup join the two
  * tables. mono_jinfo_inline_frame () is how a stack walk reads them.
  */
@@ -363,8 +363,8 @@ struct _MonoJitInfo {
 	 * This code was compiled for the method without being a translation of its
 	 * body: a filter body, an entry thunk, the stub that raises a deferred
 	 * error. It is reached and unwound like any other frame, but every mapping
-	 * registered against the MonoMethod describes the body, so llvm_seq_points
-	 * below is the only thing that can place such a frame in the IL.
+	 * registered against the MonoMethod describes the body, so il_offsets below
+	 * is the only thing that can place such a frame in the IL.
 	 */
 	guint32    llvm_side_body : 1;
 
@@ -389,18 +389,16 @@ struct _MonoJitInfo {
 	guint32    tier : 4;
 
 	/*
-	 * This body's own native_offset -> il_offset map, present (n_llvm_seq_points > 0)
-	 * only for a tier-1 body whose translation actually recovered one - see
-	 * MonoLLVMSeqPoint above. Allocated out of the same mem_manager as this MonoJitInfo,
-	 * so it needs no separate freeing. no_il_offsets is FALSE whenever this is set;
-	 * mini-exceptions.c consults it instead of the method-keyed seq-points.c tables.
+	 * This body's own native_offset -> il_offset map - see MonoILOffsetEntry
+	 * above - or NULL when its compiler recovered none. Carved out of the same
+	 * allocation as this MonoJitInfo, so it needs no separate freeing.
 	 */
-	MonoLLVMSeqPoint *llvm_seq_points;
-	guint32     n_llvm_seq_points;
+	MonoILOffsetEntry *il_offsets;
+	guint32     n_il_offsets;
 
 	/*
 	 * The bodies inlined into this one, ascending by (native offset, depth).
-	 * Same allocation and lifetime as llvm_seq_points above.
+	 * Same allocation and lifetime as il_offsets above.
 	 */
 	MonoLLVMInlineFrame *llvm_inline_frames;
 	guint32     n_llvm_inline_frames;

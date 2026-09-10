@@ -98,6 +98,54 @@ collect_pred_seq_points (MonoCompile *cfg, MonoBasicBlock *bb, MonoInst *ins, GS
 	return;
 }
 
+/// Builds this body's native_offset -> il_offset map into cfg->il_offsets, out
+/// of the sequence points codegen placed.
+void
+mono_save_il_offset_map (MonoCompile *cfg)
+{
+	MonoILOffsetEntry *map;
+	guint32 n = 0;
+
+	if (!cfg->seq_points || cfg->seq_points->len == 0)
+		return;
+
+	map = (MonoILOffsetEntry *) mono_mempool_alloc (cfg->mempool, cfg->seq_points->len * sizeof (MonoILOffsetEntry));
+
+	// cfg->seq_points is appended to as the blocks are emitted, and a block's
+	// offset is cfg->code_len, which only grows. One pass in that order needs no
+	// sort behind it.
+	for (guint i = 0; i < cfg->seq_points->len; ++i) {
+		MonoInst *ins = (MonoInst *) g_ptr_array_index (cfg->seq_points, i);
+		guint32 native_offset;
+
+		// A dead-code point stands in for IL that emitted nothing, so it has no
+		// native offset.
+		if (ins->inst_offset == SEQ_POINT_NATIVE_OFFSET_DEAD_CODE)
+			continue;
+		// The debugger's method entry and exit points, whose il_offset names no
+		// instruction.
+		if (ins->inst_imm == METHOD_ENTRY_IL_OFFSET || ins->inst_imm == METHOD_EXIT_IL_OFFSET)
+			continue;
+
+		native_offset = (guint32) ins->inst_offset;
+
+		// An IL instruction that emitted no code of its own leaves two points at
+		// one native offset. The later one is the one whose code follows.
+		if (n > 0 && map [n - 1].native_offset == native_offset)
+			--n;
+
+		map [n].native_offset = native_offset;
+		map [n].il_offset = (guint32) ins->inst_imm;
+		++n;
+	}
+
+	if (n == 0)
+		return;
+
+	cfg->il_offsets = map;
+	cfg->n_il_offsets = n;
+}
+
 void
 mono_save_seq_point_info (MonoCompile *cfg, MonoJitInfo *jinfo)
 {

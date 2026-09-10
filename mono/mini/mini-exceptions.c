@@ -297,16 +297,19 @@ int
 mono_jinfo_get_il_offset (MonoDomain *domain, MonoJitInfo *ji, guint32 native_offset)
 {
 	if (ji->from_llvm)
-		return ji->no_il_offsets ? -1 : mono_jit_info_llvm_il_offset (ji, native_offset);
+		return ji->no_il_offsets ? -1 : mono_jit_info_lookup_il_offset (ji, native_offset);
 
 	if (ji->is_interp)
 		return mini_get_interp_callbacks ()->il_offset_from_native_offset (domain, jinfo_get_method (ji), native_offset);
 
+	// A classic tier-0 body, which carries the same per-body map the LLVM tiers do.
+	if (ji->n_il_offsets > 0)
+		return mono_jit_info_lookup_il_offset (ji, native_offset);
+
 	/*
-	 * A classic tier-0 body. mono_save_seq_point_info () hangs its sequence
-	 * points off the body's own jit info, so this map is per body the way the
-	 * LLVM one above is, and it is not the debug table the comment above
-	 * warns about.
+	 * A body compiled with sequence points turned off, which leaves it no map.
+	 * mono_save_seq_point_info () hangs its points off the body's own jit info
+	 * too, so this is not the debug table the comment above warns about.
 	 */
 	MonoSeqPointInfo *seq_points = (MonoSeqPointInfo *) ji->seq_points;
 	SeqPoint sp;
@@ -1235,27 +1238,26 @@ mono_exception_walk_trace_internal (MonoException *ex, MonoExceptionFrameWalk fu
 }
 
 /*
- * Binary search JI's own native_offset -> il_offset map (recovered from the
- * emitted line table - see
- * MonoJitInfo::llvm_seq_points) for the entry at or immediately before
+ * Binary search JI's own native_offset -> il_offset map (see
+ * MonoJitInfo::il_offsets) for the entry at or immediately before
  * NATIVE_OFFSET, i.e. the same "most recent point execution passed" semantics
- * mono_find_prev_seq_point_for_native_offset () has for a classic body.
+ * mono_find_prev_seq_point_for_native_offset () has.
  *
  * Unlike that function this never consults anything keyed by MonoMethod, so it
- * is safe to call for a tier-1 frame regardless of whether a tier-0 body for
- * the same method is (or ever was) also registered.
+ * is safe to call for any body of a method regardless of which of its other
+ * bodies is (or ever was) also registered.
  *
- * Returns the index into ji->llvm_seq_points, or -1 if the map is empty
- * (translation recovered nothing) or NATIVE_OFFSET precedes every entry.
+ * Returns the index into ji->il_offsets, or -1 if the map is empty (the
+ * compiler recovered nothing) or NATIVE_OFFSET precedes every entry.
  */
 static int
-mono_jit_info_llvm_row (MonoJitInfo *ji, guint32 native_offset)
+il_offset_row (MonoJitInfo *ji, guint32 native_offset)
 {
-	guint32 lo = 0, hi = ji->n_llvm_seq_points;
+	guint32 lo = 0, hi = ji->n_il_offsets;
 
 	while (lo < hi) {
 		guint32 mid = lo + (hi - lo) / 2;
-		if (ji->llvm_seq_points [mid].native_offset <= native_offset)
+		if (ji->il_offsets [mid].native_offset <= native_offset)
 			lo = mid + 1;
 		else
 			hi = mid;
@@ -1265,11 +1267,11 @@ mono_jit_info_llvm_row (MonoJitInfo *ji, guint32 native_offset)
 }
 
 int
-mono_jit_info_llvm_il_offset (MonoJitInfo *ji, guint32 native_offset)
+mono_jit_info_lookup_il_offset (MonoJitInfo *ji, guint32 native_offset)
 {
-	int row = mono_jit_info_llvm_row (ji, native_offset);
+	int row = il_offset_row (ji, native_offset);
 
-	return row < 0 ? -1 : (int) ji->llvm_seq_points [row].il_offset;
+	return row < 0 ? -1 : (int) ji->il_offsets [row].il_offset;
 }
 
 /*
@@ -1294,10 +1296,10 @@ mono_jit_info_llvm_inline_frames (MonoJitInfo *ji, guint32 native_offset, MonoLL
 	if (ji->n_llvm_inline_frames == 0)
 		return 0;
 
-	row = mono_jit_info_llvm_row (ji, native_offset);
+	row = il_offset_row (ji, native_offset);
 	if (row < 0)
 		return 0;
-	anchor = ji->llvm_seq_points [row].native_offset;
+	anchor = ji->il_offsets [row].native_offset;
 
 	lo = 0;
 	hi = ji->n_llvm_inline_frames;
@@ -1766,7 +1768,7 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 				 * create_jit_info ()). Its own per-body map has no file/line,
 				 * only an IL offset.
 				 */
-				il_offset = mono_jit_info_llvm_il_offset (frame.ji, frame.native_offset);
+				il_offset = mono_jit_info_lookup_il_offset (frame.ji, frame.native_offset);
 			} else if (frame.type == FRAME_TYPE_INTERP) {
 				/*
 				 * An offset into the interpreter IR, which only the interpreter's own
@@ -2386,7 +2388,7 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 		} else {
 			actual_method = get_method_from_stack_frame (ji, get_generic_info_from_stack_frame (ji, &ctx));
 			if (ji->from_llvm && !ji->no_il_offsets)
-				il_offset = mono_jit_info_llvm_il_offset (ji, frame.native_offset);
+				il_offset = mono_jit_info_lookup_il_offset (ji, frame.native_offset);
 		}
 	}
 

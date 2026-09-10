@@ -139,7 +139,7 @@ struct InterpMethod {
 	MonoDomain *domain;
 	/// Maps a bytecode offset back to the IL offset it came from. A stack
 	/// trace reads an interpreted frame's IL offset from here, the way it
-	/// reads a compiled frame's from llvm_seq_points.
+	/// reads a compiled frame's from il_offsets.
 	///
 	/// A transformed method with IL keeps a table of its own, so the encoding
 	/// favors size over simplicity. Pairs of deltas as varints, ascending by

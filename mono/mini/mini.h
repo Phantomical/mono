@@ -712,7 +712,7 @@ MonoJitInfo* mini_jit_info_table_find_ext       (MonoDomain *domain, gpointer ad
 G_EXTERN_C void mono_resume_unwind              (MonoContext *ctx);
 
 MonoJitInfo * mono_find_jit_info                (MonoDomain *domain, MonoJitTlsData *jit_tls, MonoJitInfo *res, MonoJitInfo *prev_ji, MonoContext *ctx, MonoContext *new_ctx, char **trace, MonoLMF **lmf, int *native_offset, gboolean *managed);
-int      mono_jit_info_llvm_il_offset           (MonoJitInfo *ji, guint32 native_offset);
+int      mono_jit_info_lookup_il_offset         (MonoJitInfo *ji, guint32 native_offset);
 int      mono_jinfo_frame_count                 (MonoJitInfo *ji, guint32 native_offset);
 gboolean mono_jinfo_inline_frame                (MonoJitInfo *ji, guint32 native_offset, int index, MonoMethod **method, int *il_offset);
 
