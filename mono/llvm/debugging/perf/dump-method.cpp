@@ -63,6 +63,82 @@ room_past (const uint8_t *code, size_t size, const CompiledMethod &compiled)
 	return size + code_slack ();
 }
 
+/// The line rows for the function symbol names, or null where it has none.
+const std::vector<IlLineRow> *
+il_lines_for (const CompiledMethod &compiled, llvm::StringRef symbol)
+{
+	if (symbol == compiled.functions.front ().first)
+		return &compiled.il_lines;
+
+	for (const auto &[name, rows] : compiled.other_il_lines) {
+		if (name == symbol)
+			return &rows;
+	}
+
+	return nullptr;
+}
+
+/// The same, for the bodies an inliner folded into that function.
+const std::vector<IlInlineRow> *
+inline_frames_for (const CompiledMethod &compiled, llvm::StringRef symbol)
+{
+	if (symbol == compiled.functions.front ().first)
+		return &compiled.inline_frames;
+
+	for (const auto &[name, rows] : compiled.other_inline_frames) {
+		if (name == symbol)
+			return &rows;
+	}
+
+	return nullptr;
+}
+
+/// Turn one function's line table into the rows a dump record carries.
+///
+/// perf keeps one position per address. So a row an inliner covered names the
+/// innermost body folded in there, which is the one the address is running.
+std::vector<DebugLine>
+debug_lines (MonoMethod *method, const CompiledMethod &compiled, llvm::StringRef symbol)
+{
+	const std::vector<IlLineRow> *rows = il_lines_for (compiled, symbol);
+
+	if (rows == nullptr || rows->empty ())
+		return {};
+
+	const std::vector<IlInlineRow> *folded = inline_frames_for (compiled, symbol);
+	std::string own = display_name (method, symbol);
+	std::vector<DebugLine> lines;
+
+	lines.reserve (rows->size ());
+	for (const IlLineRow &row : *rows) {
+		DebugLine line;
+
+		line.offset = row.native_offset;
+		line.line = row.il_offset;
+		line.file = own;
+
+		// The rows ascend by offset and then by depth, so the first row on
+		// an offset is the innermost body.
+		if (folded != nullptr) {
+			auto at = std::lower_bound (
+				folded->begin (), folded->end (), row.native_offset,
+				[] (const IlInlineRow &frame, uint32_t offset) {
+					return frame.native_offset < offset;
+				});
+
+			if (at != folded->end () && at->native_offset == row.native_offset) {
+				line.line = at->il_offset;
+				line.file = method_display_name (
+					(MonoMethod *) (uintptr_t) at->callee);
+			}
+		}
+
+		lines.push_back (std::move (line));
+	}
+
+	return lines;
+}
+
 } // namespace
 
 void
@@ -91,7 +167,7 @@ dump_method (MonoMethod *method, const CompiledMethod &compiled)
 		std::string display = display_name (method, symbol);
 
 		publish (display.c_str (), {code, size, room_past (code, size, compiled)},
-		         std::move (described));
+		         std::move (described), debug_lines (method, compiled, symbol));
 	}
 
 	for (const auto &[code, size] : compiled.linker_stubs) {
