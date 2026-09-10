@@ -53,6 +53,10 @@ if(NOT MONO_HOST_WINDOWS)
     # which includes gc.h with the same expectations.
     PUBLIC GC_LINUX_THREADS _GNU_SOURCE _REENTRANT USE_MMAP USE_MUNMAP
            USE_COMPILER_TLS)
+  # The collector holds the allocation lock for a whole stop-the-world
+  # collection. The spin lock it takes otherwise backs off to a 15 ms sleep. Its
+  # holder re-takes it on release, so a fast allocator starves its peers.
+  target_compile_definitions(monogc PRIVATE USE_PTHREAD_LOCKS)
 endif()
 
 target_compile_options(monogc PRIVATE
