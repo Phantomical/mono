@@ -55,8 +55,9 @@ mono_test_environment(PROFILE net_4_x ASSEMBLY Mono.Debugger.Soft.dll
 # forever. About a dozen do, in a run that otherwise passes, so the suite is
 # followed by a sweep.
 #
-# Matched on the full path of the exe this build tree produced, which no other
-# process on the machine can be running.
+# Matched on the full path of the exe this build tree produced, so no other tree
+# is in reach. A debuggee this tree is still using matches too, which is what the
+# label below is for.
 if(WIN32)
   # No pkill here. PowerShell matches on the same full path and is made to
   # exit 1 when it matched nothing, so SKIP_RETURN_CODE below reads either
@@ -71,7 +72,10 @@ endif()
 
 add_test(NAME bcl-Mono.Debugger.Soft-cleanup COMMAND ${_sweep})
 set_tests_properties(bcl-Mono.Debugger.Soft-cleanup PROPERTIES
-  LABELS fixture
+  # `bcl` is the suite's own label, so a run that excludes the suite excludes the
+  # sweep. A fixture still runs for the test that requires it, whatever the label
+  # filters say.
+  LABELS "bcl;fixture"
   FIXTURES_CLEANUP fx_bcl-Mono.Debugger.Soft
   # The sweep exits 1 when it matched nothing, which is the good outcome.
   SKIP_RETURN_CODE 1)
