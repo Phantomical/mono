@@ -214,13 +214,13 @@ method_load (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo, gboolea
 	MonoClass *klass = mono_method_get_class (method);
 	char *signature = mono_signature_get_desc (mono_method_signature_internal (method), TRUE);
 	char *full_class_name = g_strdup_printf ("%s.%s", m_class_get_name (klass), mono_method_get_name (method));
-	const char *namespace = m_class_get_name_space (klass);
+	const char *name_space = m_class_get_name_space (klass);
 	gpointer code_start = mono_jit_info_get_code_start (jinfo);
 	int code_size = mono_jit_info_get_code_size (jinfo);
 	MonoImage *image = mono_class_get_image (klass);
 	uint32_t method_token = mono_unity_method_get_token (method);
 
-	gunichar2 *namespace_utf16 = u8to16 (namespace);
+	gunichar2 *namespace_utf16 = u8to16 (name_space);
 	gunichar2 *full_class_name_utf16 = u8to16 (full_class_name);
 	gunichar2 *signature_utf16 = u8to16 (signature);
 

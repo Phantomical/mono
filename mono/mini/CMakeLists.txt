@@ -79,7 +79,8 @@ file(GLOB icall_sources CONFIGURE_DEPENDS icalls/*.c)
 list(APPEND mini_sources ${icall_sources})
 
 if(MONO_ENABLE_LLVM)
-  list(APPEND mini_sources llvm-runtime.cpp domain-method.cpp method-override.cpp thunk.cpp)
+  list(APPEND mini_sources llvm-runtime.cpp domain-method.cpp method-override.cpp thunk.cpp
+              etw-profiler.cpp)
 endif()
 
 # Only a player build defines these: the operator new family and the

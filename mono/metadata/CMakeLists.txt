@@ -130,8 +130,7 @@ set(metadata_common_sources
   abi.c
   memory-manager.c
   native-library.c
-  native-library-qcall.c
-  etw-profiler.c)
+  native-library-qcall.c)
 
 if(MONO_ENABLE_ICALL_TABLES)
   list(APPEND metadata_common_sources icall-table.c)
