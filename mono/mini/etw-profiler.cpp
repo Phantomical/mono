@@ -1,17 +1,17 @@
 // MIT License
-// 
+//
 // Copyright (c) 2021 Superluminal (www.superluminal.eu)
-// 
+//
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
 // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
-// 
+//
 // The above copyright notice and this permission notice shall be included in all
 // copies or substantial portions of the Software.
-// 
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -22,11 +22,106 @@
 
 #include <config.h>
 
-#if defined (HOST_WIN32)
+#include "etw-profiler.hpp"
+
+#include "domain-method.hpp"
+
 #include <glib.h>
+#include <mono/llvm/runtime.h>
+#include <mono/metadata/class-internals.h>
+#include <mono/metadata/domain-internals.h>
+
+// The two payload computations below take no ETW session and no HOST_WIN32,
+// which is what lets mono/unit-tests/gtest/runtime/test-etw-profiler.cpp call
+// them directly. Everything past the #if is the ETW registration itself.
+
+namespace mono {
+
+namespace {
+
+constexpr uint32_t kMethodFlagsDynamic = 0x1;
+constexpr uint32_t kMethodFlagsGeneric = 0x2;
+constexpr uint32_t kMethodFlagsSharedGenericCode = 0x4;
+constexpr uint32_t kMethodFlagsJitted = 0x8;
+
+// src/coreclr/vm/codeversion.h's own values, held fixed there to avoid
+// breaking event tracing. This backend has no OSR and profiles nothing
+// beyond mono_llvm_jit_tier2_enabled (), so five of its eight are all this
+// ever reports.
+uint32_t
+clr_tier (MonoJitInfo *jinfo)
+{
+	switch (static_cast<MonoTier> (jinfo->tier)) {
+	case MonoTier::none:
+		return 0; /* Unknown */
+	case MonoTier::tier0:
+		return 1; /* MinOptJitted */
+	case MonoTier::tier1:
+		return mono_llvm_jit_tier2_enabled () ? 6 /* InstrumentedTier */
+		                                      : 3; /* QuickJitted */
+	case MonoTier::tier2:
+		return 4; /* OptimizedTier1 */
+	case MonoTier::interp:
+	case MonoTier::detoured:
+		break;
+	}
+
+	// An interpreted body's jit info is always null (attach_body ()), and
+	// MonoJitInfo::tier's own comment rules out detoured. Neither value
+	// reaches a live jinfo.
+	g_assert_not_reached ();
+	return 0;
+}
+
+} // namespace
+
+uint32_t
+etw_method_flags (MonoMethod *method, MonoJitInfo *jinfo)
+{
+	uint32_t flags = kMethodFlagsJitted;
+
+	if (method->is_inflated)
+		flags |= kMethodFlagsGeneric;
+
+	if (jinfo->has_generic_jit_info
+	    && mono_jit_info_get_generic_sharing_context (jinfo) != nullptr)
+		flags |= kMethodFlagsSharedGenericCode;
+
+	if (method->dynamic)
+		flags |= kMethodFlagsDynamic;
+
+	flags |= (clr_tier (jinfo) & 0x7) << 7;
+
+	return flags;
+}
+
+uint32_t
+etw_body_il_map (MonoJitInfo *jinfo, uint32_t *il_offsets, uint32_t *native_offsets,
+                 uint32_t max_entries)
+{
+	uint32_t count = 0;
+	uint32_t last_il_offset = (uint32_t) -1;
+
+	for (uint32_t i = 0; i < jinfo->n_llvm_seq_points && count < max_entries; ++i) {
+		uint32_t il_offset = jinfo->llvm_seq_points[i].il_offset;
+
+		if (il_offset == last_il_offset)
+			continue;
+
+		last_il_offset = il_offset;
+		il_offsets[count] = il_offset;
+		native_offsets[count] = jinfo->llvm_seq_points[i].native_offset;
+		++count;
+	}
+
+	return count;
+}
+
+} // namespace mono
+
+#if defined (HOST_WIN32)
 #include <mono/metadata/assembly-internals.h>
 #include <mono/metadata/assembly.h>
-#include <mono/metadata/class-internals.h>
 #include <mono/metadata/debug-helpers.h>
 #include <mono/metadata/debug-internals.h>
 #include <mono/metadata/debug-mono-ppdb.h>
@@ -156,59 +251,37 @@ method_load (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo, gboolea
 	int compressed_num_lines = 0;
 
 	char *sourceFilePath = NULL;
-	MonoDebugMethodJitInfo *dmji = mono_debug_find_method (method, domain);
-	if (dmji != NULL) {
-		// There are a few things to keep in mind when emitting IL/native offset mapping data:
-		//
-		// 1) Debug data redundancy
-		//
-		// The way Mono works is:
-		// - IL is converted to IR
-		// - IR is converted to ASM
-		//
-		// Each step is a 1:N mapping: 1 IL instruction can result in multiple IR instructions and 1 IR instruction can result in multiple asm instructions.
-		// Mono's debug data contains IL offset -> native offset mapping data for each IR instruction. This means that there could be multiple entries for
-		// a single IL instruction, depending on how many IR instructions were involved. These entries will all have the same IL offset, but a different
-		// native offset.
-		//
-		// For our purposes, this is redundant information: we only care about the fact that a range of ASM instructions maps to a specific IL offsets,
-		// we don't care about the individual ASM ranges.
-		//
-		// So, the following loop eliminates this redundancy by only emitting a new IL/native offset pair when the IL offset changes.
-		// This means that each entry in the resulting table basically represents a range in  both IL and native space.
-		//
-		// 2) ETW max event sizes
-		//
-		// In order to communicate the IL/native offset mapping, the MethodILToNativeMap event from the .NET provider is used. This event takes two arrays,
-		// along with a count. However, there is a limit: ETW events can have a maximum of 64KiB - sizeof(EVENT_HEADER) of data. This is problematic,
-		// because the size of the data needed for the MethodILToNativeMap grows with the length of the function that was compiled, and is basically unbounded.
-		// With the redundancy improvement from the previous section, the chance of this happening is low, but it's still possible if you have a large enough
-		// function (think 5k+ lines).
-		//
-		// When the event size limit is exceeded, EventWriteMethodILToNativeMap will return ERROR_ARITHMETIC_OVERFLOW (through EventWriteTransfer) and the
-		// event will not be written to the file. However, the ETW recorder will notice this happening and will record this as a lost event. So, when this happens
-		// the user will get an 'XX events lost' warning when opening this trace in a profiler that understands ETW.
-		//
-		// In order to prevent this scary warning, we make sure we only ever emit a maximum number of IL/native offsets. This is currently set to 7000 (see MAX_NUM_OFFSETS),
-		// which was taken from .NET Core's ETW provider which does the same thing; see https://github.com/dotnet/runtime/blob/5fa6dd364982be4ffd83358adbf130d88049c72a/src/coreclr/vm/eventtrace.cpp#L6859.
-		//
-		// This does have the effect that for functions where this happens, not all asm instructions will be able to be mapped to lines. A better fix would be to simply
-		// emit multiple MethodILToNativeMap events to ensure all data is recorded. However, existing tooling around .NET/ETW (i.e. PerfView, WPA, etc) most likely can't
-		// deal with multiple of these events happening for the same method, so for compatibility reasons we've decided not to do that.
-		uint32_t last_il_offset = -1;
-		for (int i = 0; i < (int)dmji->num_line_numbers && compressed_num_lines < MAX_NUM_OFFSETS; ++i) {
-			if (dmji->line_numbers[i].il_offset != last_il_offset) {
 
-				last_il_offset = dmji->line_numbers[i].il_offset;
+	if (jinfo->n_llvm_seq_points > 0) {
+		compressed_num_lines =
+			(int) mono::etw_body_il_map (jinfo, il_offsets, native_offsets, MAX_NUM_OFFSETS);
+	} else {
+		/*
+		 * A classic tier-0 body's jinfo carries no per-body map:
+		 * n_llvm_seq_points is 0. This reads the method-keyed debug table
+		 * instead.
+		 *
+		 * One IL instruction can lower to several IR instructions, each with
+		 * its own native offset but the same IL offset. Dedupe by IL offset
+		 * the same way etw_body_il_map () does, since PerfView only wants
+		 * the range each IL offset covers.
+		 */
+		MonoDebugMethodJitInfo *dmji = mono_debug_find_method (method, domain);
+		if (dmji != NULL) {
+			uint32_t last_il_offset = (uint32_t) -1;
+			for (int i = 0; i < (int)dmji->num_line_numbers && compressed_num_lines < MAX_NUM_OFFSETS; ++i) {
+				if (dmji->line_numbers[i].il_offset != last_il_offset) {
+					last_il_offset = dmji->line_numbers[i].il_offset;
 
-				native_offsets[compressed_num_lines] = dmji->line_numbers[i].native_offset;
-				il_offsets[compressed_num_lines] = dmji->line_numbers[i].il_offset;
+					native_offsets[compressed_num_lines] = dmji->line_numbers[i].native_offset;
+					il_offsets[compressed_num_lines] = dmji->line_numbers[i].il_offset;
 
-				compressed_num_lines++;
+					compressed_num_lines++;
+				}
 			}
-		}
 
-		mono_debug_free_method_jit_info (dmji);
+			mono_debug_free_method_jit_info (dmji);
+		}
 	}
 
 	MonoClass *klass = mono_method_get_class (method);
@@ -219,17 +292,21 @@ method_load (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo, gboolea
 	int code_size = mono_jit_info_get_code_size (jinfo);
 	MonoImage *image = mono_class_get_image (klass);
 	uint32_t method_token = mono_unity_method_get_token (method);
+	uint32_t method_flags = mono::etw_method_flags (method, jinfo);
 
 	gunichar2 *namespace_utf16 = u8to16 (name_space);
 	gunichar2 *full_class_name_utf16 = u8to16 (full_class_name);
 	gunichar2 *signature_utf16 = u8to16 (signature);
 
 	if (is_rundown) {
-		EventWriteMethodDCEndVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, 0x4, namespace_utf16, full_class_name_utf16, signature_utf16, 0, 0);
-		EventWriteMethodDCEndILToNativeMap ((uint64_t)method, 0, 0, compressed_num_lines, il_offsets, native_offsets, 0);
+		EventWriteMethodDCEndVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, method_flags, namespace_utf16, full_class_name_utf16, signature_utf16, 0, 0);
+		// An empty map is noise no consumer can use.
+		if (compressed_num_lines > 0)
+			EventWriteMethodDCEndILToNativeMap ((uint64_t)method, 0, 0, compressed_num_lines, il_offsets, native_offsets, 0);
 	} else {
-		EventWriteMethodLoadVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, 0x4, namespace_utf16, full_class_name_utf16, signature_utf16, 0, 0);
-		EventWriteMethodILToNativeMap ((uint64_t)method, 0, 0, compressed_num_lines, il_offsets, native_offsets, 0);
+		EventWriteMethodLoadVerbose_V2 ((uint64_t)method, (uint64_t)image, (uint64_t)code_start, code_size, method_token, method_flags, namespace_utf16, full_class_name_utf16, signature_utf16, 0, 0);
+		if (compressed_num_lines > 0)
+			EventWriteMethodILToNativeMap ((uint64_t)method, 0, 0, compressed_num_lines, il_offsets, native_offsets, 0);
 	}
 
 	g_free (signature_utf16);
@@ -248,6 +325,17 @@ struct JITEnumerationData {
 static void
 method_jit_done (MonoProfiler *prof, MonoMethod *method, MonoJitInfo *jinfo)
 {
+	/*
+	 * raise_jit_done () (publish-events.cpp) raises jit_done twice for a
+	 * managed-to-native wrapper.
+	 *
+	 * The first names the method it wraps, but passes this same jinfo - the
+	 * wrapper's own. The second names the wrapper, which jinfo actually
+	 * describes. This event reports only the second.
+	 */
+	if (mono_jit_info_get_method (jinfo) != method)
+		return;
+
 	method_load (mono_domain_get (), method, jinfo, FALSE);
 }
 
