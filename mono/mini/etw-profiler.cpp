@@ -57,8 +57,9 @@ constexpr uint32_t kEventControlCodeEnableProvider = 1;
 constexpr uint32_t kEventControlCodeCaptureState = 2;
 
 // The tier bits a MethodLoadVerbose_V2 event carries. ClrEtwAll.man reserves
-// 0x80 to 0x200 for them and names no values, so the names are the consumer's
-// own. etw-profiler.md has PerfView's.
+// 0x80 to 0x200 for them and names no values, so these are the consumer's
+// numbering. codeversion.h's OptimizationTier is a different enum with
+// different values.
 uint32_t
 clr_tier (MonoJitInfo *jinfo)
 {
