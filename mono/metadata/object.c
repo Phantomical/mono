@@ -582,8 +582,6 @@ mono_runtime_class_init_full (MonoVTable *vtable, MonoError *error)
 			  (klass_image == mono_defaults.corlib &&
 			   !strcmp (klass_name_space, "System") &&
 			   !strcmp (klass_name, "TypeInitializationException")))) {
-			vtable->init_failed = 1;
-
 			char *full_name;
 
 			if (klass_name_space && *klass_name_space)
@@ -591,11 +589,26 @@ mono_runtime_class_init_full (MonoVTable *vtable, MonoError *error)
 			else
 				full_name = g_strdup (klass_name);
 
+			/*
+			 * Setting init_failed before this call would let a reentrant call
+			 * on this same thread see it failed with nothing yet in
+			 * type_init_exception_hash: TypeInitializationException's own
+			 * constructor runs managed code, and a base-constructor touch of
+			 * CultureInfo (say) reaches this same vtable's class-init check on
+			 * the way. Seen that early, the reentrant call takes this same
+			 * branch and builds a second wrapper of its own, which runs the
+			 * same constructor again -- forever. Left at 0 until the wrapper
+			 * below exists, it instead finds this thread's own
+			 * TypeInitializationLock still on type_initialization_hash and
+			 * returns at once, same as any other same-thread reentrant init.
+			 */
 			MonoException *exc_to_throw = mono_get_exception_type_initialization_checked (full_name, exc, error);
 			MONO_HANDLE_NEW (MonoException, exc_to_throw);
 			g_free (full_name);
 
 			mono_error_assert_ok (error); //We can't recover from this, no way to fail a type we can't alloc a failure.
+
+			vtable->init_failed = 1;
 
 			/*
 			 * Store the exception object so it could be thrown on subsequent

@@ -831,6 +831,8 @@ mono_get_exception_type_initialization (const gchar *type_name, MonoException* i
 	HANDLE_FUNCTION_RETURN_OBJ (ret);
 }
 
+void (*mono_test_hook_type_init_exception_ctor) (const gchar *type_name);
+
 MonoExceptionHandle
 mono_get_exception_type_initialization_handle (const gchar *type_name, MonoExceptionHandle inner, MonoError *error)
 {
@@ -841,6 +843,9 @@ mono_get_exception_type_initialization_handle (const gchar *type_name, MonoExcep
 	gpointer iter;
 
 	error_init (error);
+
+	if (mono_test_hook_type_init_exception_ctor)
+		mono_test_hook_type_init_exception_ctor (type_name);
 
 	klass = mono_class_load_from_name (mono_get_corlib (), "System", "TypeInitializationException");
 

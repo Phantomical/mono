@@ -17,6 +17,19 @@ G_BEGIN_DECLS
 MonoExceptionHandle
 mono_get_exception_type_initialization_handle (const gchar *type_name, MonoExceptionHandle inner, MonoError *error);
 
+/*
+ * Test-only: called from mono_get_exception_type_initialization_handle ()
+ * before it builds the TypeInitializationException instance, naming the
+ * class the exception is for. NULL outside mono/unit-tests/gtest/runtime/
+ * test-type-init-recursion.cpp, which is the only thing that ever sets it.
+ * Lets that test reenter a vtable's class-init check from the same window
+ * mono_runtime_class_init_full ()'s own construction of that exception runs
+ * in, on ordinary hardware, without needing a class that fails to initialize
+ * only because building its own failure's report needs it again --
+ * System.Globalization.CultureInfo is the one this happens to on Windows.
+ */
+extern void (*mono_test_hook_type_init_exception_ctor) (const gchar *type_name);
+
 MonoExceptionHandle
 mono_get_exception_reflection_type_load_checked (MonoArrayHandle types, MonoArrayHandle exceptions, MonoError *error);
 
