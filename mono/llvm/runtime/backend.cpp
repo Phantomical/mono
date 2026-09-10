@@ -23,6 +23,7 @@
 // _CRT_NONSTDC_NO_DEPRECATE.
 #include <io.h>
 #include <process.h>
+#include <windows.h>
 #else
 #include <unistd.h>
 #endif
@@ -78,6 +79,26 @@ lazy_compile_failed ()
 	fflush (nullptr);
 	_exit (1);
 }
+
+#ifdef HOST_WIN32
+typedef BOOLEAN (NTAPI *RtlDllShutdownInProgressPtr) (void);
+
+/// Whether ExitProcess () is currently unwinding every loaded module.
+bool
+tearing_down_every_module ()
+{
+	static RtlDllShutdownInProgressPtr in_progress = [] () -> RtlDllShutdownInProgressPtr {
+		HMODULE ntdll;
+		if (!GetModuleHandleExW (0, L"ntdll.dll", &ntdll))
+			return nullptr;
+
+		return reinterpret_cast<RtlDllShutdownInProgressPtr> (
+			GetProcAddress (ntdll, "RtlDllShutdownInProgress"));
+	} ();
+
+	return in_progress != nullptr && in_progress ();
+}
+#endif
 
 } // namespace
 
@@ -252,14 +273,19 @@ MonoBackend::register_exit_teardown ()
 			 */
 #ifdef HOST_WIN32
 			/*
-			 * The CRT runs this from the loader's process-detach
-			 * notification, with the loader lock held and every other thread
-			 * in the process already gone. Waiting for a worker there is a
-			 * wait on a thread that cannot answer, and it is a wait for
-			 * nothing: no teardown follows that a worker could be ordered
-			 * against.
+			 * Statically linked into an executable, this handler runs on
+			 * the thread that returned from main (), with every worker
+			 * still live. The wait below is safe there, and orders the
+			 * teardown above against a compile.
+			 *
+			 * Linked into a DLL an embedder unloads through ExitProcess (),
+			 * it runs instead from DllMain (DLL_PROCESS_DETACH), with the
+			 * loader lock held. Microsoft's documentation for that
+			 * notification says every other thread is already cut off, so
+			 * joining one can deadlock this thread on its own lock.
+			 * tearing_down_every_module () tells the two cases apart.
 			 */
-			stop_compilation (false);
+			stop_compilation (!tearing_down_every_module ());
 #else
 			stop_compilation ();
 #endif
