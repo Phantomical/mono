@@ -413,6 +413,34 @@ sgen_try_alloc_obj_nolock (GCVTable vtable, size_t size)
 	return (GCObject*)p;
 }
 
+/* Takes the GC lock itself. Calling it while already holding the lock deadlocks. */
+static void
+per_allocation_action (void)
+{
+	static int alloc_count;
+	int current_alloc;
+
+	if (G_LIKELY (!sgen_has_per_allocation_action))
+		return;
+
+	current_alloc = mono_atomic_inc_i32 (&alloc_count);
+
+	if (sgen_verify_before_allocs) {
+		if ((current_alloc % sgen_verify_before_allocs) == 0) {
+			LOCK_GC;
+			sgen_check_whole_heap_stw ();
+			UNLOCK_GC;
+		}
+	}
+	if (sgen_collect_before_allocs) {
+		if (((current_alloc % sgen_collect_before_allocs) == 0) && sgen_nursery_section) {
+			LOCK_GC;
+			sgen_perform_collection (0, GENERATION_NURSERY, "collect-before-alloc-triggered", TRUE, TRUE);
+			UNLOCK_GC;
+		}
+	}
+}
+
 GCObject*
 sgen_alloc_obj (GCVTable vtable, size_t size)
 {
@@ -422,25 +450,7 @@ sgen_alloc_obj (GCVTable vtable, size_t size)
 	if (!SGEN_CAN_ALIGN_UP (size))
 		return NULL;
 
-	if (G_UNLIKELY (sgen_has_per_allocation_action)) {
-		static int alloc_count;
-		int current_alloc = mono_atomic_inc_i32 (&alloc_count);
-
-		if (sgen_verify_before_allocs) {
-			if ((current_alloc % sgen_verify_before_allocs) == 0) {
-				LOCK_GC;
-				sgen_check_whole_heap_stw ();
-				UNLOCK_GC;
-			}
-		}
-		if (sgen_collect_before_allocs) {
-			if (((current_alloc % sgen_collect_before_allocs) == 0) && sgen_nursery_section) {
-				LOCK_GC;
-				sgen_perform_collection (0, GENERATION_NURSERY, "collect-before-alloc-triggered", TRUE, TRUE);
-				UNLOCK_GC;
-			}
-		}
-	}
+	per_allocation_action ();
 
 	ENTER_CRITICAL_REGION;
 	res = sgen_try_alloc_obj_nolock (vtable, size);
@@ -470,6 +480,8 @@ sgen_alloc_obj_pinned (GCVTable vtable, size_t size)
 	if (!SGEN_CAN_ALIGN_UP (size))
 		return NULL;
 	size = ALIGN_UP (size);
+
+	per_allocation_action ();
 
 	LOCK_GC;
 
