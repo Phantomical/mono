@@ -700,8 +700,11 @@ as well as by `amd64.hpp`, so it holds nothing but `#define`s.
   `arch/amd64/`, not a hunt through the backend for the amd64 in it.
 - **`passes/`** — `array-address`, `lower-builtins`, `cast-func` and `alloc-func` rewrite
   the symbolic calls the front end leaves standing. `restore-tail-position` puts back the tail position
-  SimplifyCFG merged away. `devirtualize` and `eliminate-cast` answer a site whose
-  operands the optimizer settled. `top-down-inline` is tier 2's cost model and `inline-copies`
+  SimplifyCFG merged away. `devirtualize` answers a dispatch whose operands the
+  optimizer settled, and `builtins` does the same for a type test, a vtable read, a
+  delegate Invoke and a write barrier - `MonoBuiltinConstProp` is the pass that runs
+  them, in the file the free functions behind it live in too, because none of them
+  is a pass of its own. `top-down-inline` is tier 2's cost model and `inline-copies`
   the sweep behind it. `eh-gather` and `finally-range` are `MachineFunctionPass`es that
   emit nothing and instead fill in the side channel the EH sections are written from.
 - **`analysis/`** — what a pass asks about the IR, answering rather than rewriting.
@@ -710,7 +713,11 @@ as well as by `amd64.hpp`, so it holds nothing but `#define`s.
   a value holds or the set of values it can be reached by. `operand-class` says what
   class a value holds, `escape` whether an allocation's pointer leaves the function,
   and `vtable-info` what a class's vtable symbol carries. `strip-casts` is the one
-  traversal left, for a rule that compares two spellings of one address.
+  traversal left, for a rule that compares two spellings of one address. `builtins`
+  answers a type test against a known class and a delegate Invoke against the method
+  it was built over - questions the tier-2 cost model and the front end ask as well,
+  which is why they are read-only functions here rather than folded into either
+  `MonoBuiltinConstProp` or the front end that asks them.
 
 Where a pass needs something only the front end knew, the front end emits a call to a
 declaration. That declaration's *name* says what the site means (`mono.array.address.*`,
@@ -910,7 +917,7 @@ clause, so what the runtime holds does not grow with the calls.
 answered. In between, `MonoBuiltinConstProp` eliminates a site from what the IR says the
 operand is: an allocation states its class, and a parameter states the class its slot is
 declared with. A declared class is a bound, so an answer needs every class that slot
-admits to agree, and `cast_answer ()` (`passes/eliminate-cast.cpp`) is that rule, with the
+admits to agree, and `cast_answer ()` (`analysis/builtins.cpp`) is that rule, with the
 argument for each arm beside it. Two of them are worth knowing from outside, because both
 are places an obvious rule is wrong: an interface target can be answered no only for an
 array operand, since any subclass may implement an interface; and the single-inheritance

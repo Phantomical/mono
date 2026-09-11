@@ -7,7 +7,7 @@
  * build or to read.
  */
 
-#include "passes/eliminate-delegate.hpp"
+#include "analysis/builtins.hpp"
 
 #include "analysis/constant-values.hpp"
 

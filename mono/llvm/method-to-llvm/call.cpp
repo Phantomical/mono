@@ -315,7 +315,7 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 ///
 /// The read is a load, and mark_object_vtable_read () (passes/vtable-func.cpp)
 /// states on it that the word is invariant. eliminate_object_vtables ()
-/// (passes/eliminate-vtable.cpp) names the vtable from the class the IR gives object.
+/// (passes/builtins.cpp) names the vtable from the class the IR gives object.
 /// It reaches a receiver no store names: one a sealed slot declares, or one read
 /// out of an initonly static. Where a store does name it, LLVM forwards that
 /// store itself.

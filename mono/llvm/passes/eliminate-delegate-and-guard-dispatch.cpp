@@ -1,8 +1,8 @@
 #include "eliminate-delegate-and-guard-dispatch.hpp"
 
 #include "analysis/constant-values.hpp"
+#include "builtins.hpp"
 #include "devirtualize.hpp"
-#include "eliminate-delegate.hpp"
 
 #include <llvm/Analysis/BlockFrequencyInfo.h>
 

@@ -8,7 +8,7 @@
  * behind it.
  */
 
-#include "passes/eliminate-cast.hpp"
+#include "analysis/builtins.hpp"
 
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>

@@ -1,12 +1,15 @@
 /**
  * \file
- * \brief The two passes that act on the declarations the front end leaves
- * standing, and the helpers a new one is written with.
+ * \brief `MonoBuiltinConstProp` and `MonoBuiltinLower`, the eliminations
+ * behind them, and the helpers a new one is written with.
  *
  * A site the front end cannot expand is written as a call to a declaration
  * whose name says what the site means. `MonoBuiltinConstProp` eliminates such a
  * site where the IR settles it, and `MonoBuiltinLower` writes back the IR every
- * site that is left stands for.
+ * site that is left stands for. Each elimination below is a plain function
+ * rather than a pass of its own, because more than one pass can want to call
+ * it: `eliminate_delegate_invokes ()` is `EliminateDelegateAndGuardDispatchPass`'s,
+ * not `MonoBuiltinConstProp`'s.
  */
 
 #ifndef MONO_LLVM_PASSES_BUILTINS_HPP
@@ -17,6 +20,7 @@
 #include <llvm/IR/PassManager.h>
 
 namespace llvm {
+class BlockFrequencyInfo;
 class CallBase;
 class Function;
 class FunctionType;
@@ -24,6 +28,8 @@ class Module;
 } // namespace llvm
 
 namespace mono {
+
+class ConstantValues;
 
 /// The declaration \p name has in \p m, created on first use with \p shape.
 ///
@@ -71,6 +77,59 @@ enum class LowerStage {
 	/// barrier a compare and a byte store, so neither wants one.
 	post_optimization,
 };
+
+/// Replaces each type test in \p f that the operand's own class decides with
+/// the value it stands for. Says whether it changed anything.
+bool eliminate_type_tests (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+
+/// Replaces each object vtable read in \p f whose class the IR settles with
+/// that class's own vtable symbol. Says whether it changed anything.
+///
+/// A read stands under the null check on its object, and the declaration is not
+/// speculatable, so nothing moves one above that check. That is what lets a
+/// sealed slot's declared class stand for the class the object is. The null
+/// such a slot also admits cannot reach the read.
+bool eliminate_object_vtables (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+
+/// Replaces each vtable field read in \p f whose vtable is a marked symbol with
+/// the value that symbol carries. Says whether it changed anything.
+bool eliminate_vtable_fields (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+
+/// Erases each write barrier in \p f whose destination the IR settles to an
+/// alloca. Says whether it changed anything.
+///
+/// Both collectors scan a thread's frames conservatively, so a reference a frame
+/// holds is found without a remembered-set entry.
+bool eliminate_stack_barriers (llvm::Function &f);
+
+/// Rewrites each value copy in \p f that the IR settles as safe in the open into
+/// a memcpy or a memmove with the cards behind it. Says whether it changed
+/// anything.
+///
+/// A copy the optimizer can read is what lets SROA scalarize a value type and
+/// what lets the dead-allocation walk erase the object behind it. The site the
+/// translator wrote hides all of that inside one call, because an open copy is
+/// wrong where a copied reference lands somewhere no conservative scan reaches.
+/// `gc_value_copy_name` (`passes/gc-barrier.hpp`) states that rule, and this is
+/// the elimination that reads the IR against it.
+bool open_value_copies (llvm::Function &f);
+
+/// Enters the delegate's target at each Invoke in \p f the IR names one for: a
+/// settled target directly, a candidate behind a compare against the delegate's
+/// own entry, with the original dispatch on the arm that does not match.
+///
+/// Tier 2 only, and behind the pass that reads the profile. Two things put it
+/// there. A guard is blocks the CFG tier 1 hashed does not have. And the
+/// elimination needs current_compile () to name a method at all, which a tier-1
+/// compile has only when its batch holds one method - so at tier 1 whether a
+/// site eliminates turns on how many methods promoted together rather than on
+/// the IR, and a tier 2 that eliminated where tier 1 could not loses the counts.
+///
+/// \p counts and \p values are read rather than fetched, so a caller running
+/// this beside another pass that reads the same two can solve them once.
+/// Says whether it changed anything.
+bool eliminate_delegate_invokes (llvm::Function &f, llvm::BlockFrequencyInfo &counts,
+                                 const ConstantValues &values);
 
 /// Eliminates every builtin site in a function that the IR settles.
 ///

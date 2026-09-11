@@ -2,7 +2,7 @@
  * \file
  * \brief Delegate-elimination and dispatch-guard, run off one memory solve.
  *
- * eliminate_delegate_invokes () and guard_dispatch_sites () (eliminate-delegate.hpp,
+ * eliminate_delegate_invokes () and guard_dispatch_sites () (builtins.hpp,
  * devirtualize.hpp) each read a MonoMemoryValues solve of their own where
  * run as separate passes. The pipeline never runs one without the other
  * beside it, so this fetches BlockFrequencyInfo and MonoMemoryValues once

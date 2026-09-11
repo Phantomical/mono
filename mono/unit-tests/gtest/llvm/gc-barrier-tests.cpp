@@ -10,7 +10,7 @@
  * harness links.
  */
 
-#include "passes/eliminate-barrier.hpp"
+#include "passes/builtins.hpp"
 #include "passes/gc-barrier.hpp"
 
 #include <llvm/IR/BasicBlock.h>
