@@ -511,19 +511,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 				continue;
 			}
 
-			/*
-			 * A shared body is entered with its context in a register
-			 * and a call to it is not, which is the one shape the copy
-			 * and the declaration disagree on. Redirecting the site
-			 * would run the copy on the wrong arguments, so leave the
-			 * call on the callee's thunk.
-			 */
-			if (copy->getFunctionType () != decl->getFunctionType ()) {
-				externals.resize (before);
-				copy->eraseFromParent ();
-				unresolved.insert (callee);
-				continue;
-			}
+			g_assert (copy->getFunctionType () == decl->getFunctionType ());
 
 			if (is_jit_trace_enabled ())
 				trace_inline (callee, caller_method);

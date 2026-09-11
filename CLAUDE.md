@@ -1013,11 +1013,11 @@ the forwarder chain is refused too, because no inliner takes that call away. The
 the size limit's question, and `--llvm-opt=-mono-inline-il-limit` bounds it. A candidate
 must also pass gates that are about correctness rather than cost (`is_inlinable ()`,
 `runtime/inline-scope.cpp`): no dynamic method, no clauses, no `NoInlining`
-on the callee, no call instrumentation, no detour on the record, and nothing at all
-while `gen-seq-points` is on. A wrapper is not one of them, and folds like any other
-callee. Neither is a shared body: what stops a fold there is the copy's own entry,
-which takes a generic context the site does not pass, and both inliners decline a
-copy whose type disagrees with the declaration the site calls through.
+on the callee, no call instrumentation, no detour on the record, no override registered
+against the callee, and nothing at all while `gen-seq-points` is on. Neither a wrapper nor
+a shared generic body is one of them, and each folds like any other callee: a copy is
+declared the way the site's own declaration was, so the two agree on the generic context
+a shared body is entered with, and both inliners assert that before moving a site.
 
 **A host that starts the debugger agent turns every fold off.**
 `folding_off_for_seq_points ()` (`runtime/inline-scope.cpp`) is the gate both inliners
@@ -1161,7 +1161,10 @@ its own, and a stack walk over its frame finds nothing.
 no thunk, so redirecting the method's entry misses it. Each method's record names the
 methods that folded it in (`note_folded_into ()`), and `install_detour ()` takes each of
 those entries back to the lazy resolver it started at, so the next call compiles the
-method again, and `is_inlinable ()` keeps a detoured method's copy out of that compile.
+method again, and `is_inlinable ()` keeps the method's copy out of that compile. It reads
+the override registry as well as the record. A fold is decided before the site that names
+the callee is resolved, so the record can still be missing then, and
+`mono/tests/override-basic.cs` is the gate on that.
 Both compiled tiers run the pre-pass,
 so an earlier body is no safer than the newest one — that is why the entry goes back past
 all of them rather than down one tier. `mono/tests/tier2-inline-override.cs` holds both

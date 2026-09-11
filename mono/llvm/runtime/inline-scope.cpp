@@ -3,6 +3,7 @@
 #include "inline-scope.hpp"
 
 #include "domain-method.hpp"
+#include "method-override.hpp"
 #include "method-to-llvm/intrinsics.hpp"
 #include "naming.hpp"
 #include "options.hpp"
@@ -76,19 +77,20 @@ is_inlinable (MonoDomain *domain, MonoMethod *callee)
 		return false;
 
 	/*
-	 * Native code behind a detour owns the entry, so a call to the method no
-	 * longer runs the IL this would copy. This covers a compile that starts
-	 * after the install. A copy that already stands is drop_folded_bodies ()'s
-	 * to take down.
+	 * Both of the tests below take a lock, and every test above reads a field.
 	 *
-	 * Last because it takes the domain's table lock, and every test above reads
-	 * a field.
+	 * Native code behind a detour owns the entry, so a call to the method no
+	 * longer runs the IL this would copy. A copy that already stands is
+	 * drop_folded_bodies ()'s to take down.
 	 */
 	if (MonoDomainMethod *dm = domain_method_find (domain, callee))
 		if (dm->tier () == MonoTier::detoured)
 			return false;
 
-	return true;
+	// An override the assembly names is installed when the method's record is
+	// built. The record above can be missing here, because a fold is decided
+	// before the site that names the callee is resolved.
+	return get_method_override (callee) == nullptr;
 }
 
 uint32_t
