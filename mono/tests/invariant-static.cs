@@ -6,10 +6,10 @@ using System.Runtime.CompilerServices;
  * Reads of an initonly static. Every class below declares a cctor, so every
  * one translates through push_guarded_static_read (), a runtime branch on
  * the type initializer's own flag rather than a translate-time answer - see
- * class_has_no_cctor () for why. ClassInitWarmPass collapses that branch to
- * its llvm.invariant.start arm once the runtime says the class has finished
- * initializing, which is usually already true by the time a case here is
- * compiled.
+ * class_has_no_cctor () for why. ClassInitCompleteElisionPass collapses that
+ * branch to its llvm.invariant.start arm once the runtime says the class has
+ * finished initializing, which is usually already true by the time a case
+ * here is compiled.
  *
  * Each case puts an opaque call between two reads of one field. A wrong
  * invariant mark then answers from the first read instead of taking a second
@@ -18,9 +18,10 @@ using System.Runtime.CompilerServices;
  *
  * Every case runs interpreted and compiled in one process, because the interpreter
  * marks nothing and answers each read from memory. The guarded cases additionally
- * force a compile, with Mono.Tiering.MonoTier::PromoteNow, before anything touches
- * the class they read. ClassInitWarmPass then has nothing to collapse, so the
- * branch these two cases run at runtime is the one this file gates.
+ * force a compile, with Mono.Tiering.MonoTier::PromoteNow, before anything
+ * touches the class they read. ClassInitCompleteElisionPass then has nothing
+ * to collapse, so the branch these two cases run at runtime is the one this
+ * file gates.
  */
 
 namespace Mono.Tiering {
@@ -179,7 +180,8 @@ public class InvariantStatic {
 	}
 
 	// Compiled by Main () before anything else touches Guarded, so
-	// ClassInitWarmPass leaves the branch push_guarded_static_read () wrote standing.
+	// ClassInitCompleteElisionPass leaves the branch push_guarded_static_read ()
+	// wrote standing.
 	static int GuardedScalarAcrossCall ()
 	{
 		int first = Guarded.Scalar;

@@ -3,7 +3,7 @@
 #include "analysis/vtable-info.hpp"
 #include "method-symbols.hpp"
 #include "runtime-error.hpp"
-#include "../passes/class-init.hpp"
+#include "../passes/class-init-elision.hpp"
 #include "../passes/gc-barrier.hpp"
 #include "../runtime/naming.hpp"
 #include "../runtime/options.hpp"
@@ -375,8 +375,8 @@ MethodLLVMEmitter::field_symbol (MonoClassField *field)
 ///
 /// Unlike whether the constructor has already run, this never varies between
 /// two translations of the same method: a class either declares a .cctor or
-/// it does not, which metadata settles once and for all. `ClassInitWarmPass`
-/// (`passes/class-init-warm.cpp`) is where the *has* run question is asked -
+/// it does not, which metadata settles once and for all.
+/// `ClassInitCompleteElisionPass` is where the *has* run question is asked -
 /// after the point both tiers hash a CFG, so that a class the compile finds
 /// already warm does not lower differently from one it does not.
 bool
@@ -386,7 +386,7 @@ MethodLLVMEmitter::class_has_no_cctor (MonoClass *klass)
 }
 
 /// Whether field is eligible to be marked invariant, apart from whether klass's
-/// initializer has actually finished. `ClassInitWarmPass` and
+/// initializer has actually finished. `ClassInitCompleteElisionPass` and
 /// push_guarded_static_read () decide that part.
 ///
 /// An ordinary program writes such a field only from the type initializer. ECMA-335
@@ -424,9 +424,10 @@ MethodLLVMEmitter::eligible_for_invariant_static_read (MonoClassField *field)
 /// The constructor itself never runs here. It is arbitrary managed code, and a
 /// compilation thread must not execute it. Whether klass's has already run is
 /// not asked here - a translation is the same whether or not it has, and
-/// ClassInitWarmPass is what asks, once both tiers have hashed the same call.
-/// A site that still needs the check gets a call, and ClassInitPass deletes
-/// the ones a dominating check already covers.
+/// ClassInitCompleteElisionPass is what asks, once both tiers have hashed the
+/// same call. A site that still needs the check gets a call, and
+/// ClassInitDominatedElisionPass deletes the ones a dominating check already
+/// covers.
 llvm::Error
 MethodLLVMEmitter::emit_class_init (MonoIrBuilder &builder, MonoClass *klass)
 {

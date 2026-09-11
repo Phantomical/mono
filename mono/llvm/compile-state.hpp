@@ -60,13 +60,9 @@ struct CompileState {
 	/// PGOInstrumentationGen or PGOInstrumentationUse took the module's CFG
 	/// hash.
 	///
-	/// A read of an initonly static's value must not answer before this is
-	/// true, or a tier-1 compile and its tier-2 recompile of the same body can
-	/// hash two different CFGs and lose the tier-1 counts. Checked by
-	/// initonly_static_read () directly. ClassInitWarmPass and
-	/// EliminateStaticConstPass ask the same live question for a class's init
-	/// flag, and stay safe without reading this flag at all: the pipeline
-	/// places both only behind the pass that sets it (`pipelines.cpp`).
+	/// We can only take advantage of class initialization or initonly statics
+	/// once this is true. Otherwise, the profiling data may not match the
+	/// CFG and will be discarded.
 	bool past_pgo_hash = false;
 };
 

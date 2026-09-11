@@ -5,7 +5,7 @@
  *
  * `push_guarded_static_read ()` never bakes a value in: the class may still be
  * behind its own initializer when the front end runs, so every eligible read
- * goes through the runtime, twice - once through `ClassInitWarmPass`'s
+ * goes through the runtime, twice - once through `ClassInitCompleteElisionPass`'s
  * concern, the flag, and once here, through the value itself. Both ask the
  * same question this late for the same reason: a translation cannot answer it
  * once and have that answer count for every later translation of the same

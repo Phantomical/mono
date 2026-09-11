@@ -1,7 +1,7 @@
 #include "eliminate-static-const.hpp"
 
 #include "analysis/operand-class.hpp"
-#include "class-init-warm.hpp"
+#include "class-init-elision.hpp"
 #include "compile-state.hpp"
 #include "method-symbols.hpp"
 
@@ -85,7 +85,7 @@ warm_static_constant (const LoadInst &load)
 	MonoDomain *domain = current_compile ().domain;
 	MonoClass *klass = field->parent;
 
-	if (!class_is_initialized (domain, klass))
+	if (!is_class_initialized (domain, klass))
 		return nullptr;
 
 	MonoVTable *vtable = mono_class_try_get_vtable (domain, klass);

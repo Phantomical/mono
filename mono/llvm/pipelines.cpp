@@ -6,8 +6,7 @@
 #include "jit.hpp"
 #include "passes/builtins.hpp"
 #include "passes/clamp-frame-align.hpp"
-#include "passes/class-init.hpp"
-#include "passes/class-init-warm.hpp"
+#include "passes/class-init-elision.hpp"
 #include "passes/eliminate-static-const.hpp"
 #include "passes/dead-alloc.hpp"
 #include "passes/dump-ir.hpp"
@@ -92,7 +91,6 @@ register_mono_analyses (llvm::FunctionAnalysisManager &fam)
 	fam.registerPass ([] { return MonoMemoryValues (); });
 }
 
-
 namespace {
 
 /*
@@ -133,10 +131,10 @@ summary_for (uint64_t entry)
 
 	// Ordered by cutoff, because getEntryForPercentile () answers with the
 	// first entry that reaches the percentile it is given.
-	llvm::SummaryEntryVector detailed {
-		{ 990000, hot, 1 },
-		{ 999999, cold, 2 },
-		{ 1000000, cold, 2 },
+	llvm::SummaryEntryVector detailed{
+		{990000, hot, 1},
+		{999999, cold, 2},
+		{1000000, cold, 2},
 	};
 
 	return std::make_unique<llvm::ProfileSummary> (
@@ -240,7 +238,7 @@ addAnnotationRemarksPass (llvm::ModulePassManager &MPM)
 }
 } // namespace
 
-MonoPipelineTuningOptions::MonoPipelineTuningOptions () 
+MonoPipelineTuningOptions::MonoPipelineTuningOptions ()
 {
 	// We actually benefit quite a bit from reusing analyses. Also, our modules
 	// are small so the memory savings is minor.
@@ -282,10 +280,9 @@ makeProfileFileSystem ()
 OneFileFS::CurrentFileGuard
 pushProfile (OneFileFS &fs, llvm::ArrayRef<uint8_t> profile)
 {
-	llvm::StringRef bytes =
-		profile.empty ()
-			? profile_with_no_records ()
-			: llvm::StringRef ((const char *) profile.data (), profile.size ());
+	llvm::StringRef bytes = profile.empty ()
+	                            ? profile_with_no_records ()
+	                            : llvm::StringRef ((const char *) profile.data (), profile.size ());
 
 	// Not a copy. The guard is what says the bytes are still there.
 	return fs.set (llvm::MemoryBuffer::getMemBuffer (bytes, profile_file,
@@ -295,8 +292,7 @@ pushProfile (OneFileFS &fs, llvm::ArrayRef<uint8_t> profile)
 MonoPassBuilder::MonoPassBuilder (llvm::TargetMachine *TM, OneFileFS *ProfileFS,
                                   llvm::PassInstrumentationCallbacks *PIC,
                                   MonoPipelineTuningOptions PTO)
-	: llvm::PassBuilder (TM, PTO, std::nullopt, PIC), TM (TM), PTO (PTO),
-	  ProfileFS (ProfileFS)
+	: llvm::PassBuilder (TM, PTO, std::nullopt, PIC), TM (TM), PTO (PTO), ProfileFS (ProfileFS)
 {
 	/*
 	 * Here rather than at a place in either pipeline, because what settles a
@@ -309,11 +305,10 @@ MonoPassBuilder::MonoPassBuilder (llvm::TargetMachine *TM, OneFileFS *ProfileFS,
 	 * Registered before either pipeline is built, since that is when the
 	 * callbacks are asked for.
 	 */
-	registerPeepholeEPCallback (
-		[] (llvm::FunctionPassManager &FPM, llvm::OptimizationLevel) {
-			FPM.addPass (mono::PromoteAllocationsPass ());
-			FPM.addPass (mono::MonoBuiltinConstProp ());
-		});
+	registerPeepholeEPCallback ([] (llvm::FunctionPassManager &FPM, llvm::OptimizationLevel) {
+		FPM.addPass (mono::PromoteAllocationsPass ());
+		FPM.addPass (mono::MonoBuiltinConstProp ());
+	});
 }
 
 llvm::FunctionPassManager
@@ -432,29 +427,28 @@ MonoPassBuilder::buildPgoInstrumentationPipeline ()
 {
 	llvm::ModulePassManager MPM;
 
-	// A body that cannot promote gets no counters. The thunks, the thrower and
-	// the dispatcher are all in the module and none of them ever reaches
-	// tier 2.
+	// Mark any functions that aren't supposed to be promoted as noprofile
 	MPM.addPass (mono::ProfileSelectPass ());
+
+	// instrument the rest
 	MPM.addPass (llvm::PGOInstrumentationGen ());
 
-	// Promotion wants each loop to have a preheader and exits that only it
-	// branches to, and the translator gives it neither.
+	// Counter promotion needs each loop to have a preheader. We run LoopSimplify
+	// in order to ensure that is the case.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (llvm::LoopSimplifyPass ()));
 	MPM.addPass (mono::ProfileCounterPromoterPass ());
 
 	MPM.addPass (mono::ProfileGatherPass ());
 
-	/*
-	 * Every counter update is an atomicrmw, the write-backs the promoter left
-	 * behind included. Threads share a body's counters, so an update written
-	 * as a load and a store loses a count when two of them reach one block
-	 * together.
-	 */
-	llvm::InstrProfOptions instr_prof;
+	llvm::InstrProfOptions profopts;
 
-	instr_prof.Atomic = true;
-	MPM.addPass (llvm::InstrProfilingLoweringPass (instr_prof));
+	// Methods may be called from multiple threads so counters must be atomic.
+	profopts.Atomic = true;
+	MPM.addPass (llvm::InstrProfilingLoweringPass (profopts));
+
+	// The lowering pass assumes that we are linking an executable and makes
+	// the counters globally visible. That's not what we want, so this changes
+	// them back to being internal.
 	MPM.addPass (mono::ProfileLocalizePass ());
 
 	return MPM;
@@ -465,28 +459,15 @@ MonoPassBuilder::buildPgoUsePipeline ()
 {
 	llvm::ModulePassManager MPM;
 
-	/*
-	 * The reader takes a path rather than a buffer, so the counts reach it as
-	 * a file. Which counts those are is settled per run rather than here: the
-	 * file system serves whatever the running compile pushed, so one pipeline
-	 * built once reads a different method's counts each time.
-	 *
-	 * This file system serves that buffer for every path it is asked for, so
-	 * the name below only has to be one the reader will open.
-	 */
+	// LLVM assumes that the profile counts come from a file. That is obviously
+	// not the case with us, so we instead use a fake one-file FS that contains
+	// the counter data.
 	MPM.addPass (llvm::PGOInstrumentationUse (profile_file, "", /*IsCS=*/false, ProfileFS));
 
-	// Behind the reader, which is what writes the entry counts this replaces,
-	// and in front of the summary the thresholds are read against.
 	if (uint64_t entry = profile_entry_count ())
 		MPM.addPass (NormalizeProfilePass (entry));
 
-	/*
-	 * The summary the weights are read against. LLVM caches it here for the
-	 * same reason, in addPGOInstrPasses: nothing downstream asks for it, and
-	 * without it every hot and cold question answers the same way. The tier-2
-	 * inliner reads it straight off the module analysis manager.
-	 */
+	// Downstream passes use this if available but won't force it to be computed.
 	MPM.addPass (llvm::RequireAnalysisPass<llvm::ProfileSummaryAnalysis, llvm::Module> ());
 
 	return MPM;
@@ -502,13 +483,6 @@ MonoPassBuilder::buildTier1Pipeline ()
 
 	MPM.addPass (MarkPastPgoHashPass ());
 
-	/*
-	 * Behind the instrumentation, so that both tiers hash a CFG with these
-	 * calls still opaque.
-	 *
-	 * In front of TierCounterPass, which turns the calls that can unwind into
-	 * invokes on to the counter's own pad. The type test wrapper is one of them.
-	 */
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
 
 	// Beside the stage above rather than behind an optimization pipeline, which
@@ -516,21 +490,22 @@ MonoPassBuilder::buildTier1Pipeline ()
 	// allocation and a barrier carry, and no pass here reads them.
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_optimization));
 
-	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitDominatedElisionPass ()));
 
 	/*
-	 * Behind ClassInitPass, so it has already dropped what a dominating check
-	 * covers and this only has to ask the domain about what is left standing.
-	 * Behind the PGO instrumentation for the same reason as ClassInitPass: a
-	 * call this drops on a warm class is one tier 2's own compile of the same
-	 * method also finds warm - it promotes long after this one - so nothing
-	 * here can make the two tiers hash a different CFG.
+	 * Behind ClassInitDominatedElisionPass, so it has already dropped what a
+	 * dominating check covers and this only has to ask the domain about what
+	 * is left standing. Behind the PGO instrumentation for the same reason as
+	 * ClassInitDominatedElisionPass: a call this drops on a warm class is one
+	 * tier 2's own compile of the same method also finds warm - it promotes
+	 * long after this one - so nothing here can make the two tiers hash a
+	 * different CFG.
 	 */
-	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitWarmPass ()));
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitCompleteElisionPass ()));
 
-	// Beside ClassInitWarmPass rather than behind it: the two ask the domain
-	// about the same warm class for different reasons, and neither result
-	// depends on the other having run.
+	// Beside ClassInitCompleteElisionPass rather than behind it: the two ask
+	// the domain about the same warm class for different reasons, and neither
+	// result depends on the other having run.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::EliminateStaticConstPass ()));
 
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RgctxDedupPass ()));
@@ -585,12 +560,13 @@ MonoPassBuilder::buildTier2SimplificationPipeline ()
 	// tier reading it back hash the same CFG. A check this drops sits on an
 	// invoke where its class has a handler around it, and an edge is what the
 	// hash is over.
-	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitPass ()));
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitDominatedElisionPass ()));
 
-	// Behind the counts for the reason ClassInitPass is: this asks the domain
-	// rather than the CFG, and both tiers' compiles of one method ask it long
-	// enough apart that only a check behind the hash can act on the answer.
-	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitWarmPass ()));
+	// Behind the counts for the reason ClassInitDominatedElisionPass is: this
+	// asks the domain rather than the CFG, and both tiers' compiles of one
+	// method ask it long enough apart that only a check behind the hash can
+	// act on the answer.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitCompleteElisionPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::EliminateStaticConstPass ()));
 
 	// Behind the counts for the same reason, and in front of the pipeline
@@ -724,8 +700,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 	 *
 	 * In front of the lowering below, where a barrier stops being one call.
 	 */
-	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
-		mono::EraseDeadAllocationsPass ()));
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::EraseDeadAllocationsPass ()));
 
 	/*
 	 * Behind the pipeline above, because an allocation and a barrier say more as
@@ -743,8 +718,8 @@ MonoPassBuilder::buildTier2Pipeline ()
 
 	// Again, because unrolling and jump threading copied whatever the run in
 	// the common pipeline left standing.
-	FPM.addPass (mono::ClassInitPass ());
-	FPM.addPass (mono::ClassInitWarmPass ());
+	FPM.addPass (mono::ClassInitDominatedElisionPass ());
+	FPM.addPass (mono::ClassInitCompleteElisionPass ());
 	FPM.addPass (mono::EliminateStaticConstPass ());
 	FPM.addPass (mono::RgctxDedupPass ());
 
