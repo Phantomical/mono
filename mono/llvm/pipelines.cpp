@@ -24,6 +24,7 @@
 #include "passes/sink-keep-alive.hpp"
 #include "passes/tier-counter.hpp"
 #include "passes/top-down-inline.hpp"
+#include "passes/trap-unreachable.hpp"
 #include <llvm/IR/PassManager.h>
 #include <llvm/ADT/Statistic.h>
 #include <llvm/IR/ProfileSummary.h>
@@ -556,6 +557,10 @@ MonoPassBuilder::buildTier1Pipeline ()
 	// Behind the ABI lowering, which makes an alloca of its own for a value the
 	// convention passes in memory.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClampFrameAlignPass ()));
+
+	// Behind every simplification, which erases a trap standing in front of an
+	// `unreachable`.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::TrapUnreachablePass ()));
 
 	// Last: FastISel runs straight off whatever this pass manager leaves, with
 	// no later pass in between to catch a marker this one missed.
