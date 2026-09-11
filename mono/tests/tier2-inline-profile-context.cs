@@ -12,13 +12,13 @@ using System.Runtime.CompilerServices;
  * never takes it. PromoteNow (tier 1) locks that count in before
  * ThrowHelperLoop () is promoted at all, so HotWithColdThrow () carries its
  * own record by the time it is materialized as ThrowHelperLoop ()'s
- * candidate. ThrowHelperLoop () then folds HotWithColdThrow () in - it is
- * cheap and every arm agrees on that - and the fold exposes ThrowHelper ()'s
+ * candidate. ThrowHelperLoop () then inlines HotWithColdThrow () - it is
+ * cheap and every arm agrees on that - and the inline exposes ThrowHelper ()'s
  * call as a site inside ThrowHelperLoop () for the same pass to weigh next.
  * Answered off HotWithColdThrow ()'s own record, that site reads as never
  * taken and ThrowHelper () is declined. Answered off ThrowHelperLoop ()'s
  * record instead, the site has no entry for HotWithColdThrow ()'s own
- * branch and reads off LLVM's static estimate, which folds ThrowHelper ()
+ * branch and reads off LLVM's static estimate, which inlines ThrowHelper ()
  * into the hot loop.
  *
  * The probe call after promotion passes a poison index so exactly one
@@ -28,7 +28,7 @@ using System.Runtime.CompilerServices;
  *
  * -mono-tier2-threshold=0 keeps both methods from promoting on their own, so
  * PromoteNow () alone decides when each does. -mono-inline-il-limit=0 keeps
- * the trivial pre-pass from folding ThrowHelper () on its shape before the
+ * the trivial pre-pass from inlining ThrowHelper () on its shape before the
  * cost model ever sees it - straight-line-then-throw is exactly what that
  * pre-pass takes.
  */
@@ -127,7 +127,7 @@ static class ProfileContext {
 			return 1;
 		}
 
-		bool folded_hot = false, folded_throw = false;
+		bool inlined_hot = false, inlined_throw = false;
 		bool saw_hot = false, saw_throw = false;
 
 		try {
@@ -138,13 +138,13 @@ static class ProfileContext {
 
 			saw_hot = trace.Contains ("HotWithColdThrow");
 			saw_throw = trace.Contains ("ThrowHelper");
-			folded_hot = RunsInsideRoot (e, "HotWithColdThrow");
-			folded_throw = RunsInsideRoot (e, "ThrowHelper");
+			inlined_hot = RunsInsideRoot (e, "HotWithColdThrow");
+			inlined_throw = RunsInsideRoot (e, "ThrowHelper");
 		}
 
 		Check (saw_hot && saw_throw, "both helpers still have a frame at tier 2");
-		Check (folded_hot, "HotWithColdThrow () folds into the loop - it is cheap either way");
-		Check (!folded_throw,
+		Check (inlined_hot, "HotWithColdThrow () inlines into the loop - it is cheap either way");
+		Check (!inlined_throw,
 			"ThrowHelper () stays a call - its own record reads the branch as cold");
 
 		if (fails > 0) {

@@ -318,7 +318,7 @@ translate_method (const std::string &image, const std::string &name)
 }
 
 llvm::Function *
-fold_method_into (Translation &into, const std::string &image, const std::string &name)
+inline_method_into (Translation &into, const std::string &image, const std::string &name)
 {
 	MonoMethodDesc *desc = mono_method_desc_new (name.c_str (), TRUE);
 	MonoMethod *method = mono_method_desc_search_in_image (desc, load_image (image));

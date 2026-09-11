@@ -6,18 +6,18 @@ using System.Runtime.CompilerServices;
 /*
  * The call-site bonuses passes/inline-policy.cpp adds to the tier-2 cost model.
  * Each shape below is a body the model declines on LLVM's own numbers and takes
- * once mono says what the fold is worth, so the suite runs twice: once on the
+ * once mono says what the inline is worth, so the suite runs twice: once on the
  * defaults and once with every bonus set to zero, and reads MONO_INLINE_POLICY
  * to know which arm it is in.
  *
  * The trivial pre-pass is off in both arms
  * (--llvm-opt=-mono-inline-il-limit=0). Make () is one allocation that is
  * returned, which is a shape that pre-pass
- * folds on sight, and a fold it takes says nothing about the cost model.
+ * inlines on sight, and an inline it takes says nothing about the cost model.
  *
- * What says a fold happened is the stack trace, the way tier2-inline-cost.cs
- * reads it: a folded body owns no code, so its frame reports the offset into
- * Root () that it was folded at, and a body that was really called reports an
+ * What says an inline happened is the stack trace, the way tier2-inline-cost.cs
+ * reads it: an inlined body owns no code, so its frame reports the offset into
+ * Root () that it was inlined at, and a body that was really called reports an
  * offset into itself.
  *
  * Both suites name a cold-callsite threshold of their own, because the bodies
@@ -26,10 +26,10 @@ using System.Runtime.CompilerServices;
  * dispatch as the load it lowers to and gives 135, and leaves Make where it is,
  * so one threshold has to serve two costs.
  *
- * Measure is the tighter of the two: it has to decline at 180 and fold at
+ * Measure is the tighter of the two: it has to decline at 180 and inline at
  * 135 with the argument bonus of 50, which puts the threshold between 85 and
  * 135. 110 takes the middle and leaves 25 either way. Make then declines at 180
- * and folds with the return bonus of 100. Re-measure all of it when this starts
+ * and inlines with the return bonus of 100. Re-measure all of it when this starts
  * failing on one arm:
  *
  *   MONO_LLVM_JIT_TRACE=1 MONO_INLINE_POLICY=off mono-sgen \
@@ -70,7 +70,7 @@ class Box : IShape {
 static class Shapes {
 	/*
 	 * Allocates under a class it names and answers with the interface, which
-	 * the caller then dispatches on. Folding it puts the vtable where the
+	 * the caller then dispatches on. Inlining it puts the vtable where the
 	 * caller's dispatch reads a pointer, so fold_dispatch_sites () can read it.
 	 */
 	public static IShape Make (int w, int h, bool yes)
@@ -104,7 +104,7 @@ static class Program {
 	static bool saw_make, saw_measure;
 
 	/* Which of them ran inside Root ()'s code rather than in a body of its own. */
-	static bool folded_make, folded_measure;
+	static bool inlined_make, inlined_measure;
 
 	/// Whether the helper's frame covers the same code as Root ()'s.
 	static bool RunsInsideRoot (Exception e, string helper)
@@ -134,8 +134,8 @@ static class Program {
 		saw_make |= trace.Contains ("Shapes.Make");
 		saw_measure |= trace.Contains ("Shapes.Measure");
 
-		folded_make |= RunsInsideRoot (e, "Make");
-		folded_measure |= RunsInsideRoot (e, "Measure");
+		inlined_make |= RunsInsideRoot (e, "Make");
+		inlined_measure |= RunsInsideRoot (e, "Measure");
 
 		if (!trace.Contains ("Program.Root"))
 			throw new Exception ("the frame that caught it is missing: " + trace);
@@ -205,7 +205,7 @@ static class Program {
 		int want = Root (-2, true);
 
 		Check (saw_make && saw_measure, "every helper has a frame before tier 2");
-		Check (!folded_make && !folded_measure,
+		Check (!inlined_make && !inlined_measure,
 			"and every one of them runs in a body of its own before tier 2");
 
 		// Enough calls to leave counts on the tier-1 body.
@@ -218,21 +218,21 @@ static class Program {
 		}
 
 		saw_make = saw_measure = false;
-		folded_make = folded_measure = false;
+		inlined_make = inlined_measure = false;
 
 		Check (want == Root (-2, true), "the answer at tier 2 is the answer before it");
 		Check (saw_make && saw_measure, "every helper still has a frame at tier 2");
 
 		if (bonuses) {
-			Check (folded_make,
-				"the return bonus folds a body that answers with what it allocated");
-			Check (folded_measure,
-				"the argument bonus folds a body that dispatches on a fresh argument");
+			Check (inlined_make,
+				"the return bonus inlines a body that answers with what it allocated");
+			Check (inlined_measure,
+				"the argument bonus inlines a body that dispatches on a fresh argument");
 		} else {
-			Check (!folded_make,
-				"the return bonus is what folds the body that allocates its answer");
-			Check (!folded_measure,
-				"the argument bonus is what folds the body that dispatches");
+			Check (!inlined_make,
+				"the return bonus is what inlines the body that allocates its answer");
+			Check (!inlined_measure,
+				"the argument bonus is what inlines the body that dispatches");
 		}
 
 		Console.WriteLine (fails == 0 ? "OK" : "FAILED");

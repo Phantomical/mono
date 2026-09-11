@@ -4,15 +4,15 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 
-// A body an inliner folded in still gets a frame of its own, and that frame is
-// blamed on the line inside the folded body rather than on the call site it was
-// folded through. The caller keeps its frame, on its own line, so one stretch of
+// A body an inliner inlined still gets a frame of its own, and that frame is
+// blamed on the line inside the inlined body rather than on the call site it was
+// inlined through. The caller keeps its frame, on its own line, so one stretch of
 // code has to come back as several frames blamed on several lines.
 //
-// The nested scenario folds a body into a body that was itself folded in, which
+// The nested scenario inlines a body into a body that was itself inlined, which
 // is what puts more than one frame on a single call site and orders them.
 //
-// Both compiled tiers fold, so each scenario is run at each, and the two have to
+// Both compiled tiers inline, so each scenario is run at each, and the two have to
 // answer the same. Mono.Tiering.MonoTier::PromoteNow compiles a method at the
 // tier it is given, on this thread, so the fixture needs no environment and
 // races no compile worker.
@@ -29,13 +29,13 @@ class InlinedFrames {
 	/*
 	 * Stop unless the frame reported for `inlined` covers `host`'s code.
 	 *
-	 * The lines the markers check are the same whether a helper was folded in or
-	 * called, so on their own they would pass against a run that folded nothing.
-	 * A folded body owns no code: its frame reports the offset into the body it
-	 * was folded into, which is what tells the two apart. Running with
+	 * The lines the markers check are the same whether a helper was inlined or
+	 * called, so on their own they would pass against a run that inlined nothing.
+	 * An inlined body owns no code: its frame reports the offset into the body it
+	 * was inlined into, which is what tells the two apart. Running with
 	 * --llvm-opt=-mono-inline-il-limit=0 is what this refuses.
 	 */
-	static void MustBeFolded (StackTrace st, string inlined, string host)
+	static void MustBeInlined (StackTrace st, string inlined, string host)
 	{
 		int in_helper = -1, in_host = -2;
 
@@ -54,7 +54,7 @@ class InlinedFrames {
 		if (in_helper >= 0 && in_helper == in_host)
 			return;
 
-		Console.Error.WriteLine ("{0} was not folded into {1}: offsets {2} and {3}",
+		Console.Error.WriteLine ("{0} was not inlined into {1}: offsets {2} and {3}",
 					 inlined, host, in_helper, in_host);
 		Environment.Exit (1);
 	}
@@ -72,10 +72,10 @@ class InlinedFrames {
 	}
 
 	// A straight line to one call and then a throw, which is the shape the
-	// pre-pass in front of both tiers folds.
+	// pre-pass in front of both tiers inlines.
 	static int Thrower (int x)
 	{
-		throw new InvalidOperationException ("folded");	// IL-FRAME: flat1,flat2 0 InlinedFrames:Thrower
+		throw new InvalidOperationException ("inlined");	// IL-FRAME: flat1,flat2 0 InlinedFrames:Thrower
 	}
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
@@ -90,7 +90,7 @@ class InlinedFrames {
 	}
 
 	// A plain forwarder - the shape test takes nothing between the call and the
-	// return - so the fold that takes this one takes Inner () with it.
+	// return - so the inline that takes this one takes Inner () with it.
 	static int Outer (int x)
 	{
 		return Inner (x);	// IL-FRAME: nested1,nested2 1 InlinedFrames:Outer
@@ -110,7 +110,7 @@ class InlinedFrames {
 		} catch (Exception e) {
 			StackTrace st = new StackTrace (e, true);
 
-			MustBeFolded (st, "Thrower", "Flat");
+			MustBeInlined (st, "Thrower", "Flat");
 			Dump ("flat" + tier, st);
 		}
 
@@ -119,8 +119,8 @@ class InlinedFrames {
 		} catch (Exception e) {
 			StackTrace st = new StackTrace (e, true);
 
-			MustBeFolded (st, "Inner", "Nested");
-			MustBeFolded (st, "Outer", "Nested");
+			MustBeInlined (st, "Inner", "Nested");
+			MustBeInlined (st, "Outer", "Nested");
 			Dump ("nested" + tier, st);
 		}
 	}

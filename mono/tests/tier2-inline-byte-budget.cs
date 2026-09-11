@@ -14,7 +14,7 @@ using System.Runtime.CompilerServices;
  * CallA () and CallB () are each 113 IL bytes -- both loop-free, so
  * tier2_site_heat () answers both their sites hot, and the shipped
  * -mono-inline-cost-il-limit-hot default (1024) admits either alone with
- * plenty to spare. What decides whether both fold is the byte budget alone.
+ * plenty to spare. What decides whether both inline is the byte budget alone.
  * The suite runs twice: on a small byte budget (150, past the 113 either
  * spends alone but under the 226 both together spend) and on a huge one that
  * is not the binding constraint. The count budget stays at its default in
@@ -24,12 +24,12 @@ using System.Runtime.CompilerServices;
  * Which of the two candidates the byte budget catches is not fixed --
  * TopDownInlinerPass ranks equally-hot sites in whatever order ties break in,
  * and this file does not depend on which one wins. What it checks is the
- * count that folds: both under the huge budget, and strictly fewer than both
+ * count that inlines: both under the huge budget, and strictly fewer than both
  * under the small one.
  *
- * What says a fold happened is the stack trace, the way
- * tier2-inline-cost.cs reads it: a folded body owns no code, so its frame
- * reports the offset into Root () it was folded at, and a body that was
+ * What says an inline happened is the stack trace, the way
+ * tier2-inline-cost.cs reads it: an inlined body owns no code, so its frame
+ * reports the offset into Root () it was inlined at, and a body that was
  * really called reports an offset into itself.
  */
 
@@ -60,10 +60,10 @@ static class Costed {
 		return a + b + c + d;
 	}
 
-	// The same shape as CallA () under a name of its own, so each site's fold
+	// The same shape as CallA () under a name of its own, so each site's inline
 	// decision is independent -- materialize () hands back a standing copy
-	// once a callee is folded anywhere in the root, which would fold this one
-	// for free off CallA ()'s copy if they shared a name.
+	// once a callee is inlined anywhere in the root, which would inline this
+	// one for free off CallA ()'s copy if they shared a name.
 	public static int CallB (int n, bool yes)
 	{
 		int a = n + 1, b = n + 2, c = n + 3, d = n + 4;
@@ -85,7 +85,7 @@ static class Costed {
 }
 
 static class Program {
-	static bool sawA, sawB, foldedA, foldedB;
+	static bool sawA, sawB, inlinedA, inlinedB;
 
 	static bool RunsInsideRoot (Exception e, string helper)
 	{
@@ -115,14 +115,14 @@ static class Program {
 			total += Costed.CallA (n, takeRare);
 		} catch (InvalidOperationException e) {
 			sawA = true;
-			foldedA = RunsInsideRoot (e, "CallA");
+			inlinedA = RunsInsideRoot (e, "CallA");
 		}
 
 		try {
 			total += Costed.CallB (n, takeRare);
 		} catch (InvalidOperationException e) {
 			sawB = true;
-			foldedB = RunsInsideRoot (e, "CallB");
+			inlinedB = RunsInsideRoot (e, "CallB");
 		}
 
 		return total;
@@ -157,22 +157,22 @@ static class Program {
 			return 1;
 		}
 
-		sawA = sawB = foldedA = foldedB = false;
+		sawA = sawB = inlinedA = inlinedB = false;
 
 		Root (4, true);
 
 		Check (sawA && sawB, "both call sites threw at tier 2");
 
 		bool small = Environment.GetEnvironmentVariable ("MONO_INLINE_POLICY") != "off";
-		int foldedCount = (foldedA ? 1 : 0) + (foldedB ? 1 : 0);
+		int inlinedCount = (inlinedA ? 1 : 0) + (inlinedB ? 1 : 0);
 
 		if (small)
-			Check (foldedCount == 1,
+			Check (inlinedCount == 1,
 				"150 admits one of the two 113-byte candidates and leaves too "
 				+ "little for the other, however the count budget reads them");
 		else
-			Check (foldedCount == 2,
-				"a byte budget that is not the binding constraint folds both, "
+			Check (inlinedCount == 2,
+				"a byte budget that is not the binding constraint inlines both, "
 				+ "same as the count budget alone would");
 
 		if (fails != 0)

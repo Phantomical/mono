@@ -4,20 +4,20 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
- * Whether a wrapper folds into the method that calls it.
+ * Whether a wrapper inlines into the method that calls it.
  *
  * A managed-to-native wrapper is a method with IL of its own: load the
- * arguments, call the icall, test for a pending interruption, return. may_fold ()
- * lets one through like any other callee, so what decides it is the cost model.
- * The suite turns the trivial pre-pass off
- * (--llvm-opt=-mono-inline-il-limit=0), so every fold this reads is the
+ * arguments, call the icall, test for a pending interruption, return.
+ * is_inlinable () lets one through like any other callee, so what decides it
+ * is the cost model. The suite turns the trivial pre-pass off
+ * (--llvm-opt=-mono-inline-il-limit=0), so every inline this reads is the
  * model's.
  *
  * A covariant store is the shape. slots is declared object[] and holds a
  * string[], so the store has to ask mono_helper_stelem_ref_check () whether the
  * value fits, and the wrapper around that icall raises the
  * ArrayTypeMismatchException when it does not. That gives one test both halves:
- * a wrapper folded into Root (), and an exception raised inside the folded body
+ * a wrapper inlined into Root (), and an exception raised inside the inlined body
  * and caught by Root ()'s own clause.
  *
  * The site sits in a cold block -- emit_stelem_ref_check ()
@@ -25,10 +25,10 @@ using System.Runtime.CompilerServices;
  * ordinary case. So the suite raises both the default and the cold-callsite
  * threshold, since the cold arm's budget is the lower of the two.
  *
- * What says a fold happened is the same reading tier2-inline-casts.cs takes: a
- * folded body owns no code, so its frame reports the offset into Root () that it
- * was folded at, and a body that was really called reports an offset into
- * itself. The frame count is read beside it, because a fold must not take the
+ * What says an inline happened is the same reading tier2-inline-casts.cs takes: an
+ * inlined body owns no code, so its frame reports the offset into Root () that it
+ * was inlined at, and a body that was really called reports an offset into
+ * itself. The frame count is read beside it, because an inline must not take the
  * wrapper's frame away -- an icall that reads its caller finds it there.
  */
 
@@ -95,7 +95,7 @@ static class Program {
 
 	public static int Main ()
 	{
-		bool folds = Environment.GetEnvironmentVariable ("MONO_WRAPPER_FOLD") != "off";
+		bool inlines = Environment.GetEnvironmentVariable ("MONO_WRAPPER_INLINE") != "off";
 		MethodInfo root = typeof (Program).GetMethod ("Root",
 			BindingFlags.Static | BindingFlags.NonPublic);
 
@@ -133,9 +133,9 @@ static class Program {
 		Check (caught, "Root ()'s own clause still catches it");
 		Check (frames == tier1_frames, "the wrapper still has a frame at tier 2");
 
-		if (folds)
+		if (inlines)
 			Check (inner_offset >= 0 && inner_offset == root_offset,
-				"and the folded wrapper reports Root ()'s offset");
+				"and the inlined wrapper reports Root ()'s offset");
 		else
 			Check (inner_offset >= 0 && inner_offset != root_offset,
 				"and a wrapper the model refused reports its own");

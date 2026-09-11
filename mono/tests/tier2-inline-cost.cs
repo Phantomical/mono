@@ -4,7 +4,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
- * The callees tier 2 weighs before folding them in, which is everything the
+ * The callees tier 2 weighs before inlining them, which is everything the
  * shape test in front of the pre-pass refuses: a branch, a loop, several calls.
  *
  * Root () is called until it has run at tier 1 long enough to have counts, and
@@ -13,9 +13,9 @@ using System.Runtime.CompilerServices;
  * the body stays instrumented and counting and never promotes on its own -
  * which is what keeps the compile this test is about the only one there is.
  *
- * What says a fold really happened is the stack trace. Every helper that threw
- * has a frame in it either way, but a folded body owns no code: its frame
- * reports the offset into Root () that it was folded at, and a helper the gates
+ * What says an inline really happened is the stack trace. Every helper that
+ * threw has a frame in it either way, but an inlined body owns no code: its
+ * frame reports the offset into Root () that it was inlined at, and a helper the gates
  * refuse reports an offset into itself. The warm-up calls ask the helpers not to
  * throw, because the trace is the expensive part and the calls are what the
  * counts are wanted for.
@@ -65,10 +65,10 @@ static class Costed {
 
 	/*
 	 * A body that calls a NoInlining method. The mark keeps FailNoInline () out
-	 * of every fold, so that method holds a body and a frame of its own whatever
+	 * of every inline, so that method holds a body and a frame of its own whatever
 	 * its caller does. The mark says nothing about this body, and the cost model
-	 * is free to fold it. The branch keeps the shape test off this body, so a
-	 * fold here is the cost model's.
+	 * is free to inline it. The branch keeps the shape test off this body, so an
+	 * inline here is the cost model's.
 	 */
 	public static void FailThroughNoInline (string what, bool yes)
 	{
@@ -80,11 +80,11 @@ static class Costed {
 	public static string frame_read_saw;
 
 	/*
-	 * A body whose own calls read the frame they were called from. The fold takes
-	 * this body's frame off the stack, so both icalls answer off the frames the
-	 * compile recorded instead. The name below has to stay this method's, folded
-	 * or not, and the branch keeps the shape test away so a fold here is the cost
-	 * model's.
+	 * A body whose own calls read the frame they were called from. The inline
+	 * takes this body's frame off the stack, so both icalls answer off the frames
+	 * the compile recorded instead. The name below has to stay this method's,
+	 * inlined or not, and the branch keeps the shape test away so an inline here
+	 * is the cost model's.
 	 */
 	public static void FailThroughFrameRead (string what, bool yes)
 	{
@@ -94,7 +94,7 @@ static class Costed {
 		}
 	}
 
-	// Recursion: the loop folds a few levels and the last call is left standing,
+	// Recursion: the loop inlines a few levels and the last call is left standing,
 	// which is the body the sweep has to put back on the method's thunk.
 	public static int Countdown (int n)
 	{
@@ -122,13 +122,13 @@ static class Program {
 	static bool saw_branch, saw_no_inline, saw_through, saw_frame_read;
 
 	/* Which of them ran inside Root ()'s code rather than in a body of its own. */
-	static bool folded_branch, folded_no_inline, folded_through, folded_frame_read;
+	static bool inlined_branch, inlined_no_inline, inlined_through, inlined_frame_read;
 
 	/*
 	 * Whether the helper's frame covers the same code as Root ()'s.
 	 *
-	 * A folded body has no code of its own, so the frame reported for it names
-	 * the call site in Root () that it was folded at - the same native offset
+	 * An inlined body has no code of its own, so the frame reported for it names
+	 * the call site in Root () that it was inlined at - the same native offset
 	 * Root ()'s own frame reports. A helper that was really called runs in its
 	 * own body and reports an offset into that.
 	 */
@@ -161,10 +161,10 @@ static class Program {
 		saw_through |= trace.Contains ("Costed.FailThroughNoInline");
 		saw_frame_read |= trace.Contains ("Costed.FailThroughFrameRead");
 
-		folded_branch |= RunsInsideRoot (e, "FailBranch");
-		folded_no_inline |= RunsInsideRoot (e, "FailNoInline");
-		folded_through |= RunsInsideRoot (e, "FailThroughNoInline");
-		folded_frame_read |= RunsInsideRoot (e, "FailThroughFrameRead");
+		inlined_branch |= RunsInsideRoot (e, "FailBranch");
+		inlined_no_inline |= RunsInsideRoot (e, "FailNoInline");
+		inlined_through |= RunsInsideRoot (e, "FailThroughNoInline");
+		inlined_frame_read |= RunsInsideRoot (e, "FailThroughFrameRead");
 
 		if (!trace.Contains ("Program.Root"))
 			throw new Exception ("the frame that caught it is missing: " + trace);
@@ -239,8 +239,8 @@ static class Program {
 
 		Check (saw_branch && saw_no_inline && saw_through && saw_frame_read,
 			"every helper has a frame before tier 2");
-		Check (!folded_branch && !folded_no_inline && !folded_through
-			&& !folded_frame_read,
+		Check (!inlined_branch && !inlined_no_inline && !inlined_through
+			&& !inlined_frame_read,
 			"and every one of them runs in a body of its own before tier 2");
 		Check (Costed.frame_read_saw == "FailThroughFrameRead",
 			"GetCurrentMethod () names the body that asked before tier 2, not "
@@ -257,22 +257,22 @@ static class Program {
 		}
 
 		saw_branch = saw_no_inline = saw_through = saw_frame_read = false;
-		folded_branch = folded_no_inline = folded_through = folded_frame_read = false;
+		inlined_branch = inlined_no_inline = inlined_through = inlined_frame_read = false;
 		Costed.frame_read_saw = null;
 
 		Check (want == Root (4, true), "the answer at tier 2 is the answer before it");
 
 		/*
-		 * A folded body keeps a frame in the trace, built from the side table
+		 * An inlined body keeps a frame in the trace, built from the side table
 		 * the compile wrote rather than from a frame on the stack. What says the
-		 * fold happened is where that frame's code is.
+		 * inline happened is where that frame's code is.
 		 */
-		Check (folded_branch, "the cost model folds a helper with a branch");
-		Check (saw_no_inline && !folded_no_inline, "NoInlining keeps the helper's body");
-		Check (saw_through && folded_through,
-			"and the mark on it leaves a helper that calls it foldable");
-		Check (saw_frame_read && folded_frame_read,
-			"the cost model folds a helper that reads the frame that called it");
+		Check (inlined_branch, "the cost model inlines a helper with a branch");
+		Check (saw_no_inline && !inlined_no_inline, "NoInlining keeps the helper's body");
+		Check (saw_through && inlined_through,
+			"and the mark on it leaves a helper that calls it inlinable");
+		Check (saw_frame_read && inlined_frame_read,
+			"the cost model inlines a helper that reads the frame that called it");
 		Check (Costed.frame_read_saw == "FailThroughFrameRead",
 			"and GetCurrentMethod () still names that body, not "
 			+ (Costed.frame_read_saw ?? "nothing"));

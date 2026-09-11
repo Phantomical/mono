@@ -102,7 +102,7 @@ tearing_down_every_module ()
 
 } // namespace
 
-char StaleFold::ID = 0;
+char StaleInline::ID = 0;
 
 MonoBackend *MonoBackend::instance = nullptr;
 
@@ -623,7 +623,7 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 		                                "tier 0 does not run this method");
 
 	/*
-	 * A method whose entry went back to this trampoline after a fold was
+	 * A method whose entry went back to this trampoline after an inline was
 	 * replaced ran compiled before, so its tier-0 call counter is spent. Sent
 	 * to the interpreter now, it would stay there.
 	 */
@@ -896,9 +896,9 @@ MonoBackend::entry_point (DomainState &domain, MonoDomainMethod &dm, bool allow_
 
 		/*
 		 * Refused rather than not built. The replacement is installed by now,
-		 * so the next translation folds nothing stale in and the loop ends.
+		 * so the next translation inlines nothing stale and the loop ends.
 		 */
-		if (!code.errorIsA<StaleFold> ())
+		if (!code.errorIsA<StaleInline> ())
 			return code.takeError ();
 
 		llvm::consumeError (code.takeError ());
@@ -1211,9 +1211,9 @@ namespace {
 struct Member {
 	MonoDomainMethod *dm;
 
-	/// What MonoDomainMethod::folds_epoch () gave before the translation. The
+	/// What MonoDomainMethod::inlines_epoch () gave before the translation. The
 	/// publication is refused when it has moved since.
-	uint32_t folds_epoch = 0;
+	uint32_t inlines_epoch = 0;
 
 	std::vector<uint8_t> profile;
 	std::function<llvm::Expected<MonoDomainMethod *> (MonoMethod *)> publish_callee;
@@ -1356,7 +1356,7 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 		auto member = std::make_unique<Member> ();
 
 		member->dm = dm;
-		member->folds_epoch = dm->folds_epoch ();
+		member->inlines_epoch = dm->inlines_epoch ();
 		member->publish_callee = [&domain] (MonoMethod *callee) {
 			return publish (domain, callee);
 		};
@@ -1464,15 +1464,15 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 			                                  result.published);
 
 		/*
-		 * A method this body folded in was replaced while it compiled, so the
+		 * A method this body inlined was replaced while it compiled, so the
 		 * body holds a copy of IL that is gone. The record has taken the entry
 		 * back to its lazy resolver already, and the body is left where it is:
 		 * no caller can reach code that was never published.
 		 */
-		if (!dms[i]->publish (tier, result.code->body, members[k]->folds_epoch)
-		    && dms[i]->folds_epoch () != members[k]->folds_epoch) {
-			compiled.push_back (llvm::make_error<StaleFold> (
-				"a method the body folded in was replaced while it compiled"));
+		if (!dms[i]->publish (tier, result.code->body, members[k]->inlines_epoch)
+		    && dms[i]->inlines_epoch () != members[k]->inlines_epoch) {
+			compiled.push_back (llvm::make_error<StaleInline> (
+				"a method the body inlined was replaced while it compiled"));
 			continue;
 		}
 
@@ -1618,7 +1618,7 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier
 
 			/* Not a failed promotion. The method's entry is on its lazy
 			 * resolver and the next call compiles it again. */
-			if (body.errorIsA<StaleFold> ()) {
+			if (body.errorIsA<StaleInline> ()) {
 				llvm::consumeError (body.takeError ());
 				continue;
 			}
@@ -1928,7 +1928,7 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 /*
  * The wrapper is resolved here rather than in attach_interop (), which runs
  * under the record's lock. Compiling the wrapper translates its body, the
- * trivial inliner folds this method into it, and note_folded_into () then wants
+ * trivial inliner inlines this method into it, and note_inlined_into () then wants
  * that same lock. Nothing is cached on this record: the marshalling layer
  * caches the wrapper and the wrapper's own record caches its entry, so the
  * address is the same on every ask.

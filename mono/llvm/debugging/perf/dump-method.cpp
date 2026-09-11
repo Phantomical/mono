@@ -36,7 +36,7 @@ dump_method (MonoMethod *method, MonoJitInfo *jinfo)
 
 	/*
 	 * The body's own map is already what publish () asks a line table for:
-	 * ascending by offset and one row per offset. Nothing folds into a classic
+	 * ascending by offset and one row per offset. Nothing inlines into a classic
 	 * body, so every row names the method itself.
 	 */
 	std::vector<DebugLine> lines;
@@ -90,7 +90,7 @@ il_lines_for (const CompiledMethod &compiled, llvm::StringRef symbol)
 	return nullptr;
 }
 
-/// The same, for the bodies an inliner folded into that function.
+/// The same, for the bodies an inliner inlined into that function.
 const std::vector<IlInlineRow> *
 inline_frames_for (const CompiledMethod &compiled, llvm::StringRef symbol)
 {
@@ -108,7 +108,7 @@ inline_frames_for (const CompiledMethod &compiled, llvm::StringRef symbol)
 /// Turn one function's line table into the rows a dump record carries.
 ///
 /// perf keeps one position per address. So a row an inliner covered names the
-/// innermost body folded in there, which is the one the address is running.
+/// innermost body inlined there, which is the one the address is running.
 std::vector<DebugLine>
 debug_lines (MonoMethod *method, const CompiledMethod &compiled, llvm::StringRef symbol)
 {
@@ -117,7 +117,7 @@ debug_lines (MonoMethod *method, const CompiledMethod &compiled, llvm::StringRef
 	if (rows == nullptr || rows->empty ())
 		return {};
 
-	const std::vector<IlInlineRow> *folded = inline_frames_for (compiled, symbol);
+	const std::vector<IlInlineRow> *inlined = inline_frames_for (compiled, symbol);
 	std::string own = display_name (method, symbol);
 	std::vector<DebugLine> lines;
 
@@ -131,14 +131,14 @@ debug_lines (MonoMethod *method, const CompiledMethod &compiled, llvm::StringRef
 
 		// The rows ascend by offset and then by depth, so the first row on
 		// an offset is the innermost body.
-		if (folded != nullptr) {
+		if (inlined != nullptr) {
 			auto at = std::lower_bound (
-				folded->begin (), folded->end (), row.native_offset,
+				inlined->begin (), inlined->end (), row.native_offset,
 				[] (const IlInlineRow &frame, uint32_t offset) {
 					return frame.native_offset < offset;
 				});
 
-			if (at != folded->end () && at->native_offset == row.native_offset) {
+			if (at != inlined->end () && at->native_offset == row.native_offset) {
 				line.line = at->il_offset;
 				line.file = method_display_name (
 					(MonoMethod *) (uintptr_t) at->callee);

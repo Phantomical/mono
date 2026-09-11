@@ -108,8 +108,8 @@
  * decision to LLVM's cost model, which judges the translated body rather than
  * its IL length. A front-end inline would pre-empt that with a worse metric, and
  * it also stamps the CALLER's IL offset onto the inlined IR
- * (cfg->real_offset = inline_offset), so the folded-in body leaves no debug info
- * behind and cannot be named as a frame in a stack trace. What LLVM folds in
+ * (cfg->real_offset = inline_offset), so the inlined body leaves no debug info
+ * behind and cannot be named as a frame in a stack trace. What LLVM inlines
  * keeps its own DILocations, and does.
  *
  * MONO_INLINELIMIT still overrides this - 0 is how you say "decline everything"

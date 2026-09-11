@@ -68,11 +68,11 @@ concretely is charged the ordinary call penalty instead.
 
 **The last-call-to-static bonus is zero.** `LastCallToStaticBonus` reads
 `TTI.getInliningLastCallToStaticBonus ()` upstream, and the discount prices
-deleting a body the fold takes the last call to. `isSoleCallToLocalFunction ()`
+deleting a body the inline takes the last call to. `isSoleCallToLocalFunction ()`
 counts the uses the module holds, and a module here holds one root and the copies
 translated for it, so that count describes one compile rather than the program. A
-copy nothing folds is erased by `StripInlineCopiesPass` either way, and the callee
-keeps its own body behind its thunk, so no fold deletes a body. Neither LLVM nor
+copy nothing inlines is erased by `StripInlineCopiesPass` either way, and the callee
+keeps its own body behind its thunk, so no inline deletes a body. Neither LLVM nor
 the copy carries an option for this number. `isSoleCallToLocalFunction ()` itself
 stays, because `analyze ()` also reads it to refuse a callee holding a
 `noduplicate` call.

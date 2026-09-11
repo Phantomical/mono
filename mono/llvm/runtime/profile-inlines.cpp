@@ -49,8 +49,8 @@ ProfileInliner::round_limit () const
 }
 
 void
-ProfileInliner::folded (Function &caller, Function &callee, const InlineCost &cost,
-                        uint64_t count)
+ProfileInliner::inlined (Function &caller, Function &callee, const InlineCost &cost,
+                         uint64_t count)
 {
 	if (!is_jit_trace_enabled ())
 		return;
@@ -62,20 +62,20 @@ ProfileInliner::folded (Function &caller, Function &callee, const InlineCost &co
 		return;
 
 	char *host = mono_method_full_name (into, TRUE);
-	char *folded = mono_method_full_name (what, TRUE);
+	char *inlined = mono_method_full_name (what, TRUE);
 
 	MONO_LOCK (jit_trace_mutex ())
 	{
 		if (cost.isVariable ())
-			fprintf (stderr, "[llvm-jit] folding %s into %s at a site counted %"
+			fprintf (stderr, "[llvm-jit] inlining %s into %s at a site counted %"
 			                 G_GUINT64_FORMAT " times: costs %d against a budget of %d\n",
-			         folded, host, count, cost.getCost (), cost.getThreshold ());
+			         inlined, host, count, cost.getCost (), cost.getThreshold ());
 		else
-			fprintf (stderr, "[llvm-jit] folding %s into %s at a site counted %"
+			fprintf (stderr, "[llvm-jit] inlining %s into %s at a site counted %"
 			                 G_GUINT64_FORMAT " times: %s\n",
-			         folded, host, count, cost.getReason ());
+			         inlined, host, count, cost.getReason ());
 	}
-	g_free (folded);
+	g_free (inlined);
 	g_free (host);
 }
 
@@ -179,15 +179,15 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 		return nullptr;
 
 	/*
-	 * The root folded this method already, so hand back the body standing
+	 * The root inlined this method already, so hand back the body standing
 	 * beside it. Ahead of the tests below because none of them governs a body
 	 * that is already translated.
 	 *
 	 * No cycle to rule out here, unlike the pre-pass. What this returns is a
-	 * body the root's own module holds, and the pass folds it at one site under
-	 * a depth limit rather than marking it always-inline.
+	 * body the root's own module holds, and the pass inlines it at one site
+	 * under a depth limit rather than marking it always-inline.
 	 */
-	bool rebuild = already_folded (scope_, callee);
+	bool rebuild = already_inlined (scope_, callee);
 
 	if (rebuild) {
 		if (callee == scope_.root)
@@ -195,7 +195,7 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 
 		// A copy standing beside the root is what the site should reach.
 		// Without one, fall through and build one into the candidate's module.
-		if (Function *standing = folded_copy_in (scope_, callee, *decl.getParent ()))
+		if (Function *standing = inlined_copy_in (scope_, callee, *decl.getParent ()))
 			return standing;
 	}
 
@@ -210,23 +210,23 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 		limit = costed_inline_il_limit_cold ();
 
 		// The IL limit bounds translation cost; it is not meant to be the
-		// fold/decline answer itself, and a cold site carrying an argument
+		// inline/decline answer itself, and a cold site carrying an argument
 		// this compile can already tell, from the caller's own IR, is a live
 		// elision candidate is exactly the case where the cold limit would be
 		// making that call on a proxy. What the callee does with the
 		// argument - capture it, dispatch on it - still decides the actual
-		// fold, once this lets the candidate translate at all.
+		// inline, once this lets the candidate translate at all.
 		if (carries_an_elision_candidate (call))
 			limit = costed_inline_il_limit ();
 	}
 
 	// A rebuild is free, so only a method new to this root meets either budget
 	// below.
-	if (limit == 0 || folding_off_for_seq_points ())
+	if (limit == 0 || inlining_off_for_seq_points ())
 		return nullptr;
 
 	if (!rebuild && scope_.budget.costed == 0) {
-		trace_refusal (scope_, callee, "the cost model's fold budget is spent");
+		trace_refusal (scope_, callee, "the cost model's inline budget is spent");
 		return nullptr;
 	}
 
@@ -247,8 +247,8 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 	}
 
 	bool fits = is_builtin (callee)
-	            || (fold_clause_bearing_callees () ? is_small_enough (header, limit)
-	                                              : is_small_and_clause_free (header, limit));
+	            || (inline_clause_bearing_callees () ? is_small_enough (header, limit)
+	                                                : is_small_and_clause_free (header, limit));
 
 	if (!fits) {
 		if (is_jit_trace_enabled ()) {

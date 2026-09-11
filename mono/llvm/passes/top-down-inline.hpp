@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief Folding a hot method's callees into it, hottest call site first.
+ * \brief Inlining a hot method's callees into it, hottest call site first.
  */
 
 #ifndef MONO_LLVM_PASSES_TOP_DOWN_INLINE_HPP
@@ -29,7 +29,7 @@ class OneFileFS;
 /// The interface the engine implements so the pass can ask about a candidate.
 ///
 /// The pass reads IR and a profile. Two questions need managed metadata to
-/// answer: whether a method can be folded at all, and what its body is. Both go
+/// answer: whether a method can be inlined at all, and what its body is. Both go
 /// through here, so the pass itself names no metadata.
 class InlineCandidates {
 public:
@@ -43,7 +43,7 @@ public:
 	/// decl's name either: the caller reconciles any leftover declaration once
 	/// the body is linked in, so the site still needs no rewriting of its own.
 	///
-	/// What comes back is fresh translator output, unless the engine folded the
+	/// What comes back is fresh translator output, unless the engine inlined the
 	/// method into this root already. It then returns the body standing in
 	/// decl's own module, which the caller links nothing for. Read getParent ()
 	/// to tell the two apart.
@@ -71,10 +71,10 @@ public:
 	virtual llvm::ArrayRef<uint8_t> profile_for (llvm::Function &decl) = 0;
 
 	/// Says that the cost model weighed \p callee at a site in \p caller and
-	/// folded it. \p cost and \p count are what declined () below gets, for a
-	/// trace that can read a fold and a decline the same way.
-	virtual void folded (llvm::Function &caller, llvm::Function &callee,
-	                     const llvm::InlineCost &cost, uint64_t count) = 0;
+	/// inlined it. \p cost and \p count are what declined () below gets, for a
+	/// trace that can read an inline and a decline the same way.
+	virtual void inlined (llvm::Function &caller, llvm::Function &callee,
+	                      const llvm::InlineCost &cost, uint64_t count) = 0;
 
 	/// Says that the cost model weighed \p callee at a site in \p caller and
 	/// declined it.
@@ -91,20 +91,20 @@ public:
 	virtual void declined (llvm::Function &caller, llvm::Function &callee,
 	                       const llvm::InlineCost &cost, uint64_t count) = 0;
 
-	/// Whether the engine has spent everything it will ever fold into this
+	/// Whether the engine has spent everything it will ever inline into this
 	/// root, so every remaining site can be treated as already declined.
 	virtual bool exhausted () const = 0;
 
-	/// How many folds deep past the root a chain can go. Without a limit a call
-	/// graph with a cycle in it never runs out of sites.
+	/// How many inlines deep past the root a chain can go. Without a limit a
+	/// call graph with a cycle in it never runs out of sites.
 	virtual unsigned depth_limit () const = 0;
 
 	/// How many times the pass takes up a root's sites again.
 	///
-	/// A fold settles what a dispatch below it reads, and the simplification
-	/// behind the fold answers that dispatch with a direct call. Such a site was
-	/// not there when the root's sites were first read, so a pass that reads
-	/// them once never offers it.
+	/// An inline settles what a dispatch below it reads, and the simplification
+	/// behind the inline answers that dispatch with a direct call. Such a site
+	/// was not there when the root's sites were first read, so a pass that
+	/// reads them once never offers it.
 	virtual unsigned round_limit () const = 0;
 };
 
@@ -141,7 +141,7 @@ public:
 	Result run (llvm::Module &, llvm::ModuleAnalysisManager &) { return Result { *slot_ }; }
 };
 
-/// Folds a method's hottest call sites into it.
+/// Inlines a method's hottest call sites into it.
 ///
 /// Sites are ranked by the caller's own block counts, so a caller the profile
 /// describes spends its budget where the calls really are.
@@ -154,7 +154,7 @@ class TopDownInlinerPass : public llvm::PassInfoMixin<TopDownInlinerPass> {
 public:
 	/// materialize is run over the module each candidate is translated into,
 	/// and settles what shape the cost model weighs. simplify is run over a
-	/// root the loop folded anything into.
+	/// root the loop inlined anything into.
 	///
 	/// The two are the caller's rather than the pass's own so that a candidate
 	/// reaches the cost model in the same shape a tier-1 body has. The profile

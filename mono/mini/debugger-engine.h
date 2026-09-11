@@ -236,7 +236,7 @@ typedef struct
 	 */
 	gboolean has_ctx;
 	/*
-	 * This frame is a body an inliner folded into the one below it, so it owns no
+	 * This frame is a body an inliner inlined into the one below it, so it owns no
 	 * code: de.ji and de.native_offset name that other body, and the sequence
 	 * points, variable homes and resume addresses read off them describe it and
 	 * not this method. Stepping and any command that reads the frame's state must

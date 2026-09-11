@@ -4,16 +4,16 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
- * The callees a compile folds into their caller before any cost model looks at
- * them. Both compiled tiers do it, so both are checked.
+ * The callees a compile inlines into their caller before any cost model looks
+ * at them. Both compiled tiers do it, so both are checked.
  * Mono.Tiering.MonoTier::PromoteNow compiles Root () at the tier it is given, on
  * this thread and whatever tier the method was running at, so the test needs no
  * environment and races no compile worker.
  *
  * Every shape is checked at each tier, and the answers all have to agree with
- * the first one. What says the fold really happened is the stack trace. Every
- * helper that threw has a frame in it either way, but a folded body owns no
- * code: its frame reports the offset into the caller it was folded at, and a
+ * the first one. What says the inline really happened is the stack trace. Every
+ * helper that threw has a frame in it either way, but an inlined body owns no
+ * code: its frame reports the offset into the caller it was inlined at, and a
  * helper the gates refuse reports an offset into itself.
  * --llvm-opt=-mono-inline-il-limit=0 turns the pre-pass off, and this test
  * then fails on those checks alone.
@@ -90,7 +90,7 @@ static class Trivial {
 
 	/*
 	 * A forwarder onto a method that forwards to an icall, which is two links of
-	 * chain for one fold: Array:Clone () calls object:MemberwiseClone (). A null
+	 * chain for one inline: Array:Clone () calls object:MemberwiseClone (). A null
 	 * array raises where the call stands.
 	 */
 	public static object CloneOf (Array a) { return a.Clone (); }
@@ -103,8 +103,8 @@ static class Trivial {
 
 	/*
 	 * A forwarder onto FailNoInline (). The mark keeps that method out of every
-	 * fold, so it holds a body and a frame of its own whatever its caller does.
-	 * The mark says nothing about this forwarder, so this one folds.
+	 * inline, so it holds a body and a frame of its own whatever its caller does.
+	 * The mark says nothing about this forwarder, so this one inlines.
 	 */
 	public static void FailThroughNoInline (string what) { FailNoInline (what); }
 
@@ -120,7 +120,7 @@ static class Trivial {
 	 * Asks who called it and throws the answer, so one trace says both what
 	 * GetCurrentMethod () named and where the body that asked ran. Three calls,
 	 * so the shape test declines it and only the cost model takes it - which
-	 * makes this the tier-2 arm for a folded body that walks the stack.
+	 * makes this the tier-2 arm for an inlined body that walks the stack.
 	 *
 	 * The answer has to stay FailCurrent at both tiers. It comes off the frames
 	 * the compile recorded, and a walk blind to those names the root instead.
@@ -138,8 +138,8 @@ static class Program {
 	static bool saw_fail, saw_no_inline, saw_through, saw_branch, saw_clone;
 
 	/* Which of them ran inside their root's code rather than in a body of its own. */
-	static bool folded_fail, folded_no_inline, folded_through, folded_branch,
-		folded_clone, folded_current;
+	static bool inlined_fail, inlined_no_inline, inlined_through, inlined_branch,
+		inlined_clone, inlined_current;
 
 	/* What GetCurrentMethod () named inside FailCurrent (). */
 	static string current_name;
@@ -147,8 +147,8 @@ static class Program {
 	/*
 	 * Whether the helper's frame covers the same code as root's.
 	 *
-	 * A folded body has no code of its own, so the frame reported for it names
-	 * the call site in root that it was folded at - the same native offset
+	 * An inlined body has no code of its own, so the frame reported for it names
+	 * the call site in root that it was inlined at - the same native offset
 	 * root's own frame reports. A helper that was really called runs in its
 	 * own body and reports an offset into that.
 	 */
@@ -175,7 +175,7 @@ static class Program {
 	/*
 	 * A root of its own, because the cost model weighs a site against the size
 	 * of the method it stands in. Put this call in Root () and tier 2 stops
-	 * folding FailBranch ().
+	 * inlining FailBranch ().
 	 */
 	static void CloneRoot ()
 	{
@@ -183,7 +183,7 @@ static class Program {
 			Trivial.CloneOf (null);
 		} catch (NullReferenceException e) {
 			saw_clone |= (e.StackTrace ?? "").Contains ("Trivial.CloneOf");
-			folded_clone |= RunsInside (e, "CloneOf", "CloneRoot");
+			inlined_clone |= RunsInside (e, "CloneOf", "CloneRoot");
 		}
 	}
 
@@ -194,7 +194,7 @@ static class Program {
 			Trivial.FailCurrent ();
 		} catch (InvalidOperationException e) {
 			current_name = e.Message;
-			folded_current |= RunsInside (e, "FailCurrent", "CurrentRoot");
+			inlined_current |= RunsInside (e, "FailCurrent", "CurrentRoot");
 		}
 	}
 
@@ -207,10 +207,10 @@ static class Program {
 		saw_through |= trace.Contains ("Trivial.FailThroughNoInline");
 		saw_branch |= trace.Contains ("Trivial.FailBranch");
 
-		folded_fail |= RunsInside (e, "Fail", "Root");
-		folded_no_inline |= RunsInside (e, "FailNoInline", "Root");
-		folded_through |= RunsInside (e, "FailThroughNoInline", "Root");
-		folded_branch |= RunsInside (e, "FailBranch", "Root");
+		inlined_fail |= RunsInside (e, "Fail", "Root");
+		inlined_no_inline |= RunsInside (e, "FailNoInline", "Root");
+		inlined_through |= RunsInside (e, "FailThroughNoInline", "Root");
+		inlined_branch |= RunsInside (e, "FailBranch", "Root");
 
 		if (!trace.Contains ("Program.Root"))
 			throw new Exception ("the frame that caught it is missing: " + trace);
@@ -219,7 +219,7 @@ static class Program {
 	/*
 	 * Every shape is called from here rather than from a helper of its own,
 	 * because the pre-pass only looks at the method being compiled: a shape
-	 * called from somewhere else is folded into that method, at whatever tier
+	 * called from somewhere else is inlined into that method, at whatever tier
 	 * that method reaches.
 	 */
 	static int Root (int n)
@@ -304,8 +304,8 @@ static class Program {
 		}
 
 		saw_fail = saw_no_inline = saw_through = saw_branch = saw_clone = false;
-		folded_fail = folded_no_inline = folded_through = folded_branch =
-			folded_clone = folded_current = false;
+		inlined_fail = inlined_no_inline = inlined_through = inlined_branch =
+			inlined_clone = inlined_current = false;
 		current_name = null;
 
 		int got = Root (3);
@@ -316,25 +316,25 @@ static class Program {
 		Check (want == got, "the answer at " + name);
 
 		/*
-		 * A folded body keeps a frame in the trace, built from the side table
+		 * An inlined body keeps a frame in the trace, built from the side table
 		 * the compile wrote rather than from a frame on the stack. What says
-		 * the fold happened is where that frame's code is.
+		 * the inline happened is where that frame's code is.
 		 */
-		Check (saw_fail, "the folded helper has a frame of its own at " + name);
-		Check (folded_fail, "and it runs inside Root () at " + name);
+		Check (saw_fail, "the inlined helper has a frame of its own at " + name);
+		Check (inlined_fail, "and it runs inside Root () at " + name);
 		Check (saw_no_inline, "NoInlining keeps the helper's frame at " + name);
-		Check (!folded_no_inline,
+		Check (!inlined_no_inline,
 		       "and a refused helper runs in a body of its own at " + name);
 		Check (saw_through, "a forwarder onto it has a frame at " + name);
-		Check (folded_through,
-		       "and the mark on its target leaves it foldable at " + name);
+		Check (inlined_through,
+		       "and the mark on its target leaves it inlinable at " + name);
 
 		/*
 		 * A gate that refuses a forwarder for what it reaches keeps CloneOf ()
 		 * in a body of its own and fails this.
 		 */
 		Check (saw_clone, "a forwarder onto an icall has a frame at " + name);
-		Check (folded_clone, "and it runs inside CloneRoot () at " + name);
+		Check (inlined_clone, "and it runs inside CloneRoot () at " + name);
 
 		/*
 		 * FailBranch () is the one shape the two tiers answer differently. The
@@ -342,22 +342,22 @@ static class Program {
 		 * model behind it that then takes the body anyway.
 		 */
 		if (tier == tier2)
-			Check (folded_branch, "the cost model takes what the shape test declined");
+			Check (inlined_branch, "the cost model takes what the shape test declined");
 		else
-			Check (saw_branch && !folded_branch,
+			Check (saw_branch && !inlined_branch,
 			       "a helper with a branch keeps a body of its own at " + name);
 
 		/*
 		 * A body that asks who called it. The name has to hold at both tiers,
-		 * and tier 2 is where it is asked of a body the cost model folded in.
+		 * and tier 2 is where it is asked of a body the cost model inlined.
 		 */
 		Check (current_name == "FailCurrent",
 		       "GetCurrentMethod () names the body that asked at " + name
 		       + ", not " + (current_name ?? "nothing"));
 
 		if (tier == tier2)
-			Check (folded_current,
-			       "and the cost model folded that body into CurrentRoot ()");
+			Check (inlined_current,
+			       "and the cost model inlined that body into CurrentRoot ()");
 
 		return true;
 	}

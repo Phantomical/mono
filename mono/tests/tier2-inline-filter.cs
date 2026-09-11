@@ -9,7 +9,7 @@ using System.Runtime.CompilerServices;
  *
  * WithFilter ()'s catch carries a filter, which the front end lowers to a
  * function of its own tied to WithFilter ()'s frame through llvm.localescape
- * and llvm.localrecover. getInlineCost refuses to fold a body carrying
+ * and llvm.localrecover. getInlineCost refuses to inline a body carrying
  * llvm.localescape, so ProfileInliner::materialize () has to decline this
  * candidate itself. Translating it anyway would leave the filter function
  * standing once StripInlineCopiesPass takes the untaken copy back off, its
@@ -81,7 +81,7 @@ static class Program {
 			saw_propagated = true;
 
 			if (RunsInsideRoot (e))
-				throw new Exception ("WithFilter () folded into Root ()");
+				throw new Exception ("WithFilter () inlined into Root ()");
 			if (!e.StackTrace.Contains ("Program.Root"))
 				throw new Exception ("the frame that caught it is missing: " + e.StackTrace);
 

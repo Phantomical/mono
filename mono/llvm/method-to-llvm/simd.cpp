@@ -975,7 +975,7 @@ struct SimdEmitters : SimdEmit {
 	 * The selector is a parameter rather than a constant, so this is a read at
 	 * a computed index. That is what the managed body does through its element
 	 * pointer. A caller passing a constant leaves one shufflevector once the
-	 * body folds into it.
+	 * body is inlined.
 	 *
 	 * The field is two bits wide for a four-lane operand and one for a
 	 * two-lane one. The mask in front of it keeps every index in range.

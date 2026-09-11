@@ -418,7 +418,7 @@ MonoPassBuilder::buildCommonModuleSimplificationPipeline ()
 	/*
 	 * An array shape site that is left goes back onto its accessor. The
 	 * translator gives every argument an alloca, so a dimension that arrived
-	 * with a fold is a load until SROA has run above, whatever the caller
+	 * with an inline is a load until SROA has run above, whatever the caller
 	 * passed. Both tiers lower here, so a body carries the same CFG into the
 	 * PGO hash whichever tier compiled it.
 	 */
@@ -654,7 +654,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 
 	/*
 	 * Both folds run again between the inliner's rounds. Most of what they
-	 * find there is not in the caller's own code: it arrives with a fold.
+	 * find there is not in the caller's own code: it arrives with an inline.
 	 * An inlined `MoveNext` or `get_Current` carries its own delegate calls and
 	 * array dispatches into the caller. Neither reached those sites before
 	 * the inline happened. The round after each pass then reads what it named
@@ -717,8 +717,8 @@ MonoPassBuilder::buildTier2Pipeline ()
 	                                              llvm::ThinOrFullLTOPhase::None));
 
 	/*
-	 * Behind the pipeline above. A fold brings the constructor in and SROA takes
-	 * away the reads, which is what leaves an object with its stores and no
+	 * Behind the pipeline above. An inline brings the constructor in and SROA
+	 * takes away the reads, which is what leaves an object with its stores and no
 	 * reader. LLVM stops at the barriers. Each one writes the card table as well
 	 * as the field, and takes the address of the field rather than of the object.
 	 *

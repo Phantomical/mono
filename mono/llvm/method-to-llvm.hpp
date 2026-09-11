@@ -70,11 +70,11 @@ private:
 /// This is not a compile failure. The method's entry is back on its lazy
 /// resolver. Compiling it again gives a body without the copy, so a caller that
 /// gets one has somewhere to go.
-class StaleFold : public llvm::ErrorInfo<StaleFold> {
+class StaleInline : public llvm::ErrorInfo<StaleInline> {
 public:
 	static char ID;
 
-	explicit StaleFold (std::string what) : what_ (std::move (what)) {}
+	explicit StaleInline (std::string what) : what_ (std::move (what)) {}
 
 	void log (llvm::raw_ostream &os) const override { os << what_; }
 	std::error_code convertToErrorCode () const override
@@ -603,7 +603,7 @@ private:
 
 	/// The suffix on the name of the function being emitted, empty when it takes
 	/// the plain one. A module holds one body under a method's own name, so a
-	/// copy folded into a caller beside it needs a name of its own.
+	/// copy inlined into a caller beside it needs a name of its own.
 	std::string body_suffix;
 
 	void set_il_location (llvm::IRBuilder<> &builder, size_t offset)

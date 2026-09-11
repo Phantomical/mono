@@ -165,7 +165,7 @@ private:
 	/// is compiled over. Pass false if you cannot set the register the
 	/// interpreter reads its method from.
 	///
-	/// Compiles the method again when one it folded in was replaced while it
+	/// Compiles the method again when one it inlined was replaced while it
 	/// compiled.
 	llvm::Expected<void *> entry_point (DomainState &domain, MonoDomainMethod &dm,
 	                                    bool allow_tier0 = true);

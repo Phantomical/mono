@@ -106,7 +106,7 @@ llvm::BasicBlock *noreturn_free_successor (const llvm::BranchInst &branch);
 /// erasure -- checked with no need to look at, or translate, the callee.
 ///
 /// The caller-side half of what call_site_bonus () asks in full once the
-/// callee is available: whether a fold could plausibly erase an allocation,
+/// callee is available: whether an inline could plausibly erase an allocation,
 /// not whether it will. Meant for a gate that runs before translation, such
 /// as the IL limit a cold site would otherwise be held to.
 bool carries_an_elision_candidate (const llvm::CallBase &call);
@@ -114,7 +114,7 @@ bool carries_an_elision_candidate (const llvm::CallBase &call);
 /// What to add to the threshold a call site is weighed against, in the units
 /// the model costs an instruction in.
 ///
-/// Each bonus estimates the work a fold removes from \p callee once its body
+/// Each bonus estimates the work an inline removes from \p callee once its body
 /// can see the caller's own values. LLVM's model cannot estimate it: resolving
 /// a dispatch needs the operand's class, and an IR pointer carries none.
 ///

@@ -973,15 +973,16 @@ mono_runtime_suite(runtime-tier2-inline-return-self-off TESTS ${_tier2_inline_re
                    ENV "MONO_INLINE_POLICY=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=45 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-noreturn-free=false")
 
-# Whether the cost model folds a clause-bearing callee once its clause is dead.
-# PromoteNow drives the compiles, so self-promotion is off, and the trivial
-# pre-pass is off so a fold the test reads is never that one's instead.
+# Whether the cost model inlines a clause-bearing callee once its clause is
+# dead. PromoteNow drives the compiles, so self-promotion is off, and the
+# trivial pre-pass is off so an inline the test reads is never that one's
+# instead.
 _mono_exe_list(_tier2_inline_clause ${MONO_TESTS_TIER2_INLINE_CLAUSE_SRC})
 mono_runtime_suite(runtime-tier2-inline-clause TESTS ${_tier2_inline_clause}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
 mono_runtime_suite(runtime-tier2-inline-clause-off TESTS ${_tier2_inline_clause}
-                   ENV "MONO_FOLD_CLAUSES=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-fold-clauses=0")
+                   ENV "MONO_INLINE_CLAUSES=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-clauses=0")
 
 # PromoteNow drives the compiles, so self-promotion is off. Every callee here
 # carries a clause, and is_small_and_clause_free () refuses those outright.
@@ -992,7 +993,7 @@ mono_runtime_suite(runtime-tier2-finally-guard-owner TESTS ${_tier2_finally_guar
 
 # Whether a candidate the cost model materializes is weighed on its own
 # tier-1 record or the root's. The suite drives both promotions itself, so
-# self-promotion is off, and the trivial pre-pass is off so the fold the
+# self-promotion is off, and the trivial pre-pass is off so the inline the
 # test reads is never that one's instead.
 _mono_exe_list(_tier2_inline_profile_context ${MONO_TESTS_TIER2_INLINE_PROFILE_CONTEXT_SRC})
 mono_runtime_suite(runtime-tier2-inline-profile-context TESTS ${_tier2_inline_profile_context}
@@ -1000,20 +1001,20 @@ mono_runtime_suite(runtime-tier2-inline-profile-context TESTS ${_tier2_inline_pr
 
 # Whether the cost model specializes a concrete callee out of a root that is
 # itself shared (task #345). PromoteNow drives the compiles, so self-promotion
-# is off, and the trivial pre-pass is off so the fold the test reads is the
+# is off, and the trivial pre-pass is off so the inline the test reads is the
 # cost model's rather than that pass's.
 _mono_exe_list(_tier2_inline_generic_scope ${MONO_TESTS_TIER2_INLINE_GENERIC_SCOPE_SRC})
 mono_runtime_suite(runtime-tier2-inline-generic-scope TESTS ${_tier2_inline_generic_scope}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
 
-# A filter-bearing callee can never fold -- getInlineCost refuses its
+# A filter-bearing callee can never inline -- getInlineCost refuses its
 # llvm.localescape outright -- so both arms expect the same refusal.
 # PromoteNow drives the compiles the same way runtime-tier2-inline-clause does.
 _mono_exe_list(_tier2_inline_filter ${MONO_TESTS_TIER2_INLINE_FILTER_SRC})
 mono_runtime_suite(runtime-tier2-inline-filter TESTS ${_tier2_inline_filter}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
 mono_runtime_suite(runtime-tier2-inline-filter-off TESTS ${_tier2_inline_filter}
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-fold-clauses=0")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-clauses=0")
 
 # The raising arm mono-inline-implicit-null-free leaves out of a callee's
 # cost. The body is past the default cost-translate limit and past the
@@ -1135,20 +1136,20 @@ mono_runtime_suite(runtime-tier2-inline-casts-off TESTS ${_tier2_inline_casts}
                    ENV "MONO_INLINE_POLICY=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=512 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400 --llvm-opt=-mono-inline-answer-casts=false --llvm-opt=-mono-inline-noreturn-free=false")
 
-# A wrapper folded into its caller. The off arm leaves the cost model nothing to
-# translate, which is what separates the fold from the frame: both arms assert
-# that the wrapper still has a frame, and only the fold moves its offset onto the
+# A wrapper inlined into its caller. The off arm leaves the cost model nothing to
+# translate, which is what separates the inline from the frame: both arms assert
+# that the wrapper still has a frame, and only the inline moves its offset onto the
 # caller's. A cold callsite's budget is the lower of the default threshold and
 # the cold one, so both arms raise both. Only the off arm needs -hot/-cold
 # pinned to 0: it relies on -cost-il-limit=0 taking the cost model out of the
-# fold entirely, and its fallback-hot site would otherwise put it back in at
-# -hot's default. The on arm's own assertions (a fold happened, a frame moved)
+# inline entirely, and its fallback-hot site would otherwise put it back in at
+# -hot's default. The on arm's own assertions (an inline happened, a frame moved)
 # do not depend on the exact limit, so it is unaffected either way.
 _mono_exe_list(_tier2_inline_wrapper ${MONO_TESTS_TIER2_INLINE_WRAPPER_SRC})
 mono_runtime_suite(runtime-tier2-inline-wrapper TESTS ${_tier2_inline_wrapper}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
 mono_runtime_suite(runtime-tier2-inline-wrapper-off TESTS ${_tier2_inline_wrapper}
-                   ENV "MONO_WRAPPER_FOLD=off"
+                   ENV "MONO_WRAPPER_INLINE=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inlinedefault-threshold=400 --llvm-opt=-mono-inline-cold-callsite-threshold=400")
 
 # MONO_ENV_OPTIONS has to reach the runtime before it parses its own argv.

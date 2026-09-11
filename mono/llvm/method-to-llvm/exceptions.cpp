@@ -198,9 +198,9 @@ MethodLLVMEmitter::emit_clause_geometry ()
 /// names this global, whose three words are the clause index, the clause's kind,
 /// and which method clause is one of this instance's own - the same convention
 /// jit.hpp's IlInlineRow::callee uses, so eh-gather.cpp resolves owner off the
-/// clause itself rather than off ambient code position. A fold can move a folded
-/// body's own code under a clause of the root's that was never that body's own
-/// (innermost_try ()'s widening in eh-gather.cpp does exactly that on purpose),
+/// clause itself rather than off ambient code position. An inline can move an
+/// inlined body's own code under a clause of the root's that was never that
+/// body's own (innermost_try ()'s widening in eh-gather.cpp does exactly that),
 /// so nothing about where the protected code ends up answers which method a
 /// clause belongs to - only the clause's own marker does.
 /// The runtime reads them back to build the method's MonoJitInfo.

@@ -40,7 +40,7 @@ static class Program {
 
 	/*
 	 * NoInlining keeps the failure at the call. The trivial-inline pre-pass
-	 * takes a body that makes an object and stores a field, and a folded copy
+	 * takes a body that makes an object and stores a field, and an inlined copy
 	 * loads the type while Main is translated, which is before the try below
 	 * can catch anything.
 	 */

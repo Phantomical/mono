@@ -12,16 +12,16 @@ using System.Runtime.CompilerServices;
  * reading MONO_INLINE_POLICY to know which arm it is in.
  *
  * The trivial pre-pass is off in both arms (--llvm-opt=-mono-inline-il-limit=0),
- * so a fold this reads is the cost model's. What says a fold happened is the
- * stack trace, the way tier2-inline-cost.cs reads it: a folded body owns no
- * code, so its frame reports the offset into Root () that it was folded at,
- * and a body that was really called reports an offset into itself.
+ * so an inline this reads is the cost model's. What says an inline happened is
+ * the stack trace, the way tier2-inline-cost.cs reads it: an inlined body owns
+ * no code, so its frame reports the offset into Root () that it was inlined
+ * at, and a body that was really called reports an offset into itself.
  *
  * `Holder` carries a finalizer so its own allocation takes
  * `mono.alloc.object.kept` rather than `mono.alloc.object` (CLAUDE.md,
  * "An allocation is one call until late as well"): without it, `h` itself
  * would independently earn the *scalarize* bonus (its only other use is a
- * read), which folds `MeasureField` on its own and leaves nothing for this
+ * read), which inlines `MeasureField` on its own and leaves nothing for this
  * suite to tell apart from the devirt-arg bonus under test.
  *
  * Each of the four declines at 165, 175, 145 and 140 with every mono bonus
@@ -122,7 +122,7 @@ static class Shapes {
 
 static class Program {
 	static bool saw_field, saw_cast, saw_static, saw_phi;
-	static bool folded_field, folded_cast, folded_static, folded_phi;
+	static bool inlined_field, inlined_cast, inlined_static, inlined_phi;
 
 	/// Whether \p helper's frame covers the same code as Root ()'s.
 	static bool RunsInsideRoot (Exception e, string helper)
@@ -162,7 +162,7 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_field |= (e.StackTrace ?? "").Contains ("Shapes.MeasureField");
-			folded_field |= RunsInsideRoot (e, "MeasureField");
+			inlined_field |= RunsInsideRoot (e, "MeasureField");
 		}
 
 		try {
@@ -170,7 +170,7 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_cast |= (e.StackTrace ?? "").Contains ("Shapes.MeasureCast");
-			folded_cast |= RunsInsideRoot (e, "MeasureCast");
+			inlined_cast |= RunsInsideRoot (e, "MeasureCast");
 		}
 
 		try {
@@ -178,7 +178,7 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_static |= (e.StackTrace ?? "").Contains ("Shapes.MeasureStatic");
-			folded_static |= RunsInsideRoot (e, "MeasureStatic");
+			inlined_static |= RunsInsideRoot (e, "MeasureStatic");
 		}
 
 		try {
@@ -187,7 +187,7 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_phi |= (e.StackTrace ?? "").Contains ("Shapes.MeasurePhi");
-			folded_phi |= RunsInsideRoot (e, "MeasurePhi");
+			inlined_phi |= RunsInsideRoot (e, "MeasurePhi");
 		}
 
 		return total;
@@ -219,7 +219,7 @@ static class Program {
 
 		Check (saw_field && saw_cast && saw_static && saw_phi,
 			"every helper has a frame before tier 2");
-		Check (!folded_field && !folded_cast && !folded_static && !folded_phi,
+		Check (!inlined_field && !inlined_cast && !inlined_static && !inlined_phi,
 			"and every one of them runs in a body of its own before tier 2");
 
 		// Enough calls to leave counts on the tier-1 body.
@@ -232,30 +232,30 @@ static class Program {
 		}
 
 		saw_field = saw_cast = saw_static = saw_phi = false;
-		folded_field = folded_cast = folded_static = folded_phi = false;
+		inlined_field = inlined_cast = inlined_static = inlined_phi = false;
 
 		Check (want == Root (-2, true), "the answer at tier 2 is the answer before it");
 		Check (saw_field && saw_cast && saw_static && saw_phi,
 			"every helper still has a frame at tier 2");
 
 		if (bonus) {
-			Check (folded_field,
-				"the argument bonus folds a body that dispatches one field from the argument");
-			Check (folded_cast,
-				"the argument bonus folds a body that tests the argument's own class");
-			Check (folded_static,
-				"the argument bonus folds a body that dispatches on an initonly static read");
-			Check (folded_phi,
-				"the argument bonus folds a body that dispatches on a merged allocation");
+			Check (inlined_field,
+				"the argument bonus inlines a body that dispatches one field from the argument");
+			Check (inlined_cast,
+				"the argument bonus inlines a body that tests the argument's own class");
+			Check (inlined_static,
+				"the argument bonus inlines a body that dispatches on an initonly static read");
+			Check (inlined_phi,
+				"the argument bonus inlines a body that dispatches on a merged allocation");
 		} else {
-			Check (!folded_field,
-				"the argument bonus is what folds the body one field from the argument");
-			Check (!folded_cast,
-				"the argument bonus is what folds the body that tests the argument's class");
-			Check (!folded_static,
-				"the argument bonus is what folds the body dispatching on the static read");
-			Check (!folded_phi,
-				"the argument bonus is what folds the body dispatching on the merged allocation");
+			Check (!inlined_field,
+				"the argument bonus is what inlines the body one field from the argument");
+			Check (!inlined_cast,
+				"the argument bonus is what inlines the body that tests the argument's class");
+			Check (!inlined_static,
+				"the argument bonus is what inlines the body dispatching on the static read");
+			Check (!inlined_phi,
+				"the argument bonus is what inlines the body dispatching on the merged allocation");
 		}
 
 		Console.WriteLine (fails == 0 ? "OK" : "FAILED");

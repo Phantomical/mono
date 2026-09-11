@@ -283,7 +283,7 @@ const BuiltinMethod array_methods[] = {
 
 	// Whatever dimension the site names. lower_array_shapes () leaves the ones
 	// it cannot read on the accessor, and it reads the dimension where an
-	// inliner has already folded a forwarded parameter into a constant.
+	// inliner has already inlined a forwarded parameter into a constant.
 	{ "GetLength", 1, Receiver::one, BuiltinEmitters::array_dimension },
 	{ "GetLowerBound", 1, Receiver::one, BuiltinEmitters::array_lower_bound },
 };

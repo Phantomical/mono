@@ -680,7 +680,7 @@ find_jit_info (MonoDomain *domain, MonoJitTlsData *jit_tls, MonoJitInfo *res, Mo
  * exception, because Reflection.Emit is where its IL came from.
  *
  * Ask this of the method a frame runs rather than of the frame, so a body an
- * inliner folded in is answered for on its own terms. A wrapper folded into a
+ * inliner inlined is answered for on its own terms. A wrapper inlined into a
  * managed method is still a wrapper.
  */
 static gboolean
@@ -1491,7 +1491,7 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 
 			/*
 			 * An inlined frame has no code of its own, so it borrows the address of
-			 * the body it was folded into. That is what the frame really executed
+			 * the body it was inlined into. That is what the frame really executed
 			 * at, and it keeps mono_exception_stackframe_obj_walk () - which maps
 			 * these back through the jit info table - resolving.
 			 */
@@ -1501,7 +1501,7 @@ ves_icall_get_trace (MonoException *exc, gint32 skip, MonoBoolean need_file_info
 
 			/*
 			 * An inlined frame has no body of its own, so its IL offset comes from
-			 * the table the body it was folded into carries. Everything else asks
+			 * the table the body it was inlined into carries. Everything else asks
 			 * the engine that owns the frame.
 			 *
 			 * A frame with no IL offset is reported as having none, and the caller
@@ -1800,7 +1800,7 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 			frame.reg_locations = reg_locations;
 
 		/*
-		 * The bodies folded into this frame, innermost first and ahead of the
+		 * The bodies inlined into this frame, innermost first and ahead of the
 		 * frame itself, which is the order they were called in. Each borrows
 		 * the frame it runs in, so only the method, the IL offset and the type
 		 * change.
@@ -1816,7 +1816,7 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 				mono_jinfo_inline_frame (frame.ji, frame.native_offset, i, &inlined.method, &inlined.il_offset);
 				inlined.actual_method = inlined.method;
 				// The borrowed frame's flag describes the method that owns the
-				// code, and a folded wrapper is a wrapper wherever it ran.
+				// code, and an inlined wrapper is a wrapper wherever it ran.
 				inlined.managed = mono_method_runs_managed_frame (inlined.method);
 
 				if (func (&inlined, &ctx, user_data))

@@ -13,12 +13,12 @@ using System.Runtime.CompilerServices;
  *
  * The suite runs twice, once on the defaults and once with the answer off, and
  * reads MONO_INLINE_POLICY to know which arm it is in. The trivial pre-pass is
- * off in both (--llvm-opt=-mono-inline-il-limit=0), so a fold this reads is
+ * off in both (--llvm-opt=-mono-inline-il-limit=0), so an inline this reads is
  * the cost model's.
  *
- * What says a fold happened is the stack trace, the way tier2-inline-cost.cs
- * reads it: a folded body owns no code, so its frame reports the offset into
- * Root () that it was folded at, and a body that was really called reports an
+ * What says an inline happened is the stack trace, the way tier2-inline-cost.cs
+ * reads it: an inlined body owns no code, so its frame reports the offset into
+ * Root () that it was inlined at, and a body that was really called reports an
  * offset into itself.
  *
  * Weigh () costs 100 on mono's answers and 850 on LLVM's, so a threshold of 400
@@ -89,7 +89,7 @@ static class Work {
 
 static class Program {
 	/* Whether Weigh () had a frame at all, and whether it ran inside Root (). */
-	static bool saw_weigh, folded_weigh;
+	static bool saw_weigh, inlined_weigh;
 
 	/// Whether Weigh ()'s frame covers the same code as Root ()'s.
 	static bool RunsInsideRoot (Exception e)
@@ -129,7 +129,7 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_weigh |= (e.StackTrace ?? "").Contains ("Work.Weigh");
-			folded_weigh |= RunsInsideRoot (e);
+			inlined_weigh |= RunsInsideRoot (e);
 		}
 
 		return total;
@@ -161,7 +161,7 @@ static class Program {
 		int want = Root (-2, true);
 
 		Check (saw_weigh, "Weigh () has a frame before tier 2");
-		Check (!folded_weigh, "and it runs in a body of its own before tier 2");
+		Check (!inlined_weigh, "and it runs in a body of its own before tier 2");
 
 		// Enough calls to leave counts on the tier-1 body.
 		for (int i = 0; i < 20000; ++i)
@@ -172,16 +172,16 @@ static class Program {
 			return 1;
 		}
 
-		saw_weigh = folded_weigh = false;
+		saw_weigh = inlined_weigh = false;
 
 		Check (want == Root (-2, true), "the answer at tier 2 is the answer before it");
 		Check (saw_weigh, "Weigh () still has a frame at tier 2");
 
 		if (answers)
-			Check (folded_weigh, "an answered cascade folds the body behind it");
+			Check (inlined_weigh, "an answered cascade inlines the body behind it");
 		else
-			Check (!folded_weigh,
-				"an answered cascade is what folds the body behind it");
+			Check (!inlined_weigh,
+				"an answered cascade is what inlines the body behind it");
 
 		Console.WriteLine (fails == 0 ? "OK" : "FAILED");
 		return fails == 0 ? 0 : 1;

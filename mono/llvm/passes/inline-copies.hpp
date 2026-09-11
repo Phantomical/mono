@@ -1,7 +1,7 @@
 /**
  * \file
  * \brief The bodies an inliner translates in beside a caller, and the sweep
- * that takes back the ones it did not fold in.
+ * that takes back the ones it did not inline.
  */
 
 #ifndef MONO_LLVM_PASSES_INLINE_COPIES_HPP
@@ -30,8 +30,8 @@ constexpr llvm::StringRef inline_copy_attribute = "mono-inline-copy";
 /// Names a freshly materialized body as the copy of the method published at
 /// \p published_name, and gives it the linkage and the marks a copy carries.
 ///
-/// The caller adds `alwaysinline` when the copy is one the pipeline has to fold
-/// in rather than one a cost model still has to weigh.
+/// The caller adds `alwaysinline` when the copy is one the pipeline has to
+/// inline rather than one a cost model still has to weigh.
 void mark_inline_copy (llvm::Function &copy, llvm::StringRef published_name);
 
 /// Turns every inline copy the module still defines back into a declaration of

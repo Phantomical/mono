@@ -26,10 +26,10 @@ constexpr const char *dump_name_key = "mono.dump.name";
 
 /// Collects entry and every local body it reaches through a direct call.
 ///
-/// These are the copies the inliners folded in, and the module publishes no
+/// These are the copies the inliners inlined, and the module publishes no
 /// symbol for one, so a reader has them here or not at all.
 void
-gather_folded_bodies (Function &entry, SmallPtrSetImpl<Function *> &keep)
+gather_inlined_bodies (Function &entry, SmallPtrSetImpl<Function *> &keep)
 {
 	SmallVector<Function *, 8> pending;
 
@@ -118,7 +118,7 @@ dump_body_module (DumpPoint point, const Module &module, StringRef entry,
 	Function *body = copy->getFunction (entry);
 	SmallPtrSet<Function *, 8> keep;
 
-	gather_folded_bodies (*body, keep);
+	gather_inlined_bodies (*body, keep);
 
 	for (Function &function : *copy) {
 		if (keep.contains (&function) || function.isDeclaration ())
@@ -127,7 +127,7 @@ dump_body_module (DumpPoint point, const Module &module, StringRef entry,
 		function.deleteBody ();
 
 		// A declaration cannot have local linkage. What the other members
-		// folded in is a copy under a name of its own, so widening it here
+		// inlined is a copy under a name of its own, so widening it here
 		// clashes with nothing.
 		if (function.hasLocalLinkage ())
 			function.setLinkage (GlobalValue::ExternalLinkage);

@@ -221,9 +221,9 @@ TEST_F (SimdBodies, VectorAddStillRunsItsOwnIl)
 	EXPECT_FALSE (builtin_body_replaces_il (method));
 }
 
-// The pre-pass bounds a fold by the callee's IL size, and this operator is over
-// that limit. What lets it fold anyway is that the backend writes the body
-// rather than translating the IL the limit measures.
+// The pre-pass bounds an inline by the callee's IL size, and this operator is
+// over that limit. What lets it inline anyway is that the backend writes the
+// body rather than translating the IL the limit measures.
 TEST_F (SimdBodies, TheAddOperatorIsOverThePrePassIlLimit)
 {
 	MonoMethod *method = find_method ("Mono.Simd", vector_add);

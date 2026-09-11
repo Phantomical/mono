@@ -21,7 +21,7 @@ mark_inline_copy (Function &copy, StringRef published_name)
 	copy.removeFnAttr (tier_entry_weight_attribute);
 	copy.removeFnAttr (tier_handle_attribute);
 
-	// Local linkage is what lets an inliner delete the copy once it has folded
+	// Local linkage is what lets an inliner delete the copy once it has inlined
 	// every call to it.
 	copy.setLinkage (GlobalValue::InternalLinkage);
 	copy.addFnAttr (inline_copy_attribute, published_name);
@@ -88,7 +88,7 @@ inline_copies_stripped (const Module &m)
 			continue;
 
 		return createStringError (inconvertibleErrorCode (),
-		                          "%s was materialized to be folded into its "
+		                          "%s was materialized to be inlined into its "
 		                          "caller and was never taken back off",
 		                          fn.getName ().str ().c_str ());
 	}

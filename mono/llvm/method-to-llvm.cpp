@@ -882,7 +882,7 @@ MethodLLVMEmitter::emit ()
 	function = declr.get ();
 
 	// AggressiveInlining is a hint, not a mandate, so this widens the tier-2
-	// cost model's threshold rather than forcing the fold with AlwaysInline.
+	// cost model's threshold rather than forcing the inline with AlwaysInline.
 	// passes/inline-cost.cpp already reads InlineHint that way for any callee.
 	if (method->iflags & METHOD_IMPL_ATTRIBUTE_AGGRESSIVE_INLINING)
 		function->addFnAttr (llvm::Attribute::InlineHint);
@@ -942,7 +942,7 @@ MethodLLVMEmitter::emit ()
 	// This runs before anything that can call out. A stack walk entered below this
 	// frame must find the chain already linked.
 	if (method->save_lmf) {
-		// What save_lmf_cost () (passes/inline-policy.cpp) reads to price folding
+		// What save_lmf_cost () (passes/inline-policy.cpp) reads to price inlining
 		// this body's frame into a caller.
 		function->addFnAttr (save_lmf_attribute);
 		if (auto error = emit_push_lmf (builder))
@@ -1333,7 +1333,7 @@ MethodLLVMEmitter::create_cold_block (const llvm::Twine &name)
 /// Plants a bookkeeping `llvm.experimental.stackmap` under \p id, naming \p vars.
 ///
 /// Marked nounwind: the intrinsic is declared able to throw, so an inliner
-/// folding its function into a body already unwinding through a landing pad
+/// inlining its function into a body already unwinding through a landing pad
 /// turns an unmarked call into an invoke, and the verifier refuses one on any
 /// intrinsic but the few it names as invokable.
 llvm::CallInst *

@@ -225,7 +225,7 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 	 * self is a different question from anything positions answers: which
 	 * method this whole machine function is itself the compiled body of,
 	 * read off the function's own subprogram rather than off any one
-	 * instruction. It never needs a fold's boundary respected the way a
+	 * instruction. It never needs an inline's boundary respected the way a
 	 * per-instruction answer would, because it is a property of the
 	 * function, not of a position in it. See where it is used, below, for
 	 * why an instruction's own position cannot answer this question at all.
@@ -247,10 +247,10 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 				continue;
 
 			/*
-			 * A folded body's location carries the callee's IL offset,
+			 * An inlined body's location carries the callee's IL offset,
 			 * which says nothing about this method's try regions. The
 			 * outermost location of the chain names the call site the
-			 * body was folded at, which is the offset IlLineHandler
+			 * body was inlined at, which is the offset IlLineHandler
 			 * records as well (compiler.cpp).
 			 */
 			if (const DILocation *loc = it->getDebugLoc ().get ()) {
@@ -370,7 +370,7 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 			/*
 			 * Which method clause_index indexes into, decoded off the
 			 * clause's own marker rather than off anything nearby in the
-			 * code. A fold can move a folded body's own code under a
+			 * code. An inline can move an inlined body's own code under a
 			 * clause of the root's that was never that body's own -
 			 * innermost_try ()'s widening above does exactly that, on
 			 * purpose - so ambient code position answers a different

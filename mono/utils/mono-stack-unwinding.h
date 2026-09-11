@@ -29,7 +29,7 @@ typedef enum {
 	/* same, but with MonoContext */
 	FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX = 6,
 	/*
-	 * A body an inliner folded into the managed frame that follows this one.
+	 * A body an inliner inlined into the managed frame that follows this one.
 	 * It owns no code, so ji, native_offset and frame_addr all describe that
 	 * other body, method and il_offset are this one's, and reg_locations is
 	 * NULL. Only a walk that asked for MONO_UNWIND_INLINED_FRAMES is given
@@ -51,7 +51,7 @@ typedef enum {
 	 */
 	MONO_UNWIND_REG_LOCATIONS = 0x4,
 	/*
-	 * Report a FRAME_TYPE_INLINED frame for each body an inliner folded into a
+	 * Report a FRAME_TYPE_INLINED frame for each body an inliner inlined into a
 	 * managed frame, innermost first, ahead of the frame itself.
 	 */
 	MONO_UNWIND_INLINED_FRAMES = 0x8,

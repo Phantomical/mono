@@ -13,7 +13,7 @@ using System.Runtime.CompilerServices;
  * both, so every arm must answer OverflowException here.
  */
 class NewarrRefusal {
-	// The array is returned, and the caller cannot fold this body in, so the
+	// The array is returned, and the caller cannot inline this body, so the
 	// allocation stands whatever the tier does with it.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static byte[] Allocate (long length)

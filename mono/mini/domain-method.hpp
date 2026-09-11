@@ -137,18 +137,18 @@ public:
 	/// higher tier - or a detour - already owns. A refused publication leaves
 	/// the entry as it was, so a caller must not redirect anything itself.
 	///
-	/// Pass \p epoch for a body a compile produced: the value folds_epoch ()
+	/// Pass \p epoch for a body a compile produced: the value inlines_epoch ()
 	/// gave when that compile started. Such a body is refused whatever its tier
 	/// once the epoch has moved, since a method it holds a copy of has been
-	/// replaced. Leave it out for code that folds nothing in.
+	/// replaced. Leave it out for code that inlines nothing in.
 	bool publish (MonoTier tier, void *code, std::optional<uint32_t> epoch = std::nullopt);
 
-	/// Counts the times a method this one folded in has been replaced.
+	/// Counts the times a method this one inlined has been replaced.
 	///
 	/// Read this before a compile translates the method, and hand it back to
 	/// publish (). A compile that spans a replacement built its body from IL
 	/// that is gone.
-	uint32_t folds_epoch () const { return folds_epoch_.load (std::memory_order_acquire); }
+	uint32_t inlines_epoch () const { return inlines_epoch_.load (std::memory_order_acquire); }
 
 	/// Whether the interpreter is closed to this method.
 	bool past_tier0 () const { return past_tier0_.load (std::memory_order_acquire); }
@@ -180,16 +180,16 @@ public:
 	///
 	/// A copy sits under no thunk, so redirecting this method's entry does not
 	/// reach it. This is how a detour finds the bodies it has to take down.
-	void note_folded_into (MonoMethod *root);
+	void note_inlined_into (MonoMethod *root);
 
-	/// Takes the entry of every method that folded a copy of this one in back
+	/// Takes the entry of every method that inlined a copy of this one in back
 	/// to its lazy resolver. The next call to one of them compiles it again,
 	/// and is_inlinable () keeps the copy out that time.
 	///
 	/// A thread already inside such a body stays there, since there is no
 	/// on-stack replacement here. So this decides what later calls enter rather
 	/// than what is executing.
-	void drop_folded_bodies ();
+	void drop_inlined_bodies ();
 
 	/// The method standing in for this one, or null while none does.
 	///
@@ -317,14 +317,14 @@ private:
 	std::atomic<bool> override_checked_ { false };
 
 	/// The methods whose compiled bodies hold a copy of this one's.
-	llvm::SmallVector<MonoMethod *, 2> folded_into_;
+	llvm::SmallVector<MonoMethod *, 2> inlined_into_;
 	/// How many methods this one holds a copy of have been replaced.
-	std::atomic<uint32_t> folds_epoch_ { 0 };
+	std::atomic<uint32_t> inlines_epoch_ { 0 };
 	std::atomic<bool> past_tier0_ { false };
 
 	/// Takes the entry back to the lazy resolver, so the next call compiles the
 	/// method again.
-	void unwind_folded_body ();
+	void unwind_inlined_body ();
 
 	std::atomic<MonoTier> tier_ { MonoTier::none };
 	/* The highest tier anything has asked for, which is what keeps two requests
@@ -354,7 +354,7 @@ llvm::Error attach_interop_entry (MonoDomainMethod &dm);
 /// ldftn, a stub request, or a raw function pointer.
 ///
 /// The compiling engine defines this. Call it with no lock on \p dm held. It
-/// can compile, and what it compiles can fold this method in, which wants the
+/// can compile, and what it compiles can inline this method in, which wants the
 /// record's own lock.
 llvm::Expected<void *> published_entry_of (MonoDomainMethod &dm);
 

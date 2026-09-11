@@ -40,10 +40,10 @@ protected:
 	/// Translates image's method and prints it at the `unopt-ir` point, then
 	/// hands back what the point wrote.
 	///
-	/// folded names a second method of the same image to translate in beside
-	/// it and mark always-inline, the way the engine's pre-pass folds a callee.
+	/// inlined names a second method of the same image to translate in beside
+	/// it and mark always-inline, the way the engine's pre-pass inlines a callee.
 	std::string dump (const std::string &image, const std::string &method,
-	                  const std::string &folded = std::string ())
+	                  const std::string &inlined = std::string ())
 	{
 		std::unique_ptr<Translation> t = translate_method (image, method);
 
@@ -51,8 +51,8 @@ protected:
 		if (t->function == nullptr)
 			return std::string ();
 
-		if (!folded.empty ())
-			EXPECT_NE (fold_method_into (*t, image, folded), nullptr);
+		if (!inlined.empty ())
+			EXPECT_NE (inline_method_into (*t, image, inlined), nullptr);
 
 		/* As the engine does, so the dump is filed and filtered by method. */
 		set_dump_name (*t->function, dump_filter);
@@ -118,10 +118,10 @@ TEST_F (IrDump, PrintsAModuleThatParsesOnItsOwn)
 }
 
 /*
- * A folded copy carries no symbol, so a reader has its body from this dump or
+ * An inlined copy carries no symbol, so a reader has its body from this dump or
  * not at all.
  */
-TEST_F (IrDump, KeepsTheBodyOfAFoldedCallee)
+TEST_F (IrDump, KeepsTheBodyOfAnInlinedCallee)
 {
 	std::string text = dump ("calls", "Calls:CallStatic", "Calls:Helper");
 	LLVMContext context;
@@ -153,7 +153,7 @@ TEST_F (IrDump, DropsTheBodyOfAnotherMethodInTheModule)
 	ASSERT_NE (t->function, nullptr) << t->error;
 
 	/* A batch member: a body of its own, under a symbol of its own. */
-	Function *other = fold_method_into (*t, "arith", "Arith:Add");
+	Function *other = inline_method_into (*t, "arith", "Arith:Add");
 
 	ASSERT_NE (other, nullptr);
 	other->removeFnAttr (Attribute::AlwaysInline);

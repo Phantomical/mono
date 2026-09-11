@@ -560,7 +560,7 @@ TEST_F (MethodDetour, IsMissedByAnInlinedCallee)
 	mono_error_assert_ok (error);
 	ASSERT_EQ (1001, entry (1));
 
-	/* The classic compiler folds nothing at tier 0, so its call goes through
+	/* The classic compiler inlines nothing at tier 0, so its call goes through
 	 * the entry and sees the detour. Only an interpreted caller misses it. */
 	EXPECT_EQ (mono_llvm_jit_interp_tier0_enabled () ? 2 : 1001, invoke (caller, 1));
 }

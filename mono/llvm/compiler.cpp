@@ -221,7 +221,7 @@ public:
 	struct Row {
 		const MCSymbol *at;
 		uint32_t line;
-		/// The bodies folded in here, innermost first. Empty for code the
+		/// The bodies inlined here, innermost first. Empty for code the
 		/// compiled method wrote itself.
 		SmallVector<Inlined, 2> inlined;
 	};
@@ -304,7 +304,7 @@ private:
 	 * A row opens wherever the chain changes as well as wherever the line does.
 	 * The engine keys a chain on the exact offset of the row that governs it
 	 * (mono_jit_info_llvm_inline_frames ()). So code that comes back out of a
-	 * folded body, at the call site it was folded through, needs a row of its
+	 * inlined body, at the call site it was inlined through, needs a row of its
 	 * own to say the chain has ended. The line there is the one already in
 	 * effect, and on its own it would open no row.
 	 */
@@ -881,8 +881,8 @@ private:
 	}
 
 	/**
-	 * `.mono_inlines`, the chain of bodies folded into each row of the line
-	 * table. Only a function that had something folded into it gets a block, so
+	 * `.mono_inlines`, the chain of bodies inlined into each row of the line
+	 * table. Only a function that had something inlined into it gets a block, so
 	 * a method the inliners left alone pays nothing.
 	 */
 	void emit_inline_table ()

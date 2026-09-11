@@ -86,7 +86,7 @@ constexpr std::uint32_t MONO_LSDA_KIND_TIER_UNWIND = 0x10002;
  *
  * Each marker's first live value is which method its clause index indexes into,
  * as (uint64_t)(uintptr_t) of a MonoMethod*. passes/clause-marker.hpp decodes
- * the same convention off a landing pad's type_info_N global. A fold puts a
+ * the same convention off a landing pad's type_info_N global. An inline puts a
  * callee's markers in the root's frame, so the index alone names no clause. An
  * opening marker's second live value is the guard byte.
  *

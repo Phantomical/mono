@@ -9,8 +9,8 @@ using System.Runtime.CompilerServices;
  *
  * The dimension decides which sites are answered that way, and a caller often
  * writes it one frame above the accessor. GetUpperBound () and LengthAt () are
- * the two shapes that put the constant behind a fold, so each answer here has to
- * hold whether the tier folded the body in or left the call standing.
+ * the two shapes that put the constant behind an inline, so each answer here has
+ * to hold whether the tier inlined the body or left the call standing.
  *
  * Every receiver here is typed as Array. C# turns `a.Length` on an int[] into
  * ldlen, so a test that holds its arrays in their own type never reaches the

@@ -31,8 +31,8 @@ class LiveStackTrace {
 		Dump ("live-stack", new StackTrace (true));	// IL-FRAME: live-stack 0 LiveStackTrace:LiveLeaf
 	}
 
-	// Deliberately not NoInlining, so that a front end which started folding
-	// callees in would lose this frame and be caught doing it.
+	// Deliberately not NoInlining, so that a front end which started inlining
+	// callees would lose this frame and be caught doing it.
 	static void LiveMiddle (int x)
 	{
 		if (x == 7)

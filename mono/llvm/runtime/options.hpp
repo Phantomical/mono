@@ -155,9 +155,9 @@ bool guard_class_dispatch ();
 /// all.
 ///
 /// A false value refuses one the way the shape-test pre-pass always does.
-/// clause_survives_fold ()'s trial has to give the same answer when it
+/// clause_survives_inline ()'s trial has to give the same answer when it
 /// declines a callee for real.
-bool fold_clause_bearing_callees ();
+bool inline_clause_bearing_callees ();
 
 /// Whether the thread-static fast path is on.
 ///
@@ -215,25 +215,25 @@ uint64_t tier2_threshold ();
 /// The default is five thousand.
 uint64_t tier2_entry_weight ();
 
-/// The largest callee, in IL bytes, a compile folds into its caller before any
+/// The largest callee, in IL bytes, a compile inlines into its caller before any
 /// cost model has looked at it.
 ///
 /// Thirty-two, which leaves room to spare on the shapes the pre-pass
-/// recognizes. Zero turns the pre-pass off, which separates a bug in a folded
-/// body from one in the method that folded it.
+/// recognizes. Zero turns the pre-pass off, which separates a bug in an inlined
+/// body from one in the method that inlined it.
 uint32_t trivial_inline_il_limit ();
 
-/// How many bodies the shape-test pre-pass can fold into one method.
+/// How many bodies the shape-test pre-pass can inline into one method.
 ///
 /// A chain of forwarders is what spends it. A batch gives each member its own
-/// count, so a method folds in the same bodies however many others promoted
+/// count, so a method inlines the same bodies however many others promoted
 /// beside it.
 uint32_t trivial_inline_budget ();
 
-/// How many bodies the tier-2 cost model can fold into one method.
+/// How many bodies the tier-2 cost model can inline into one method.
 ///
 /// A count of its own rather than the pre-pass's, so what one inliner takes in
-/// does not decide what the other one is left to fold.
+/// does not decide what the other one is left to inline.
 uint32_t costed_inline_budget ();
 
 /// How many IL bytes of candidate the tier-2 cost model can still translate
@@ -242,7 +242,7 @@ uint32_t costed_inline_budget ();
 /// A count cannot tell a 5-byte getter from a 250-byte body, so a root that
 /// spends its count on small forwarders never reaches a large candidate
 /// standing behind them. This is charged the same way: once per candidate
-/// translated, whether the fold is accepted or not, since the compile cost is
+/// translated, whether the inline is accepted or not, since the compile cost is
 /// paid either way.
 uint32_t costed_inline_byte_budget ();
 
@@ -250,7 +250,7 @@ uint32_t costed_inline_byte_budget ();
 /// order to weigh it.
 ///
 /// Zero leaves tier 2 with the shape-test pre-pass alone, which separates a
-/// bug in the cost model from one in what it folded.
+/// bug in the cost model from one in what it inlined.
 uint32_t costed_inline_il_limit ();
 
 /// costed_inline_il_limit (), but for a site tier2_site_heat () answers hot.
@@ -264,7 +264,7 @@ uint32_t costed_inline_il_limit_hot ();
 /// 0 takes costed_inline_il_limit ().
 uint32_t costed_inline_il_limit_cold ();
 
-/// How many folds deep past a method the tier-2 inliner can go.
+/// How many inlines deep past a method the tier-2 inliner can go.
 ///
 /// A call graph with a cycle in it never runs out of sites, so the loop needs
 /// a floor whatever the budget says.
@@ -272,7 +272,7 @@ uint32_t inline_depth_limit ();
 
 /// How many times the tier-2 inliner takes up a method's sites again.
 ///
-/// One leaves the inliner with the sites the method arrived with. A fold
+/// One leaves the inliner with the sites the method arrived with. An inline
 /// settles the receiver's class at a dispatch below it, which
 /// `fold_dispatch_sites ()` then replaces with a direct call - a site that was
 /// not there when the sites were first read, and one an interface dispatch
@@ -282,22 +282,22 @@ uint32_t inline_depth_limit ();
 /// a cycle, the way the depth limit does.
 uint32_t inline_round_limit ();
 
-/// How many folds deep past root the shape-test pre-pass can go.
+/// How many inlines deep past root the shape-test pre-pass can go.
 ///
 /// A bound of its own rather than the cost model's, because the two take
 /// different candidates: this one takes a forwarder, and a chain of them
 /// reaches much further for the same budget.
 ///
 /// The pre-pass drains its worklist least deep first, so this decides where the
-/// count left over goes rather than what the first folds are.
+/// count left over goes rather than what the first inlines are.
 uint32_t trivial_inline_depth_limit ();
 
-/// How many call sites within one caller a single trivial fold can cover.
+/// How many call sites within one caller a single trivial inline can cover.
 ///
-/// A trivial fold shares one copy across every site that calls it, and
+/// A trivial inline shares one copy across every site that calls it, and
 /// AlwaysInlinerPass then duplicates that copy at each of them: a helper with
 /// call sites past this count is left calling its published entry rather
-/// than folded, so translating it once does not turn into duplicating it
+/// than inlined, so translating it once does not turn into duplicating it
 /// past this many times. Zero turns the check off.
 uint32_t trivial_inline_fanout_limit ();
 

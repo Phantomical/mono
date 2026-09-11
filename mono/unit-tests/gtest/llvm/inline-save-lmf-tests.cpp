@@ -63,7 +63,7 @@ struct CallModule {
 		EXPECT_FALSE (verifyModule (*module, &errs ()));
 	}
 
-	/// What getInlineCost () charges for folding `callee` at `call`.
+	/// What getInlineCost () charges for inlining `callee` at `call`.
 	int cost ()
 	{
 		PassBuilder pb;

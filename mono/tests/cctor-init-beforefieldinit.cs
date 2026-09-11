@@ -16,7 +16,7 @@ class Log {
 	public static int WriteRuns;
 	public static int AddrRuns;
 	public static int SpecialRuns;
-	public static int FoldedRuns;
+	public static int InlinedRuns;
 	public static int BoomRuns;
 }
 
@@ -111,14 +111,14 @@ class Special {
 	public static int ReadSlot () { return Slot; }
 }
 
-// One straight line then ret, and small, so the trivial-callee pre-pass folds
-// Get () into its caller. The folded copy has to carry the check with it.
-class Folded {
+// One straight line then ret, and small, so the trivial-callee pre-pass inlines
+// Get () into its caller. The inlined copy has to carry the check with it.
+class Inlined {
 	public static int Value = Bump ();
 
 	static int Bump ()
 	{
-		Log.FoldedRuns++;
+		Log.InlinedRuns++;
 		return 77;
 	}
 
@@ -230,7 +230,7 @@ class BeforeFieldInit {
 		int total = 0;
 
 		for (int i = 0; i < Turns; i++)
-			total += Folded.Get ();
+			total += Inlined.Get ();
 
 		return total;
 	}
@@ -323,7 +323,7 @@ class BeforeFieldInit {
 		bad = Check ("Fold ()", Fold (), 77 * Turns, 14);
 		if (bad != 0) return bad;
 
-		bad = Check ("Folded's cctor runs", Log.FoldedRuns, 1, 15);
+		bad = Check ("Inlined's cctor runs", Log.InlinedRuns, 1, 15);
 		if (bad != 0) return bad;
 
 		bad = Check ("Nested ()", Nested (), 188 * Turns, 16);

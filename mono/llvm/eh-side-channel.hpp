@@ -48,12 +48,12 @@ struct MonoEHClause {
 	/// The IL clause index, smuggled through the type_info_N initializer.
 	int clause_index = -1;
 	/// Which method clause_index indexes into: 0 for the method this compile is
-	/// building, otherwise (uint64_t)(uintptr_t) of a folded body's own
+	/// building, otherwise (uint64_t)(uintptr_t) of an inlined body's own
 	/// MonoMethod*, the same convention IlInlineRow::callee uses (jit.hpp).
 	/// eh-gather.cpp reads it off the clause's own marker (clause-marker.hpp)
-	/// rather than off ambient code position, because a fold can move a folded
-	/// body's own code under a clause of the root's that was never that body's
-	/// own.
+	/// rather than off ambient code position, because an inline can move an
+	/// inlined body's own code under a clause of the root's that was never that
+	/// body's own.
 	std::uint64_t owner = 0;
 	/// The clause's IL flags, a MonoExceptionEnum: NONE=0 for catch, FINALLY=2,
 	/// FAULT=4. It rides alongside clause_index in the same type_info_N global,
@@ -98,7 +98,7 @@ struct MonoEHFinallyBody {
 	/// The IL clause index, read back from the markers bracketing the run.
 	int clause_index = -1;
 	/// Same convention as MonoEHClause::owner above: 0 for this compile's own
-	/// method, otherwise a folded body's own MonoMethod*. finally-range.cpp
+	/// method, otherwise an inlined body's own MonoMethod*. finally-range.cpp
 	/// reads it off the marker's own operands (mono_lsda_format.hpp).
 	std::uint64_t owner = 0;
 	/// Where the clause's thread-abort guard byte sits in the frame: the DWARF

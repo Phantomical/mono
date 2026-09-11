@@ -14,12 +14,12 @@ using System.Runtime.CompilerServices;
  * for the same callee rather than in what it is willing to spend. The suite
  * runs twice, once on the default and once with the option off, and reads
  * MONO_INLINE_POLICY to know which arm it is in. The trivial pre-pass is off
- * in both (--llvm-opt=-mono-inline-il-limit=0), so a fold this reads is the
- * cost model's.
+ * in both (--llvm-opt=-mono-inline-il-limit=0), so an inline this reads is
+ * the cost model's.
  *
- * What says a fold happened is the stack trace, the way tier2-inline-cost.cs
- * reads it: a folded body owns no code, so its frame reports the offset into
- * Root () that it was folded at, and a body that was really called reports an
+ * What says an inline happened is the stack trace, the way tier2-inline-cost.cs
+ * reads it: an inlined body owns no code, so its frame reports the offset into
+ * Root () that it was inlined at, and a body that was really called reports an
  * offset into itself.
  *
  * Walk () holds eighteen dereferences and one explicit throw, at code size
@@ -82,7 +82,7 @@ static class Chain {
 }
 
 static class Program {
-	static bool saw_walk, folded_walk;
+	static bool saw_walk, inlined_walk;
 
 	static Node mk (int b) { return new Node { v = b, n = new Node { v = b + 1, n = new Node { v = b + 2 } } }; }
 
@@ -126,7 +126,7 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_walk |= (e.StackTrace ?? "").Contains ("Chain.Walk");
-			folded_walk |= RunsInsideRoot (e);
+			inlined_walk |= RunsInsideRoot (e);
 		}
 
 		return total;
@@ -158,7 +158,7 @@ static class Program {
 		int want = Root (-2, true);
 
 		Check (saw_walk, "Walk () has a frame before tier 2");
-		Check (!folded_walk, "and it runs in a body of its own before tier 2");
+		Check (!inlined_walk, "and it runs in a body of its own before tier 2");
 
 		// Enough calls to leave counts on the tier-1 body.
 		for (int i = 0; i < 20000; ++i)
@@ -169,16 +169,16 @@ static class Program {
 			return 1;
 		}
 
-		saw_walk = folded_walk = false;
+		saw_walk = inlined_walk = false;
 
 		Check (want == Root (-2, true), "the answer at tier 2 is the answer before it");
 		Check (saw_walk, "Walk () still has a frame at tier 2");
 
 		if (nullfree)
-			Check (folded_walk,
-				"leaving the raising arms uncounted is what folds a body of eighteen null checks");
+			Check (inlined_walk,
+				"leaving the raising arms uncounted is what inlines a body of eighteen null checks");
 		else
-			Check (!folded_walk,
+			Check (!inlined_walk,
 				"counting the raising arms is what keeps the body of eighteen null checks declined");
 
 		Console.WriteLine (fails == 0 ? "OK" : "FAILED");

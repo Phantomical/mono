@@ -41,7 +41,7 @@ struct Shape {
 /// holding none of these is left to is_small_and_clause_free (), which bounds
 /// the cost.
 bool
-blocks_a_fold (MonoOpcodeEnum op)
+blocks_an_inline (MonoOpcodeEnum op)
 {
 	switch (op) {
 	// match_trivial_shape () walks the IL once and stops at a terminator, so
@@ -82,7 +82,7 @@ blocks_a_fold (MonoOpcodeEnum op)
 
 	// No target to check the one-call rule against.
 	case MONO_CEE_CALLI:
-	// Hands the frame to the callee; the folded copy stands in for it.
+	// Hands the frame to the callee; the inlined copy stands in for it.
 	case MONO_CEE_TAIL_:
 
 	case MONO_CEE_ARGLIST:
@@ -143,10 +143,10 @@ is_fallthrough_branch (const unsigned char *code, MonoOpcodeEnum op, size_t oper
 
 /// Returns the method's shape when its IL is one straight line: at most one
 /// call, not counting a call is_array_shape_accessor () names, nothing
-/// blocks_a_fold () refuses, and a terminator on the last IL byte. Returns
+/// blocks_an_inline () refuses, and a terminator on the last IL byte. Returns
 /// nullopt otherwise.
 ///
-/// These are the shapes worth folding in without weighing them:
+/// These are the shapes worth inlining without weighing them:
 ///
 ///   ldc.i4.1                       ret a constant
 ///   ret
@@ -219,7 +219,7 @@ match_trivial_shape (MonoMethod *method, MonoMethodHeader *header)
 				return std::nullopt;
 
 			shape.call = target;
-		} else if (blocks_a_fold (op)
+		} else if (blocks_an_inline (op)
 		           // A C# compiler ends a value-returning method with
 		           // stloc.0, a branch to the next instruction, ldloc.0,
 		           // then ret. Letting that one branch through as a
@@ -239,7 +239,7 @@ match_trivial_shape (MonoMethod *method, MonoMethodHeader *header)
 /// than any chain worth following, and each link costs a header.
 constexpr int max_links = 8;
 
-/// Decides which of a caller's callees are worth folding in without weighing
+/// Decides which of a caller's callees are worth inlining without weighing
 /// them, and how much more of that translation this compile still has budget
 /// for. materialize_trivial_callees () builds what this approves and moves
 /// the caller's sites onto it.
@@ -258,7 +258,7 @@ public:
 	/// rebuild says a copy for it already stands elsewhere in this compile.
 	bool worth_a_copy (MonoMethod *callee, unsigned sites, bool rebuild) const;
 
-	/// Whether callee's header is one of the shapes this pre-pass folds in
+	/// Whether callee's header is one of the shapes this pre-pass inlines
 	/// without weighing it.
 	bool fits_the_shape (MonoMethod *callee, MonoMethodHeader *header) const;
 
@@ -272,7 +272,7 @@ public:
 private:
 	/// Whether target reaches itself through the forwarder chain
 	/// match_trivial_shape () describes. A recursive body is one no inliner
-	/// can fold the call out of, however small it is, so direct recursion
+	/// can inline the call out of, however small it is, so direct recursion
 	/// and a cycle through other forwarders both refuse here.
 	bool forwards_into_a_cycle (MonoMethod *target) const;
 
@@ -294,7 +294,7 @@ TrivialInlineAdvisor::worth_a_copy (MonoMethod *callee, unsigned sites, bool reb
 
 	// Reaching here always means a fresh copy is about to be built and its
 	// sites duplicated, rebuild or not, so both limits below gate every one
-	// of these rather than only a first-time fold.
+	// of these rather than only a first-time inline.
 	if (fanout_limit_ != 0 && sites > fanout_limit_)
 		return false;
 	if (instance_budget_ != 0 && sites > instances_left_)
@@ -338,7 +338,7 @@ TrivialInlineAdvisor::forwards_into_a_cycle (MonoMethod *target) const
 
 		// A body the shape test declines ends the chain here: it keeps its
 		// own call sites, so a cycle behind it is one the pre-pass never
-		// folds through.
+		// inlines through.
 		if (header->num_clauses != 0)
 			return false;
 
@@ -358,7 +358,7 @@ TrivialInlineAdvisor::forwards_into_a_cycle (MonoMethod *target) const
 
 /// A copy belongs to the one compile that asked for it. Another body in the
 /// module keeps the declaration and reaches the published entry, until its
-/// own compile folds a copy of its own.
+/// own compile inlines a copy of its own.
 void
 redirect_calls (Function &caller, Function &from, Function &to)
 {
@@ -378,7 +378,7 @@ trace_inline (MonoMethod *callee, MonoMethod *caller)
 
 	MONO_LOCK (jit_trace_mutex ())
 	{
-		fprintf (stderr, "[llvm-jit] folding %s into %s\n", callee_name, caller_name);
+		fprintf (stderr, "[llvm-jit] inlining %s into %s\n", callee_name, caller_name);
 	}
 	g_free (callee_name);
 	g_free (caller_name);
@@ -394,14 +394,14 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 {
 	uint32_t il_limit = trivial_inline_il_limit ();
 
-	if (il_limit == 0 || folding_off_for_seq_points ())
+	if (il_limit == 0 || inlining_off_for_seq_points ())
 		return;
 
 	struct Candidate {
 		MonoMethod *method;
 		llvm::Function *body;
 
-		/// Folds between this candidate and root. Zero is root itself.
+		/// Inlines between this candidate and root. Zero is root itself.
 		unsigned depth;
 	};
 
@@ -438,28 +438,28 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 
 		for (Function *decl : called) {
 			// Each of decl's sites gets its own copy once AlwaysInlinerPass
-			// folds it in, so the budgets below scale with this.
+			// inlines it, so the budgets below scale with this.
 			unsigned sites = sites_of[decl];
 			MonoMethod *callee = get_method (*decl);
 
 			if (callee == nullptr || unresolved.contains (callee))
 				continue;
 
-			bool rebuild = already_folded (scope, callee);
+			bool rebuild = already_inlined (scope, callee);
 
 			if (rebuild) {
-				// Folding root back into itself would recurse forever.
+				// Inlining root back into itself would recurse forever.
 				if (callee == scope.root)
 					continue;
 
-				Function *standing = folded_copy_in (scope, callee, module);
+				Function *standing = inlined_copy_in (scope, callee, module);
 
 				// Ahead of the advisor: redirecting to a standing copy
 				// costs no translation, so it happens even once the
 				// budget is spent.
 				if (standing != nullptr) {
 					// A copy that already reaches caller_body keeps its
-					// call: the two would fold into each other otherwise.
+					// call: the two would inline into each other otherwise.
 					if (!copy_reaches (*standing, *caller_body)) {
 						g_assert (standing->getFunctionType ()
 						          == decl->getFunctionType ());
@@ -470,7 +470,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 				}
 
 				// The pipeline can erase a standing copy once every call
-				// to it is folded, so reaching here for a rebuild is
+				// to it is inlined, so reaching here for a rebuild is
 				// ordinary rather than a bug to guard against.
 			}
 
@@ -519,7 +519,7 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 			redirect_calls (*caller_body, *decl, *copy);
 			advisor.charge (sites);
 
-			// These shapes have nothing to weigh, so the pipeline folds
+			// These shapes have nothing to weigh, so the pipeline inlines
 			// them rather than a cost model.
 			copy->addFnAttr (Attribute::AlwaysInline);
 

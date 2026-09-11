@@ -14,18 +14,18 @@ using System.Runtime.CompilerServices;
  *
  * The suite runs twice, once on the default and once with the option off,
  * and reads MONO_INLINE_POLICY to know which arm it is in. The trivial
- * pre-pass is off in both (--llvm-opt=-mono-inline-il-limit=0), so a fold
+ * pre-pass is off in both (--llvm-opt=-mono-inline-il-limit=0), so an inline
  * this reads is the cost model's.
  *
- * What says a fold happened is the stack trace, the way
- * tier2-inline-nullcheck.cs reads it: a folded body owns no code, so its
- * frame reports the offset into Root () that it was folded at, and a body
+ * What says an inline happened is the stack trace, the way
+ * tier2-inline-nullcheck.cs reads it: an inlined body owns no code, so its
+ * frame reports the offset into Root () that it was inlined at, and a body
  * that was really called reports an offset into itself.
  *
  * The site is cold -- the warm-up calls all take Root ()'s early return --
  * so the model weighs it against ColdCallSiteThreshold, 45 by default.
  * Validate () raises through the six range checks and one explicit throw
- * below them. With all seven arms out, it costs 0 and folds. Counting them
+ * below them. With all seven arms out, it costs 0 and inlines. Counting them
  * costs 70 and declines. No suite here has to raise a threshold to keep the
  * two arms apart. Re-measure both numbers when this starts failing on one
  * arm:
@@ -73,7 +73,7 @@ static class Guard {
 }
 
 static class Program {
-	static bool saw_validate, folded_validate;
+	static bool saw_validate, inlined_validate;
 
 	/// Whether Validate ()'s frame covers the same code as Root ()'s.
 	static bool RunsInsideRoot (Exception e)
@@ -113,7 +113,7 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_validate |= (e.StackTrace ?? "").Contains ("Guard.Validate");
-			folded_validate |= RunsInsideRoot (e);
+			inlined_validate |= RunsInsideRoot (e);
 		}
 
 		return total;
@@ -145,7 +145,7 @@ static class Program {
 		int want = Root (-2, true);
 
 		Check (saw_validate, "Validate () has a frame before tier 2");
-		Check (!folded_validate, "and it runs in a body of its own before tier 2");
+		Check (!inlined_validate, "and it runs in a body of its own before tier 2");
 
 		// Enough calls to leave counts on the tier-1 body.
 		for (int i = 0; i < 20000; ++i)
@@ -156,16 +156,16 @@ static class Program {
 			return 1;
 		}
 
-		saw_validate = folded_validate = false;
+		saw_validate = inlined_validate = false;
 
 		Check (want == Root (-2, true), "the answer at tier 2 is the answer before it");
 		Check (saw_validate, "Validate () still has a frame at tier 2");
 
 		if (noreturnfree)
-			Check (folded_validate,
-				"leaving the raising arms uncounted is what folds a body of six range guards");
+			Check (inlined_validate,
+				"leaving the raising arms uncounted is what inlines a body of six range guards");
 		else
-			Check (!folded_validate,
+			Check (!inlined_validate,
 				"counting the raising arms is what keeps the body of six range guards declined");
 
 		Console.WriteLine (fails == 0 ? "OK" : "FAILED");

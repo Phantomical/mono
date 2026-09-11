@@ -1716,7 +1716,7 @@ stack_walk_adapter (MonoStackFrameInfo *frame, MonoContext *ctx, gpointer data)
 
 /*
  * The reflection and security internal calls that ask who called them reach one
- * of the two walks below. So both ask for the bodies an inliner folded in: a
+ * of the two walks below. So both ask for the bodies an inliner inlined: a
  * walk without them names the root instead of the body that asked.
  */
 

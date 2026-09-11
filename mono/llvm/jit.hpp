@@ -88,7 +88,7 @@ struct IlLineRow {
 	uint8_t flags = 0;
 };
 
-/// One body an inliner folded into a compiled function, and where the code it
+/// One body an inliner inlined into a compiled function, and where the code it
 /// stands for sits.
 ///
 /// native_offset is the line-table row this belongs to, so the two tables are
@@ -99,7 +99,7 @@ struct IlInlineRow {
 	uint32_t native_offset;
 	uint32_t il_offset;
 	uint32_t depth;
-	/// What the compile called the folded body. Opaque to the JIT: the engine
+	/// What the compile called the inlined body. Opaque to the JIT: the engine
 	/// puts it in through il-line-table.hpp and reads it back here.
 	uint64_t callee;
 };
@@ -216,7 +216,7 @@ struct CompiledMethod {
 	/// say where in the method's IL it is.
 	std::vector<std::pair<std::string, std::vector<IlLineRow>>> other_il_lines;
 
-	/// The bodies folded into the entry function, ascending by native offset
+	/// The bodies inlined into the entry function, ascending by native offset
 	/// and then by depth. Empty when the inliners left it alone.
 	std::vector<IlInlineRow> inline_frames;
 
@@ -334,8 +334,8 @@ public:
 	/// Returns nothing when the module was not instrumented: every tier-2
 	/// module, and a tier-1 module compiled with -mono-tier1-pgo off.
 	///
-	/// inliner, when given, is what tier 2 asks for the callee bodies it folds
-	/// in. Without one the module is compiled with every call it arrived with
+	/// inliner, when given, is what tier 2 asks for the callee bodies it
+	/// inlines. Without one the module is compiled with every call it arrived with
 	/// still standing.
 	static std::vector<ProfileCounters> optimize (llvm::Module &m, JitTier tier,
 	                                              llvm::ArrayRef<uint8_t> profile = {},

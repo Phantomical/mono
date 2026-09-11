@@ -3,7 +3,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
- * Which method a folded finally's `.mono_guards` record belongs to.
+ * Which method an inlined finally's `.mono_guards` record belongs to.
  *
  * Guarded<T> is the shape that gets that wrong when a marker's owner is
  * inferred rather than carried on it (mono_lsda_format.hpp). Each
@@ -14,8 +14,8 @@ using System.Runtime.CompilerServices;
  *
  * Root () declares no clause of its own, which is what turns that into a
  * failure rather than a silently wrong guard. Every clause in the compiled
- * body arrives through a fold, so a marker read back as the root's own names a
- * clause index the root's header does not have.
+ * body arrives through an inline, so a marker read back as the root's own
+ * names a clause index the root's header does not have.
  */
 
 namespace Mono.Tiering {
@@ -29,7 +29,7 @@ static class Cleanups {
 	public static int ran;
 
 	// Not inlinable, so the try region keeps a call that can unwind and the
-	// clause stays live through the fold.
+	// clause stays live through the inline.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int Work (int n)
 	{

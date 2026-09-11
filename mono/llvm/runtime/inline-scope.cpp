@@ -32,9 +32,9 @@ using namespace llvm;
 namespace mono {
 
 bool
-folding_off_for_seq_points ()
+inlining_off_for_seq_points ()
 {
-	// A breakpoint is armed on a method, and a folded copy carries none of the
+	// A breakpoint is armed on a method, and an inlined copy carries none of the
 	// method's sequence points.
 	if (!mini_get_debug_options ()->gen_sdb_seq_points)
 		return false;
@@ -60,7 +60,7 @@ folding_off_for_seq_points ()
 bool
 is_inlinable (MonoDomain *domain, MonoMethod *callee)
 {
-	// A dynamic method is freed on its own. A copy of its body folded into a
+	// A dynamic method is freed on its own. A copy of its body inlined into a
 	// caller would outlive the data its constants point at.
 	if (callee->dynamic)
 		return false;
@@ -72,7 +72,7 @@ is_inlinable (MonoDomain *domain, MonoMethod *callee)
 	if ((callee->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0)
 		return false;
 
-	// The enter and leave events describe a frame, and a folded body has none.
+	// The enter and leave events describe a frame, and an inlined body has none.
 	if (mono_profiler_get_call_instrumentation_flags (callee) != 0)
 		return false;
 
@@ -81,15 +81,15 @@ is_inlinable (MonoDomain *domain, MonoMethod *callee)
 	 *
 	 * Native code behind a detour owns the entry, so a call to the method no
 	 * longer runs the IL this would copy. A copy that already stands is
-	 * drop_folded_bodies ()'s to take down.
+	 * drop_inlined_bodies ()'s to take down.
 	 */
 	if (MonoDomainMethod *dm = domain_method_find (domain, callee))
 		if (dm->tier () == MonoTier::detoured)
 			return false;
 
 	// An override the assembly names is installed when the method's record is
-	// built. The record above can be missing here, because a fold is decided
-	// before the site that names the callee is resolved.
+	// built. The record above can be missing here, because an inline is
+	// decided before the site that names the callee is resolved.
 	return get_method_override (callee) == nullptr;
 }
 
@@ -142,9 +142,9 @@ has_filter_clause (MonoMethodHeader *header)
 }
 
 bool
-already_folded (const InlineScope &scope, MonoMethod *callee)
+already_inlined (const InlineScope &scope, MonoMethod *callee)
 {
-	return any_of (scope.folded, [&] (const InlineScope::Folded &entry) {
+	return any_of (scope.inlined, [&] (const InlineScope::Inlined &entry) {
 		return entry.method == callee;
 	});
 }
@@ -181,9 +181,9 @@ copy_reaches (const Function &from, const Function &to)
 }
 
 Function *
-folded_copy_in (const InlineScope &scope, MonoMethod *callee, const Module &module)
+inlined_copy_in (const InlineScope &scope, MonoMethod *callee, const Module &module)
 {
-	for (const InlineScope::Folded &entry : scope.folded) {
+	for (const InlineScope::Inlined &entry : scope.inlined) {
 		if (entry.method != callee)
 			continue;
 
@@ -195,11 +195,11 @@ folded_copy_in (const InlineScope &scope, MonoMethod *callee, const Module &modu
 	return nullptr;
 }
 
-/// Returns this root's entry for callee, or null when it has not folded it.
-static InlineScope::Folded *
-find_folded (InlineScope &scope, MonoMethod *callee)
+/// Returns this root's entry for callee, or null when it has not inlined it.
+static InlineScope::Inlined *
+find_inlined (InlineScope &scope, MonoMethod *callee)
 {
-	for (InlineScope::Folded &entry : scope.folded)
+	for (InlineScope::Inlined &entry : scope.inlined)
 		if (entry.method == callee)
 			return &entry;
 
@@ -212,14 +212,14 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
                          ModuleTypes &types, InlineScope &scope, Inliner who)
 {
 	// The root and the callee together name the copy. A module holds the
-	// callee's own body as well, and one copy of it for each root that folds it
-	// in.
+	// callee's own body as well, and one copy of it for each root that inlines
+	// it.
 	std::string suffix = "$copy" + identity_of (scope.root);
 
 	// Read before the translation below records the new body against it. Null
-	// says this root has not folded callee before, which is what the budget
+	// says this root has not inlined callee before, which is what the budget
 	// counts.
-	InlineScope::Folded *entry = find_folded (scope, callee);
+	InlineScope::Inlined *entry = find_inlined (scope, callee);
 
 	/*
 	 * The translator declares the method it is asked for under a placeholder of
@@ -287,25 +287,25 @@ materialize_inline_copy (Module &module, MonoDomain *domain, MonoMethod *callee,
 	g_assert (*materialized == *target);
 
 	/*
-	 * Recorded because the body exists rather than because a fold happened: the
-	 * fold is the pipeline's decision, and this is not where it is taken. What
-	 * it costs when the body is stripped again is one wasted de-promotion of
-	 * the root.
+	 * Recorded because the body exists rather than because an inline happened:
+	 * the inline is the pipeline's decision, and this is not where it is taken.
+	 * What it costs when the body is stripped again is one wasted de-promotion
+	 * of the root.
 	 */
 	if (Expected<MonoDomainMethod *> record = domain_method_get (domain, callee))
-		(*record)->note_folded_into (scope.root);
+		(*record)->note_inlined_into (scope.root);
 	else
 		consumeError (record.takeError ());
 
 	/*
-	 * A method this root folded before is here again because the copy it made
+	 * A method this root inlined before is here again because the copy it made
 	 * then has gone: the pipeline erased it, or it belongs to a candidate's own
 	 * module. The entry keeps the method and takes the body that stands now.
 	 */
 	if (entry != nullptr)
 		entry->copy = *target;
 	else
-		scope.folded.push_back ({ callee, *target });
+		scope.inlined.push_back ({ callee, *target });
 	return *target;
 }
 

@@ -31,7 +31,7 @@ namespace Mono.Tiering {
 }
 
 static class Helpers {
-	// 3 sites in Root (): under both limits, so this folds.
+	// 3 sites in Root (): under both limits, so this inlines.
 	public static void Small (int x) { throw new InvalidOperationException ("small"); }
 
 	// 8 sites in Root (): over the fanout limit on its own, whatever the
@@ -39,7 +39,7 @@ static class Helpers {
 	public static void Wide (int x) { throw new InvalidOperationException ("wide"); }
 
 	// 4 sites in Root (), read after Small () has already spent 3 of the
-	// instance budget: 3 + 4 is still within it, so this folds too.
+	// instance budget: 3 + 4 is still within it, so this inlines too.
 	public static void Extra (int x) { throw new InvalidOperationException ("extra"); }
 
 	// 4 sites in Root (), read after Small () and Extra () between them have
@@ -70,107 +70,107 @@ static class Program {
 		return in_helper >= 0 && in_helper == in_root;
 	}
 
-	static bool folded_small, folded_wide, folded_extra, folded_too_much;
+	static bool inlined_small, inlined_wide, inlined_extra, inlined_too_much;
 
 	static void Root (int n)
 	{
 		try {
 			Helpers.Small (n + 0);
 		} catch (InvalidOperationException e) {
-			folded_small |= RunsInside (e, "Small", "Root");
+			inlined_small |= RunsInside (e, "Small", "Root");
 		}
 		try {
 			Helpers.Small (n + 1);
 		} catch (InvalidOperationException e) {
-			folded_small |= RunsInside (e, "Small", "Root");
+			inlined_small |= RunsInside (e, "Small", "Root");
 		}
 		try {
 			Helpers.Small (n + 2);
 		} catch (InvalidOperationException e) {
-			folded_small |= RunsInside (e, "Small", "Root");
+			inlined_small |= RunsInside (e, "Small", "Root");
 		}
 
 		try {
 			Helpers.Wide (n + 0);
 		} catch (InvalidOperationException e) {
-			folded_wide |= RunsInside (e, "Wide", "Root");
+			inlined_wide |= RunsInside (e, "Wide", "Root");
 		}
 		try {
 			Helpers.Wide (n + 1);
 		} catch (InvalidOperationException e) {
-			folded_wide |= RunsInside (e, "Wide", "Root");
+			inlined_wide |= RunsInside (e, "Wide", "Root");
 		}
 		try {
 			Helpers.Wide (n + 2);
 		} catch (InvalidOperationException e) {
-			folded_wide |= RunsInside (e, "Wide", "Root");
+			inlined_wide |= RunsInside (e, "Wide", "Root");
 		}
 		try {
 			Helpers.Wide (n + 3);
 		} catch (InvalidOperationException e) {
-			folded_wide |= RunsInside (e, "Wide", "Root");
+			inlined_wide |= RunsInside (e, "Wide", "Root");
 		}
 		try {
 			Helpers.Wide (n + 4);
 		} catch (InvalidOperationException e) {
-			folded_wide |= RunsInside (e, "Wide", "Root");
+			inlined_wide |= RunsInside (e, "Wide", "Root");
 		}
 		try {
 			Helpers.Wide (n + 5);
 		} catch (InvalidOperationException e) {
-			folded_wide |= RunsInside (e, "Wide", "Root");
+			inlined_wide |= RunsInside (e, "Wide", "Root");
 		}
 		try {
 			Helpers.Wide (n + 6);
 		} catch (InvalidOperationException e) {
-			folded_wide |= RunsInside (e, "Wide", "Root");
+			inlined_wide |= RunsInside (e, "Wide", "Root");
 		}
 		try {
 			Helpers.Wide (n + 7);
 		} catch (InvalidOperationException e) {
-			folded_wide |= RunsInside (e, "Wide", "Root");
+			inlined_wide |= RunsInside (e, "Wide", "Root");
 		}
 
 		try {
 			Helpers.Extra (n + 0);
 		} catch (InvalidOperationException e) {
-			folded_extra |= RunsInside (e, "Extra", "Root");
+			inlined_extra |= RunsInside (e, "Extra", "Root");
 		}
 		try {
 			Helpers.Extra (n + 1);
 		} catch (InvalidOperationException e) {
-			folded_extra |= RunsInside (e, "Extra", "Root");
+			inlined_extra |= RunsInside (e, "Extra", "Root");
 		}
 		try {
 			Helpers.Extra (n + 2);
 		} catch (InvalidOperationException e) {
-			folded_extra |= RunsInside (e, "Extra", "Root");
+			inlined_extra |= RunsInside (e, "Extra", "Root");
 		}
 		try {
 			Helpers.Extra (n + 3);
 		} catch (InvalidOperationException e) {
-			folded_extra |= RunsInside (e, "Extra", "Root");
+			inlined_extra |= RunsInside (e, "Extra", "Root");
 		}
 
 		try {
 			Helpers.TooMuch (n + 0);
 		} catch (InvalidOperationException e) {
-			folded_too_much |= RunsInside (e, "TooMuch", "Root");
+			inlined_too_much |= RunsInside (e, "TooMuch", "Root");
 		}
 		try {
 			Helpers.TooMuch (n + 1);
 		} catch (InvalidOperationException e) {
-			folded_too_much |= RunsInside (e, "TooMuch", "Root");
+			inlined_too_much |= RunsInside (e, "TooMuch", "Root");
 		}
 		try {
 			Helpers.TooMuch (n + 2);
 		} catch (InvalidOperationException e) {
-			folded_too_much |= RunsInside (e, "TooMuch", "Root");
+			inlined_too_much |= RunsInside (e, "TooMuch", "Root");
 		}
 		try {
 			Helpers.TooMuch (n + 3);
 		} catch (InvalidOperationException e) {
-			folded_too_much |= RunsInside (e, "TooMuch", "Root");
+			inlined_too_much |= RunsInside (e, "TooMuch", "Root");
 		}
 	}
 
@@ -200,11 +200,11 @@ static class Program {
 
 		Root (1);
 
-		Check (folded_small, "a callee under both limits folds");
-		Check (!folded_wide, "a callee over the fanout limit alone stays uncalled");
-		Check (folded_extra,
-		       "a callee the instance budget still has room for folds too");
-		Check (!folded_too_much,
+		Check (inlined_small, "a callee under both limits inlines");
+		Check (!inlined_wide, "a callee over the fanout limit alone stays uncalled");
+		Check (inlined_extra,
+		       "a callee the instance budget still has room for inlines too");
+		Check (!inlined_too_much,
 		       "a callee under the fanout limit is still refused once the "
 		       + "instance budget it would spend is not left");
 

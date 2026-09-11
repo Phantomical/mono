@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
  * caller's own argument type. fold_type_tests () answers what a candidate's
  * own declared parameter settles, when the tier-2 inliner materializes it
  * standalone for costing. A caller's narrower bound answers the rest, once
- * the candidate is folded in and the caller's own compile reaches the copy
+ * the candidate is inlined and the caller's own compile reaches the copy
  * again.
  */
 
@@ -61,7 +61,7 @@ public class InlineCastBound {
 	public static int Main ()
 	{
 		// The later rounds promote through both tiers, which is where
-		// Specialize's cascade folds into each caller with that caller's own
+		// Specialize's cascade inlines into each caller with that caller's own
 		// operand rather than Specialize's own declared parameter.
 		for (int i = 0; i < 25000; ++i)
 			Round ();

@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief The callees tier 2 weighs before folding them in.
+ * \brief The callees tier 2 weighs before inlining them.
  */
 
 #ifndef MONO_LLVM_RUNTIME_PROFILE_INLINES_HPP
@@ -56,8 +56,8 @@ public:
 	                             std::optional<SiteHeat> heat,
 	                             const llvm::CallBase &call) override;
 	llvm::ArrayRef<uint8_t> profile_for (llvm::Function &decl) override;
-	void folded (llvm::Function &caller, llvm::Function &callee,
-	            const llvm::InlineCost &cost, uint64_t count) override;
+	void inlined (llvm::Function &caller, llvm::Function &callee,
+	             const llvm::InlineCost &cost, uint64_t count) override;
 	void declined (llvm::Function &caller, llvm::Function &callee,
 	               const llvm::InlineCost &cost, uint64_t count) override;
 	bool exhausted () const override;

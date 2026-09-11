@@ -1758,7 +1758,7 @@ TEST_F (TranslatorTest, ARawCopyBecomesAMemoryIntrinsic)
  * shape test refuses the first of them, which branches on its count.
  *
  * This is the translator's output, before any pipeline, which is what the
- * fixture hands back. Tier 2 does fold both forwarders: it takes the whole
+ * fixture hands back. Tier 2 does inline both forwarders: it takes the whole
  * chain down to one unaligned `load i32`, with the null test the copy carries
  * left as an implicit check. So read this as where the intrinsic has not
  * arrived yet rather than as a limit on the compiled code.

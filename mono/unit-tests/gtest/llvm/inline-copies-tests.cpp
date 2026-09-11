@@ -1,6 +1,6 @@
 /*
  * Tests for StripInlineCopiesPass, which takes back the bodies an inliner
- * translated in beside a caller and did not fold.
+ * translated in beside a caller and did not inline.
  *
  * Pure LLVM: the pass names no metadata, so neither do these.
  */
@@ -102,7 +102,7 @@ TEST (InlineCopies, ACopyGoesBackToADeclarationOfThePublishedEntry)
 	EXPECT_EQ (reached->getName (), "Some.Class:Method@0x1234");
 	EXPECT_TRUE (reached->isDeclaration ());
 	// A declaration with local linkage does not verify, and one that kept
-	// alwaysinline reads to an inliner as a body it can fold.
+	// alwaysinline reads to an inliner as a body it can inline.
 	EXPECT_EQ (reached->getLinkage (), GlobalValue::ExternalLinkage);
 	EXPECT_FALSE (reached->hasFnAttribute (Attribute::AlwaysInline));
 	EXPECT_FALSE (reached->hasFnAttribute (inline_copy_attribute));

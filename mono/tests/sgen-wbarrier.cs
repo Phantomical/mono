@@ -20,7 +20,7 @@ using System.Runtime.CompilerServices;
  *
  * Two things make the test decide rather than pass by luck.
  * Mono.Tiering.MonoTier::PromoteNow compiles the store methods on this thread,
- * because the interpreter has a barrier of its own and folds bodies this small
+ * because the interpreter has a barrier of its own and inlines bodies this small
  * into their caller. And the count is large, because a handful of payloads can
  * survive on a conservatively pinned stack slot whatever the cards say.
  */

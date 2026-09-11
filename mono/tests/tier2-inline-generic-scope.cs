@@ -5,9 +5,9 @@ using System.Runtime.CompilerServices;
 
 /*
  * Task #345 asked which of two shapes the tier-2 cost model specializes when
- * it folds a generic callee. One shape is a closed root reaching a callee
+ * it inlines a generic callee. One shape is a closed root reaching a callee
  * the runtime would otherwise compile shared. The other is a root that is
- * itself shared folding a callee it names concretely. A trace confirmed the
+ * itself shared inlining a callee it names concretely. A trace confirmed the
  * second: it already works through the same gate as the first, and this
  * locks that answer in.
  *
@@ -18,7 +18,7 @@ using System.Runtime.CompilerServices;
  * own context, which only substitutes UseConcrete's own T. The literal int
  * Helper<int> names is untouched either way, so the callee it hands back is
  * closed regardless of which T is running. depends_on_context () and
- * may_fold () read the callee alone, so materialize () treats this exactly
+ * is_inlinable () read the callee alone, so materialize () treats this exactly
  * like a closed root's call to a canonically-shared callee. It translates a
  * copy against Helper<int>.IsInt's own exact instantiation. typeof (U) then
  * folds to a constant with no RGCTX fetch behind it.
@@ -27,13 +27,13 @@ using System.Runtime.CompilerServices;
  * naming UseOpen's own open T. Substitution cannot close that one - T is
  * whatever instantiation is running - so depends_on_context () still answers
  * yes and the call stays on the dispatch the shared body was built with. That
- * arm is here as the negative control: if a later change ever let this fold
+ * arm is here as the negative control: if a later change ever let this inline
  * anyway, it would need a per-instantiation RGCTX this shared body does not
  * carry.
  *
- * The stack trace says whether a fold happened, the same way
- * tier2-inline-cost.cs reads it. A folded body owns no code, so its frame
- * reports the offset into the root it was folded at. A body that really ran
+ * The stack trace says whether an inline happened, the same way
+ * tier2-inline-cost.cs reads it. An inlined body owns no code, so its frame
+ * reports the offset into the root it was inlined at. A body that really ran
  * reports an offset into itself.
  */
 
@@ -67,8 +67,8 @@ static class Box<T> where T : class {
 }
 
 class Program {
-	static bool folded_concrete, ran_concrete;
-	static bool folded_open, ran_open;
+	static bool inlined_concrete, ran_concrete;
+	static bool inlined_open, ran_open;
 
 	static bool RunsInsideRoot (Exception e, string root)
 	{
@@ -107,7 +107,7 @@ class Program {
 			Box<T>.UseConcrete (t, 4, true);
 		} catch (InvalidOperationException e) {
 			ran_concrete = true;
-			folded_concrete |= RunsInsideRoot (e, "UseConcrete");
+			inlined_concrete |= RunsInsideRoot (e, "UseConcrete");
 		}
 	}
 
@@ -117,7 +117,7 @@ class Program {
 			Box<T>.UseOpen (t, 4, true);
 		} catch (InvalidOperationException e) {
 			ran_open = true;
-			folded_open |= RunsInsideRoot (e, "UseOpen");
+			inlined_open |= RunsInsideRoot (e, "UseOpen");
 		}
 	}
 
@@ -138,7 +138,7 @@ class Program {
 			"typeof (T) answers false for a reference T before tier 2");
 
 		// The loop runs two reference-type instantiations of the same shared
-		// root, so a fold that answered off the wrong T would show up as
+		// root, so an inline that answered off the wrong T would show up as
 		// soon as the second one runs.
 		for (int i = 0; i < 20000; i++) {
 			Box<object>.UseConcrete (new object (), i, false);
@@ -158,15 +158,15 @@ class Program {
 		RunOpen (new object ());
 		RunOpen ("x");
 
-		Check (ran_concrete && folded_concrete,
-			"the cost model folds a concrete callee out of a shared root");
-		Check (ran_open && !folded_open,
+		Check (ran_concrete && inlined_concrete,
+			"the cost model inlines a concrete callee out of a shared root");
+		Check (ran_open && !inlined_open,
 			"and leaves an open callee dispatching out of the same root");
 
 		Check (Box<object>.UseConcrete (new object (), 4, false) == 5,
 			"typeof (int) still answers true at tier 2");
 		Check (Box<string>.UseConcrete ("x", 4, false) == 5,
-			"and the same fold answers true for the other instantiation");
+			"and the same inline answers true for the other instantiation");
 		Check (Box<object>.UseOpen (new object (), 4, false) == 4,
 			"typeof (T) still answers false for a reference T at tier 2");
 		Check (Box<string>.UseOpen ("x", 4, false) == 4,

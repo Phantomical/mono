@@ -142,7 +142,7 @@ parse_guards (const uint8_t *section, size_t size, const uint8_t *code,
 	return guards;
 }
 
-/// Answers build_ex_info ()'s OwnerHeader callback for a folded body's own
+/// Answers build_ex_info ()'s OwnerHeader callback for an inlined body's own
 /// MonoMethod*, fetching and freeing each distinct owner at most once for as
 /// long as one register_jit_info () call needs it.
 ///
@@ -723,7 +723,7 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 	size_t map_offset = (size_t) ALIGN_TO (jinfo_size, sizeof (guint32));
 	size_t map_size = n_seq_points * sizeof (MonoILOffsetEntry);
 	/*
-	 * The folded bodies ride along behind the map, for the same reason and with
+	 * The inlined bodies ride along behind the map, for the same reason and with
 	 * the same lifetime. A row whose offset names no row of the map is left out:
 	 * the runtime looks a chain up by that offset, and finds this one at no
 	 * address at all.

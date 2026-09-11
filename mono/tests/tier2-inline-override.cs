@@ -3,11 +3,11 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
- * A method replaced after a caller folded a copy of it in.
+ * A method replaced after a caller inlined a copy of it.
  *
  * The copy sits under no thunk, so pointing the method's entry at the
  * replacement does not reach it: the caller would go on running the body it was
- * compiled with. Each method's record names the callers that folded it in, and
+ * compiled with. Each method's record names the callers that inlined it, and
  * an override takes their entries back to the lazy resolver they started at.
  *
  * Both inliners are covered. Small () is a shape the pre-pass takes without
@@ -31,7 +31,7 @@ namespace Mono.Tiering {
 	}
 }
 
-public static class Folded {
+public static class Inlined {
 	public static int Small (int x)
 	{
 		return x + 1;
@@ -72,7 +72,7 @@ public static class Program {
 
 	static int Root (int x)
 	{
-		return Folded.Small (x) + Folded.Branchy (x);
+		return Inlined.Small (x) + Inlined.Branchy (x);
 	}
 
 	static MethodInfo MethodOf (Type type, string name)
@@ -104,20 +104,20 @@ public static class Program {
 		if (!Promote (root, 4, "Root ()"))
 			return 1;
 
-		Check ("the folded answer", Root (7), 8 + 9);
+		Check ("the inlined answer", Root (7), 8 + 9);
 
 		Mono.Overrides.MonoOverride.Install (
-			MethodOf (typeof (Folded), "Small").MethodHandle.Value,
+			MethodOf (typeof (Inlined), "Small").MethodHandle.Value,
 			MethodOf (typeof (Replacements), "Small").MethodHandle.Value);
 
-		Check ("the replacement reaches a body that folded the method in",
+		Check ("the replacement reaches a body that inlined the method",
 			Root (7), 1007 + 9);
 
 		Mono.Overrides.MonoOverride.Install (
-			MethodOf (typeof (Folded), "Branchy").MethodHandle.Value,
+			MethodOf (typeof (Inlined), "Branchy").MethodHandle.Value,
 			MethodOf (typeof (Replacements), "Branchy").MethodHandle.Value);
 
-		Check ("and so does one that only the cost model folded",
+		Check ("and so does one that only the cost model inlined",
 			Root (7), 1007 + 2007);
 
 		// Whatever tier the record went back to, the answers stay the ones the

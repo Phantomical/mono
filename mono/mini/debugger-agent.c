@@ -3367,7 +3367,7 @@ process_frame (StackFrameInfo *info, MonoContext *ctx, gpointer user_data)
 		return FALSE;
 	}
 
-	/* An inlined frame borrows the jit info of the body it was folded into, so
+	/* An inlined frame borrows the jit info of the body it was inlined into, so
 	 * that record names the wrong method for it. The walk names the right one. */
 	if (info->ji && info->type != FRAME_TYPE_INLINED)
 		method = jinfo_get_method (info->ji);
@@ -3435,8 +3435,8 @@ process_frame (StackFrameInfo *info, MonoContext *ctx, gpointer user_data)
 	if (info->reg_locations)
 		memcpy (frame->reg_locations, info->reg_locations, MONO_MAX_IREGS * sizeof (host_mgreg_t*));
 	/*
-	 * A folded body has no context of its own: the registers and the frame belong
-	 * to the body it was folded into, and every home read off them describes that
+	 * An inlined body has no context of its own: the registers and the frame belong
+	 * to the body it was inlined into, and every home read off them describes that
 	 * body's layout. Leaving has_ctx clear is what makes frame_commands () answer
 	 * ERR_ABSENT_INFORMATION rather than hand back another method's locals.
 	 */
@@ -3497,9 +3497,9 @@ leave:
 /*
  * The innermost of FRAMES that owns code, or NULL if there is none.
  *
- * A folded body's frame carries its method and its IL offset and nothing more:
+ * An inlined body's frame carries its method and its IL offset and nothing more:
  * the sequence points, the variable homes and the address a thread resumes at
- * all belong to the body it was folded into. So anything that reads a frame's
+ * all belong to the body it was inlined into. So anything that reads a frame's
  * state, rather than only reporting it, works on this one.
  */
 static StackFrame *
@@ -3635,7 +3635,7 @@ compute_frame_info (MonoInternalThread *thread, DebuggerTlsData *tls, gboolean f
 		 * Reuse the id for already existing stack frames, so invokes don't invalidate
 		 * the still valid stack frames.
 		 *
-		 * The bodies folded into a frame share its address, so the address alone
+		 * The bodies inlined into a frame share its address, so the address alone
 		 * would hand one id to several frames and every command naming it would
 		 * reach the first. Both lists describe the same stack in the same order,
 		 * so the search carries on from the last match and takes the method into
@@ -4759,7 +4759,7 @@ ensure_jit (DbgEngineStackFrame* the_frame)
 
 	/*
 	 * What this hands back describes a body: where its code sits and where it
-	 * keeps its variables. A folded body runs inside another one's code and out
+	 * keeps its variables. An inlined body runs inside another one's code and out
 	 * of another one's frame, so the record found under its method belongs to
 	 * some other compile of it and every offset in it is wrong here.
 	 */
@@ -9528,9 +9528,9 @@ thread_commands (int command, guint8 *p, guint8 *end, Buffer *buf)
 
 		compute_frame_info (thread, tls, FALSE);
 		/*
-		 * A folded body has no code to resume in. Its frame names the method the
+		 * An inlined body has no code to resume in. Its frame names the method the
 		 * client asked for, and the address behind it belongs to the body it was
-		 * folded into, so a jump computed from it would land in another method.
+		 * inlined into, so a jump computed from it would land in another method.
 		 */
 		if (tls->frame_count == 0 || tls->frames [0]->is_inlined || tls->frames [0]->actual_method != method)
 			return ERR_INVALID_ARGUMENT;

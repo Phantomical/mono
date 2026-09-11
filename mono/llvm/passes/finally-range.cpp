@@ -74,7 +74,7 @@ finally_marker (const MachineInstr &mi, int *clause, uint64_t *owner, bool *is_s
 	return true;
 }
 
-/// A clause index paired with the method it belongs to - two folded bodies
+/// A clause index paired with the method it belongs to - two inlined bodies
 /// can each declare a clause 0, and their finally markers must never be read
 /// as one clause's.
 struct ClauseKey {

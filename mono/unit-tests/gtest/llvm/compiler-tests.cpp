@@ -48,11 +48,11 @@ protected:
 	/// body a dump name the filter does or does not name. Hands back the
 	/// compiled function's symbol, which is what the assembly labels it.
 	///
-	/// folded names a second method of the same image to translate in beside it
-	/// and mark always-inline, the way the engine's pre-pass folds a callee.
+	/// inlined names a second method of the same image to translate in beside it
+	/// and mark always-inline, the way the engine's pre-pass inlines a callee.
 	std::string compile (const std::string &image, const std::string &method,
 	                     bool dumped, JitTier tier = JitTier::tier1,
-	                     const std::string &folded = std::string ())
+	                     const std::string &inlined = std::string ())
 	{
 		std::unique_ptr<Translation> t = translate_method (image, method);
 
@@ -60,8 +60,8 @@ protected:
 		if (t->function == nullptr)
 			return std::string ();
 
-		if (!folded.empty ())
-			EXPECT_NE (fold_method_into (*t, image, folded), nullptr);
+		if (!inlined.empty ())
+			EXPECT_NE (inline_method_into (*t, image, inlined), nullptr);
 
 		/* As the engine does, so the dump is filed and filtered by method. */
 		set_dump_name (*t->function, dumped ? dump_filter : image);
@@ -146,10 +146,10 @@ TEST_F (AsmDump, PrintsTheCodeAndTheClauseTableOfASelectedMethod)
 }
 
 /*
- * The chain of bodies folded into a method, which rides beside the line table
+ * The chain of bodies inlined into a method, which rides beside the line table
  * and is what lets a stack walk report a frame for each of them.
  */
-TEST_F (AsmDump, WritesTheInlineTableOfAFoldedBody)
+TEST_F (AsmDump, WritesTheInlineTableOfAnInlinedBody)
 {
 	CapturedStdout captured;
 	std::string entry = compile ("calls", "Calls:CallStatic", /*dumped=*/true,
@@ -166,11 +166,11 @@ TEST_F (AsmDump, WritesTheInlineTableOfAFoldedBody)
 }
 
 /*
- * A method with nothing folded into it gets a line table and no inline table.
+ * A method with nothing inlined into it gets a line table and no inline table.
  * The two sections are written from one set of rows, so this is what says the
- * case above is about the fold rather than about compiling anything at all.
+ * case above is about the inline rather than about compiling anything at all.
  */
-TEST_F (AsmDump, WritesNoInlineTableWithoutAFold)
+TEST_F (AsmDump, WritesNoInlineTableWithoutAnInline)
 {
 	CapturedStdout captured;
 	std::string entry = compile ("arith", "Arith:Add", /*dumped=*/true);

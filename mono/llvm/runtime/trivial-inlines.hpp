@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief The callees a compile folds in without costing them.
+ * \brief The callees a compile inlines without costing them.
  */
 
 #ifndef MONO_LLVM_RUNTIME_TRIVIAL_INLINES_HPP
@@ -30,7 +30,7 @@ namespace mono {
 using ResolveExternals = llvm::function_ref<llvm::Error (llvm::ArrayRef<ExternalSymbol>)>;
 
 /// Translate into a body's own module each callee whose IL already says the
-/// inline pays, and mark it always-inline for the pipeline to fold in.
+/// inline pays, and mark it always-inline for the pipeline to inline in.
 ///
 /// These shapes have nothing to weigh: a constant, a chain of field accesses,
 /// one forward to another method, a throw, and an object made and returned. A
@@ -40,8 +40,8 @@ using ResolveExternals = llvm::function_ref<llvm::Error (llvm::ArrayRef<External
 /// This walks the chain under body, so a forwarder that forwards to a
 /// forwarder collapses in one call.
 ///
-/// scope.folded must already name root, or the compile folds root into its own
-/// callee. scope.defined must name every method the module publishes a body
+/// scope.inlined must already name root, or the compile inlines root into its
+/// own callee. scope.defined must name every method the module publishes a body
 /// for, so that a copy calling one of them reaches its entry rather than the
 /// body beside it.
 ///

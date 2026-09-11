@@ -21,8 +21,8 @@
  *                          kind from mono_lsda_format.hpp.
  *     u64 owner            which method clause_index indexes into: 0 for the
  *                          function this block was linked for, the shape
- *                          every entry had before a fold could merge a live
- *                          clause in from elsewhere. Otherwise a folded
+ *                          every entry had before an inline could merge a live
+ *                          clause in from elsewhere. Otherwise an inlined
  *                          body's own MonoMethod*, same convention as
  *                          jit.hpp's IlInlineRow::callee.
  *
@@ -430,7 +430,7 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries, OwnerHeaders &
 	// Per owner per clause, the pad its resume trampoline unwinds to once the
 	// cleanup has run. The chaining below routes the rest of a chain through
 	// it, so the runtime re-enters carrying the state the cleanup left
-	// behind. Keyed by owner as well as clause_index: two folded bodies can
+	// behind. Keyed by owner as well as clause_index: two inlined bodies can
 	// each declare a clause 0, and their resume pads are not one clause's.
 	ResumePads resume_pad;
 
@@ -608,8 +608,8 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 	if (!append_finally_guards (guards, headers, native_code, code_len, out))
 		return false;
 
-	// The tier-unwind fault is the root's own instrumentation pad, never a
-	// folded body's, so it stays keyed to owner 0's own num_clauses.
+	// The tier-unwind fault is the root's own instrumentation pad, never an
+	// inlined body's, so it stays keyed to owner 0's own num_clauses.
 	append_tier_unwind (tier_unwind_off, tier_unwind, num_clauses, native_code, code_len, out);
 	return true;
 }

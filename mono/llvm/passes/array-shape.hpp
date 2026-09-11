@@ -8,8 +8,8 @@
  *
  * Which one a site is cannot be read where the site is emitted. A caller that
  * writes a literal often reaches the accessor through `Array.GetUpperBound ()`,
- * which forwards its parameter, so the constant arrives when an inliner folds
- * that body in. The translator therefore emits a `mono.array.shape.*` call
+ * which forwards its parameter, so the constant arrives when an inliner inlines
+ * that body. The translator therefore emits a `mono.array.shape.*` call
  * whatever the dimension is, and this pass reads the dimension once the
  * inliners have run: zero becomes the loads, and anything else becomes the
  * call to the accessor named on the declaration.

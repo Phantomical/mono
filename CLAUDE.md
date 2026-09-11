@@ -256,7 +256,7 @@ each is documented at its declaration.
 
 Tracing:
 - `MONO_LLVM_JIT_TRACE=1` — print every method the backend translates, every worker
-  thread it starts and every body an inliner folds in. A method reached as a callee is
+  thread it starts and every body an inliner inlines. A method reached as a callee is
   compiled without the runtime ever being asked for it, so no other output says it
   happened.
 - `MONO_LLVM_JIT_GDB=1` (`gdb-jit.cpp`) — hand every compiled object to gdb through its
@@ -290,10 +290,10 @@ What each point prints:
   a filter). `MONO_VERBOSE_METHOD` still prints the same dump and the transform's tracing
   with it, and it is also what prints a classic tier-0 body's IR and code.
 - `unopt-ir` — the IR the translator wrote, before any pipeline. A body the pre-pass
-  folded in is still a function of its own here, so it prints after the caller.
+  inlined is still a function of its own here, so it prints after the caller.
 - `tier1-ir` / `tier2-ir` — that IR after its tier's pipeline.
 - `tier2-inlined-ir` — the IR the tier-2 inliners leave: behind `AlwaysInlinerPass`, the
-  cost model and the sweep that takes the copies neither folded in back off, and in
+  cost model and the sweep that takes the copies neither inlined back off, and in
   front of the lowering and the O3 pipeline. A type test and a vtable read are still
   one call each here, which is the half `tier2-ir` no longer shows. The simplification
   the cost model reads has already run in front of it, so this is not the translator's
@@ -310,7 +310,7 @@ What each point prints:
   the same disassembly on `MONO_JIT_DUMP_FILTER` and `MONO_JIT_DUMP_DIR`'s terms instead.
 
 **An IR point prints a module, not a function.** Each dump holds the method's body, the
-bodies an inliner folded into it, and the declarations, the globals and the metadata
+bodies an inliner inlined into it, and the declarations, the globals and the metadata
 those bodies name. So `opt` reads the file as it stands, and an offline run of a
 pipeline stands in for the one inside the process. The other bodies in the module are
 dropped, and each dump costs a copy of that module.
@@ -490,18 +490,18 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   tier 0, `-interp` swaps the interpreter in, and `-off` is the negative control
   the switch names directly. `-off` is also the negative control for what the
   lowering is worth, and only at tier 1, which is where nearly all code stays. A
-  written row is small enough for the pre-pass to fold into its caller, where
+  written row is small enough for the pre-pass to inline into its caller, where
   the fallback body is not, and the matmul and n-body kernels landed as
   `benchmark-simd-matmul` and `benchmark-simd-nbody` measured roughly 2x there.
-  At tier 2 the cost model folds the fallback body too, and the same two
+  At tier 2 the cost model inlines the fallback body too, and the same two
   kernels show no measurable difference against `-mono-simd=0` — ratios of
   0.95 and 0.99.
   What a row costs to *compile* is paid per call site rather than per method,
-  because the pre-pass materializes and folds one row body at each of them: a
+  because the pre-pass materializes and inlines one row body at each of them: a
   program of 256 kernels written to be nothing but SIMD pays 24% more compile
   CPU at tier 1, and with `-mono-inline-il-limit=0` on both arms — neither
-  folding anything — the two are indistinguishable, which is what says the
-  fold is the cost and not the row. At tier 2 that reverses to 0.65 and 0.72,
+  inlining anything — the two are indistinguishable, which is what says the
+  inline is the cost and not the row. At tier 2 that reverses to 0.65 and 0.72,
   because reaching the same code from the fallback bodies means translating
   them at O3. Neither shows on an ordinary program: the ~170
   `managed-to-native` wrapper compiles every process here starts with are far
@@ -538,21 +538,21 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   backend builds against. Turn it on once the fix, `#219929`, ships in the installed
   LLVM.
 
-Inlining. `MONO_LLVM_JIT_TRACE=1` prints a line for each fold, which is the only place a
-fold is visible from outside. Every knob below is an LLVM command-line option, reached
-the same way as the tiering ones above:
+Inlining. `MONO_LLVM_JIT_TRACE=1` prints a line for each inline, which is the only place
+an inline is visible from outside. Every knob below is an LLVM command-line option,
+reached the same way as the tiering ones above:
 - `--llvm-opt=-mono-inline-il-limit=<n>` (`runtime/options.cpp`) — largest callee in IL
-  bytes the shape-test pre-pass folds in, default 32. Both compiled tiers run that
-  pre-pass. Zero turns it off, which separates a bug in a folded body from one in the
-  method that folded it. The limit is the policy: the shape test in front of it refuses
+  bytes the shape-test pre-pass inlines, default 32. Both compiled tiers run that
+  pre-pass. Zero turns it off, which separates a bug in an inlined body from one in the
+  method that inlined it. The limit is the policy: the shape test in front of it refuses
   control flow and the opcodes that describe a frame, and lets everything else through,
-  so this is what decides how large a body folds. 32 is the knee rather than a round
-  number — `GoParse` folds 851 distinct callees at 16, 878 at 32 and 887 at 128, so below
-  it loses bodies and above it buys almost none. Raising `-mono-inline-budget` with it
-  moves that 878 to 889, so neither knob is a large lever past the defaults.
+  so this is what decides how large a body inlines. 32 is the knee rather than a round
+  number — `GoParse` inlines 851 distinct callees at 16, 878 at 32 and 887 at 128, so
+  below it loses bodies and above it buys almost none. Raising `-mono-inline-budget` with
+  it moves that 878 to 889, so neither knob is a large lever past the defaults.
 - `--llvm-opt=-mono-inline-cost-il-limit=<n>` (`runtime/options.cpp`) — largest callee
   the tier-2 cost model translates so it can weigh it, default 256. It bounds translation
-  rather than code size, because LLVM's own threshold decides what is worth folding.
+  rather than code size, because LLVM's own threshold decides what is worth inlining.
   Zero leaves tier 2 with the pre-pass alone, which separates a cost-model defect from a
   pre-pass one.
 - `--llvm-opt=-mono-inline-cost-il-limit-hot=<n>` (`runtime/options.cpp`) — the same
@@ -574,7 +574,7 @@ the same way as the tiering ones above:
   `-mono-inline-cost-il-limit`.
 - `--llvm-opt=-mono-inline-cold-elision-il-limit=<0|false|empty>`
   (`passes/inline-policy.cpp`) — on by default. The IL limit bounds translation cost;
-  it is not meant to be the fold/decline answer itself, and a cold site is exactly
+  it is not meant to be the inline/decline answer itself, and a cold site is exactly
   where that distinction matters most, because the elision bonus below is worth far
   more than the cold cost budget (45) that would otherwise weigh the candidate once
   translated. `carries_an_elision_candidate ()` reads the *caller's* own IR alone —
@@ -582,7 +582,7 @@ the same way as the tiering ones above:
   named-class allocation `alloc_elision_fate ()` has not already ruled out as an
   escape, and a cold site carrying one translates its candidate under the ordinary
   limit instead of the cold one. What the callee actually does with the argument —
-  capture it, dispatch on it — still decides the real fold, once this lets the
+  capture it, dispatch on it — still decides the real inline, once this lets the
   candidate translate at all. `mono/tests/tier2-inline-cold-elision.cs` gates it: an
   unescaped and an escaping candidate of the same size at the same cold site settle
   the question inside one run.
@@ -595,21 +595,21 @@ the same way as the tiering ones above:
   zeroes every bonus on the cold arm besides. Raising the cold threshold past the base
   buys nothing until the base is raised too, which is why `mono/tests/tier2-inline-wrapper.cs`'s
   suite raises both.
-- `--llvm-opt=-mono-inline-depth=<n>` (`runtime/options.cpp`) — folds deep past a method
+- `--llvm-opt=-mono-inline-depth=<n>` (`runtime/options.cpp`) — inlines deep past a method
   the cost model may go, default 4. A call graph with a cycle never runs out of sites, so
   the loop needs this whatever the budget says.
 - `--llvm-opt=-mono-inline-prepass-depth=<n>` (`runtime/options.cpp`) — the same reach
   for the pre-pass, default 8. It drains its worklist least deep first, so this decides
-  what the leftover count goes on rather than what the first folds are. The count below
+  what the leftover count goes on rather than what the first inlines are. The count below
   is what bounds the translation, which is why the reach can be generous.
 - `--llvm-opt=-mono-inline-budget=<n>` (`runtime/options.cpp`) — bodies the pre-pass may
-  fold into one method, default 16. A chain of forwarders is what spends it. Each batch
+  inline into one method, default 16. A chain of forwarders is what spends it. Each batch
   member gets its own count, so `-mono-batch` changes how many compiles run, not what
-  any one of them folds in.
+  any one of them inlines.
 - `--llvm-opt=-mono-inline-cost-budget=<n>` (`runtime/options.cpp`) — bodies the tier-2
-  cost model may fold into one method, default 32. A count of its own, so what one
-  inliner takes in does not decide what the other is left to fold. Zero refuses every
-  method this root has not folded already, which separates a cost-model fold from a
+  cost model may inline into one method, default 32. A count of its own, so what one
+  inliner takes in does not decide what the other is left to inline. Zero refuses every
+  method this root has not inlined already, which separates a cost-model inline from a
   pre-pass one. Raised from 16: a wider count widens what a root can reach past a chain
   of small forwarders (`SharpSAT`'s `set_svar_value`, `IronPython`'s `CallSite.Target`),
   and the compile CPU it costs is mostly background-thread time a short benchmark's own
@@ -624,24 +624,24 @@ the same way as the tiering ones above:
   default 4096. A count cannot tell a 5-byte getter from a 250-byte body, so a root that
   spends its count on small forwarders never reaches a large candidate standing behind
   them — `lcscbench`'s `shiftNonterm` roots are the corpus case. Charged the same way the
-  count is: once per candidate the costed inliner translates, whether the fold is
+  count is: once per candidate the costed inliner translates, whether the inline is
   accepted or not, because the compile cost is paid either way.
 - `--llvm-opt=-mono-inline-rounds=<n>` (`runtime/options.cpp`) — times the tier-2
   inliner takes up a method's sites again, default 4. One reads them once, which is what
-  separates a fold a round exposed from one the method arrived with. A dispatch is not a
-  site — its callee is a load — so a virtual or interface call becomes foldable only
-  after `DevirtualizePass` answers it, and that needs the receiver's class, which a fold
-  is often what settles. On `tier2-inline-policy.cs` one round folds 15 bodies and never
-  reaches `Box:Area`; four fold 22 and reach it at all three of its sites. The budget
-  above is what bounds the work, and this count is what stops a cycle.
-- `--llvm-opt=-mono-fold-clauses=<0|false|empty>` (`runtime/options.cpp`) — turn off the
+  separates an inline a round exposed from one the method arrived with. A dispatch is not
+  a site — its callee is a load — so a virtual or interface call becomes inlinable only
+  after `DevirtualizePass` answers it, and that needs the receiver's class, which an
+  inline is often what settles. On `tier2-inline-policy.cs` one round inlines 15 bodies
+  and never reaches `Box:Area`; four inline 22 and reach it at all three of its sites.
+  The budget above is what bounds the work, and this count is what stops a cycle.
+- `--llvm-opt=-mono-inline-clauses=<0|false|empty>` (`runtime/options.cpp`) — turn off the
   tier-2 cost model's ability to translate a clause-bearing callee at all, so it is
   refused the way the shape-test pre-pass always refuses one. On by default.
-  `clause_survives_fold ()` (`passes/top-down-inline.cpp`) is what keeps the fold safe
-  when this is on: it clones the call site, folds the callee there and runs the same
-  simplification the round applies for real, and the cost model folds the callee only
+  `clause_survives_inline ()` (`passes/top-down-inline.cpp`) is what keeps the inline safe
+  when this is on: it clones the call site, inlines the callee there and runs the same
+  simplification the round applies for real, and the cost model inlines the callee only
   when none of its own landing pads are left standing. `mono/tests/tier2-inline-clause.cs`
-  gates both arms, reading the `MONO_FOLD_CLAUSES` environment variable the suite sets
+  gates both arms, reading the `MONO_INLINE_CLAUSES` environment variable the suite sets
   alongside the flag to know which arm it is in.
 - `--llvm-opt=-mono-inline-enable-cost-benefit-analysis=<0|1>` (`passes/inline-cost.cpp`)
   — turn on the copy's cycles-against-size verdict. `finalizeAnalysis ()` asks it
@@ -889,7 +889,7 @@ promoted. No OSR exists to move it.
 `array-address` and `lower-builtins` before, `restore-tail-position` and the arch's
 legacy-ABI lowering after. Codegen then runs at `CodeGenOptLevel::None`, which selects
 FastISel. The module and CGSCC layers are skipped deliberately. The only interprocedural
-work a module here has is the fold below, which `AlwaysInlinerPass` does on its own, and
+work a module here has is the inline below, which `AlwaysInlinerPass` does on its own, and
 every call still standing leaves the module by symbol. Running the two layers anyway
 costs a large fraction of compile time.
 
@@ -1006,7 +1006,7 @@ What the pass finds are bodies `materialize_trivial_callees ()`
 itself and before naming and resolution, each marked always-inline and given local
 linkage. A candidate is one straight line, then at most one call, then `ret` or `throw`:
 a constant, a chain of field accesses, arithmetic on the arguments, a forward to one
-other method, a throw, or an object made and returned. `declines_a_fold ()` names what
+other method, a throw, or an object made and returned. `blocks_an_inline ()` names what
 the line may not hold, and it is a denylist rather than an allowlist: control flow, and
 the opcodes that describe the frame the body runs in. A body that reaches itself through
 the forwarder chain is refused too, because no inliner takes that call away. The rest is
@@ -1015,19 +1015,19 @@ must also pass gates that are about correctness rather than cost (`is_inlinable 
 `runtime/inline-scope.cpp`): no dynamic method, no clauses, no `NoInlining`
 on the callee, no call instrumentation, no detour on the record, no override registered
 against the callee, and nothing at all while `gen-seq-points` is on. Neither a wrapper nor
-a shared generic body is one of them, and each folds like any other callee: a copy is
+a shared generic body is one of them, and each inlines like any other callee: a copy is
 declared the way the site's own declaration was, so the two agree on the generic context
 a shared body is entered with, and both inliners assert that before moving a site.
 
-**A host that starts the debugger agent turns every fold off.**
-`folding_off_for_seq_points ()` (`runtime/inline-scope.cpp`) is the gate both inliners
+**A host that starts the debugger agent turns every inline off.**
+`inlining_off_for_seq_points ()` (`runtime/inline-scope.cpp`) is the gate both inliners
 read, and the agent sets `gen_sdb_seq_points` as it starts
 (`mono/mini/debugger-agent.c`). An embedding host starts it before it reads
 `MONO_ENV_OPTIONS`: a Unity player carrying `player-connection-debug=1` in its
 `boot.config` logs `Starting managed debugger on port …` and passes a
 `--debugger-agent=` of its own, and `~/KSP` is such an install. A capture taken there
 without an override measures a runtime with inlining fully off, and the only symptom is a
-trace with no folding line in it. `MONO_DEBUG=force-disable-seq-points` is the override
+trace with no inlining line in it. `MONO_DEBUG=force-disable-seq-points` is the override
 that reaches it, because `force_disable_seq_points` keeps the flag false whatever sets it
 afterwards. `MONO_ENV_OPTIONS="--debug=force-disable-seq-points"` does not: the host's
 argv never reaches the parser `mono-sgen`'s own CLI goes through, and the runtime rejects
@@ -1035,40 +1035,40 @@ it with `Unsupported command line option`. Under `MONO_LLVM_JIT_TRACE=1` the gat
 `inlining is disabled because sequence points are enabled` once, so a trace says which of
 the two a run is.
 
-**A folded body keeps a frame any walk that asks for it can see.** The compiler
+**An inlined body keeps a frame any walk that asks for it can see.** The compiler
 writes `.mono_inlines` beside the code, `jinfo.cpp` turns it into the rows
 `mono_jinfo_inline_frame ()` reads, and `mono_walk_stack_full ()` reports one
-`FRAME_TYPE_INLINED` frame per folded body to a walk that asked for
+`FRAME_TYPE_INLINED` frame per inlined body to a walk that asked for
 `MONO_UNWIND_INLINED_FRAMES`. `mono_stack_walk ()` and `mono_stack_walk_no_il ()`
-(`mono/metadata/loader.c`) both ask, which is what puts the folded frame in front of the
+(`mono/metadata/loader.c`) both ask, which is what puts the inlined frame in front of the
 icalls that read their caller — `Assembly.GetCallingAssembly ()`,
 `MethodBase.GetCurrentMethod ()`, the reflection stack marks and the core-clr security
-checks all reach one of those two. So a fold does not change what managed code sees of
+checks all reach one of those two. So an inline does not change what managed code sees of
 its own callers, and no gate refuses a callee for reaching such an icall.
 
-Such a frame owns no code: it reports the native offset of the call site it was folded
+Such a frame owns no code: it reports the native offset of the call site it was inlined
 at. `mono/tests/test-inline-call-stack.cs` is the gate, and it fails on
 `GetCurrentMethod`, `GetExecutingAssembly` and `GetCallingAssembly` if either half of
 this is taken out.
 
-Two walks stay blind to a folded frame, and both are async-safe: the thread dump
+Two walks stay blind to an inlined frame, and both are async-safe: the thread dump
 (`mono/metadata/threads.c`) and `mono_stack_walk_async_safe ()`. Neither reads caller
-identity, and a fold the inliners have always allowed is already invisible to them.
+identity, and an inline the inliners have always allowed is already invisible to them.
 
-**What a method folds in is decided by that method alone.** A copy is built under a name
+**What a method inlines is decided by that method alone.** A copy is built under a name
 of its own, `<callee>$copy@<root>`, and only the caller that asked for it has its call
 sites moved over. So the module holds the callee's own body beside the copy, and a batch
-member is as foldable as any other callee. Both pipelines take the PGO CFG hash after
-`AlwaysInlinerPass`, so a tier-1 body that folded a different set than its own tier-2
+member is as inlinable as any other callee. Both pipelines take the PGO CFG hash after
+`AlwaysInlinerPass`, so a tier-1 body that inlined a different set than its own tier-2
 compile costs that compile the counts it gathered — LLVM prints `hash mismatch ... count
 discarded` and lays the body out on static frequencies. Keep any new gate off what else
 the module holds.
 
 `InlineScope` (`runtime/inline-scope.hpp`) is where the two are kept apart. `defined`
 names what the module publishes a body for, which is what the translator declares a call
-through a thunk from. `folded` names what this root has taken in, which is what both
+through a thunk from. `inlined` names what this root has taken in, which is what both
 inliners read. In a batch every member is translated first, the pre-pass then runs over
-each of them, and each member gets its own `folded` and its own counts. The two inliners
+each of them, and each member gets its own `inlined` and its own counts. The two inliners
 keep a count each: what one of them takes in leaves the other's untouched, and a compile
 translates at most the two added together.
 
@@ -1078,10 +1078,10 @@ call sites by the block counts the profile gave them, hottest first. Each candid
 translated on demand. `ProfileInliner` (`runtime/profile-inlines.cpp`) is what the pass
 asks, because the pass itself names no metadata, so a site the gates or `getInlineCost`
 refuse costs nothing but the questions. A candidate arrives with its own trivial callees
-already folded in. Everything past `is_inlinable ()` is a correctness gate of its own: no
+already inlined. Everything past `is_inlinable ()` is a correctness gate of its own: no
 clauses, and inside `--llvm-opt=-mono-inline-cost-il-limit` bytes of IL.
 `NoInlining` on a call target is not one of the gates: the mark says
-do not fold that target, which `is_inlinable ()` already enforces. A caller with no profile still
+do not inline that target, which `is_inlinable ()` already enforces. A caller with no profile still
 inlines, off the static frequencies BFI falls back to.
 
 **The `getInlineCost ()` it calls is a copy of LLVM's**, `passes/inline-cost.cpp`, taken
@@ -1111,15 +1111,15 @@ of its own, which puts a run back on LLVM's own answers without a rebuild:
   parameter the callee dispatches on.
 - `-mono-inline-alloc-elision-bonus` and `-mono-inline-alloc-elision-pending-bonus` —
   the site passes a fresh allocation into a parameter neither side keeps reachable past
-  the fold, so the fold hands SROA the accesses a call was hiding. Named for what the
-  fold buys rather than for scalarize, the mechanism is `alloc_elision_fate ()`
+  the inline, so the inline hands SROA the accesses a call was hiding. Named for what the
+  inline buys rather than for scalarize, the mechanism is `alloc_elision_fate ()`
   (`passes/inline-policy.cpp`): a linear scan of a pointer's own uses, excluding
-  whichever one is the fold itself, that withholds both bonuses where it can prove the
-  pointer gets out anyway — returned, or passed to a call `call_wont_fold ()` says no
+  whichever one is the inline itself, that withholds both bonuses where it can prove the
+  pointer gets out anyway — returned, or passed to a call `call_wont_inline ()` says no
   round of this compile takes — and otherwise awards the full bonus where the use being
   weighed is the pointer's only remaining one, and the pending bonus everywhere else: a
   store into a field, whose escape needs a recursive walk this scan will not pay for, or
-  a pass to another call this round may yet fold, which is a **pending** escape a later
+  a pass to another call this round may yet inline, which is a **pending** escape a later
   round settles on its own. Run twice and combined pessimistically (an escape on either
   side wins): once caller-side over the allocation's own uses, the same question
   `-mono-inline-cold-elision-il-limit` above asks before the callee is even translated,
@@ -1127,14 +1127,14 @@ of its own, which puts a run back on LLVM's own answers without a rebuild:
   LLVM's own capture analysis (`PointerMayBeCaptured`) here, which answers conservatively
   for a call to *any* opaque function — a constructor's call to its own base class's
   included, since neither is marked `nocapture` — and so never cleared for a constructor
-  callee at all before this changed; the same `call_wont_fold ()` rule the caller-side
+  callee at all before this changed; the same `call_wont_inline ()` rule the caller-side
   scan already uses answers that correctly instead, without needing a second, separate
   policy. What lets LLVM erase the allocation behind the scalarized fields, once nothing
   reads it, is the alloc kind on `mono.alloc.object`, which both collectors emit, so this
   answers the same under either.
 
 The three call-site bonuses are threshold bonuses rather than cost discounts, and each is
-priced as a count of calls the fold takes away. They go in behind `SingleBBBonus` and
+priced as a count of calls the inline takes away. They go in behind `SingleBBBonus` and
 `VectorBonus`, which are shares of the threshold, and behind the cold-callsite clamp,
 which is what lets one reach a cold site at all. A hot site is weighed against
 `HotCallSiteThreshold`, which is large enough that none of them decides anything there.
@@ -1151,19 +1151,19 @@ inside whatever try the call sits in. A compile that fails instead raises it at 
 root's entry, with the root's clauses gone. Dropping the copy leaves the call on the
 callee's thunk, where the callee's own compile raises it.
 
-**A body neither inliner folded in is taken back off.** `StripInlineCopiesPass`
+**A body neither inliner inlined is taken back off.** `StripInlineCopiesPass`
 (`passes/inline-copies.cpp`) erases every copy still standing and puts the call back on
 the callee's thunk. That is what lets a cost model translate, weigh and refuse without
 owing a cleanup. Without it, such a body is entered by a direct call with no jit info of
 its own, and a stack walk over its frame finds nothing.
 
-**A detour or an override reaches a folded copy through the record.** A copy sits under
+**A detour or an override reaches an inlined copy through the record.** A copy sits under
 no thunk, so redirecting the method's entry misses it. Each method's record names the
-methods that folded it in (`note_folded_into ()`), and `install_detour ()` takes each of
+methods that inlined it (`note_inlined_into ()`), and `install_detour ()` takes each of
 those entries back to the lazy resolver it started at, so the next call compiles the
 method again, and `is_inlinable ()` keeps the method's copy out of that compile. It reads
-the override registry as well as the record. A fold is decided before the site that names
-the callee is resolved, so the record can still be missing then, and
+the override registry as well as the record. An inline is decided before the site that
+names the callee is resolved, so the record can still be missing then, and
 `mono/tests/override-basic.cs` is the gate on that.
 Both compiled tiers run the pre-pass,
 so an earlier body is no safer than the newest one — that is why the entry goes back past
@@ -1172,15 +1172,15 @@ arms. A thread already inside such a body stays there, because no on-stack repla
 exists here.
 
 A compile that spans the replacement is refused rather than published: the record counts
-the replacements (`folds_epoch ()`) and a body stamped with an older count never takes the
-entry. `entry_point ()` then compiles the method again.
+the replacements (`inlines_epoch ()`) and a body stamped with an older count never takes
+the entry. `entry_point ()` then compiles the method again.
 
 `is_small_and_clause_free ()` still refuses a clause-bearing callee at the pre-pass. The
-tier-2 cost model does not: it folds one once `clause_survives_fold ()`
-(`passes/top-down-inline.cpp`) has shown, on a clone of the call site folded and simplified
-the way the round does for real, that none of the callee's own landing pads are left
-standing — eh-gather.cpp reads a folded body's clauses off the root's own `!mono.clauses`
-alone, so nothing describes one that survives.
+tier-2 cost model does not: it inlines one once `clause_survives_inline ()`
+(`passes/top-down-inline.cpp`) has shown, on a clone of the call site inlined and
+simplified the way the round does for real, that none of the callee's own landing pads
+are left standing — eh-gather.cpp reads an inlined body's clauses off the root's own
+`!mono.clauses` alone, so nothing describes one that survives.
 
 ### Detours
 

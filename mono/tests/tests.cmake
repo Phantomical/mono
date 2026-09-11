@@ -1065,7 +1065,7 @@ set(MONO_TESTS_TIER2_INLINE_NORETURN_SRC
 )
 
 # mono-inline-cost-il-limit-hot/-cold let the cost model translate a bigger
-# candidate at a hot site than at a cold one. One run: the same body folds at
+# candidate at a hot site than at a cold one. One run: the same body inlines at
 # a hot site and declines at a cold one.
 set(MONO_TESTS_TIER2_INLINE_HEAT_IL_LIMIT_SRC
   tier2-inline-heat-il-limit.cs
@@ -1087,15 +1087,15 @@ set(MONO_TESTS_TIER2_INLINE_COLD_ELISION_SRC
   tier2-inline-cold-elision.cs
 )
 
-# Whether the cost model folds a clause-bearing callee. It runs twice, on the
-# default and with the fold off, and reads MONO_FOLD_CLAUSES to know which arm
-# it is in.
+# Whether the cost model inlines a clause-bearing callee. It runs twice, on the
+# default and with the inline off, and reads MONO_INLINE_CLAUSES to know which
+# arm it is in.
 set(MONO_TESTS_TIER2_INLINE_CLAUSE_SRC
   tier2-inline-clause.cs
 )
 
-# Which method a folded finally's `.mono_guards` record belongs to, when
-# several folded bodies each carry a clause 0 and the root carries none.
+# Which method an inlined finally's `.mono_guards` record belongs to, when
+# several inlined bodies each carry a clause 0 and the root carries none.
 set(MONO_TESTS_TIER2_FINALLY_GUARD_OWNER_SRC
   tier2-finally-guard-owner.cs
 )
@@ -1108,7 +1108,7 @@ set(MONO_TESTS_TIER2_INLINE_PROFILE_CONTEXT_SRC
 
 # Whether the cost model can weigh a filter-bearing callee without aborting
 # the compile. It runs twice, on the default and with
-# -mono-fold-clauses=0, and expects the same refusal either way.
+# -mono-inline-clauses=0, and expects the same refusal either way.
 set(MONO_TESTS_TIER2_INLINE_FILTER_SRC
   tier2-inline-filter.cs
 )
@@ -1172,7 +1172,7 @@ set(MONO_TESTS_TIER2_INLINE_CASTS_SRC
   tier2-inline-casts.cs
 )
 
-# A wrapper folded into the method that calls it. Two arms the same way, and the
+# A wrapper inlined into the method that calls it. Two arms the same way, and the
 # file says why it names a threshold of its own.
 set(MONO_TESTS_TIER2_INLINE_WRAPPER_SRC
   tier2-inline-wrapper.cs

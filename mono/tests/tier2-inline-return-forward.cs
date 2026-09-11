@@ -7,7 +7,7 @@ using System.Runtime.CompilerServices;
  * `mono-inline-devirt-return-bonus` on a callee that forwards a further
  * call's answer rather than allocating its own. tier2-inline-policy.cs's
  * Make () already gates the bonus on a body that allocates and returns what
- * it allocated; Relay () below never allocates at all, so the fold is the
+ * it allocated; Relay () below never allocates at all, so the inline is the
  * call-site mark method-to-llvm/call.cpp writes when a callee's declared
  * return type is sealed, not the allocation mark emit_object_alloc () writes.
  * MakeBox ()'s return type, Box, is what carries that mark to Relay ()'s own
@@ -15,12 +15,12 @@ using System.Runtime.CompilerServices;
  *
  * The suite runs twice, once on the default and once with the bonus zeroed,
  * and reads MONO_INLINE_POLICY to know which arm it is in. The trivial
- * pre-pass is off in both (--llvm-opt=-mono-inline-il-limit=0), so a fold
+ * pre-pass is off in both (--llvm-opt=-mono-inline-il-limit=0), so an inline
  * this reads is the cost model's.
  *
- * What says a fold happened is the stack trace, the way tier2-inline-cost.cs
- * reads it: a folded body owns no code, so its frame reports the offset into
- * Root () that it was folded at, and a body that was really called reports an
+ * What says an inline happened is the stack trace, the way tier2-inline-cost.cs
+ * reads it: an inlined body owns no code, so its frame reports the offset into
+ * Root () that it was inlined at, and a body that was really called reports an
  * offset into itself.
  *
  * Relay () costs 130 on -mono-inline-cost-full, on either arm -- the bonus
@@ -80,7 +80,7 @@ static class Shapes {
 }
 
 static class Program {
-	static bool saw_relay, folded_relay;
+	static bool saw_relay, inlined_relay;
 
 	/// Whether Relay ()'s frame covers the same code as Root ()'s.
 	static bool RunsInsideRoot (Exception e)
@@ -121,7 +121,7 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_relay |= (e.StackTrace ?? "").Contains ("Shapes.Relay");
-			folded_relay |= RunsInsideRoot (e);
+			inlined_relay |= RunsInsideRoot (e);
 		}
 
 		return total;
@@ -153,7 +153,7 @@ static class Program {
 		int want = Root (-2, true);
 
 		Check (saw_relay, "Relay () has a frame before tier 2");
-		Check (!folded_relay, "and it runs in a body of its own before tier 2");
+		Check (!inlined_relay, "and it runs in a body of its own before tier 2");
 
 		// Enough calls to leave counts on the tier-1 body.
 		for (int i = 0; i < 20000; ++i)
@@ -164,17 +164,17 @@ static class Program {
 			return 1;
 		}
 
-		saw_relay = folded_relay = false;
+		saw_relay = inlined_relay = false;
 
 		Check (want == Root (-2, true), "the answer at tier 2 is the answer before it");
 		Check (saw_relay, "Relay () still has a frame at tier 2");
 
 		if (bonuses)
-			Check (folded_relay,
-				"the return bonus folds a body that forwards a sealed-return call's answer");
+			Check (inlined_relay,
+				"the return bonus inlines a body that forwards a sealed-return call's answer");
 		else
-			Check (!folded_relay,
-				"the return bonus is what folds the body that forwards the answer");
+			Check (!inlined_relay,
+				"the return bonus is what inlines the body that forwards the answer");
 
 		Console.WriteLine (fails == 0 ? "OK" : "FAILED");
 		return fails == 0 ? 0 : 1;

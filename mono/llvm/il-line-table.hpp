@@ -57,7 +57,7 @@ public:
 	///
 	/// id is opaque here, and the engine decides what it means.
 	/// il_debug_subprogram_ids () reads it back, and still answers for a copy the
-	/// pipeline has since taken back off - which is what every folded body is by
+	/// pipeline has since taken back off - which is what every inlined body is by
 	/// the time codegen runs.
 	IlDebugScope *add_function (llvm::Function *fn, const char *name, uint64_t id);
 

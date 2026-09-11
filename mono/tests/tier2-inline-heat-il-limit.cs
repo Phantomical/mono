@@ -10,17 +10,17 @@ using System.Runtime.CompilerServices;
  *
  * The suite sets the flat limit to 0, which refuses every site tier2_site_heat
  * () does not answer hot or cold, and hot/cold to 500/100 -- so the two knobs
- * below are the only thing that can fold anything here. HotCall () and
+ * below are the only thing that can inline anything here. HotCall () and
  * ColdCall () are the same body under two names: materialize () hands back a
- * standing copy once a callee is folded anywhere in the root, which would
- * fold the cold site for free off the hot site's copy under one shared name
+ * standing copy once a callee is inlined anywhere in the root, which would
+ * inline the cold site for free off the hot site's copy under one shared name
  * and defeat the test. Both bodies are tier2-inline-cost.cs's FailLong (),
  * which that file documents as just past the *flat default* of 256 -- clearly
  * under -hot's 500 here and clearly over -cold's 100.
  *
- * What says a fold happened is the stack trace, the way tier2-inline-cost.cs
- * reads it: a folded body owns no code, so its frame reports the offset into
- * Root () it was folded at, and a body that was really called reports an
+ * What says an inline happened is the stack trace, the way tier2-inline-cost.cs
+ * reads it: an inlined body owns no code, so its frame reports the offset into
+ * Root () it was inlined at, and a body that was really called reports an
  * offset into itself.
  */
 
@@ -93,7 +93,7 @@ static class Costed {
 }
 
 static class Program {
-	static bool sawHot, sawCold, foldedHot, foldedCold;
+	static bool sawHot, sawCold, inlinedHot, inlinedCold;
 
 	static bool RunsInsideRoot (Exception e, string helper)
 	{
@@ -128,7 +128,7 @@ static class Program {
 				total += Costed.HotCall (n + i, takeRare && i == 19);
 			} catch (InvalidOperationException e) {
 				sawHot = true;
-				foldedHot = RunsInsideRoot (e, "HotCall");
+				inlinedHot = RunsInsideRoot (e, "HotCall");
 			}
 		}
 
@@ -137,7 +137,7 @@ static class Program {
 				Costed.ColdCall (n, true);
 			} catch (InvalidOperationException e) {
 				sawCold = true;
-				foldedCold = RunsInsideRoot (e, "ColdCall");
+				inlinedCold = RunsInsideRoot (e, "ColdCall");
 			}
 		}
 
@@ -176,14 +176,14 @@ static class Program {
 			return 1;
 		}
 
-		sawHot = sawCold = foldedHot = foldedCold = false;
+		sawHot = sawCold = inlinedHot = inlinedCold = false;
 
 		Root (4, true);
 
 		Check (sawHot && sawCold, "both call sites threw at tier 2");
-		Check (foldedHot,
-			"the hot site folds a body past the flat default, under -hot's limit");
-		Check (!foldedCold, "the cold site keeps its call, over -cold's limit");
+		Check (inlinedHot,
+			"the hot site inlines a body past the flat default, under -hot's limit");
+		Check (!inlinedCold, "the cold site keeps its call, over -cold's limit");
 
 		if (fails != 0)
 			return 1;

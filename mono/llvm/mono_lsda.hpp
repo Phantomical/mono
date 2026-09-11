@@ -48,9 +48,9 @@ struct MonoLsdaEntry {
 	std::uint32_t kind = 0;
 
 	/// Which method clause_index indexes into: 0 for the method this section's
-	/// block was linked for, the shape every entry had before a fold could
+	/// block was linked for, the shape every entry had before an inline could
 	/// merge a live clause in and what every entry still has today. Otherwise
-	/// (uint64_t)(uintptr_t) of a folded body's own MonoMethod*, same
+	/// (uint64_t)(uintptr_t) of an inlined body's own MonoMethod*, same
 	/// convention as jit.hpp's IlInlineRow::callee. build_ex_info () resolves a
 	/// non-zero owner through the OwnerHeader a caller opts in with. Left
 	/// unset, any entry naming one is declined.
@@ -107,7 +107,7 @@ bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *cod
  * \param guards       thread-abort guards for this method's FINALLY clauses.
  *                     Each becomes one guard-only entry, appended behind the
  *                     dispatch entries.
- * \param owner_header resolves a non-zero owner (a fold merged a live clause
+ * \param owner_header resolves a non-zero owner (an inline merged a live clause
  *                     in from another method) to that method's own IL clause
  *                     table. Left empty, any entry naming one is declined -
  *                     the caller has not opted in to joining against more

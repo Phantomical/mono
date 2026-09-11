@@ -17,8 +17,8 @@ using System.Threading;
  *
  * What says the tier-2 body is the one running is the stack trace. Probe () has
  * a branch, so the shape-test pre-pass declines it and only the tier-2 cost
- * model folds it in. A folded body owns no code: its frame reports the native
- * offset of the call site it was folded at, and the same helper called for real
+ * model inlines it. An inlined body owns no code: its frame reports the native
+ * offset of the call site it was inlined at, and the same helper called for real
  * reports an offset into its own body.
  *
  * Unwinder () and UnwinderLoop () are the third way out of a body. They reach no
@@ -67,7 +67,7 @@ static class Program {
 	/*
 	 * Turns of the loop in Unwinder (), and calls of it. The loop is short, so the
 	 * call site behind it keeps a block count near the count of the calls, and the
-	 * cost model reads that site as hot enough to fold.
+	 * cost model reads that site as hot enough to inline.
 	 *
 	 * A call charges the entry weight and the blocks no loop holds, which is a
 	 * little past five thousand. Four thousand calls take that past the same ten
@@ -90,7 +90,7 @@ static class Program {
 	static bool saw_probe, probe_runs_inside_kernel;
 
 	// A branch, so the shape-test pre-pass declines this body and the tier-2
-	// cost model is the only thing that folds it in.
+	// cost model is the only thing that inlines it.
 	static void Probe (string what, bool yes)
 	{
 		if (yes)
@@ -101,8 +101,8 @@ static class Program {
 	 * Whether the frame reported for Probe () covers the same code as its
 	 * caller's.
 	 *
-	 * A folded body has no code of its own, so the frame built for it reports
-	 * the call site it was folded at. That is the same native offset the caller's
+	 * An inlined body has no code of its own, so the frame built for it reports
+	 * the call site it was inlined at. That is the same native offset the caller's
 	 * own frame reports. A helper that was really called runs in its own body and
 	 * reports an offset into that.
 	 */
@@ -128,8 +128,8 @@ static class Program {
 
 	/*
 	 * The two kernels are one body written twice, so that the pair differs in
-	 * the turns of the loop and in nothing else. Neither may fold into the other
-	 * or into Observe (), because a folded kernel counts against its caller.
+	 * the turns of the loop and in nothing else. Neither may inline into the other
+	 * or into Observe (), because an inlined kernel counts against its caller.
 	 *
 	 * Probe () is called from inside the loop rather than after it. The cost
 	 * model ranks a call site by the block count the profile gave it, and a site
@@ -178,7 +178,7 @@ static class Program {
 	 * A body with no loop, which spends about the entry weight in a call and
 	 * almost nothing else. It is the shape a count of work alone never reaches,
 	 * and SharpChess is full of it: a property getter of a few instructions,
-	 * called very often, whose tier-2 payoff is being folded into its callers.
+	 * called very often, whose tier-2 payoff is being inlined into its callers.
 	 *
 	 * Probe () throws only for a negative argument, so the calls that spend the
 	 * counter cost what the body costs and the last one reads the tier.
@@ -223,7 +223,7 @@ static class Program {
 	 * to promote.
 	 *
 	 * Probe () throws on the last turn, so the site is as hot as the loop, which is
-	 * what the cost model reads to fold it. The frame still leaves through a
+	 * what the cost model reads to inline it. The frame still leaves through a
 	 * callee's exception.
 	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
@@ -317,7 +317,7 @@ static class Program {
 		++fails;
 	}
 
-	/// Puts one kernel at tier 1, then runs it and answers whether it folded.
+	/// Puts one kernel at tier 1, then runs it and answers whether it inlined.
 	static bool Run (string name, bool is_heavy, int n)
 	{
 		MethodInfo kernel = typeof (Program).GetMethod (name,
@@ -349,22 +349,22 @@ static class Program {
 		 * call of the kernel, which keeps the calls it charges far below the
 		 * threshold in both arms.
 		 */
-		bool folded = false;
+		bool inlined = false;
 
-		for (int i = 0; i < 100 && !folded; ++i) {
-			folded = Observe (is_heavy);
-			if (!folded)
+		for (int i = 0; i < 100 && !inlined; ++i) {
+			inlined = Observe (is_heavy);
+			if (!inlined)
 				Thread.Sleep (10);
 		}
 
 		Check ((is_heavy ? HeavyKernel (n, false) : LightKernel (n, false)) == want,
 		       "the answer at the end is the answer at the start");
 
-		return folded;
+		return inlined;
 	}
 
 	/// Puts Tiny () at tier 1, spends its counter in calls, and answers whether it
-	/// folded.
+	/// inlined.
 	static bool RunTiny ()
 	{
 		MethodInfo tiny = typeof (Program).GetMethod ("Tiny",
@@ -381,19 +381,19 @@ static class Program {
 		for (int i = 0; i < tiny_calls; ++i)
 			Check (Tiny (i) == i * 3 + 1, "the answer stays the same");
 
-		bool folded = false;
+		bool inlined = false;
 
-		for (int i = 0; i < 100 && !folded; ++i) {
-			folded = ObserveTiny ();
-			if (!folded)
+		for (int i = 0; i < 100 && !inlined; ++i) {
+			inlined = ObserveTiny ();
+			if (!inlined)
 				Thread.Sleep (10);
 		}
 
-		return folded;
+		return inlined;
 	}
 
 	/// Puts Unwinder () at tier 1, spends its counter in calls, and answers whether
-	/// it folded.
+	/// it inlined.
 	static bool RunUnwinder ()
 	{
 		MethodInfo unwinder = typeof (Program).GetMethod ("Unwinder",
@@ -419,19 +419,19 @@ static class Program {
 
 		Check (!came_back, "the kernel leaves only through the exception");
 
-		bool folded = false;
+		bool inlined = false;
 
-		for (int i = 0; i < 100 && !folded; ++i) {
-			folded = ObserveUnwinder ();
-			if (!folded)
+		for (int i = 0; i < 100 && !inlined; ++i) {
+			inlined = ObserveUnwinder ();
+			if (!inlined)
 				Thread.Sleep (10);
 		}
 
-		return folded;
+		return inlined;
 	}
 
 	/// Puts UnwinderLoop () at tier 1, spends its counter in loop turns, and
-	/// answers whether it folded.
+	/// answers whether it inlined.
 	static bool RunUnwinderLoop ()
 	{
 		MethodInfo unwinder = typeof (Program).GetMethod ("UnwinderLoop",
@@ -457,46 +457,46 @@ static class Program {
 
 		Check (!came_back, "the kernel leaves only through the exception");
 
-		bool folded = false;
+		bool inlined = false;
 
-		for (int i = 0; i < 100 && !folded; ++i) {
-			folded = ObserveUnwinderLoop ();
-			if (!folded)
+		for (int i = 0; i < 100 && !inlined; ++i) {
+			inlined = ObserveUnwinderLoop ();
+			if (!inlined)
 				Thread.Sleep (10);
 		}
 
-		return folded;
+		return inlined;
 	}
 
 	public static int Main ()
 	{
 		bool want_tier2 = Environment.GetEnvironmentVariable ("MONO_WANT_TIER2") != "off";
 
-		bool heavy_folded = Run ("HeavyKernel", true, heavy);
-		bool light_folded = Run ("LightKernel", false, light);
-		bool tiny_folded = RunTiny ();
-		bool unwinder_folded = RunUnwinder ();
-		bool unwinder_loop_folded = RunUnwinderLoop ();
+		bool heavy_inlined = Run ("HeavyKernel", true, heavy);
+		bool light_inlined = Run ("LightKernel", false, light);
+		bool tiny_inlined = RunTiny ();
+		bool unwinder_inlined = RunUnwinder ();
+		bool unwinder_loop_inlined = RunUnwinderLoop ();
 
 		if (want_tier2) {
-			Check (heavy_folded, "the work a body does takes it to tier 2");
+			Check (heavy_inlined, "the work a body does takes it to tier 2");
 			// The other half of the counter, and the half a threshold on work
 			// alone never reaches. Tiny () does almost nothing in a call and
 			// promotes on the number of them.
-			Check (tiny_folded, "the calls a body takes take it to tier 2");
+			Check (tiny_inlined, "the calls a body takes take it to tier 2");
 			// A body that leaves only through a callee's exception. What its
 			// entry charges is enough here, and the calls are what spend it.
-			Check (unwinder_folded, "a body that always unwinds still reaches tier 2");
+			Check (unwinder_inlined, "a body that always unwinds still reaches tier 2");
 			// The same shape with too few calls to promote on the entry. Only
 			// the pad the counter's fault clause names as its handler charges
 			// the turns of the loop, so this is what asserts the pad runs.
-			Check (unwinder_loop_folded,
+			Check (unwinder_loop_inlined,
 			       "an unwinding body is charged the turns its loop made");
 		} else {
-			Check (!heavy_folded, "and no counter promotes a body while the threshold is zero");
-			Check (!tiny_folded, "and neither does a body that only takes calls");
-			Check (!unwinder_folded, "and neither does a body that always unwinds");
-			Check (!unwinder_loop_folded, "and neither does one whose loop is what it spends");
+			Check (!heavy_inlined, "and no counter promotes a body while the threshold is zero");
+			Check (!tiny_inlined, "and neither does a body that only takes calls");
+			Check (!unwinder_inlined, "and neither does a body that always unwinds");
+			Check (!unwinder_loop_inlined, "and neither does one whose loop is what it spends");
 		}
 
 		/*
@@ -505,7 +505,7 @@ static class Program {
 		 * which is three hundred thousand against a threshold of ten million. So
 		 * it reaches the threshold on neither half and stays where it is.
 		 */
-		Check (!light_folded, "a body with too little of either stays at tier 1");
+		Check (!light_inlined, "a body with too little of either stays at tier 1");
 
 		if (fails != 0)
 			return 1;

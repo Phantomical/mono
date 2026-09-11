@@ -55,7 +55,7 @@ struct Colder {
 /// A musttail site is a real tail call, and a body in its place takes that
 /// away.
 bool
-foldable_site (const CallBase &call)
+inlinable_site (const CallBase &call)
 {
 	const Function *callee = call.getCalledFunction ();
 
@@ -97,8 +97,8 @@ struct ScratchAnalyses {
 /// It is translated into a module of its own and prepared there, then linked
 /// over the declaration the site already calls. Preparing it away from the root
 /// is what keeps the preparation from reaching the root: it runs module passes,
-/// and one of them is an always-inliner, which would otherwise fold bodies into
-/// the root behind the walk that is working on it.
+/// and one of them is an always-inliner, which would otherwise inline bodies
+/// into the root behind the walk that is working on it.
 ///
 /// The preparation's own PGOInstrumentationUse reads whatever profile_fs
 /// currently serves - the root's own counts, pushed there before this runs.
@@ -138,7 +138,7 @@ materialize_candidate (Module &m, Function &decl, InlineCandidates &candidates,
 
 	/*
 	 * A copy is internal, which is what lets an inliner delete it once every
-	 * call to it is folded. Internal is also what stops it from satisfying the
+	 * call to it is inlined. Internal is also what stops it from satisfying the
 	 * declaration the site calls, so it crosses as external and is put back
 	 * once it is across.
 	 */
@@ -226,9 +226,9 @@ has_own_clause (const Function &callee)
 ///
 /// A filter clause answers no, the same as a decode this pass does not
 /// understand. What "merged" describes is scoped to this function alone:
-/// a decline here still leaves clause_survives_fold ()'s own trial as the
+/// a decline here still leaves clause_survives_inline ()'s own trial as the
 /// correctness gate underneath, and it is eh-gather.cpp's own decode of the
-/// same marker that places a merged clause once this has let the real fold
+/// same marker that places a merged clause once this has let the real inline
 /// through. mono_lsda.cpp's per-owner join already resolves catch_class off
 /// whichever header the clause's owner names, the same as it always has for
 /// the root's own catch clauses, so a catch needs no case of its own there.
@@ -269,18 +269,18 @@ mergeable_clause_kinds_only (const Function &callee)
 	return true;
 }
 
-/// The kind clause_survives_fold () tags callee's own landing pads and
+/// The kind clause_survives_inline () tags callee's own landing pads and
 /// finally markers with, to tell them apart once they are cloned into
 /// another function.
 constexpr StringRef clause_trial_tag = "mono.clause-trial";
 
-/// Whether folding call leaves one of callee's own landing pads or finally
+/// Whether inlining call leaves one of callee's own landing pads or finally
 /// markers live.
 ///
-/// eh-gather.cpp reads a folded body's geometry off the root's own
-/// !mono.clauses, so a clause the fold leaves live has nothing left to
-/// describe it. MonoFinallyRangePass reads a folded finally's markers
-/// against that same table. This clones the site's function and folds call
+/// eh-gather.cpp reads an inlined body's geometry off the root's own
+/// !mono.clauses, so a clause the inline leaves live has nothing left to
+/// describe it. MonoFinallyRangePass reads an inlined finally's markers
+/// against that same table. This clones the site's function and inlines call
 /// into the clone. It then runs the same simplification the round applies
 /// for real, and reads back whether a tagged landing pad or marker is still
 /// standing.
@@ -288,9 +288,9 @@ constexpr StringRef clause_trial_tag = "mono.clause-trial";
 /// The argument that answers callee's own type test is fixed at this call
 /// site, so nothing the clone misses can change the verdict.
 bool
-clause_survives_fold (CallBase &call, Function &callee, FunctionPassManager &simplify,
-                      FunctionAnalysisManager &fam,
-                      function_ref<AssumptionCache &(Function &)> get_ac)
+clause_survives_inline (CallBase &call, Function &callee, FunctionPassManager &simplify,
+                        FunctionAnalysisManager &fam,
+                        function_ref<AssumptionCache &(Function &)> get_ac)
 {
 	MDNode *tag = MDNode::get (callee.getContext (), {});
 
@@ -340,7 +340,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 	SmallVector<Function *, 4> roots;
 
 	// The bodies a method promotes through, which is what the profile is about
-	// and what a folded frame belongs to. A filter body and a copy carry no
+	// and what an inlined frame belongs to. A filter body and a copy carry no
 	// counter, so neither is one.
 	for (Function &fn : m)
 		if (!fn.isDeclaration () && fn.hasFnAttribute (tier_counter_attribute))
@@ -376,11 +376,11 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 		/*
 		 * Read through get_bfi () every time rather than holding a reference.
-		 * A fold drops the root's cached analyses, so the reference from before
+		 * An inline drops the root's cached analyses, so the reference from before
 		 * one is a reference to freed memory.
 		 */
 		auto push = [&] (CallBase *call, unsigned depth) {
-			if (!foldable_site (*call))
+			if (!inlinable_site (*call))
 				return;
 
 			uint64_t count = get_bfi (*root).getBlockProfileCount (call->getParent ()).value_or (0);
@@ -390,7 +390,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 		};
 
 		/*
-		 * A site a fold exposed keeps the depth it was reached at, so the
+		 * A site an inline exposed keeps the depth it was reached at, so the
 		 * queue is seeded with those before the root's own sites are read.
 		 * Everything else starts over at zero, and the set is what keeps a
 		 * site the walk below already holds from arriving twice.
@@ -415,7 +415,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 						push (call, 0);
 		};
 
-		/// A candidate the gathering loop took, waiting for the folding one.
+		/// A candidate the gathering loop took, waiting for the inlining one.
 		struct Accepted {
 			WeakTrackingVH call;
 			Function *callee;
@@ -433,7 +433,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			// each of those the same way. Checking here is what spares such
 			// a root the walk, a BFI query per site, and the round's own
 			// re-simplify at the end - paid otherwise whether or not
-			// anything left can fold.
+			// anything left can inline.
 			if (candidates->exhausted ())
 				break;
 
@@ -449,7 +449,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 				auto *call = dyn_cast_or_null<CallBase> (site.call);
 
 				if (call == nullptr || site.depth >= candidates->depth_limit ()
-				    || !foldable_site (*call))
+				    || !inlinable_site (*call))
 					continue;
 
 				Function *callee = call->getCalledFunction ();
@@ -496,24 +496,24 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 				// read of callee's own clauses, and a filter is the only kind
 				// that can still make this decline. Its answer already
 				// settles the ordinary catch, finally and fault case.
-				// Short-circuiting past clause_survives_fold () there keeps
+				// Short-circuiting past clause_survives_inline () there keeps
 				// its cost off every callee but the filter one it can still
 				// affect.
 				if (has_own_clause (*callee) && !mergeable_clause_kinds_only (*callee)
-				    && clause_survives_fold (*call, *callee, simplify_, fam, get_ac)) {
+				    && clause_survives_inline (*call, *callee, simplify_, fam, get_ac)) {
 					candidates->declined (
 						*root, *callee,
-						InlineCost::getNever ("its clause has nowhere to sit once folded"),
+						InlineCost::getNever ("its clause has nowhere to sit once inlined"),
 						site.count);
 					continue;
 				}
 
 				/*
 				 * A surviving catch, finally or fault clause falls through to the
-				 * real fold below rather than being declined. eh-gather.cpp reads
+				 * real inline below rather than being declined. eh-gather.cpp reads
 				 * such a clause's owner straight off its own marker, whichever
 				 * function's landing pad it ends up on after codegen, so nothing
-				 * here has to flag that a merge happened - the fold itself is
+				 * here has to flag that a merge happened - the inline itself is
 				 * what makes one.
 				 */
 
@@ -525,7 +525,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 			for (const Accepted &take : accepted) {
 				/*
-				 * An earlier fold in this round can take a later site with it,
+				 * An earlier inline in this round can take a later site with it,
 				 * and the handle goes null when it does.
 				 */
 				auto *call = dyn_cast_or_null<CallBase> (take.call);
@@ -545,7 +545,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 				if (!InlineFunction (*call, ifi, /*MergeAttributes=*/true).isSuccess ())
 					continue;
 
-				candidates->folded (*root, *take.callee, take.cost, take.count);
+				candidates->inlined (*root, *take.callee, take.cost, take.count);
 
 				for (CallBase *site : ifi.InlinedCallSites)
 					exposed.push_back (Site{site, 0, take.depth + 1});
@@ -560,13 +560,13 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			fam.invalidate (*root, PreservedAnalyses::none ());
 
 			/*
-			 * What a fold buys is the caller's arguments as constants inside the
-			 * folded body and the branches that kill, so simplification runs over
+			 * What an inline buys is the caller's arguments as constants inside the
+			 * inlined body and the branches that kill, so simplification runs over
 			 * what the round took. Here rather than as a pipeline row behind the
-			 * pass, so a compile that folded nothing pays nothing.
+			 * pass, so a compile that inlined nothing pays nothing.
 			 *
 			 * The next round reads the sites again. Those constants settle what a
-			 * dispatch below the fold reads, and the simplification answers it
+			 * dispatch below the inline reads, and the simplification answers it
 			 * with a direct call - a site nothing offered before. An interface
 			 * dispatch enters the root as a load rather than as a call of a
 			 * function, so this is the only way it becomes a site at all.

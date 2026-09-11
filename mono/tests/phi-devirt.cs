@@ -123,7 +123,7 @@ public static class Program {
 		return o is Narrow;
 	}
 
-	// Small enough for the trivial-inline pre-pass to fold into any caller,
+	// Small enough for the trivial-inline pre-pass to inline into any caller,
 	// which is what puts this allocation inside AllocatedInATryBlock's try.
 	static Shape MakeNarrow ()
 	{

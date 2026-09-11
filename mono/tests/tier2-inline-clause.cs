@@ -4,41 +4,42 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
- * Whether the tier-2 cost model folds a clause-bearing callee. The suite
- * runs this file twice, and MONO_FOLD_CLAUSES tells the test which arm it
+ * Whether the tier-2 cost model inlines a clause-bearing callee. The suite
+ * runs this file twice, and MONO_INLINE_CLAUSES tells the test which arm it
  * is in.
  *
- * DiesOnFold ()'s clause is dead once folded: Root () only ever passes a
+ * DiesOnInline ()'s clause is dead once inlined: Root () only ever passes a
  * freshly allocated Foo, so f != null answers true off the allocation's own
  * nonnull return, with no cast or class guess involved. StaysLive ()'s clause
- * stays live: Root () forwards its own takeClause parameter, which the fold
+ * stays live: Root () forwards its own takeClause parameter, which the inline
  * cannot see a fixed value for, so the clause runs on some calls and not
  * others. A finally clause that stays live is not the dead weight
- * DiesOnFold ()'s is, but it still folds - eh-gather.cpp reads such a
- * clause's owner straight off its own marker, so the fold merges the clause
+ * DiesOnInline ()'s is, but it still inlines - eh-gather.cpp reads such a
+ * clause's owner straight off its own marker, so the inline merges the clause
  * into Root ()'s own table instead of needing it gone.
  *
  * NoLandingPad ()'s clause has no landing pad at all: its try region calls
  * nothing, so the front end never builds one. Its finally body still runs on
  * every call, so the clause stays live the same way StaysLive ()'s does. The
- * fold has to catch this one through the marker channel alone, and it folds
- * for the same reason StaysLive ()'s does.
+ * inline has to catch this one through the marker channel alone, and it
+ * inlines for the same reason StaysLive ()'s does.
  *
  * StaysLiveCatch ()'s clause is a genuine catch, live the same way
  * StaysLive ()'s finally is - Root () forwards the same kind of parameter the
- * fold cannot see a fixed value for. It folds for the same reason StaysLive
- * ()'s finally does: mergeable_clause_kinds_only () (passes/top-down-inline.cpp)
- * accepts a catch the same as a finally or a fault.
+ * inline cannot see a fixed value for. It inlines for the same reason
+ * StaysLive ()'s finally does: mergeable_clause_kinds_only ()
+ * (passes/top-down-inline.cpp) accepts a catch the same as a finally or a
+ * fault.
  *
  * StaysLiveSiblingCatch ()'s try is protected by two catches rather than one -
  * the same shared pad and shared PC range mono_lsda.cpp's
  * ranges_equal_or_disjoint () already accepts for the root's own sibling
- * catches. Folding splices both into the root's table, so this is what
+ * catches. Inlining splices both into the root's table, so this is what
  * exercises that join once the clauses are not the root's own.
  *
- * What says a fold happened is the stack trace, the way tier2-inline-policy.cs
- * reads it: a folded body owns no code, so its frame reports the offset into
- * Root () that it was folded at, and a body that was really called reports an
+ * What says an inline happened is the stack trace, the way tier2-inline-policy.cs
+ * reads it: an inlined body owns no code, so its frame reports the offset into
+ * Root () that it was inlined at, and a body that was really called reports an
  * offset into itself.
  */
 
@@ -61,7 +62,7 @@ static class Clauses {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int Slow (Foo f) { return 2; }
 
-	public static int DiesOnFold (Foo f, bool throwing)
+	public static int DiesOnInline (Foo f, bool throwing)
 	{
 		if (f != null) {
 			int v = Fast (f);
@@ -113,7 +114,7 @@ static class Clauses {
 		} catch (ArgumentException) {
 			// Never taken - Slow () never throws one. What keeps the clause
 			// live is the same as StaysLive ()'s finally: a protected call
-			// the fold cannot prove will not throw, not whether the handler
+			// the inline cannot prove will not throw, not whether the handler
 			// body itself runs.
 			return -1;
 		}
@@ -162,7 +163,7 @@ static class Clauses {
 
 static class Program {
 	static bool saw_dies, saw_stays, saw_catch, saw_sibling, saw_none;
-	static bool folded_dies, folded_stays, folded_catch, folded_sibling, folded_none;
+	static bool inlined_dies, inlined_stays, inlined_catch, inlined_sibling, inlined_none;
 
 	static bool RunsInsideRoot (Exception e, string helper)
 	{
@@ -188,21 +189,21 @@ static class Program {
 	{
 		string trace = e.StackTrace ?? "";
 
-		if (helper == "DiesOnFold") {
-			saw_dies |= trace.Contains ("Clauses.DiesOnFold");
-			folded_dies |= RunsInsideRoot (e, "DiesOnFold");
+		if (helper == "DiesOnInline") {
+			saw_dies |= trace.Contains ("Clauses.DiesOnInline");
+			inlined_dies |= RunsInsideRoot (e, "DiesOnInline");
 		} else if (helper == "StaysLive") {
 			saw_stays |= trace.Contains ("Clauses.StaysLive");
-			folded_stays |= RunsInsideRoot (e, "StaysLive");
+			inlined_stays |= RunsInsideRoot (e, "StaysLive");
 		} else if (helper == "StaysLiveCatch") {
 			saw_catch |= trace.Contains ("Clauses.StaysLiveCatch");
-			folded_catch |= RunsInsideRoot (e, "StaysLiveCatch");
+			inlined_catch |= RunsInsideRoot (e, "StaysLiveCatch");
 		} else if (helper == "StaysLiveSiblingCatch") {
 			saw_sibling |= trace.Contains ("Clauses.StaysLiveSiblingCatch");
-			folded_sibling |= RunsInsideRoot (e, "StaysLiveSiblingCatch");
+			inlined_sibling |= RunsInsideRoot (e, "StaysLiveSiblingCatch");
 		} else {
 			saw_none |= trace.Contains ("Clauses.NoLandingPad");
-			folded_none |= RunsInsideRoot (e, "NoLandingPad");
+			inlined_none |= RunsInsideRoot (e, "NoLandingPad");
 		}
 
 		if (!trace.Contains ("Program.Root"))
@@ -215,9 +216,9 @@ static class Program {
 		Foo f = new Foo ();
 
 		try {
-			total += Clauses.DiesOnFold (f, throwing);
+			total += Clauses.DiesOnInline (f, throwing);
 		} catch (InvalidOperationException e) {
-			Record (e, "DiesOnFold");
+			Record (e, "DiesOnInline");
 		}
 
 		try {
@@ -260,7 +261,7 @@ static class Program {
 
 	public static int Main ()
 	{
-		bool folding = Environment.GetEnvironmentVariable ("MONO_FOLD_CLAUSES") != "off";
+		bool inlining = Environment.GetEnvironmentVariable ("MONO_INLINE_CLAUSES") != "off";
 		MethodInfo root = typeof (Program).GetMethod ("Root",
 			BindingFlags.Static | BindingFlags.NonPublic);
 
@@ -273,7 +274,7 @@ static class Program {
 
 		Check (saw_dies && saw_stays && saw_catch && saw_sibling && saw_none,
 			"every helper has a frame before tier 2");
-		Check (!folded_dies && !folded_stays && !folded_catch && !folded_sibling && !folded_none,
+		Check (!inlined_dies && !inlined_stays && !inlined_catch && !inlined_sibling && !inlined_none,
 			"and none of them runs in a body of its own before tier 2");
 		Check (Clauses.cleanups == 0, "the live clause has not run yet");
 		Check (Clauses.landingless_cleanups == 1,
@@ -290,27 +291,27 @@ static class Program {
 		}
 
 		saw_dies = saw_stays = saw_catch = saw_sibling = saw_none = false;
-		folded_dies = folded_stays = folded_catch = folded_sibling = folded_none = false;
+		inlined_dies = inlined_stays = inlined_catch = inlined_sibling = inlined_none = false;
 
 		Check (want == Root (false, true), "the answer at tier 2 is the answer before it");
 		Check (saw_dies && saw_stays && saw_catch && saw_sibling && saw_none,
 			"every helper still has a frame at tier 2");
 
-		if (folding) {
-			Check (folded_dies, "a clause the fold makes dead folds into the root");
-			Check (folded_stays, "a live finally clause now folds into the root too");
-			Check (folded_catch, "a live catch clause folds into the root too");
-			Check (folded_sibling, "a live pair of sibling catches folds into the root too");
-			Check (folded_none,
-				"a live finally clause with no landing pad folds the same way");
+		if (inlining) {
+			Check (inlined_dies, "a clause the inline makes dead inlines into the root");
+			Check (inlined_stays, "a live finally clause now inlines into the root too");
+			Check (inlined_catch, "a live catch clause inlines into the root too");
+			Check (inlined_sibling, "a live pair of sibling catches inlines into the root too");
+			Check (inlined_none,
+				"a live finally clause with no landing pad inlines the same way");
 		} else {
-			Check (!folded_dies,
-				"MONO_FOLD_CLAUSES=off refuses it the way the pre-pass does");
-			Check (!folded_stays, "MONO_FOLD_CLAUSES=off refuses a live finally too");
-			Check (!folded_catch, "MONO_FOLD_CLAUSES=off refuses a live catch too");
-			Check (!folded_sibling, "MONO_FOLD_CLAUSES=off refuses sibling catches too");
-			Check (!folded_none,
-				"MONO_FOLD_CLAUSES=off refuses a landing-pad-free finally too");
+			Check (!inlined_dies,
+				"MONO_INLINE_CLAUSES=off refuses it the way the pre-pass does");
+			Check (!inlined_stays, "MONO_INLINE_CLAUSES=off refuses a live finally too");
+			Check (!inlined_catch, "MONO_INLINE_CLAUSES=off refuses a live catch too");
+			Check (!inlined_sibling, "MONO_INLINE_CLAUSES=off refuses sibling catches too");
+			Check (!inlined_none,
+				"MONO_INLINE_CLAUSES=off refuses a landing-pad-free finally too");
 		}
 
 		int before = Clauses.cleanups;

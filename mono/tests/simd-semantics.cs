@@ -7,7 +7,7 @@
 //
 // Each operation is computed four ways: at tier 0, promoted to tier 1,
 // promoted to tier 2, and through a delegate created over the operation's
-// own compiled body (entering its thunk rather than a copy folded into a
+// own compiled body (entering its thunk rather than a copy inlined into a
 // caller) at tier 1 and again at tier 2. All four are compared against the
 // tier-0 result as raw bytes, never with ==, because a float compare treats a
 // NaN as unequal to itself and would hide the one difference a bit pattern

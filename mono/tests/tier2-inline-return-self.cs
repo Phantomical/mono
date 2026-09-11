@@ -8,18 +8,18 @@ using System.Runtime.CompilerServices;
  * rather than allocating or forwarding a call. tier2-inline-policy.cs's
  * Make () gates the bonus on an allocation, and tier2-inline-return-forward.cs's
  * Relay () gates it on a further call's sealed return type. AsShape () below
- * allocates nothing and calls nothing, so the fold is
+ * allocates nothing and calls nothing, so the inline is
  * leaf_operand_class ()'s Argument branch answering `this` exact because Box
  * is sealed, read through `bound_is_exact ()`.
  *
  * The suite runs twice, once on the default and once with the bonus zeroed,
  * and reads MONO_INLINE_POLICY to know which arm it is in. The trivial
- * pre-pass is off in both (--llvm-opt=-mono-inline-il-limit=0), so a fold
+ * pre-pass is off in both (--llvm-opt=-mono-inline-il-limit=0), so an inline
  * this reads is the cost model's.
  *
- * What says a fold happened is the stack trace, the way tier2-inline-cost.cs
- * reads it: a folded body owns no code, so its frame reports the offset into
- * Root () that it was folded at, and a body that was really called reports an
+ * What says an inline happened is the stack trace, the way tier2-inline-cost.cs
+ * reads it: an inlined body owns no code, so its frame reports the offset into
+ * Root () that it was inlined at, and a body that was really called reports an
  * offset into itself.
  *
  * AsShape () costs 95 on -mono-inline-cost-full, on either arm -- the bonus
@@ -67,7 +67,7 @@ sealed class Box : IShape {
 }
 
 static class Program {
-	static bool saw_asshape, folded_asshape;
+	static bool saw_asshape, inlined_asshape;
 
 	/// Whether AsShape ()'s frame covers the same code as Root ()'s.
 	static bool RunsInsideRoot (Exception e)
@@ -106,7 +106,7 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_asshape |= (e.StackTrace ?? "").Contains ("Box.AsShape");
-			folded_asshape |= RunsInsideRoot (e);
+			inlined_asshape |= RunsInsideRoot (e);
 		}
 
 		return total;
@@ -138,7 +138,7 @@ static class Program {
 		int want = Root (-2, true);
 
 		Check (saw_asshape, "AsShape () has a frame before tier 2");
-		Check (!folded_asshape, "and it runs in a body of its own before tier 2");
+		Check (!inlined_asshape, "and it runs in a body of its own before tier 2");
 
 		// Enough calls to leave counts on the tier-1 body.
 		for (int i = 0; i < 20000; ++i)
@@ -149,17 +149,17 @@ static class Program {
 			return 1;
 		}
 
-		saw_asshape = folded_asshape = false;
+		saw_asshape = inlined_asshape = false;
 
 		Check (want == Root (-2, true), "the answer at tier 2 is the answer before it");
 		Check (saw_asshape, "AsShape () still has a frame at tier 2");
 
 		if (bonuses)
-			Check (folded_asshape,
-				"the return bonus folds a body that answers with `this`");
+			Check (inlined_asshape,
+				"the return bonus inlines a body that answers with `this`");
 		else
-			Check (!folded_asshape,
-				"the return bonus is what folds the body that answers with `this`");
+			Check (!inlined_asshape,
+				"the return bonus is what inlines the body that answers with `this`");
 
 		Console.WriteLine (fails == 0 ? "OK" : "FAILED");
 		return fails == 0 ? 0 : 1;

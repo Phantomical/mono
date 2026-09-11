@@ -42,7 +42,7 @@ llvm::Error with_dump_stream (DumpPoint point, llvm::StringRef name,
  *
  * A function printed alone names declarations and metadata that stay behind in
  * the module it came from, and `opt` refuses such text. This keeps the body of
- * \p entry and the bodies folded into it, drops the other bodies, and prints
+ * \p entry and the bodies inlined into it, drops the other bodies, and prints
  * what is left. The declarations, the globals and the metadata those bodies
  * name come with them, so an offline run of a pipeline has all of it.
  *
@@ -65,10 +65,10 @@ void set_dump_name (llvm::Function &function, llvm::StringRef name);
 std::string dump_name_of (const llvm::Function &function);
 
 /// Whether a function is one of the methods its module was built to publish,
-/// rather than a body folded in beside them.
+/// rather than a body inlined in beside them.
 ///
-/// A folded copy has internal linkage, so it is not a method anything can enter
-/// and it gets no dump of its own.
+/// An inlined copy has internal linkage, so it is not a method anything can
+/// enter and it gets no dump of its own.
 bool is_published_body (const llvm::Function &function);
 
 } // namespace mono

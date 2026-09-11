@@ -9,25 +9,25 @@ using System.Runtime.CompilerServices;
  * compile can name. It is the argument bonus tier2-inline-policy.cs's
  * Measure () takes with a delegate in place of a class: the target arrives
  * with the argument, so an Invoke the body cannot resolve on its own gets one
- * once the body is folded in.
+ * once the body is inlined.
  *
  * Combine () only invokes cb and never lets it escape, the shape only this
  * bonus flips -- tier2-inline-policy.cs's Measure () takes the class argument
  * bonus instead, because it dispatches on the parameter's class rather than
  * invoking it. The suite runs twice, once on the default and once with the
  * bonus zeroed, and reads MONO_INLINE_POLICY to know which arm it is in. The
- * trivial pre-pass is off in both (--llvm-opt=-mono-inline-il-limit=0), so a
- * fold this reads is the cost model's.
+ * trivial pre-pass is off in both (--llvm-opt=-mono-inline-il-limit=0), so an
+ * inline this reads is the cost model's.
  *
- * What says a fold happened is the stack trace, the way tier2-inline-cost.cs
- * reads it: a folded body owns no code, so its frame reports the offset into
- * Root () that it was folded at, and a body that was really called reports an
+ * What says an inline happened is the stack trace, the way tier2-inline-cost.cs
+ * reads it: an inlined body owns no code, so its frame reports the offset into
+ * Root () that it was inlined at, and a body that was really called reports an
  * offset into itself.
  *
  * The site passes `new Func<int, int> (Ops.MakeCallback ())`, a delegate
  * built over another delegate -- MakeCallback () is what gets a newobj
  * naming the private Double into Root () at all, since the cost model
- * folds MakeCallback () itself at this threshold. The C# compiler routes
+ * inlines MakeCallback () itself at this threshold. The C# compiler routes
  * a delegate built over a delegate through Func<int,int>:Invoke, so the
  * outer newobj here names Invoke rather than Double. Invoke is itself a
  * callable method sitting directly in Root (), so no field cache and no
@@ -86,7 +86,7 @@ static class Ops {
 }
 
 static class Program {
-	static bool saw_combine, folded_combine;
+	static bool saw_combine, inlined_combine;
 
 	/// Whether Combine ()'s frame covers the same code as Root ()'s.
 	static bool RunsInsideRoot (Exception e)
@@ -123,7 +123,7 @@ static class Program {
 
 		try {
 			// The newobj is the one this line writes, not the one inside
-			// MakeCallback (). The cost model folds that call too, so
+			// MakeCallback (). The cost model inlines that call too, so
 			// MakeCallback ()'s own newobj lands in Root () as well. The C#
 			// compiler's own delegate-from-delegate form still gives the
 			// newobj here Func<int,int>:Invoke as its target, not Double.
@@ -131,7 +131,7 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_combine |= (e.StackTrace ?? "").Contains ("Ops.Combine");
-			folded_combine |= RunsInsideRoot (e);
+			inlined_combine |= RunsInsideRoot (e);
 		}
 
 		return total;
@@ -163,7 +163,7 @@ static class Program {
 		int want = Root (-2, true);
 
 		Check (saw_combine, "Combine () has a frame before tier 2");
-		Check (!folded_combine, "and it runs in a body of its own before tier 2");
+		Check (!inlined_combine, "and it runs in a body of its own before tier 2");
 
 		// Enough calls to leave counts on the tier-1 body.
 		for (int i = 0; i < 20000; ++i)
@@ -174,17 +174,17 @@ static class Program {
 			return 1;
 		}
 
-		saw_combine = folded_combine = false;
+		saw_combine = inlined_combine = false;
 
 		Check (want == Root (-2, true), "the answer at tier 2 is the answer before it");
 		Check (saw_combine, "Combine () still has a frame at tier 2");
 
 		if (bonus)
-			Check (folded_combine,
-				"the delegate argument bonus folds a body that invokes a named-target argument");
+			Check (inlined_combine,
+				"the delegate argument bonus inlines a body that invokes a named-target argument");
 		else
-			Check (!folded_combine,
-				"the delegate argument bonus is what folds the body that invokes it");
+			Check (!inlined_combine,
+				"the delegate argument bonus is what inlines the body that invokes it");
 
 		Console.WriteLine (fails == 0 ? "OK" : "FAILED");
 		return fails == 0 ? 0 : 1;

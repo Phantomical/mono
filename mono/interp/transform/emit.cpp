@@ -803,7 +803,7 @@ TransformData::emit_rgctx_fetch (MonoRgctxInfoType info_type, gpointer data)
 	}
 
 	// The receiver is the one the body being written was entered with, and a
-	// callee folded into it was read against a context of its own. Callers that
+	// callee inlined into it was read against a context of its own. Callers that
 	// can name the site refuse ahead of this, which is why they say what the
 	// site was.
 	if (inlined_method != nullptr) {

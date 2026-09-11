@@ -899,7 +899,7 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 /// converts to.
 ///
 /// Each caller in corlib tests the index first. This emits the test again, and
-/// an inliner that folds the caller in takes one of the two back out.
+/// an inliner that inlines the caller takes one of the two back out.
 llvm::Error
 MethodLLVMEmitter::emit_array_generic_access (MonoIrBuilder &builder,
                                               MonoMethodSignature *sig,
@@ -1434,7 +1434,7 @@ MethodLLVMEmitter::emit_array_total_length (MonoIrBuilder &builder)
 /// dimension on the accessor. Which one a site is, is read in the pass rather
 /// than here, because a caller's dimension can arrive through a forwarded
 /// parameter. Array.GetUpperBound () is one such forwarder, and the constant
-/// reaches the accessor's body only once an inliner has folded it in.
+/// reaches the accessor's body only once an inliner has inlined it.
 ///
 /// The pass reads MonoArray itself. What the declaration carries is which
 /// accessor this is and the method a declined site falls back to, and the site

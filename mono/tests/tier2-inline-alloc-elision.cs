@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 /*
  * `mono-inline-alloc-elision-bonus` and `mono-inline-alloc-elision-pending-bonus`,
  * the two threshold bonuses for a callee that does not capture a parameter the site
- * fills with a fresh allocation. The fold uncovers the accesses a call was hiding,
+ * fills with a fresh allocation. The inline uncovers the accesses a call was hiding,
  * so SROA can scalarize the allocation away -- but only where the site being
  * weighed is the pointer's last reader. `alloc_elision_fate ()`
  * (passes/inline-policy.cpp) picks the bonus with one scan of the allocation's own
@@ -22,18 +22,18 @@ using System.Runtime.CompilerServices;
  * so its site earns only the pending one. The suite runs twice, once
  * on the defaults and once with both bonuses zeroed, and reads
  * MONO_INLINE_POLICY to know which arm it is in. The trivial pre-pass is off
- * in both (--llvm-opt=-mono-inline-il-limit=0), so a fold this reads is the
+ * in both (--llvm-opt=-mono-inline-il-limit=0), so an inline this reads is the
  * cost model's.
  *
- * What says a fold happened is the stack trace, the way tier2-inline-cost.cs reads
- * it: a folded body owns no code, so its frame reports the offset into Root () that
- * it was folded at, and a body that was really called reports an offset into itself.
+ * What says an inline happened is the stack trace, the way tier2-inline-cost.cs reads
+ * it: an inlined body owns no code, so its frame reports the offset into Root () that
+ * it was inlined at, and a body that was really called reports an offset into itself.
  *
  * Sum () costs 295 and SumCold () costs 350 on -mono-inline-cost-full, on either
  * arm -- the bonus changes the budget rather than the cost. The suite names a
  * cold-callsite threshold of 100. The full bonus of 1000 clears it by a wide
  * margin (100 + 1000 = 1100 > 295), and the pending bonus of 150 does not
- * (100 + 150 = 250 < 350). So the on arm folds Sum () and still declines
+ * (100 + 150 = 250 < 350). So the on arm inlines Sum () and still declines
  * SumCold (), which keeps the staging visible rather than merely bigger.
  * Re-measure both bodies when this starts failing on one arm:
  *
@@ -63,7 +63,7 @@ class Point {
 static class Ops {
 	/*
 	 * Stays a call, so the arm below is work the model has to count until the
-	 * fold uncovers p's fields.
+	 * inline uncovers p's fields.
 	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int Slow (int v) { return v * 3 + 1; }
@@ -108,8 +108,8 @@ static class Program {
 	/// last one.
 	static Point last;
 
-	static bool saw_sum, folded_sum;
-	static bool saw_escape, folded_escape;
+	static bool saw_sum, inlined_sum;
+	static bool saw_escape, inlined_escape;
 
 	/// Whether \p helper's frame covers the same code as Root ()'s.
 	static bool RunsInsideRoot (Exception e, string helper)
@@ -149,7 +149,7 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_sum |= (e.StackTrace ?? "").Contains ("Ops.Sum");
-			folded_sum |= RunsInsideRoot (e, "Sum");
+			inlined_sum |= RunsInsideRoot (e, "Sum");
 		}
 
 		try {
@@ -162,7 +162,7 @@ static class Program {
 		} catch (InvalidOperationException e) {
 			total += e.Message.Length;
 			saw_escape |= (e.StackTrace ?? "").Contains ("Ops.SumCold");
-			folded_escape |= RunsInsideRoot (e, "SumCold");
+			inlined_escape |= RunsInsideRoot (e, "SumCold");
 		}
 
 		return total;
@@ -194,9 +194,9 @@ static class Program {
 		int want = Root (-2, true);
 
 		Check (saw_sum, "Sum () has a frame before tier 2");
-		Check (!folded_sum, "and it runs in a body of its own before tier 2");
+		Check (!inlined_sum, "and it runs in a body of its own before tier 2");
 		Check (saw_escape, "SumCold () has a frame before tier 2");
-		Check (!folded_escape, "and it runs in a body of its own before tier 2");
+		Check (!inlined_escape, "and it runs in a body of its own before tier 2");
 
 		// Enough calls to leave counts on the tier-1 body.
 		for (int i = 0; i < 20000; ++i)
@@ -207,22 +207,22 @@ static class Program {
 			return 1;
 		}
 
-		saw_sum = folded_sum = saw_escape = folded_escape = false;
+		saw_sum = inlined_sum = saw_escape = inlined_escape = false;
 
 		Check (want == Root (-2, true), "the answer at tier 2 is the answer before it");
 		Check (saw_sum, "Sum () still has a frame at tier 2");
 		Check (saw_escape, "SumCold () still has a frame at tier 2");
 
 		if (bonuses) {
-			Check (folded_sum,
-				"the full elision bonus folds a body whose argument reaches nothing else");
-			Check (!folded_escape,
+			Check (inlined_sum,
+				"the full elision bonus inlines a body whose argument reaches nothing else");
+			Check (!inlined_escape,
 				"the pending bonus alone does not clear a threshold the full one is sized for");
 		} else {
-			Check (!folded_sum,
-				"the elision bonus is what folds the body whose argument reaches nothing else");
-			Check (!folded_escape,
-				"neither elision bonus is standing to fold the body with the extra reader");
+			Check (!inlined_sum,
+				"the elision bonus is what inlines the body whose argument reaches nothing else");
+			Check (!inlined_escape,
+				"neither elision bonus is standing to inline the body with the extra reader");
 		}
 
 		Console.WriteLine (fails == 0 ? "OK" : "FAILED");

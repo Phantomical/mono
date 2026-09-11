@@ -71,9 +71,9 @@ cl::opt<bool> AnswerTypeTests (
 	          "operand to"));
 
 /*
- * Each bonus below counts the calls a fold removes, times what the model
+ * Each bonus below counts the calls an inline removes, times what the model
  * charges for one call. A dispatch fold_dispatch_sites () then resolves becomes a
- * direct call the simplification behind the inliner can fold again, and an
+ * direct call the simplification behind the inliner can inline again, and an
  * allocation SROA scalarizes takes its allocator call with it.
  *
  * `mono-inline-call-penalty` sets that per-call charge, so a change to it
@@ -101,8 +101,8 @@ cl::opt<int> AllocElisionBonus (
 
 cl::opt<int> AllocElisionPendingBonus (
 	"mono-inline-alloc-elision-pending-bonus", cl::Hidden, cl::init (150),
-	cl::desc ("Threshold bonus for the same fold where the caller still holds, "
-	          "or may yet fold away, another use of the allocation"));
+	cl::desc ("Threshold bonus for the same inline where the caller still holds, "
+	          "or may yet inline away, another use of the allocation"));
 
 cl::opt<int> DevirtualizeDelegateArgumentBonus (
 	"mono-inline-devirt-delegate-arg-bonus", cl::Hidden, cl::init (50),
@@ -192,17 +192,17 @@ erasable_allocation (const Value *v)
 	       ? call : nullptr;
 }
 
-/// Whether a call to \p callee is a shape no round of this compile folds. A
+/// Whether a call to \p callee is a shape no round of this compile inlines. A
 /// use that passes an allocation to it is then a way out for the pointer.
 ///
 /// A cheap approximation of is_inlinable () from the declaration alone. A
 /// noreturn callee, an unmarked declaration -- a builtin or an icall with no
-/// wrapper of its own -- or a NoInlining method all count as won't fold here.
+/// wrapper of its own -- or a NoInlining method all count as won't inline here.
 /// So does every wrapper, though is_inlinable () lets all of them through.
 /// Refusing more than is_inlinable () does only costs a caller-side bonus,
 /// never the erasure the callee-side test still guards.
 bool
-call_wont_fold (const Function &callee)
+call_wont_inline (const Function &callee)
 {
 	if (callee.doesNotReturn ())
 		return true;
@@ -219,23 +219,23 @@ call_wont_fold (const Function &callee)
 }
 
 /// What a body still does with the allocation \p object once \p exclude, the
-/// use that stands for the fold itself, is set aside.
+/// use that stands for the inline itself, is set aside.
 enum class AllocElisionFate {
 	/// A shape this scan can prove keeps the pointer reachable: the value is
-	/// returned, or passed to a call this round provably will not fold.
+	/// returned, or passed to a call this round provably will not inline.
 	escapes,
 	/// Everything else: at least a store into a field, or a pass to a call
-	/// this round may yet fold. Each keeps the object reachable in principle,
+	/// this round may yet inline. Each keeps the object reachable in principle,
 	/// and telling them apart for real needs a walk this analysis will not
 	/// pay for.
 	pending,
-	/// \p exclude is the only use the scan counts, so folding it there is
+	/// \p exclude is the only use the scan counts, so inlining it there is
 	/// what takes the last reader away.
 	dead,
 };
 
 /// One scan of \p object's own users, excluding \p exclude if it names one --
-/// passing the object to the call being costed is the fold, not an escape.
+/// passing the object to the call being costed is the inline, not an escape.
 /// No recursion past a direct user and no analysis-manager query, which is
 /// what keeps this affordable per candidate per round. `allocation_escapes ()`
 /// (`analysis/escape.hpp`) is the walk that answers a field store for real,
@@ -254,11 +254,11 @@ enum class AllocElisionFate {
 ///
 /// \p object need not be the allocation call itself. Reading the fate of a
 /// callee's own parameter -- \p exclude null, since nothing inside the
-/// callee stands for a fold that happens in its caller -- is what
+/// callee stands for an inline that happens in its caller -- is what
 /// call_site_bonus () asks once the callee is available, in place of asking
 /// LLVM's own capture analysis: that answer is conservative about a call to
 /// *any* opaque function, a constructor's call to its own base class's
-/// included, where this scan already knows the same rule call_wont_fold ()
+/// included, where this scan already knows the same rule call_wont_inline ()
 /// applies to a caller's own allocation applies here too.
 AllocElisionFate
 alloc_elision_fate (const Value &object, const CallBase *exclude)
@@ -288,7 +288,7 @@ alloc_elision_fate (const Value &object, const CallBase *exclude)
 		if (const auto *call = dyn_cast<CallBase> (user)) {
 			const Function *callee = call->getCalledFunction ();
 
-			if (callee == nullptr || call_wont_fold (*callee))
+			if (callee == nullptr || call_wont_inline (*callee))
 				return AllocElisionFate::escapes;
 
 			held_elsewhere = true;
@@ -349,8 +349,8 @@ one_field_back (Value *object)
 
 /// Whether \p vtable is the vtable of \p dispatched_on, read rather than named.
 ///
-/// A vtable operand that is already a global is resolved, and folding a body in
-/// front of such a site changes nothing.
+/// A vtable operand that is already a global is resolved, and inlining a body
+/// in front of such a site changes nothing.
 bool
 reads_the_vtable_of (const Value *vtable, const Value *dispatched_on)
 {
@@ -769,12 +769,12 @@ noreturn_free_successor (const BranchInst &branch)
 /// alloc_elision_fate () has not already ruled out as an escape.
 ///
 /// This is the caller-side half of what call_site_bonus () asks in full once
-/// the callee is available: whether folding could plausibly erase an
+/// the callee is available: whether inlining could plausibly erase an
 /// allocation, not whether it will. The callee's own body still decides that
 /// -- does it capture the argument, does it dispatch on it -- and this
 /// answers nothing about either. What it answers is cheap enough to ask
 /// before translating a candidate at all, which is the question a size gate
-/// meant to bound cost, not make the fold, should not be answering on a
+/// meant to bound cost, not make the inline, should not be answering on a
 /// proxy: an allocation this compile can prove keeps flowing toward erasure
 /// is worth the ordinary IL limit's extra translation at a site that would
 /// otherwise get the cold one.
@@ -812,7 +812,7 @@ call_site_bonus (const CallBase &call, const Function &callee,
 	int bonus = 0;
 
 	// The caller dispatches on what this call returns and cannot name the
-	// target. The callee's own return states a class, so the fold puts one
+	// target. The callee's own return states a class, so the inline puts one
 	// where the dispatch reads a pointer.
 	if (dispatches_unresolved_on (&call, *caller)
 	    && returns_a_named_class (callee))
@@ -824,7 +824,7 @@ call_site_bonus (const CallBase &call, const Function &callee,
 	/*
 	 * Settling the caller runs a MemorySSA walk for each of its loads, and the
 	 * delegate bonus below is the only reader. The inliner settles it again
-	 * after every fold, against a caller the last fold grew. Asking for it up
+	 * after every inline, against a caller the last inline grew. Asking for it up
 	 * here instead of at that bonus costs minutes on a root with many loads.
 	 */
 	auto caller_constants = [&] () -> ConstantValues * {
@@ -843,13 +843,13 @@ call_site_bonus (const CallBase &call, const Function &callee,
 		if (named || (klass != nullptr && exact)) {
 			// The class arrives with the argument, so a dispatch the body
 			// cannot resolve on its own gets an operand once the body is
-			// folded in.
+			// inlined.
 			if (dispatches_unresolved_on (param, callee))
 				bonus += DevirtualizeArgumentBonus;
 
 			/*
 			 * SROA scalarizes an allocation only when it can see every access,
-			 * and a call hides the accesses inside the callee. The fold
+			 * and a call hides the accesses inside the callee. The inline
 			 * uncovers them for a parameter the body does not itself keep
 			 * reachable past the call.
 			 *
@@ -861,13 +861,13 @@ call_site_bonus (const CallBase &call, const Function &callee,
 			 * allocation's uses in the caller (the same one
 			 * carries_an_elision_candidate () runs before the callee even
 			 * exists), one over the parameter's uses in the callee, each
-			 * excusing only the use that is this fold itself. Capture
+			 * excusing only the use that is this inline itself. Capture
 			 * analysis answers conservatively for a call to *any* opaque
 			 * function - a constructor's call to its own base class's
 			 * included, since neither is marked nocapture - and a
 			 * constructor is exactly the shape that call would then never
 			 * clear. Both scans already know the rule that matters here:
-			 * call_wont_fold () is what tells a call this compile could
+			 * call_wont_inline () is what tells a call this compile could
 			 * still take the pointer's escape apart from one it cannot.
 			 */
 			const CallBase *allocation = named ? erasable_allocation (arg) : nullptr;
@@ -891,7 +891,7 @@ call_site_bonus (const CallBase &call, const Function &callee,
 		}
 
 		// The target arrives with the argument, so an Invoke the body cannot
-		// resolve on its own gets one once the body is folded in. The gate
+		// resolve on its own gets one once the body is inlined. The gate
 		// above answers from a leaf read alone, so a field cache merging a
 		// stored delegate with a fresh one skips it and reaches here anyway:
 		// the walk `constants` reads is what settles a merge, not a leaf.

@@ -253,7 +253,7 @@ parse_line_table (const uint8_t *table, size_t size,
 
 /*
  * Turns the linked `.mono_inlines` into per-function rows: which bodies were
- * folded into the code each line-table row covers. The functions map names each
+ * inlined into the code each line-table row covers. The functions map names each
  * function by where it was linked, the same way the line table identifies a
  * block.
  */
@@ -529,7 +529,7 @@ public:
 		std::map<std::string, std::vector<IlLineRow>> il_lines;
 		/// Each defined function's sequence point markers, by name.
 		std::map<std::string, std::vector<IlLineRow>> seq_points;
-		/// The bodies folded into each defined function, by name.
+		/// The bodies inlined into each defined function, by name.
 		std::map<std::string, std::vector<IlInlineRow>> inline_frames;
 		/// Where a function's arguments and locals live in its frame, by
 		/// name. Only a method body pins them, so a filter or a thunk has

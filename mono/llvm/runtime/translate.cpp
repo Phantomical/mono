@@ -212,7 +212,7 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 
 	inlining.root = method;
 	inlining.defined.push_back (method);
-	inlining.folded.push_back ({ method, nullptr });
+	inlining.inlined.push_back ({ method, nullptr });
 	inlining.budget = { trivial_inline_budget (), costed_inline_budget (),
 	                   costed_inline_byte_budget () };
 
@@ -226,11 +226,11 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 
 	// What the method itself named, which is everything the translation above
 	// recorded. The pre-pass resolves each copy's own share as it goes, so
-	// that a copy the runtime cannot resolve costs a fold rather than the
+	// that a copy the runtime cannot resolve costs an inline rather than the
 	// whole compile.
 	size_t own = externals.size ();
 
-	// Both compiled tiers fold in the callees whose IL already says the inline
+	// Both compiled tiers inline the callees whose IL already says the inline
 	// pays. It runs here so that the bodies it adds still reach the naming and
 	// the resolution below.
 	materialize_trivial_callees (*module, target.domain, method, **function,
@@ -602,7 +602,7 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 
 	for (auto &member : members) {
 		inlining.root = member->method;
-		inlining.folded.assign ({ InlineScope::Folded { member->method, nullptr } });
+		inlining.inlined.assign ({ InlineScope::Inlined { member->method, nullptr } });
 		inlining.budget = { trivial_inline_budget (), costed_inline_budget (),
 		                   costed_inline_byte_budget () };
 		member->own = member->externals.size ();

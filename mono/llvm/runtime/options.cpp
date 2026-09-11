@@ -124,8 +124,8 @@ llvm::cl::opt<bool> GuardClassDispatchOpt (
 	llvm::cl::desc ("Guard a dispatch on a guessed receiver class with a vtable "
 	                "compare"));
 
-llvm::cl::opt<bool> FoldClauseBearingCalleesOpt (
-	"mono-fold-clauses", llvm::cl::Hidden, llvm::cl::init (true),
+llvm::cl::opt<bool> InlineClauseBearingCalleesOpt (
+	"mono-inline-clauses", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Let the tier-2 cost model translate a clause-bearing callee"));
 
 llvm::cl::opt<bool> ThreadStaticFastPathOpt (
@@ -172,15 +172,15 @@ llvm::cl::opt<unsigned> WorkerIdleMsOpt (
 
 llvm::cl::opt<unsigned> InlineILLimitOpt (
 	"mono-inline-il-limit", llvm::cl::Hidden, llvm::cl::init (32),
-	llvm::cl::desc ("Largest callee in IL bytes the shape-test pre-pass folds in"));
+	llvm::cl::desc ("Largest callee in IL bytes the shape-test pre-pass inlines"));
 
 llvm::cl::opt<unsigned> InlineBudgetOpt (
 	"mono-inline-budget", llvm::cl::Hidden, llvm::cl::init (16),
-	llvm::cl::desc ("Bodies the shape-test pre-pass may fold into one method"));
+	llvm::cl::desc ("Bodies the shape-test pre-pass may inline into one method"));
 
 llvm::cl::opt<unsigned> CostedInlineBudgetOpt (
 	"mono-inline-cost-budget", llvm::cl::Hidden, llvm::cl::init (32),
-	llvm::cl::desc ("Bodies the tier-2 cost model may fold into one method"));
+	llvm::cl::desc ("Bodies the tier-2 cost model may inline into one method"));
 
 llvm::cl::opt<unsigned> CostedInlineByteBudgetOpt (
 	"mono-inline-cost-byte-budget", llvm::cl::Hidden, llvm::cl::init (4096),
@@ -215,7 +215,7 @@ llvm::cl::opt<unsigned> CostedInlineILLimitColdOpt (
 
 llvm::cl::opt<unsigned> InlineDepthLimitOpt (
 	"mono-inline-depth", llvm::cl::Hidden, llvm::cl::init (4),
-	llvm::cl::desc ("Folds deep past a method the tier-2 inliner may go"));
+	llvm::cl::desc ("Inlines deep past a method the tier-2 inliner may go"));
 
 llvm::cl::opt<unsigned> InlineRoundLimitOpt (
 	"mono-inline-rounds", llvm::cl::Hidden, llvm::cl::init (4),
@@ -223,13 +223,13 @@ llvm::cl::opt<unsigned> InlineRoundLimitOpt (
 
 llvm::cl::opt<unsigned> TrivialInlineDepthLimitOpt (
 	"mono-inline-prepass-depth", llvm::cl::Hidden, llvm::cl::init (8),
-	llvm::cl::desc ("Folds deep past root the shape-test pre-pass may go"));
+	llvm::cl::desc ("Inlines deep past root the shape-test pre-pass may go"));
 
 llvm::cl::opt<unsigned> TrivialInlineFanoutLimitOpt (
 	"mono-inline-trivial-fanout-limit", llvm::cl::Hidden, llvm::cl::init (32),
-	llvm::cl::desc ("Call sites within one caller a single trivial fold may cover "
+	llvm::cl::desc ("Call sites within one caller a single trivial inline may cover "
 	                "before the pre-pass leaves that callee calling its published "
-	                "entry rather than folded; 0 turns this off"));
+	                "entry rather than inlined; 0 turns this off"));
 
 llvm::cl::opt<unsigned> TrivialInlineInstanceBudgetOpt (
 	"mono-inline-trivial-instance-budget", llvm::cl::Hidden, llvm::cl::init (32),
@@ -425,9 +425,9 @@ guard_class_dispatch ()
 }
 
 bool
-fold_clause_bearing_callees ()
+inline_clause_bearing_callees ()
 {
-	return FoldClauseBearingCalleesOpt;
+	return InlineClauseBearingCalleesOpt;
 }
 
 bool
@@ -493,7 +493,7 @@ relaxed_float_flags ()
  * Calls. A count of work says nothing about how often a method is called, and a
  * body of three instructions never reaches a threshold on work however hot it is.
  * SharpChess is full of those, property getters called millions of times, and
- * tier 2 pays there by folding them into their callers rather than by emitting
+ * tier 2 pays there by inlining them into their callers rather than by emitting
  * them better. A weight for each call is what reaches them.
  *
  * The defaults put a body that does no work at twenty thousand calls, which is
@@ -619,7 +619,7 @@ trivial_inline_depth_limit ()
 	/*
 	 * Generous rather than tuned. Reach stops paying well before this on
 	 * both corpora we have, and the room past that is deliberate: we
-	 * would rather the pre-pass folds a little too much than too little,
+	 * would rather the pre-pass inlines a little too much than too little,
 	 * and this is not tuned to the benchmarks in the tree. What bounds
 	 * the translation is the budget, in materialize_trivial_callees ().
 	 */

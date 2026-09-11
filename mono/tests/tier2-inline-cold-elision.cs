@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
  * translate its candidate under the ordinary IL limit instead of the cold
  * one, when the caller's own IR already shows the argument is a fresh
  * allocation still flowing toward erasure -- the IL gate bounds cost, and
- * should not be the thing deciding an elision fold a cost model, weighing an
+ * should not be the thing deciding an elision inline a cost model, weighing an
  * elision bonus worth far more than the cold budget, would otherwise take.
  *
  * The candidate is an instance method rather than a constructor: every
@@ -25,16 +25,16 @@ using System.Runtime.CompilerServices;
  * Each is called on a freshly constructed receiver at a cold site (never
  * taken during warm-up, so the site reads cold once Root () is promoted).
  * Kept's receiver has no other use for the caller-side scan to find --
- * carries_an_elision_candidate () answers true, and the fold should clear
+ * carries_an_elision_candidate () answers true, and the inline should clear
  * the cold budget on the bonus. Escaped's receiver is passed to a
- * NoInlining sink first, which call_wont_fold () marks a way out for the
+ * NoInlining sink first, which call_wont_inline () marks a way out for the
  * pointer -- the scan answers escapes, the check answers false, and Escaped
  * should still be refused at the flat 64-byte limit, same as before this
  * landed.
  *
- * What says a fold happened is the stack trace, the way tier2-inline-cost.cs
- * reads it: a folded body owns no code, so its frame reports the offset into
- * Root () it was folded at, and a body that was really called reports an
+ * What says an inline happened is the stack trace, the way tier2-inline-cost.cs
+ * reads it: an inlined body owns no code, so its frame reports the offset into
+ * Root () it was inlined at, and a body that was really called reports an
  * offset into itself.
  */
 
@@ -84,7 +84,7 @@ class Escaped {
 }
 
 static class Sink {
-	// NoInlining is what call_wont_fold () reads to call a pass-through a way
+	// NoInlining is what call_wont_inline () reads to call a pass-through a way
 	// out for the pointer -- see carries_an_elision_candidate ()'s own
 	// comment. The body does nothing; only the mark matters.
 	[MethodImpl (MethodImplOptions.NoInlining)]
@@ -94,7 +94,7 @@ static class Sink {
 }
 
 static class Program {
-	static bool sawKept, sawEscaped, foldedKept, foldedEscaped;
+	static bool sawKept, sawEscaped, inlinedKept, inlinedEscaped;
 
 	static bool RunsInsideRoot (Exception e, string type, string helper)
 	{
@@ -126,7 +126,7 @@ static class Program {
 				kept.Process (n, true);
 			} catch (InvalidOperationException e) {
 				sawKept = true;
-				foldedKept = RunsInsideRoot (e, "Kept", "Process");
+				inlinedKept = RunsInsideRoot (e, "Kept", "Process");
 			}
 
 			try {
@@ -135,7 +135,7 @@ static class Program {
 				escaped.Process (n, true);
 			} catch (InvalidOperationException e) {
 				sawEscaped = true;
-				foldedEscaped = RunsInsideRoot (e, "Escaped", "Process");
+				inlinedEscaped = RunsInsideRoot (e, "Escaped", "Process");
 			}
 		}
 
@@ -172,15 +172,15 @@ static class Program {
 			return 1;
 		}
 
-		sawKept = sawEscaped = foldedKept = foldedEscaped = false;
+		sawKept = sawEscaped = inlinedKept = inlinedEscaped = false;
 
 		Root (4, true);
 
 		Check (sawKept && sawEscaped, "both Process () calls threw at tier 2");
-		Check (foldedKept,
-			"a cold site whose fresh receiver stays unescaped folds under "
+		Check (inlinedKept,
+			"a cold site whose fresh receiver stays unescaped inlines under "
 			+ "the ordinary limit");
-		Check (!foldedEscaped,
+		Check (!inlinedEscaped,
 			"a cold site whose receiver escapes to a NoInlining sink keeps "
 			+ "the flat cold limit");
 

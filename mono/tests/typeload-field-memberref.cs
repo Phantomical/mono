@@ -42,8 +42,8 @@ static class Program {
 	/*
 	 * The compile of this method finds the class failure and makes the body
 	 * throw at entry, so the call below raises inside the try. NoInlining is
-	 * what keeps the site a call: may_fold () (mono/llvm/runtime/inline-scope.cpp)
-	 * refuses a callee that carries it.
+	 * what keeps the site a call: is_inlinable ()
+	 * (mono/llvm/runtime/inline-scope.cpp) refuses a callee that carries it.
 	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static void TouchOverlapped (Overlapped<int> bad)

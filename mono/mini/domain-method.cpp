@@ -69,9 +69,9 @@ MonoDomainMethod::publish (MonoTier tier, void *code, std::optional<uint32_t> ep
 	if (tier < tier_.load (std::memory_order_relaxed))
 		return false;
 
-	// A compile that started before a method it folded in was replaced carries
+	// A compile that started before a method it inlined was replaced carries
 	// a copy of the body that is gone.
-	if (epoch && *epoch != folds_epoch_.load (std::memory_order_relaxed))
+	if (epoch && *epoch != inlines_epoch_.load (std::memory_order_relaxed))
 		return false;
 
 	thunk.redirect (code);
@@ -219,12 +219,12 @@ MonoDomainMethod::install_detour (void *target)
 	publish (MonoTier::detoured, target);
 
 	/*
-	 * A compiled body that folded this method in holds a copy of it that sits
+	 * A compiled body that inlined this method holds a copy of it that sits
 	 * under no thunk, so the redirect above misses it. Outside publish () for
 	 * the same reason the interpreter's callback is: this reaches other records
 	 * through the domain's table, whose lock is outside a record's.
 	 */
-	drop_folded_bodies ();
+	drop_inlined_bodies ();
 
 	/*
 	 * The interpreter settles once whether it calls a method or interprets it,
@@ -237,22 +237,22 @@ MonoDomainMethod::install_detour (void *target)
 }
 
 void
-MonoDomainMethod::note_folded_into (MonoMethod *root)
+MonoDomainMethod::note_inlined_into (MonoMethod *root)
 {
 	std::lock_guard<std::mutex> held (lock_);
 
-	if (!llvm::is_contained (folded_into_, root))
-		folded_into_.push_back (root);
+	if (!llvm::is_contained (inlined_into_, root))
+		inlined_into_.push_back (root);
 }
 
 void
-MonoDomainMethod::unwind_folded_body ()
+MonoDomainMethod::unwind_inlined_body ()
 {
 	std::lock_guard<std::mutex> held (lock_);
 
 	// Before every return below: a compile reads the epoch as it starts and
 	// publishes only while it has not moved.
-	folds_epoch_.fetch_add (1, std::memory_order_acq_rel);
+	inlines_epoch_.fetch_add (1, std::memory_order_acq_rel);
 
 	// Nothing outranks a detour, and the native code behind one holds no copy
 	// of anything.
@@ -295,19 +295,19 @@ MonoDomainMethod::unwind_folded_body ()
 }
 
 void
-MonoDomainMethod::drop_folded_bodies ()
+MonoDomainMethod::drop_inlined_bodies ()
 {
 	llvm::SmallVector<MonoMethod *, 2> roots;
 
 	{
 		std::lock_guard<std::mutex> held (lock_);
 
-		roots = folded_into_;
+		roots = inlined_into_;
 	}
 
 	for (MonoMethod *root : roots)
 		if (MonoDomainMethod *dm = domain_method_find (domain, root))
-			dm->unwind_folded_body ();
+			dm->unwind_inlined_body ();
 }
 
 /*

@@ -209,7 +209,7 @@ TEST_F (NoWrapperIcall, BuildsNoRecordForTheIcall)
 	ASSERT_EQ (8, through_managed (1));
 
 	EXPECT_NE (nullptr, mono::domain_method_find (domain, managed))
-		<< "the control callee was folded in, so this case checks nothing";
+		<< "the control callee was inlined, so this case checks nothing";
 	EXPECT_EQ (nullptr, mono::domain_method_find (domain, icall))
 		<< "the icall was published as an entry rather than named as a C function";
 }
