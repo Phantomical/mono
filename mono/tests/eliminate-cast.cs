@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
+// This is the whole thing we're testing.
+#pragma warning disable CS0184
+
 /*
  * A type test the compiler answers from what the IR says about the operand.
  *
