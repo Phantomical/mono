@@ -289,6 +289,18 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 	if (copy == nullptr)
 		return nullptr;
 
+	/*
+	 * A shared body is entered with its context in a register and a call to it
+	 * is not, which is the one shape the copy and the declaration disagree on.
+	 * The link below moves the declaration's sites onto the copy, and a site
+	 * moved across that disagreement calls the copy on the wrong arguments.
+	 */
+	if (copy->getFunctionType () != decl.getFunctionType ()) {
+		trace_refusal (scope_, callee,
+		               "the copy takes a generic context the site does not pass");
+		return nullptr;
+	}
+
 	// What the candidate itself named. The pre-pass below resolves each body as
 	// it builds it, so the range here stays the candidate's own.
 	size_t own = externals_.size ();

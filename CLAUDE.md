@@ -1013,12 +1013,11 @@ the forwarder chain is refused too, because no inliner takes that call away. The
 the size limit's question, and `--llvm-opt=-mono-inline-il-limit` bounds it. A candidate
 must also pass gates that are about correctness rather than cost (`is_inlinable ()`,
 `runtime/inline-scope.cpp`): no dynamic method, no clauses, no `NoInlining`
-on the callee, no shared body, no call instrumentation, and nothing at all while
-`gen-seq-points` is on. A wrapper is not one of them, and folds like any other
-callee. It also refuses a callee something else owns the entry of: a
-detour or an override on the record, and an override the *table* holds
-(`get_method_override ()`), which is the one that catches a declared override before
-anything has asked for the method's record and installed it.
+on the callee, no call instrumentation, no detour on the record, and nothing at all
+while `gen-seq-points` is on. A wrapper is not one of them, and folds like any other
+callee. Neither is a shared body: what stops a fold there is the copy's own entry,
+which takes a generic context the site does not pass, and both inliners decline a
+copy whose type disagrees with the declaration the site calls through.
 
 **A host that starts the debugger agent turns every fold off.**
 `folding_off_for_seq_points ()` (`runtime/inline-scope.cpp`) is the gate both inliners
@@ -1162,7 +1161,8 @@ its own, and a stack walk over its frame finds nothing.
 no thunk, so redirecting the method's entry misses it. Each method's record names the
 methods that folded it in (`note_folded_into ()`), and `install_detour ()` takes each of
 those entries back to the lazy resolver it started at, so the next call compiles the
-method again and `is_inlinable ()` keeps the copy out. Both compiled tiers run the pre-pass,
+method again, and `is_inlinable ()` keeps a detoured method's copy out of that compile.
+Both compiled tiers run the pre-pass,
 so an earlier body is no safer than the newest one — that is why the entry goes back past
 all of them rather than down one tier. `mono/tests/tier2-inline-override.cs` holds both
 arms. A thread already inside such a body stays there, because no on-stack replacement

@@ -3,7 +3,6 @@
 #include "inline-scope.hpp"
 
 #include "domain-method.hpp"
-#include "method-override.hpp"
 #include "method-to-llvm/intrinsics.hpp"
 #include "naming.hpp"
 #include "options.hpp"
@@ -72,38 +71,21 @@ is_inlinable (MonoDomain *domain, MonoMethod *callee)
 	if ((callee->iflags & METHOD_IMPL_ATTRIBUTE_NOINLINING) != 0)
 		return false;
 
-	// A shared body is entered with a context this caller has no reason to
-	// hold. What is worth folding is the instantiation, and a site naming one
-	// is already a direct call.
-	if (mono_method_check_context_used (callee) != 0)
-		return false;
-
 	// The enter and leave events describe a frame, and a folded body has none.
 	if (mono_profiler_get_call_instrumentation_flags (callee) != 0)
 		return false;
 
 	/*
-	 * A declared override is installed the first time anything asks for the
-	 * method's record (domain_method_get ()), and a compile can reach the method
-	 * as a callee before that happens. So ask the table rather than the record:
-	 * folding the IL of a method something is about to replace bakes in the body
-	 * the replacement is there to remove.
-	 */
-	if (get_method_override (callee) != nullptr)
-		return false;
-
-	/*
-	 * Something else owns the entry, so a call to the method no longer runs the
-	 * IL this would copy: native code behind a detour, or the replacement behind
-	 * an override installed through the icall, which the table above does not
-	 * hold. Both cover a compile that starts after the install. A copy that
-	 * already stands is drop_folded_bodies ()'s to take down.
+	 * Native code behind a detour owns the entry, so a call to the method no
+	 * longer runs the IL this would copy. This covers a compile that starts
+	 * after the install. A copy that already stands is drop_folded_bodies ()'s
+	 * to take down.
 	 *
 	 * Last because it takes the domain's table lock, and every test above reads
 	 * a field.
 	 */
 	if (MonoDomainMethod *dm = domain_method_find (domain, callee))
-		if (dm->tier () == MonoTier::detoured || dm->override_method () != nullptr)
+		if (dm->tier () == MonoTier::detoured)
 			return false;
 
 	return true;

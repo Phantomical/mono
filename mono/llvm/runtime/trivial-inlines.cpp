@@ -511,14 +511,22 @@ materialize_trivial_callees (Module &module, MonoDomain *domain, MonoMethod *roo
 				continue;
 			}
 
+			/*
+			 * A shared body is entered with its context in a register
+			 * and a call to it is not, which is the one shape the copy
+			 * and the declaration disagree on. Redirecting the site
+			 * would run the copy on the wrong arguments, so leave the
+			 * call on the callee's thunk.
+			 */
+			if (copy->getFunctionType () != decl->getFunctionType ()) {
+				externals.resize (before);
+				copy->eraseFromParent ();
+				unresolved.insert (callee);
+				continue;
+			}
+
 			if (is_jit_trace_enabled ())
 				trace_inline (callee, caller_method);
-
-			// A shared body is entered with its context in a register,
-			// and a call to it is not -- the one shape these two
-			// disagree on. is_inlinable () refuses that callee, so a mismatch
-			// here means the copy would run with the wrong arguments.
-			g_assert (copy->getFunctionType () == decl->getFunctionType ());
 
 			redirect_calls (*caller_body, *decl, *copy);
 			advisor.charge (sites);
