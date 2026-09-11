@@ -8,7 +8,7 @@
  * behind it.
  */
 
-#include "passes/fold-cast.hpp"
+#include "passes/eliminate-cast.hpp"
 
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
@@ -76,7 +76,7 @@ struct MergeModule {
 	}
 };
 
-TEST (FoldCastTest, SettlesWhenEveryEdgeIsDecidedEvenIfTheyDisagree)
+TEST (EliminateCastTest, SettlesWhenEveryEdgeIsDecidedEvenIfTheyDisagree)
 {
 	MergeModule m;
 
@@ -85,7 +85,7 @@ TEST (FoldCastTest, SettlesWhenEveryEdgeIsDecidedEvenIfTheyDisagree)
 	}));
 }
 
-TEST (FoldCastTest, RefusesWhenOneEdgeIsUndecided)
+TEST (EliminateCastTest, RefusesWhenOneEdgeIsUndecided)
 {
 	MergeModule m;
 
@@ -94,7 +94,7 @@ TEST (FoldCastTest, RefusesWhenOneEdgeIsUndecided)
 	}));
 }
 
-TEST (FoldCastTest, RebuildRefusesWithOneUndecidedEdge)
+TEST (EliminateCastTest, RebuildRefusesWithOneUndecidedEdge)
 {
 	MergeModule m;
 
@@ -105,7 +105,7 @@ TEST (FoldCastTest, RebuildRefusesWithOneUndecidedEdge)
 	EXPECT_EQ (rebuilt, nullptr);
 }
 
-TEST (FoldCastTest, RebuildTakesTheOperandOnYesAndNullOnNo)
+TEST (EliminateCastTest, RebuildTakesTheOperandOnYesAndNullOnNo)
 {
 	MergeModule m;
 

@@ -16,7 +16,7 @@
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
 #include "runtime-error.hpp"
-#include "../passes/fold-delegate.hpp"
+#include "../passes/eliminate-delegate.hpp"
 
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"

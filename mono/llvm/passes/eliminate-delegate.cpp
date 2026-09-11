@@ -7,7 +7,7 @@
  * mapping are shared and only the emission forks.
  */
 
-#include "fold-delegate.hpp"
+#include "eliminate-delegate.hpp"
 
 #include "analysis/constant-values.hpp"
 #include "analysis/operand-class.hpp"
@@ -63,8 +63,8 @@ enum class Receiver {
 };
 
 /// How \p target takes the receiver of a delegate whose Invoke declares
-/// \p invoke_params parameters, or nothing where this is a shape the fold does
-/// not write.
+/// \p invoke_params parameters, or nothing where this is a shape the
+/// elimination does not write.
 ///
 /// mono_delegate_trampoline () settles the same question by the same counts
 /// (mini-trampolines.c). Both shapes left out have a parameter count that
@@ -245,8 +245,8 @@ call_entry (IRBuilderBase &b, CallBase &site, Function *entry, Receiver receiver
 }
 
 /// The entry \p site may enter \p named through, with the receiver shape that
-/// needs, or nothing where the site and the method are not a pair the fold
-/// writes.
+/// needs, or nothing where the site and the method are not a pair the
+/// elimination writes.
 std::optional<std::pair<Function *, Receiver>>
 entry_at (CallBase &site, MonoMethod *named, const CompileState &compile)
 {
@@ -513,7 +513,7 @@ can_name_methods ()
 
 	// The methods ride as pointers into this process. An offline run over a
 	// dumped module would read them as addresses of its own.
-	return compile.domain != nullptr && compile.publish && fold_delegates ();
+	return compile.domain != nullptr && compile.publish && eliminate_delegates ();
 }
 
 } // namespace
@@ -607,7 +607,7 @@ delegate_target_at (Value *receiver, const ConstantValues &values)
 }
 
 bool
-fold_delegate_invokes (Function &f, BlockFrequencyInfo &counts, const ConstantValues &values)
+eliminate_delegate_invokes (Function &f, BlockFrequencyInfo &counts, const ConstantValues &values)
 {
 	if (!can_name_methods ())
 		return false;
@@ -680,13 +680,13 @@ fold_delegate_invokes (Function &f, BlockFrequencyInfo &counts, const ConstantVa
 }
 
 PreservedAnalyses
-FoldDelegateInvokesPass::run (Function &f, FunctionAnalysisManager &fam)
+EliminateDelegateInvokesPass::run (Function &f, FunctionAnalysisManager &fam)
 {
 	BlockFrequencyInfo &counts = fam.getResult<BlockFrequencyAnalysis> (f);
 	const ConstantValues &values = fam.getResult<MonoMemoryValues> (f);
 
-	return fold_delegate_invokes (f, counts, values) ? PreservedAnalyses::none ()
-	                                                 : PreservedAnalyses::all ();
+	return eliminate_delegate_invokes (f, counts, values) ? PreservedAnalyses::none ()
+	                                                      : PreservedAnalyses::all ();
 }
 
 } // namespace mono

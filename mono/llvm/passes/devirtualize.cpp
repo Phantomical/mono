@@ -379,7 +379,7 @@ struct Reached {
 /// callee itself. GVN's partial-redundancy elimination puts a second copy of
 /// the site in the predecessor that lacked one and merges the two with a phi,
 /// so a call reads its callee off that phi. Two copies of one site name one
-/// method while being two values, which is why this folds over the sources.
+/// method while being two values, which is why this combines over the sources.
 std::optional<Reached>
 reached_target (Value *callee, const ConstantValues &values)
 {
@@ -433,7 +433,7 @@ indirect_calls (Function &f)
 } // namespace
 
 bool
-fold_dispatch_sites (Function &f, FunctionAnalysisManager &fam)
+eliminate_dispatch_sites (Function &f, FunctionAnalysisManager &fam)
 {
 	const CompileState &compile = current_compile ();
 
@@ -559,11 +559,11 @@ guarded_class (CallBase *site, const Function &f, const ConstantValues &values)
 	if (object == nullptr || site->getMetadata (guarded_md) != nullptr)
 		return nullptr;
 
-	// A class exact_class () answers needs no guard: fold_object_vtables ()
-	// replaces the read with that class's vtable, and the fold above takes the
-	// site from there. Asking it rather than reading `exact` below is what keeps
-	// the two in step, since it has a rule of its own for a bound on a sealed
-	// class.
+	// A class exact_class () answers needs no guard: eliminate_object_vtables ()
+	// replaces the read with that class's vtable, and the elimination above
+	// takes the site from there. Asking it rather than reading `exact` below is
+	// what keeps the two in step, since it has a rule of its own for a bound on
+	// a sealed class.
 	if (exact_class (object, f, values) != nullptr)
 		return nullptr;
 

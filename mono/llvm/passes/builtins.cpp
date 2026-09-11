@@ -6,9 +6,9 @@
 #include "array-shape.hpp"
 #include "cast-func.hpp"
 #include "devirtualize.hpp"
-#include "fold-barrier.hpp"
-#include "fold-cast.hpp"
-#include "fold-vtable.hpp"
+#include "eliminate-barrier.hpp"
+#include "eliminate-cast.hpp"
+#include "eliminate-vtable.hpp"
 #include "gc-barrier.hpp"
 #include "lower-builtins.hpp"
 #include "vtable-func.hpp"
@@ -25,13 +25,13 @@ using namespace llvm;
 namespace mono {
 namespace {
 
-/// Times the folds take up a function's sites again.
+/// Times the eliminations take up a function's sites again.
 ///
-/// One fold exposes another. A type test that settles a receiver's class
-/// settles the dispatch below it. A dispatch folded to a direct call hands the
-/// next round an operand it could not read. Each round walks the sites again,
-/// which is what this bounds.
-constexpr unsigned fold_rounds = 4;
+/// One elimination exposes another. A type test that settles a receiver's
+/// class settles the dispatch below it. A dispatch eliminated to a direct call
+/// hands the next round an operand it could not read. Each round walks the
+/// sites again, which is what this bounds.
+constexpr unsigned elimination_rounds = 4;
 
 SmallVector<CallBase *, 8>
 sites_of (Function *decl, const Function *inside)
@@ -94,28 +94,29 @@ MonoBuiltinConstProp::run (Function &f, FunctionAnalysisManager &fam)
 {
 	bool changed = false;
 
-	for (unsigned round = 0; round < fold_rounds; ++round) {
+	for (unsigned round = 0; round < elimination_rounds; ++round) {
 		// A round rewrites what the round before it read, so each one asks
-		// again rather than folding against a stale answer.
+		// again rather than answering against a stale answer.
 		if (changed)
 			fam.invalidate (f, PreservedAnalyses::none ());
 
-		// Type tests first: folding one is what delivers the allocation a
+		// Type tests first: eliminating one is what delivers the allocation a
 		// chain's receiver comes from.
-		bool again = fold_type_tests (f, fam);
+		bool again = eliminate_type_tests (f, fam);
 
-		again |= fold_object_vtables (f, fam);
-		again |= fold_vtable_fields (f, fam);
-		again |= fold_dispatch_sites (f, fam);
-		again |= fold_array_shapes (f, fam);
+		again |= eliminate_object_vtables (f, fam);
+		again |= eliminate_vtable_fields (f, fam);
+		again |= eliminate_dispatch_sites (f, fam);
+		again |= eliminate_array_shapes (f, fam);
 
 		/*
-		 * Placed with the folds, ahead of the post_optimization lowering,
-		 * which leaves a barrier as open code and a value copy as an icall.
-		 * A pass reads neither one back. This point sits behind SROA, which
-		 * is what settles the two pointers a value copy asks about.
+		 * Placed with the eliminations, ahead of the post_optimization
+		 * lowering, which leaves a barrier as open code and a value copy as
+		 * an icall. A pass reads neither one back. This point sits behind
+		 * SROA, which is what settles the two pointers a value copy asks
+		 * about.
 		 */
-		again |= fold_stack_barriers (f);
+		again |= eliminate_stack_barriers (f);
 		again |= open_value_copies (f);
 
 		if (!again)

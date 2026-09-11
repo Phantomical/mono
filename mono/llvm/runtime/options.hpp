@@ -112,19 +112,19 @@ std::chrono::milliseconds compile_worker_idle_timeout ();
 /// On by default.
 bool tier2_enabled ();
 
-/// Whether the type-test fold is on.
+/// Whether the type-test elimination is on.
 ///
 /// A false value leaves every cast for the lowering to write as the probe and
 /// the wrapper, which is what separates a wrong answer from a wrong probe. The
 /// translator writes the same IR either way, so the two arms differ in one pass.
-bool fold_casts ();
+bool eliminate_casts ();
 
-/// Whether the delegate-Invoke fold is on.
+/// Whether the delegate-Invoke elimination is on.
 ///
 /// A false value leaves every Invoke reading its entry off the delegate, which
-/// is the answer a fold has to agree with. The translator writes the same IR
-/// either way, so the two arms differ in one pass.
-bool fold_delegates ();
+/// is the answer an elimination has to agree with. The translator writes the
+/// same IR either way, so the two arms differ in one pass.
+bool eliminate_delegates ();
 
 /// Whether the backend writes a SIMD type's operations as vector IR instead of
 /// translating the managed body they are declared with.
@@ -274,7 +274,7 @@ uint32_t inline_depth_limit ();
 ///
 /// One leaves the inliner with the sites the method arrived with. An inline
 /// settles the receiver's class at a dispatch below it, which
-/// `fold_dispatch_sites ()` then replaces with a direct call - a site that was
+/// `eliminate_dispatch_sites ()` then replaces with a direct call - a site that was
 /// not there when the sites were first read, and one an interface dispatch
 /// reaches no other way.
 ///

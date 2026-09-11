@@ -887,7 +887,7 @@ TEST_F (TranslatorTest, OnlyAnOverridableCallvirtReadsTheVtable)
 	EXPECT_EQ (overridable.count ("Base:Virt"), 0u) << overridable.text ();
 
 	// The lookup is a mono.vtable.func call, which keeps the vtable and the slot
-	// as operands for fold_dispatch_sites () to read.
+	// as operands for eliminate_dispatch_sites () to read.
 	EXPECT_EQ (overridable.count ("@mono.vtable.func"), 1u) << overridable.text ();
 
 	ASSERT_NE (final_method.function, nullptr) << final_method.error;

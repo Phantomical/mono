@@ -1,4 +1,4 @@
-#include "static-const-fold.hpp"
+#include "eliminate-static-const.hpp"
 
 #include "analysis/operand-class.hpp"
 #include "class-init-warm.hpp"
@@ -127,7 +127,7 @@ ldstr_length_constant (const LoadInst &load)
 } // namespace
 
 PreservedAnalyses
-StaticConstFoldPass::run (Function &f, FunctionAnalysisManager &)
+EliminateStaticConstPass::run (Function &f, FunctionAnalysisManager &)
 {
 	if (current_compile ().domain == nullptr)
 		return PreservedAnalyses::all ();

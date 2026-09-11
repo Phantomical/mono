@@ -8,11 +8,11 @@
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init.hpp"
 #include "passes/class-init-warm.hpp"
-#include "passes/static-const-fold.hpp"
+#include "passes/eliminate-static-const.hpp"
 #include "passes/dead-alloc.hpp"
 #include "passes/dump-ir.hpp"
-#include "passes/fold-delegate-and-guard-dispatch.hpp"
-#include "passes/fold-empty-finally.hpp"
+#include "passes/eliminate-delegate-and-guard-dispatch.hpp"
+#include "passes/eliminate-empty-finally.hpp"
 #include "passes/inline-copies.hpp"
 #include "passes/lower-keepalive.hpp"
 #include "passes/profile-counter-promoter.hpp"
@@ -101,8 +101,8 @@ namespace {
  * an error at startup. The mono- prefix is what keeps this one off whatever
  * name LLVM itself might otherwise have taken.
  */
-llvm::cl::opt<bool> FoldEmptyFinally (
-	"mono-fold-empty-finally", llvm::cl::Hidden, llvm::cl::init (true),
+llvm::cl::opt<bool> EliminateEmptyFinally (
+	"mono-eliminate-empty-finally", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Erase a finally's body markers and thread-abort check "
 	                "once nothing survives between them"));
 
@@ -194,7 +194,7 @@ public:
 
 /// Sets CompileState::past_pgo_hash. Placed unconditionally, right after
 /// where PGOInstrumentationGen or PGOInstrumentationUse would run: with
-/// PTO.EnablePGO off there was never a hash for a fold behind this to move.
+/// PTO.EnablePGO off there was never a hash for an elimination behind this to move.
 class MarkPastPgoHashPass : public llvm::PassInfoMixin<MarkPastPgoHashPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Module &, llvm::ModuleAnalysisManager &)
@@ -408,7 +408,7 @@ MonoPassBuilder::buildCommonModuleSimplificationPipeline ()
 	MPM.addPass (mono::StripInlineCopiesPass ());
 
 	// What the method's own IL settled, in front of the simplification that
-	// then optimizes what a fold writes.
+	// then optimizes what an elimination writes.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::MonoBuiltinConstProp ()));
 
 	auto CommonFPM = buildCommonFunctionSimplificationPipeline ();
@@ -531,7 +531,7 @@ MonoPassBuilder::buildTier1Pipeline ()
 	// Beside ClassInitWarmPass rather than behind it: the two ask the domain
 	// about the same warm class for different reasons, and neither result
 	// depends on the other having run.
-	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::StaticConstFoldPass ()));
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::EliminateStaticConstPass ()));
 
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RgctxDedupPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RestoreTailPositionPass ()));
@@ -591,11 +591,11 @@ MonoPassBuilder::buildTier2SimplificationPipeline ()
 	// rather than the CFG, and both tiers' compiles of one method ask it long
 	// enough apart that only a check behind the hash can act on the answer.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitWarmPass ()));
-	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::StaticConstFoldPass ()));
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::EliminateStaticConstPass ()));
 
 	// Behind the counts for the same reason, and in front of the pipeline
 	// below, which then optimizes one fetch rather than several. It also
-	// folds away what the two passes above just made constant, which is why
+	// eliminates what the two passes above just made constant, which is why
 	// tier 1 needs no pass of its own for that: this pipeline runs it for
 	// tier 2 regardless.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::RgctxDedupPass ()));
@@ -620,12 +620,12 @@ MonoPassBuilder::buildTier2SimplificationPipeline ()
 	 * place.
 	 *
 	 * This function is also buildTier2MaterializePipeline (), so a candidate
-	 * the cost model materializes gets the same fold: one it leaves with no
-	 * markers of its own no longer trips has_own_clause ()
+	 * the cost model materializes gets the same elimination: one it leaves
+	 * with no markers of its own no longer trips has_own_clause ()
 	 * (top-down-inline.cpp) on that account.
 	 */
-	if (FoldEmptyFinally)
-		MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::FoldEmptyFinallyPass ()));
+	if (EliminateEmptyFinally)
+		MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::EliminateEmptyFinallyPass ()));
 
 	return MPM;
 }
@@ -650,10 +650,10 @@ MonoPassBuilder::buildTier2Pipeline ()
 	 * or a dispatch, which it can do nothing with.
 	 */
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
-		mono::FoldDelegateAndGuardDispatchPass ()));
+		mono::EliminateDelegateAndGuardDispatchPass ()));
 
 	/*
-	 * Both folds run again between the inliner's rounds. Most of what they
+	 * Both eliminations run again between the inliner's rounds. Most of what they
 	 * find there is not in the caller's own code: it arrives with an inline.
 	 * An inlined `MoveNext` or `get_Current` carries its own delegate calls and
 	 * array dispatches into the caller. Neither reached those sites before
@@ -662,7 +662,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 	 */
 	llvm::FunctionPassManager between;
 
-	between.addPass (mono::FoldDelegateAndGuardDispatchPass ());
+	between.addPass (mono::EliminateDelegateAndGuardDispatchPass ());
 	between.addPass (buildTier2FunctionSimplificationPipeline ());
 
 	MPM.addPass (mono::TopDownInlinerPass (*TM, buildTier2MaterializePipeline (),
@@ -680,7 +680,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 
 	/*
 	 * Behind the inliner and GuardDispatchPass, both of which read the vtable
-	 * and the slot straight off the call. Behind fold_type_tests () too, since
+	 * and the slot straight off the call. Behind eliminate_type_tests () too, since
 	 * TopDownInlinerPass already runs it on every root through its own
 	 * per-round simplification. A cast still standing here found no caller's
 	 * operand to answer it.
@@ -693,7 +693,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
 
 	/*
-	 * Behind both delegate-fold rounds, so a marker still here is one no
+	 * Behind both delegate-elimination rounds, so a marker still here is one no
 	 * round could settle. In front of the optimization pipeline below, whose
 	 * LoopVectorize refuses any loop still holding one - llvm.fake.use is
 	 * not on its short list of vectorizable intrinsics.
@@ -745,7 +745,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 	// the common pipeline left standing.
 	FPM.addPass (mono::ClassInitPass ());
 	FPM.addPass (mono::ClassInitWarmPass ());
-	FPM.addPass (mono::StaticConstFoldPass ());
+	FPM.addPass (mono::EliminateStaticConstPass ());
 	FPM.addPass (mono::RgctxDedupPass ());
 
 	// Last, because what it repairs is the pipeline's own doing.

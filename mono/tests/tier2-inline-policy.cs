@@ -71,7 +71,8 @@ static class Shapes {
 	/*
 	 * Allocates under a class it names and answers with the interface, which
 	 * the caller then dispatches on. Inlining it puts the vtable where the
-	 * caller's dispatch reads a pointer, so fold_dispatch_sites () can read it.
+	 * caller's dispatch reads a pointer, so eliminate_dispatch_sites () can
+	 * read it.
 	 */
 	public static IShape Make (int w, int h, bool yes)
 	{

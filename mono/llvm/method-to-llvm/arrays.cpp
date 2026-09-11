@@ -1200,8 +1200,8 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 	 * Both branches make an array of this class and no other. A proxy stands in
 	 * for no array, so this needs none of the guard emit_object_alloc () keeps.
 	 *
-	 * The mark is what lets fold_type_tests () answer a type test on a fresh
-	 * array. fold_object_vtables () reads it as well, which takes an interface
+	 * The mark is what lets eliminate_type_tests () answer a type test on a
+	 * fresh array. eliminate_object_vtables () reads it as well, which takes an interface
 	 * dispatch on one down to a direct call.
 	 */
 	if (auto *made = llvm::dyn_cast<llvm::Instruction> (created))

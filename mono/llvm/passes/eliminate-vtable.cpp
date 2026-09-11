@@ -1,4 +1,4 @@
-#include "fold-vtable.hpp"
+#include "eliminate-vtable.hpp"
 
 #include "analysis/constant-values.hpp"
 #include "analysis/operand-class.hpp"
@@ -41,7 +41,7 @@ field_of (StringRef name, const VTableInfo &info, Type *held)
 }
 
 bool
-fold_field (Function &f, StringRef name, FunctionAnalysisManager &fam)
+eliminate_field (Function &f, StringRef name, FunctionAnalysisManager &fam)
 {
 	bool changed = false;
 	const ConstantValues *values = nullptr;
@@ -72,7 +72,7 @@ fold_field (Function &f, StringRef name, FunctionAnalysisManager &fam)
 } // namespace
 
 bool
-fold_object_vtables (Function &f, FunctionAnalysisManager &fam)
+eliminate_object_vtables (Function &f, FunctionAnalysisManager &fam)
 {
 	const CompileState &compile = current_compile ();
 
@@ -114,13 +114,13 @@ fold_object_vtables (Function &f, FunctionAnalysisManager &fam)
 }
 
 bool
-fold_vtable_fields (Function &f, FunctionAnalysisManager &fam)
+eliminate_vtable_fields (Function &f, FunctionAnalysisManager &fam)
 {
-	bool changed = fold_field (f, vtable_klass_name, fam);
+	bool changed = eliminate_field (f, vtable_klass_name, fam);
 
-	changed |= fold_field (f, vtable_type_name, fam);
+	changed |= eliminate_field (f, vtable_type_name, fam);
 
-	return fold_field (f, vtable_rank_name, fam) || changed;
+	return eliminate_field (f, vtable_rank_name, fam) || changed;
 }
 
 } // namespace mono

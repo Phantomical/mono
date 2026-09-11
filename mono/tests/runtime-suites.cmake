@@ -869,12 +869,12 @@ mono_runtime_suite(runtime-tier2-cost-trigger-off TESTS ${_tier2_cost_trigger}
 # Entering a delegate's target directly. Two arms, on and off, the way
 # runtime-tier2-cost-trigger has it. The root drives its own compiles, so
 # self-promotion is off: what the test reads is the tier it asked for.
-_mono_exe_list(_delegate_fold ${MONO_TESTS_DELEGATE_FOLD_SRC})
-mono_runtime_suite(runtime-delegate-fold TESTS ${_delegate_fold}
+_mono_exe_list(_eliminate_delegate ${MONO_TESTS_ELIMINATE_DELEGATE_SRC})
+mono_runtime_suite(runtime-eliminate-delegate TESTS ${_eliminate_delegate}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0")
-mono_runtime_suite(runtime-delegate-fold-off TESTS ${_delegate_fold}
-                   ENV "MONO_FOLD_DELEGATES=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-fold-delegates=0")
+mono_runtime_suite(runtime-eliminate-delegate-off TESTS ${_eliminate_delegate}
+                   ENV "MONO_ELIMINATE_DELEGATES=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-eliminate-delegates=0")
 
 # Each SIMD operation is computed at tier 0 and at both compiled tiers, where
 # the backend's written body runs instead of tier 0's IL. The tier-1 and tier-2
@@ -941,7 +941,7 @@ mono_runtime_suite(runtime-tier2-inline-policy TESTS ${_tier2_inline_policy}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=110")
 mono_runtime_suite(runtime-tier2-inline-policy-off TESTS ${_tier2_inline_policy}
                    ENV "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=110 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-scalarize-arg-bonus=0 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false --llvm-opt=-mono-inline-noreturn-free=false")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=110 --llvm-opt=-mono-inline-devirt-return-bonus=0 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-scalarize-arg-bonus=0 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-eliminate-vtable-fields=false --llvm-opt=-mono-inline-noreturn-free=false")
 
 # The devirt-arg bonus's own two gates, too narrow for a caller-side shape
 # each. Two arms the same way, and the file says why it names a threshold of
@@ -1122,7 +1122,7 @@ mono_runtime_suite(runtime-tier2-inline-dispatch TESTS ${_tier2_inline_dispatch}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=256 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inline-cold-callsite-threshold=190")
 mono_runtime_suite(runtime-tier2-inline-dispatch-off TESTS ${_tier2_inline_dispatch}
                    ENV "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=256 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inline-cold-callsite-threshold=190 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-fold-vtable-fields=false --llvm-opt=-mono-inline-noreturn-free=false")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=256 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0 --llvm-opt=-mono-inline-cold-callsite-threshold=190 --llvm-opt=-mono-inline-dispatch-is-a-load=false --llvm-opt=-mono-inline-eliminate-vtable-fields=false --llvm-opt=-mono-inline-noreturn-free=false")
 
 # What the cost model answers about a type test over a parameter. The off arm
 # turns that answer off alone, so what it separates is the answered cascade. A

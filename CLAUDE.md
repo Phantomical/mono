@@ -460,26 +460,26 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   Left an environment variable rather than an `--llvm-opt`: a test names the method it
   wants recompiled, and the recompiled method's own name is what the substring matches,
   so there is nothing here a caller would reach for `--llvm-opt`'s registry to find.
-- `--llvm-opt=-mono-fold-casts=<0|false|empty>` (`runtime/options.cpp`) — turn the
-  type-test fold off, so every `isinst` and `castclass` is lowered to the probe and the
-  icall whatever the IR says about the operand. On by default. The translator writes the
-  same call either way, so the two arms differ in one pass, which is what separates a
-  wrong answer from a wrong probe. It is also the negative control for what the fold is
-  worth: on `linq-devirt`'s `LinqOne` at the wide inline gates, off gives 9 icalls in 932
-  lines and on gives 3 in 483.
-- `--llvm-opt=-mono-fold-delegates=<0|false|empty>` (`runtime/options.cpp`) — turn the
-  delegate-Invoke fold off, so every Invoke reads its entry off the delegate whatever the
-  IR says the delegate is. On by default, and tier 2 only. The translator writes the same
-  site either way, which is what separates a wrong target from a wrong dispatch. Two
-  producers name a target: a read of an initonly static names the object, so the call
-  becomes a direct one; the cache a C# compiler writes for a lambda or a method group
-  names a candidate, so the call becomes a compare against `MonoDelegate::method_ptr`
-  with the direct call on the arm that matches and today's dispatch on the arm that does
-  not. `method_ptr` rather than `method`, because an `ldvirtftn` delegate never writes
-  back the override it resolves and a combined delegate leaves `method_ptr` null, so a
-  match proves both. `mono/tests/delegate-fold.cs` gates it and carries the off arm,
-  reading the `MONO_FOLD_DELEGATES` environment variable the suite sets alongside the
-  flag to know which arm it is in.
+- `--llvm-opt=-mono-eliminate-casts=<0|false|empty>` (`runtime/options.cpp`) — turn the
+  type-test elimination off, so every `isinst` and `castclass` is lowered to the probe and
+  the icall whatever the IR says about the operand. On by default. The translator writes
+  the same call either way, so the two arms differ in one pass, which is what separates a
+  wrong answer from a wrong probe. It is also the negative control for what the
+  elimination is worth: on `linq-devirt`'s `LinqOne` at the wide inline gates, off gives 9
+  icalls in 932 lines and on gives 3 in 483.
+- `--llvm-opt=-mono-eliminate-delegates=<0|false|empty>` (`runtime/options.cpp`) — turn
+  the delegate-Invoke elimination off, so every Invoke reads its entry off the delegate
+  whatever the IR says the delegate is. On by default, and tier 2 only. The translator
+  writes the same site either way, which is what separates a wrong target from a wrong
+  dispatch. Two producers name a target: a read of an initonly static names the object,
+  so the call becomes a direct one; the cache a C# compiler writes for a lambda or a
+  method group names a candidate, so the call becomes a compare against
+  `MonoDelegate::method_ptr` with the direct call on the arm that matches and today's
+  dispatch on the arm that does not. `method_ptr` rather than `method`, because an
+  `ldvirtftn` delegate never writes back the override it resolves and a combined delegate
+  leaves `method_ptr` null, so a match proves both. `mono/tests/eliminate-delegate.cs`
+  gates it and carries the off arm, reading the `MONO_ELIMINATE_DELEGATES` environment
+  variable the suite sets alongside the flag to know which arm it is in.
 - `--llvm-opt=-mono-simd=<0|false|empty>` (`runtime/options.cpp`) — turn a SIMD
   type's operator lowering off, so a Mono.Simd, `Vector4` or `Vector<T>` operation
   runs its managed fallback body instead of the vector-IR row written for it. On
@@ -700,8 +700,8 @@ as well as by `amd64.hpp`, so it holds nothing but `#define`s.
   `arch/amd64/`, not a hunt through the backend for the amd64 in it.
 - **`passes/`** — `array-address`, `lower-builtins`, `cast-func` and `alloc-func` rewrite
   the symbolic calls the front end leaves standing. `restore-tail-position` puts back the tail position
-  SimplifyCFG merged away. `devirtualize` and `fold-cast` answer a site whose operands
-  the optimizer settled. `top-down-inline` is tier 2's cost model and `inline-copies`
+  SimplifyCFG merged away. `devirtualize` and `eliminate-cast` answer a site whose
+  operands the optimizer settled. `top-down-inline` is tier 2's cost model and `inline-copies`
   the sweep behind it. `eh-gather` and `finally-range` are `MachineFunctionPass`es that
   emit nothing and instead fill in the side channel the EH sections are written from.
 - **`analysis/`** — what a pass asks about the IR, answering rather than rewriting.
@@ -906,17 +906,17 @@ clause, so what the runtime holds does not grow with the calls.
 
 **A type test is one call until late.** `emit_cast ()` writes `mono.cast.isinst` or
 `mono.cast.castclass` carrying the class, the site's cache and the wrapper behind it, and
-`LowerCastFuncPass` writes the probe and the icall back for every site nothing answered.
-In between, `FoldCastPass` answers a site from what the IR says the operand is: an
-allocation states its class, and a parameter states the class its slot is declared with.
-A declared class is a bound, so an answer needs every class that slot admits to agree,
-and `cast_answer ()` (`passes/fold-cast.cpp`) is that rule, with the argument for each
-arm beside it. Two of them are worth knowing from outside, because both are places an
-obvious rule is wrong: an interface target can be answered no only for an array operand,
-since any subclass may implement an interface; and the single-inheritance
+`lower_type_tests ()` writes the probe and the icall back for every site nothing
+answered. In between, `MonoBuiltinConstProp` eliminates a site from what the IR says the
+operand is: an allocation states its class, and a parameter states the class its slot is
+declared with. A declared class is a bound, so an answer needs every class that slot
+admits to agree, and `cast_answer ()` (`passes/eliminate-cast.cpp`) is that rule, with the
+argument for each arm beside it. Two of them are worth knowing from outside, because both
+are places an obvious rule is wrong: an interface target can be answered no only for an
+array operand, since any subclass may implement an interface; and the single-inheritance
 argument that two unrelated classes share no instance does not reach arrays, because
-covariance puts `Derived[]` under both `Base[]` and `IMarker[]`. `mono/tests/cast-fold.cs`
-gates both.
+covariance puts `Derived[]` under both `Base[]` and `IMarker[]`.
+`mono/tests/eliminate-cast.cs` gates both.
 
 **An allocation is one call until late as well.** `emit_object_alloc ()` and
 `emit_vector_alloc ()` write `mono.alloc.object` or `mono.alloc.vector` carrying the
@@ -971,7 +971,8 @@ covariance puts a `Derived[]` in a `Base[]` slot whenever the program uses one a
 compare would miss. `float[]`, `double[]` and an array of an ordinary struct are left
 dispatching because reaching one with another class needs an enum over a type II.14.3
 does not admit. This loader takes such an enum without complaint, which is why
-`exact_class ()` still refuses every array and no unguarded fold reaches those either.
+`exact_class ()` still refuses every array and no unguarded elimination reaches those
+either.
 
 CoreCLR draws the same line from the other side. It rejects the enum at load
 (`MethodTableBuilder::SetupMethodTable2`) and still refuses to call any array with a

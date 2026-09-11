@@ -4,22 +4,23 @@ using System.Runtime.CompilerServices;
 
 /*
  * Correctness for a finally that ends up with nothing between its body
- * markers: FoldEmptyFinallyPass (mono/llvm/passes/fold-empty-finally.cpp)
+ * markers: EliminateEmptyFinallyPass (mono/llvm/passes/eliminate-empty-finally.cpp)
  * drops the markers and the thread-abort check built around them once it
  * proves that.
  *
  * PlainLeave (), ExceptionUnwind () and Nested () use a literally empty
- * `finally { }`, which the front end gives no IL of its own - the fold's
+ * `finally { }`, which the front end gives no IL of its own - the elimination's
  * simplest input. DeadStore ()'s finally has IL, but writes a local nothing
- * reads, so the fold only sees an empty body once the pipeline's own
+ * reads, so the elimination only sees an empty body once the pipeline's own
  * simplification has removed that store.
  *
- * Whether the fold actually fired is not something a method's answer can
- * show: an empty finally behaves the same either way. fold-empty-finally-
- * tests.cpp checks that removal directly, against hand-built IR. What this
- * file exercises instead is the CFG surgery around a real compiled
- * try/finally/catch, at both tiers, with whatever debug and sequence-point
- * markers a real compile adds that a hand-built module does not.
+ * Whether the elimination actually fired is not something a method's answer
+ * can show: an empty finally behaves the same either way.
+ * eliminate-empty-finally-tests.cpp checks that removal directly, against
+ * hand-built IR. What this file exercises instead is the CFG surgery around a
+ * real compiled try/finally/catch, at both tiers, with whatever debug and
+ * sequence-point markers a real compile adds that a hand-built module does
+ * not.
  */
 
 namespace Mono.Tiering {

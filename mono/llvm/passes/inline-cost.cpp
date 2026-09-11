@@ -636,7 +636,7 @@ class InlineCostCallAnalyzer final : public CallAnalyzer {
   const InlineParams &Params;
 
   /// Getter for the caller's settled values, off the same walk
-  /// FoldDelegateInvokesPass reads. Only updateThreshold ()'s call into
+  /// EliminateDelegateInvokesPass reads. Only updateThreshold ()'s call into
   /// mono::call_site_bonus () reads this, and nothing upstream does.
   function_ref<ConstantValues &(Function &)> GetConstantValues;
 
@@ -2345,7 +2345,7 @@ bool CallAnalyzer::visitCmpInst(CmpInst &I) {
   // If the comparison is an equality comparison with null, we can simplify it
   // if we know the value (argument) can't be null
   if (I.isEquality() && isa<ConstantPointerNull>(I.getOperand(1))) {
-    // folded_type_test ()'s Yes answer substitutes a call's own operand for
+    // eliminated_type_test ()'s Yes answer substitutes a call's own operand for
     // the call, so isKnownNonNullInCallee () needs Settled to see through
     // it. Try I.getOperand (0) too: on a formal argument used directly,
     // Settled instead resolves to the caller's own operand, which carries no
@@ -2464,7 +2464,7 @@ bool CallAnalyzer::visitLoad(LoadInst &I) {
   // carries, and that is one step no other simplification here takes. It goes
   // in front of the SROA question, which otherwise consumes the load.
   auto Settled = [this](Value *V) { return getSimplifiedValueUnchecked(V); };
-  if (Value *Held = mono::folded_object_vtable(I, Settled)) {
+  if (Value *Held = mono::eliminated_object_vtable(I, Settled)) {
     SimplifiedValues[&I] = Held;
     return true;
   }
@@ -2642,14 +2642,14 @@ bool CallAnalyzer::visitCallBase(CallBase &Call) {
   // A type test mono writes as a call, which the class this site settled its
   // operand to can answer. The branch behind it then settles as well.
   auto Settled = [this](Value *V) { return getSimplifiedValueUnchecked(V); };
-  if (Value *Answer = mono::folded_type_test(Call, Settled)) {
+  if (Value *Answer = mono::eliminated_type_test(Call, Settled)) {
     SimplifiedValues[&Call] = Answer;
     return true;
   }
 
   // A read off a vtable mono writes as a call. The walk has the vtable symbol
   // this site passes, and the facts beside that symbol answer what is read.
-  if (Value *Held = mono::folded_vtable_read(Call, Settled)) {
+  if (Value *Held = mono::eliminated_vtable_read(Call, Settled)) {
     SimplifiedValues[&Call] = Held;
     return true;
   }

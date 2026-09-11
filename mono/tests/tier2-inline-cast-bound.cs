@@ -5,8 +5,8 @@ using System.Runtime.CompilerServices;
 
 /*
  * A type test whose declaring function takes a wider bound than any one
- * caller's own argument type. fold_type_tests () answers what a candidate's
- * own declared parameter settles, when the tier-2 inliner materializes it
+ * caller's own argument type. eliminate_type_tests () answers what a
+ * candidate's own declared parameter settles, when the tier-2 inliner materializes it
  * standalone for costing. A caller's narrower bound answers the rest, once
  * the candidate is inlined and the caller's own compile reaches the copy
  * again.

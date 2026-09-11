@@ -10,8 +10,8 @@ using System.Runtime.Remoting.Proxies;
  * What typeof (T) and object.GetType () answer, over the shapes the generated
  * code either answers itself or leaves to the runtime.
  *
- * The compiled tiers fold typeof (T) into the address of the System.Type the
- * domain holds, and read GetType () out of the receiver's vtable. The
+ * The compiled tiers eliminate typeof (T) into the address of the System.Type
+ * the domain holds, and read GetType () out of the receiver's vtable. The
  * interpreter answers both without a call as well. So what these cases pin is
  * that the three engines agree, and that one type has one object however a
  * site reaches it.
@@ -79,7 +79,7 @@ static class Program {
 	/* The constrained. spelling, which a generic parameter reaches GetType through. */
 	[MethodImpl (MethodImplOptions.NoInlining)] static Type TypeOfParam<T> (T t) { return t.GetType (); }
 
-	/* The handle by itself, which no call follows and no fold takes. */
+	/* The handle by itself, which no call follows and no elimination takes. */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static RuntimeTypeHandle HandleOfBase () { return typeof (Base).TypeHandle; }
 

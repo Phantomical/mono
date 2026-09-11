@@ -100,9 +100,9 @@ struct AllocModule {
 		b.CreateCall (gc_barrier_decl (*module, GcBarrierLayout ()), { address, value });
 	}
 
-	/// Copies a value type into the field of \p object at \p offset, as the fold
-	/// leaves such a copy where the destination is a frame slot. A copy in the
-	/// open owes no cards, so no barrier stands beside it.
+	/// Copies a value type into the field of \p object at \p offset, as the
+	/// elimination leaves such a copy where the destination is a frame slot.
+	/// A copy in the open owes no cards, so no barrier stands beside it.
 	void copy_into (Value *object, unsigned offset, Value *source,
 	                bool is_volatile = false)
 	{
@@ -110,8 +110,8 @@ struct AllocModule {
 		                b.getInt64 (copied_bytes), is_volatile);
 	}
 
-	/// The one call a value copy is where the fold leaves it standing, which is
-	/// every destination the IR does not settle to a frame slot.
+	/// The one call a value copy is where the elimination leaves it standing,
+	/// which is every destination the IR does not settle to a frame slot.
 	void value_copy (Value *dest, Value *source)
 	{
 		b.CreateCall (gc_value_copy_decl (*module, GcBarrierLayout ()),
@@ -280,8 +280,8 @@ TEST (DeadAllocTest, AnObjectDiesWithTheObjectThatHeldIt)
 	EXPECT_EQ (m.barriers (), 0u) << m.text ();
 }
 
-// A copy the fold opened writes into the object, which is the same user as a
-// store.
+// A copy the elimination opened writes into the object, which is the same
+// user as a store.
 TEST (DeadAllocTest, AnObjectAnOpenCopyFilledGoesWithTheCopy)
 {
 	AllocModule m;
@@ -341,8 +341,8 @@ TEST (DeadAllocTest, AVolatileCopyKeepsTheObject)
 	EXPECT_EQ (m.copies (), 1u) << m.text ();
 }
 
-// A value copy the fold left standing writes into the object, which is the same
-// user as a store with its barrier.
+// A value copy the elimination left standing writes into the object, which is
+// the same user as a store with its barrier.
 TEST (DeadAllocTest, AnObjectAValueCopyWroteIntoGoesWithTheCopy)
 {
 	AllocModule m;

@@ -5,10 +5,10 @@ using System.Runtime.CompilerServices;
  * What a copy of a value type that holds references must not change.
  *
  * The translator writes such a copy as `mono.gc.wbarrier.value.copy`, which
- * lowers to the collector's own copy-and-mark icall. A fold replaces that call
- * with a bare memcpy where the IR settles the destination to a frame slot, which
- * owes no card. No C# producer reaches the fold yet, so every copy below runs
- * through the icall.
+ * lowers to the collector's own copy-and-mark icall. An elimination replaces
+ * that call with a bare memcpy where the IR settles the destination to a
+ * frame slot, which owes no card. No C# producer reaches the elimination yet,
+ * so every copy below runs through the icall.
  *
  * Two things have to hold, and the steps below split them.
  *

@@ -662,10 +662,11 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 
 	/*
 	 * Without a compile in scope, current_compile ().domain is null, and
-	 * fold_dispatch_sites (), fold_object_vtables () and initonly_static_read ()
-	 * all leave their site alone. This is where nearly every tier-1 compile
-	 * happens. Without the closures below, a tier-1 body and a tier-2 compile
-	 * of the same method can fold different sites and hash different CFGs.
+	 * eliminate_dispatch_sites (), eliminate_object_vtables () and
+	 * initonly_static_read () all leave their site alone. This is where
+	 * nearly every tier-1 compile happens. Without the closures below, a
+	 * tier-1 body and a tier-2 compile of the same method can eliminate
+	 * different sites and hash different CFGs.
 	 *
 	 * One pair of closures serves the whole batch. publish_callee closes over
 	 * only the domain (see member->publish_callee above), so it answers the

@@ -4,8 +4,9 @@ using System;
  * What a compile reads off a class's vtable when the IR already names it.
  *
  * Every case here asserts the value rather than the shape, so it fails on a
- * wrong fold and not on a missing one. Each receiver is a fresh allocation, so
- * the vtable store in front of the read names the class and the reads fold.
+ * wrong elimination and not on a missing one. Each receiver is a fresh
+ * allocation, so the vtable store in front of the read names the class and
+ * the reads eliminate.
  */
 
 class Shape {
@@ -42,7 +43,7 @@ sealed class SealedCrate<T> : Box<T> {
 	public override int Sides () { return 12; }
 }
 
-class VTableFold {
+class VTableEliminate {
 	static int failures;
 
 	// Declared as the base, so only the object the initializer put here settles

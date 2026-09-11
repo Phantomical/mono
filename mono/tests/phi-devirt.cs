@@ -4,20 +4,20 @@ using System.Runtime.CompilerServices;
 
 /*
  * A virtual dispatch through a merged receiver -- a phi or a select -- can
- * fold to a direct call. It folds only where exact_class () and
+ * eliminate to a direct call. It eliminates only where exact_class () and
  * operand_class () answer one class for the receiver, and it falls back to an
  * ordinary dispatch everywhere else.
  *
  * The receiver in each case below is a value two or more paths write. Each
  * case gates one rule the merge walk must get right:
- *   - agreement folds;
+ *   - agreement eliminates;
  *   - a disagreement must not;
  *   - a value carried around a loop must not misread the loop;
  *   - a null arm must never make the walk answer some class for a null;
  *   - an allocation that reaches a protected region through inlining, and so
  *     loses the mark that names its class, must still answer that class.
  *
- * A wrong fold here is not a slower answer. It is a wrong one. Narrow and
+ * A wrong elimination here is not a slower answer. It is a wrong one. Narrow and
  * Wide read a different number of fields, so a dispatch to the wrong
  * override reads whatever memory lies past the shorter object.
  *
@@ -80,8 +80,8 @@ public static class Program {
 	}
 
 	// Two allocations of different classes. The merge must not answer either
-	// one, because a fold that guesses wrong calls the wrong override on
-	// whichever arm it misses.
+	// one, because an elimination that guesses wrong calls the wrong override
+	// on whichever arm it misses.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int DifferentClasses (bool pickNarrow)
 	{
@@ -132,7 +132,7 @@ public static class Program {
 
 	/*
 	 * MakeNarrow ()'s own translation marks its allocation with an exact
-	 * class, because nothing in MakeNarrow () itself is protected. Folding
+	 * class, because nothing in MakeNarrow () itself is protected. Inlining
 	 * MakeNarrow ()'s body in here moves that allocation inside this try
 	 * block, and the call to MakeNarrow () was already an invoke because it
 	 * sits in a protected region - so InlineFunction () rewrites the

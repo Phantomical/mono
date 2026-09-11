@@ -14,8 +14,8 @@
  * delegate's own entry with the direct call on the arm that matches.
  */
 
-#ifndef MONO_LLVM_PASSES_FOLD_DELEGATE_HPP
-#define MONO_LLVM_PASSES_FOLD_DELEGATE_HPP
+#ifndef MONO_LLVM_PASSES_ELIMINATE_DELEGATE_HPP
+#define MONO_LLVM_PASSES_ELIMINATE_DELEGATE_HPP
 
 #include <llvm/IR/PassManager.h>
 
@@ -90,24 +90,24 @@ bool reads_callee_off_delegate (const llvm::CallBase &site);
 /// own entry, with the original dispatch on the arm that does not match.
 ///
 /// Tier 2 only, and behind the pass that reads the profile. Two things put it
-/// there. A guard is blocks the CFG tier 1 hashed does not have. And the fold
-/// needs current_compile () to name a method at all, which a tier-1 compile has
-/// only when its batch holds one method - so at tier 1 whether a site folds
-/// turns on how many methods promoted together rather than on the IR, and a
-/// tier 2 that folded where tier 1 could not loses the counts.
+/// there. A guard is blocks the CFG tier 1 hashed does not have. And the
+/// elimination needs current_compile () to name a method at all, which a tier-1
+/// compile has only when its batch holds one method - so at tier 1 whether a
+/// site eliminates turns on how many methods promoted together rather than on
+/// the IR, and a tier 2 that eliminated where tier 1 could not loses the counts.
 ///
 /// \p counts and \p values are read rather than fetched, so a caller running
 /// this beside another pass that reads the same two can solve them once.
 /// Says whether it changed anything.
-bool fold_delegate_invokes (llvm::Function &f, llvm::BlockFrequencyInfo &counts,
-                            const ConstantValues &values);
+bool eliminate_delegate_invokes (llvm::Function &f, llvm::BlockFrequencyInfo &counts,
+                                 const ConstantValues &values);
 
-/// FoldDelegateInvokesPass on its own: fetches \p counts and \p values
-/// through \p fam and calls fold_delegate_invokes ().
-/// FoldDelegateAndGuardDispatchPass (fold-delegate-and-guard-dispatch.hpp) is
+/// EliminateDelegateInvokesPass on its own: fetches \p counts and \p values
+/// through \p fam and calls eliminate_delegate_invokes ().
+/// EliminateDelegateAndGuardDispatchPass (eliminate-delegate-and-guard-dispatch.hpp) is
 /// what the pipeline runs instead, because it never runs this without
 /// GuardDispatchPass beside it.
-class FoldDelegateInvokesPass : public llvm::PassInfoMixin<FoldDelegateInvokesPass> {
+class EliminateDelegateInvokesPass : public llvm::PassInfoMixin<EliminateDelegateInvokesPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 };

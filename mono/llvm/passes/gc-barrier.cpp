@@ -307,8 +307,8 @@ lower_helper (CallInst *site)
  * reading the destination in between.
  *
  * The site carries the class the icall wants, because only the front end can
- * name it. size rides beside it for the fold, which cannot ask a class its
- * width.
+ * name it. size rides beside it for the elimination, which cannot ask a
+ * class its width.
  */
 void
 lower_value_copy (CallInst *site)

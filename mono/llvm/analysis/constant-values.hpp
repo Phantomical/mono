@@ -199,7 +199,7 @@ public:
 /// the instructions that touch memory. A store forwards to a load only
 /// where both settle to the same (base, constant offset) pair, with no
 /// alias query anywhere: that is what trades the precision one would
-/// answer for not asking one. `top-down-inline.cpp`, `fold-delegate.cpp`
+/// answer for not asking one. `top-down-inline.cpp`, `eliminate-delegate.cpp`
 /// and `devirtualize.cpp` ask for this, and each runs at tier 2 alone.
 /// Everything else takes `MonoConstantValues`.
 class MonoMemoryValues : public llvm::AnalysisInfoMixin<MonoMemoryValues> {

@@ -4,8 +4,8 @@
  * nothing left in it to protect.
  */
 
-#ifndef MONO_LLVM_PASSES_FOLD_EMPTY_FINALLY_HPP
-#define MONO_LLVM_PASSES_FOLD_EMPTY_FINALLY_HPP
+#ifndef MONO_LLVM_PASSES_ELIMINATE_EMPTY_FINALLY_HPP
+#define MONO_LLVM_PASSES_ELIMINATE_EMPTY_FINALLY_HPP
 
 #include <llvm/IR/PassManager.h>
 
@@ -17,7 +17,7 @@ namespace mono {
 ///
 /// Run this behind the simplification pipeline that gives a finally's own
 /// effects their chance to prove dead.
-class FoldEmptyFinallyPass : public llvm::PassInfoMixin<FoldEmptyFinallyPass> {
+class EliminateEmptyFinallyPass : public llvm::PassInfoMixin<EliminateEmptyFinallyPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 };

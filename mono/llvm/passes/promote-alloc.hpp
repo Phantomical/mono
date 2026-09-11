@@ -34,7 +34,7 @@ constexpr uint64_t promote_alloc_limit = 1024;
 ///
 /// What this buys is the passes behind it. SROA reaches an alloca and never an
 /// allocation, so the fields become registers and the stores that fill them go
-/// with the reads. `fold_stack_barriers ()` (`passes/fold-barrier.hpp`) takes
+/// with the reads. `eliminate_stack_barriers ()` (`passes/eliminate-barrier.hpp`) takes
 /// the write barriers, because a frame slot owes no card.
 ///
 /// Four things keep an allocation on the heap. A `.kept` form says the program

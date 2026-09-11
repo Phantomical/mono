@@ -8,8 +8,8 @@
  * becomes the operand or null.
  */
 
-#ifndef MONO_LLVM_PASSES_FOLD_CAST_HPP
-#define MONO_LLVM_PASSES_FOLD_CAST_HPP
+#ifndef MONO_LLVM_PASSES_ELIMINATE_CAST_HPP
+#define MONO_LLVM_PASSES_ELIMINATE_CAST_HPP
 
 #include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/IR/PassManager.h>
@@ -52,7 +52,7 @@ llvm::Value *rebuild_isinst_over_incoming (
 
 /// Replaces each type test in \p f that the operand's own class decides with
 /// the value it stands for. Says whether it changed anything.
-bool fold_type_tests (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+bool eliminate_type_tests (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
 } // namespace mono
 

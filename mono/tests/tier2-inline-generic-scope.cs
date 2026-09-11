@@ -21,7 +21,7 @@ using System.Runtime.CompilerServices;
  * is_inlinable () read the callee alone, so materialize () treats this exactly
  * like a closed root's call to a canonically-shared callee. It translates a
  * copy against Helper<int>.IsInt's own exact instantiation. typeof (U) then
- * folds to a constant with no RGCTX fetch behind it.
+ * eliminates to a constant with no RGCTX fetch behind it.
  *
  * Box<T>.UseOpen is the same shared root calling Helper<T>.IsInt instead,
  * naming UseOpen's own open T. Substitution cannot close that one - T is

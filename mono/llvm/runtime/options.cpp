@@ -102,13 +102,13 @@ tier0_classic_setting ()
 	return setting;
 }
 
-llvm::cl::opt<bool> FoldCastsOpt (
-	"mono-fold-casts", llvm::cl::Hidden, llvm::cl::init (true),
+llvm::cl::opt<bool> EliminateCastsOpt (
+	"mono-eliminate-casts", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Answer a type test the translator can settle without a probe"));
 
-llvm::cl::opt<bool> FoldDelegatesOpt (
-	"mono-fold-delegates", llvm::cl::Hidden, llvm::cl::init (true),
-	llvm::cl::desc ("Fold a delegate Invoke whose target the translator can name"));
+llvm::cl::opt<bool> EliminateDelegatesOpt (
+	"mono-eliminate-delegates", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Eliminate a delegate Invoke whose target the translator can name"));
 
 llvm::cl::opt<bool> SimdLoweringOpt (
 	"mono-simd", llvm::cl::Hidden, llvm::cl::init (true),
@@ -395,15 +395,15 @@ tier2_enabled ()
 }
 
 bool
-fold_casts ()
+eliminate_casts ()
 {
-	return FoldCastsOpt;
+	return EliminateCastsOpt;
 }
 
 bool
-fold_delegates ()
+eliminate_delegates ()
 {
-	return FoldDelegatesOpt;
+	return EliminateDelegatesOpt;
 }
 
 bool

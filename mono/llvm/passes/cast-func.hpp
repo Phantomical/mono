@@ -4,7 +4,7 @@
  *
  * A cast expanded into a cache probe and an icall says nothing a later pass can
  * act on. Written as a call it keeps the class the test names as an operand,
- * which is the form fold_type_tests () decides once the operand's own class is
+ * which is the form eliminate_type_tests () decides once the operand's own class is
  * settled.
  */
 

@@ -8,7 +8,7 @@
  * agree, and the arguments that a set agrees are what each arm carries.
  */
 
-#include "fold-cast.hpp"
+#include "eliminate-cast.hpp"
 
 #include "analysis/constant-values.hpp"
 #include "analysis/operand-class.hpp"
@@ -156,8 +156,8 @@ rebuild_isinst_over_incoming (PHINode &phi, function_ref<CastAnswer (Value *)> a
 	auto *rebuilt = PHINode::Create (phi.getType (), n, "isinst_merge", phi.getIterator ());
 
 	// A "no" edge takes null rather than being dropped, which is what lets a
-	// later jump-threading pass split the merge and fold each cascade
-	// against its own class.
+	// later jump-threading pass split the merge and eliminate each cascade's
+	// test against its own class.
 	for (unsigned i = 0; i < n; i++) {
 		Value *edge = answer (phi.getIncomingValue (i)) == CastAnswer::Yes
 			? phi.getIncomingValue (i)
@@ -195,8 +195,8 @@ answer_with (CallBase *site, Value *value)
  * How a test against \p target comes out for every value \p v can be.
  *
  * The answer is settled only where every value reaching \p v agrees. Two of
- * them can name two classes and still agree, which is why this folds the answer
- * over the sources rather than reading the one class they settle to.
+ * them can name two classes and still agree, which is why this combines the
+ * answer over the sources rather than reading the one class they settle to.
  *
  * A null source agrees with either answer, because both rewrites leave null
  * where the operand is null.
@@ -240,10 +240,10 @@ tested_class (const CallBase *site, const ConstantValues &values)
 	return global != nullptr ? get_class (*global) : nullptr;
 }
 
-/// Folds what it can of the sites in \p f that call the declaration \p name.
+/// Eliminates what it can of the sites in \p f that call the declaration \p name.
 bool
-fold_sites (Function &f, StringRef name, bool throw_on_fail,
-            FunctionAnalysisManager &fam)
+eliminate_sites (Function &f, StringRef name, bool throw_on_fail,
+                FunctionAnalysisManager &fam)
 {
 	bool changed = false;
 	const ConstantValues *values = nullptr;
@@ -298,16 +298,16 @@ fold_sites (Function &f, StringRef name, bool throw_on_fail,
 } // namespace
 
 bool
-fold_type_tests (Function &f, FunctionAnalysisManager &fam)
+eliminate_type_tests (Function &f, FunctionAnalysisManager &fam)
 {
 	// The classes ride as pointers into this process. An offline run over a
 	// dumped module would read them as addresses of its own.
-	if (current_compile ().domain == nullptr || !fold_casts ())
+	if (current_compile ().domain == nullptr || !eliminate_casts ())
 		return false;
 
-	bool changed = fold_sites (f, cast_isinst_name, false, fam);
+	bool changed = eliminate_sites (f, cast_isinst_name, false, fam);
 
-	return fold_sites (f, cast_castclass_name, true, fam) || changed;
+	return eliminate_sites (f, cast_castclass_name, true, fam) || changed;
 }
 
 } // namespace mono

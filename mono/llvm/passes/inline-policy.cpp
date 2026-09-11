@@ -6,8 +6,8 @@
 #include "analysis/vtable-info.hpp"
 #include "cast-func.hpp"
 #include "compile-state.hpp"
-#include "fold-cast.hpp"
-#include "fold-delegate.hpp"
+#include "eliminate-cast.hpp"
+#include "eliminate-delegate.hpp"
 #include "method-symbols.hpp"
 #include "tier-counter.hpp"
 #include "vtable-func.hpp"
@@ -60,10 +60,10 @@ cl::opt<bool> DispatchIsALoad (
 	cl::desc ("Price a dispatch read as the load it lowers to rather than as a "
 	          "call"));
 
-cl::opt<bool> FoldVTableFields (
-	"mono-inline-fold-vtable-fields", cl::Hidden, cl::init (true),
-	cl::desc ("Fold a read of the class, type or rank off a vtable the call site "
-	          "settled"));
+cl::opt<bool> EliminateVTableFields (
+	"mono-inline-eliminate-vtable-fields", cl::Hidden, cl::init (true),
+	cl::desc ("Eliminate a read of the class, type or rank off a vtable the call "
+	          "site settled"));
 
 cl::opt<bool> AnswerTypeTests (
 	"mono-inline-answer-casts", cl::Hidden, cl::init (true),
@@ -72,9 +72,9 @@ cl::opt<bool> AnswerTypeTests (
 
 /*
  * Each bonus below counts the calls an inline removes, times what the model
- * charges for one call. A dispatch fold_dispatch_sites () then resolves becomes a
- * direct call the simplification behind the inliner can inline again, and an
- * allocation SROA scalarizes takes its allocator call with it.
+ * charges for one call. A dispatch eliminate_dispatch_sites () then resolves
+ * becomes a direct call the simplification behind the inliner can inline
+ * again, and an allocation SROA scalarizes takes its allocator call with it.
  *
  * `mono-inline-call-penalty` sets that per-call charge, so a change to it
  * rescales every bonus here.
@@ -377,7 +377,7 @@ reads_the_vtable_of (const Value *vtable, const Value *dispatched_on)
 /// \p object's own class.
 ///
 /// Every vtable read is one of three declarations, and a type test is two
-/// more. `folded_type_test ()` answers a test only once the class arrives, so
+/// more. `eliminated_type_test ()` answers a test only once the class arrives, so
 /// until then it is exactly as opaque as a dispatch.
 bool
 dispatches_unresolved_on (const Value *object, const Function &f)
@@ -449,7 +449,7 @@ invokes_unresolved_on (const Value *object, const Function &f)
 ///
 /// `store_object_vtable ()` writes that word once, behind an allocation nothing
 /// else holds yet, so a read of it anywhere below gives what the store put
-/// there. That is the same fact `fold_dispatch_sites ()` stands on, and it is
+/// there. That is the same fact `eliminate_dispatch_sites ()` stands on, and it is
 /// what lets a walk with no memory model follow one store.
 ///
 /// Null covers a class whose allocation can return a transparent proxy, which
@@ -563,9 +563,9 @@ lowers_to_a_load (const Function &f)
 }
 
 Value *
-folded_object_vtable (LoadInst &load, SettledValue settled)
+eliminated_object_vtable (LoadInst &load, SettledValue settled)
 {
-	if (!FoldVTableFields)
+	if (!EliminateVTableFields)
 		return nullptr;
 
 	Value *object = object_vtable_read (&load);
@@ -587,11 +587,11 @@ folded_object_vtable (LoadInst &load, SettledValue settled)
 }
 
 Value *
-folded_vtable_read (CallBase &call, SettledValue settled)
+eliminated_vtable_read (CallBase &call, SettledValue settled)
 {
 	const Function *decl = call.getCalledFunction ();
 
-	if (!FoldVTableFields || decl == nullptr)
+	if (!EliminateVTableFields || decl == nullptr)
 		return nullptr;
 
 	StringRef name = decl->getName ();
@@ -621,7 +621,7 @@ folded_vtable_read (CallBase &call, SettledValue settled)
 }
 
 Value *
-folded_type_test (CallBase &call, SettledValue settled)
+eliminated_type_test (CallBase &call, SettledValue settled)
 {
 	const Function *decl = call.getCalledFunction ();
 

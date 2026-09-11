@@ -6,24 +6,25 @@
 // the merge is a read of a mutable field, so the call becomes a compare against
 // the delegate's own entry with the direct call on the arm that matches.
 //
-// Three layers gate it, because no API reports whether the fold fired:
+// Three layers gate it, because no API reports whether the elimination fired:
 //
 //   - every shape answers the same in both arms, so a wrong target is a wrong
 //     value rather than a slower call;
 //   - a counter on each target says which arm of a guard ran;
-//   - a stack trace says the fold really happened. A folded body owns no code,
-//     so its frame reports the offset into the root it was folded at. That works
-//     only once the target is inlined, which is why it is asserted at tier 2
-//     alone - the fold is tier 2's, and nothing inlines a direct call below it.
+//   - a stack trace says the elimination really happened. An inlined body
+//     owns no code, so its frame reports the offset into the root it was
+//     inlined at. That works only once the target is inlined, which is why
+//     it is asserted at tier 2 alone - the elimination is tier 2's, and
+//     nothing inlines a direct call below it.
 //
-// MONO_FOLD_DELEGATES=off is the other arm. The first two layers hold there
-// as well; the third is what the two arms disagree about.
+// MONO_ELIMINATE_DELEGATES=off is the other arm. The first two layers hold
+// there as well; the third is what the two arms disagree about.
 //
 // The field-copy cases below are answer-only: a delegate copied into a field
 // of a fresh object, then read back at the call, the shape a LINQ iterator's
 // own cached selector or predicate takes. Nothing here proves whether that
-// case folds - only that the answer is right whether it does or not, which
-// covers both a field with one settled writer and a field two different
+// case eliminates - only that the answer is right whether it does or not,
+// which covers both a field with one settled writer and a field two different
 // writers can reach.
 
 
@@ -40,7 +41,7 @@ namespace Mono.Tiering {
 	}
 }
 
-class DelegateFold {
+class DelegateEliminate {
 	static int failures;
 
 	static void Check (string what, int got, int want)
@@ -130,8 +131,8 @@ class DelegateFold {
 
 	// Two different delegates can reach the field, one on each arm. Neither
 	// arm alone settles what the field holds, so the answer has to come from
-	// whichever delegate this call actually stored, not from a fold that
-	// guessed one of the two.
+	// whichever delegate this call actually stored, not from an elimination
+	// that guessed one of the two.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int UseFieldCopyMixed (bool useTwice, int x)
 	{
@@ -265,13 +266,13 @@ class DelegateFold {
 		return false;
 	}
 
-	// The target the fold proof reads. It throws, so it leaves a frame in the
-	// trace, and it is reached only through a delegate.
+	// The target the elimination proof reads. It throws, so it leaves a frame
+	// in the trace, and it is reached only through a delegate.
 	//
 	// The exception is made once and kept, so the body is a field read and a
 	// throw. A body that made one would be larger than the cost model takes,
 	// and then the direct call this writes would stand rather than being
-	// folded in - which is the thing the offsets below are read for.
+	// inlined in - which is the thing the offsets below are read for.
 	static readonly Exception Bang = new InvalidOperationException ("boom");
 
 	static int Boom (int x) { throw Bang; }
@@ -298,8 +299,8 @@ class DelegateFold {
 	static Vec3 CachedRootV (int x) { return ApplyV (BoomV, x); }
 
 	/// Whether \p bang's frame reports an offset into \p root, which says the
-	/// fold took its body into that method rather than leaving a call.
-	static bool FoldedInto (Exception e, string bang, string root)
+	/// inline took its body into that method rather than leaving a call.
+	static bool InlinedInto (Exception e, string bang, string root)
 	{
 		StackTrace trace = new StackTrace (e, false);
 		int in_bang = -1, in_root = -2;
@@ -307,7 +308,7 @@ class DelegateFold {
 		foreach (StackFrame frame in trace.GetFrames ()) {
 			MethodBase m = frame.GetMethod ();
 
-			if (m == null || m.DeclaringType != typeof (DelegateFold))
+			if (m == null || m.DeclaringType != typeof (DelegateEliminate))
 				continue;
 			if (m.Name == bang)
 				in_bang = frame.GetNativeOffset ();
@@ -323,7 +324,7 @@ class DelegateFold {
 		try {
 			run (0);
 		} catch (InvalidOperationException e) {
-			return FoldedInto (e, "Boom", root);
+			return InlinedInto (e, "Boom", root);
 		}
 
 
@@ -337,7 +338,7 @@ class DelegateFold {
 		try {
 			run (0);
 		} catch (InvalidOperationException e) {
-			return FoldedInto (e, "BoomV", root);
+			return InlinedInto (e, "BoomV", root);
 		}
 
 
@@ -348,7 +349,7 @@ class DelegateFold {
 
 	static bool Promote (string name, int tier)
 	{
-		MethodInfo m = typeof (DelegateFold).GetMethod (
+		MethodInfo m = typeof (DelegateEliminate).GetMethod (
 			name, BindingFlags.Static | BindingFlags.NonPublic);
 
 		return Mono.Tiering.MonoTier.PromoteNow (m.MethodHandle.Value, tier);
@@ -356,7 +357,7 @@ class DelegateFold {
 
 	static void Main ()
 	{
-		bool folding = Environment.GetEnvironmentVariable ("MONO_FOLD_DELEGATES") != "off";
+		bool eliminating = Environment.GetEnvironmentVariable ("MONO_ELIMINATE_DELEGATES") != "off";
 
 		// Warm every shape while it is interpreted, so the caches the compilers
 		// wrote hold a delegate before anything is compiled against them.
@@ -377,7 +378,7 @@ class DelegateFold {
 				continue;
 			}
 
-			Expect (root + " folded at tier 2", Threw (run, root), folding);
+			Expect (root + " inlined at tier 2", Threw (run, root), eliminating);
 		}
 
 		foreach (string root in new [] { "SettledRootV", "CachedRootV" }) {
@@ -394,7 +395,7 @@ class DelegateFold {
 				continue;
 			}
 
-			Expect (root + " folded at tier 2", ThrewV (run, root), folding);
+			Expect (root + " inlined at tier 2", ThrewV (run, root), eliminating);
 		}
 
 		Values ();

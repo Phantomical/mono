@@ -1,7 +1,7 @@
 /*
  * Tests for the lowerings that write a write barrier back as the card the
- * collector reads, and for the two folds in front of them:
- * `fold_stack_barriers ()` takes a barrier off a store into the frame, and
+ * collector reads, and for the two eliminations in front of them:
+ * `eliminate_stack_barriers ()` takes a barrier off a store into the frame, and
  * `open_value_copies ()` takes a value copy apart where the IR says an open copy
  * is safe.
  *
@@ -10,7 +10,7 @@
  * harness links.
  */
 
-#include "passes/fold-barrier.hpp"
+#include "passes/eliminate-barrier.hpp"
 #include "passes/gc-barrier.hpp"
 
 #include <llvm/IR/BasicBlock.h>
@@ -306,11 +306,11 @@ struct StackModule {
 		return seen;
 	}
 
-	bool fold ()
+	bool eliminate ()
 	{
 		b.CreateRetVoid ();
 
-		bool changed = fold_stack_barriers (*caller);
+		bool changed = eliminate_stack_barriers (*caller);
 
 		EXPECT_FALSE (verifyModule (*module, &errs ()));
 		return changed;
@@ -323,10 +323,10 @@ TEST (StackBarrierTest, ALocalsFieldNeedsNoCard)
 
 	m.store_through (m.b.CreateConstInBoundsGEP1_32 (m.b.getInt8Ty (), m.local, 8));
 
-	EXPECT_TRUE (m.fold ());
+	EXPECT_TRUE (m.eliminate ());
 	EXPECT_EQ (m.barriers (), 0u);
 
-	// The fold owes the store nothing: it is the reference the local holds.
+	// The elimination owes the store nothing: it is the reference the local holds.
 	EXPECT_EQ (m.stores (), 1u);
 }
 
@@ -336,7 +336,7 @@ TEST (StackBarrierTest, AnAddressFromOutsideKeepsItsBarrier)
 
 	m.store_through (m.elsewhere ());
 
-	EXPECT_FALSE (m.fold ());
+	EXPECT_FALSE (m.eliminate ());
 	EXPECT_EQ (m.barriers (), 1u);
 }
 
@@ -360,14 +360,14 @@ TEST (StackBarrierTest, ADestinationOfTwoObjectsKeepsItsBarrier)
 	address->addIncoming (m.elsewhere (), on_heap);
 	m.store_through (address);
 
-	EXPECT_FALSE (m.fold ());
+	EXPECT_FALSE (m.eliminate ());
 	EXPECT_EQ (m.barriers (), 1u);
 }
 
 /// A module holding one value copy of a type that holds references.
 ///
 /// \p dest_in_frame and \p src_in_frame each replace a parameter with a local,
-/// which is what the fold reads.
+/// which is what the elimination reads.
 struct ValueCopyModule {
 	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
 	std::unique_ptr<Module> module;
@@ -407,7 +407,7 @@ struct ValueCopyModule {
 		b.CreateRetVoid ();
 	}
 
-	bool fold ()
+	bool eliminate ()
 	{
 		bool changed = open_value_copies (*caller);
 
@@ -488,7 +488,7 @@ TEST (GcValueCopyTest, ADestinationInTheHeapStaysOneCall)
 {
 	ValueCopyModule m;
 
-	EXPECT_FALSE (m.fold ());
+	EXPECT_FALSE (m.eliminate ());
 	EXPECT_EQ (m.sites (gc_value_copy_name), 1u) << m.text ();
 	EXPECT_EQ (m.copies (), 0u) << m.text ();
 
@@ -508,7 +508,7 @@ TEST (GcValueCopyTest, ASourceInTheFrameKeepsTheCall)
 {
 	ValueCopyModule m (/*dest_in_frame=*/false, /*src_in_frame=*/true);
 
-	EXPECT_FALSE (m.fold ());
+	EXPECT_FALSE (m.eliminate ());
 	EXPECT_EQ (m.sites (gc_value_copy_name), 1u) << m.text ();
 	EXPECT_EQ (m.copies (), 0u) << m.text ();
 }
@@ -520,7 +520,7 @@ TEST (GcValueCopyTest, ASiteThatCannotOverlapGetsAMemcpy)
 	ValueCopyModule m (/*dest_in_frame=*/true, /*src_in_frame=*/false,
 	                   /*no_overlap=*/true);
 
-	EXPECT_TRUE (m.fold ());
+	EXPECT_TRUE (m.eliminate ());
 	EXPECT_EQ (m.count ("call void @llvm.memcpy"), 1u) << m.text ();
 	EXPECT_EQ (m.count ("call void @llvm.memmove"), 0u) << m.text ();
 	EXPECT_EQ (m.count ("align 8 "), 2u) << m.text ();
@@ -536,7 +536,7 @@ TEST (GcValueCopyTest, ADestinationInTheFrameOwesNoCards)
 {
 	ValueCopyModule m (/*dest_in_frame=*/true);
 
-	EXPECT_TRUE (m.fold ());
+	EXPECT_TRUE (m.eliminate ());
 	EXPECT_EQ (m.sites (gc_value_copy_name), 0u) << m.text ();
 	EXPECT_EQ (m.copies (), 1u) << m.text ();
 	EXPECT_EQ (m.count ("call void @llvm.memmove"), 1u) << m.text ();

@@ -1,6 +1,6 @@
 /*
- * Tests for the two halves of `mono.array.shape.*`: the fold reads such a site
- * out of the array where it names dimension zero, and the lowering puts back on
+ * Tests for the two halves of `mono.array.shape.*`: the elimination reads such
+ * a site out of the array where it names dimension zero, and the lowering puts back on
  * the accessor every site that is left.
  *
  * Both read MonoArray's layout out of mono's headers, which accessor and
@@ -122,7 +122,8 @@ struct ShapeModule {
 	}
 };
 
-/// The managers a fold asks its analyses through, held for as long as the call.
+/// The managers an elimination asks its analyses through, held for as long as
+/// the call.
 struct Analyses {
 	ModuleAnalysisManager mam;
 	CGSCCAnalysisManager cgam;
@@ -218,15 +219,15 @@ TEST (ArrayShape, OtherDimensionsKeepTheCall)
 	EXPECT_EQ (m.count_calls (), 1u);
 }
 
-/// A fold leaves a site it cannot read standing, so that a later round still
-/// gets to read the dimension.
-TEST (ArrayShape, AFoldKeepsASiteItCannotRead)
+/// An elimination leaves a site it cannot read standing, so that a later
+/// round still gets to read the dimension.
+TEST (ArrayShape, AnEliminationKeepsASiteItCannotRead)
 {
 	ShapeModule m (array_shape_length, 1);
 
 	Analyses analyses;
 
-	fold_array_shapes (*m.module->getFunction ("caller"), analyses.fam);
+	eliminate_array_shapes (*m.module->getFunction ("caller"), analyses.fam);
 	ASSERT_FALSE (verifyModule (*m.module, &errs ()));
 	EXPECT_NE (m.module->getFunction (m.decl_name), nullptr);
 	EXPECT_EQ (m.count_calls (), 0u);

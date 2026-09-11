@@ -70,14 +70,14 @@ constexpr llvm::StringRef save_lmf_attribute = "mono-save-lmf";
 ///
 /// So a caller gets the receiver's vtable, which an IR pointer does not carry.
 /// Null covers a load that is not a read of an object's vtable word.
-llvm::Value *folded_object_vtable (llvm::LoadInst &load, SettledValue settled);
+llvm::Value *eliminated_object_vtable (llvm::LoadInst &load, SettledValue settled);
 
 /// What a read off a vtable gives, where the call site settles which vtable is
 /// read, or null.
 ///
 /// So a caller gets the receiver's class and its `System.Type` object, neither
 /// of which an IR pointer carries.
-llvm::Value *folded_vtable_read (llvm::CallBase &call, SettledValue settled);
+llvm::Value *eliminated_vtable_read (llvm::CallBase &call, SettledValue settled);
 
 /// What a type test answers, where the class the call site settled its operand
 /// to decides it, or null.
@@ -85,7 +85,7 @@ llvm::Value *folded_vtable_read (llvm::CallBase &call, SettledValue settled);
 /// A test the operand's own function could settle is already answered, so what
 /// is left is the one a caller decides. Null covers a test that fails for
 /// certain and raises rather than answering, which is a throw and not a value.
-llvm::Value *folded_type_test (llvm::CallBase &call, SettledValue settled);
+llvm::Value *eliminated_type_test (llvm::CallBase &call, SettledValue settled);
 
 /// The successor of \p branch that a run reaches, or null if \p branch is not
 /// a null check that codegen folds.
@@ -119,7 +119,7 @@ bool carries_an_elision_candidate (const llvm::CallBase &call);
 /// a dispatch needs the operand's class, and an IR pointer carries none.
 ///
 /// \p get_constants answers a settled walk of the caller's own values, off the
-/// same memory model `FoldDelegateInvokesPass` reads. Null skips the bonus that
+/// same memory model `EliminateDelegateInvokesPass` reads. Null skips the bonus that
 /// needs it rather than asking for what nothing can answer.
 ///
 /// Zero for a site no bonus recognizes.

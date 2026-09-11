@@ -47,7 +47,7 @@ MonoMethod *slot_target (MonoClass *klass, int32_t index);
 /// What it needs of the running compile it reads from current_compile ()
 /// (compile-state.hpp), and it asks mono for the rest. Outside a compile it
 /// leaves every site alone.
-bool fold_dispatch_sites (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+bool eliminate_dispatch_sites (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
 /// Sends each dispatch on an array receiver through a compare of that
 /// receiver's vtable against the array class its slot is declared with. The
@@ -72,9 +72,9 @@ bool guard_dispatch_sites (llvm::Function &f, llvm::BlockFrequencyInfo &counts,
                            const ConstantValues &values);
 
 /// GuardDispatchPass on its own: fetches \p counts and \p values through
-/// \p fam and calls guard_dispatch_sites (). FoldDelegateAndGuardDispatchPass
-/// (fold-delegate-and-guard-dispatch.hpp) is what the pipeline runs instead,
-/// because it never runs this without FoldDelegateInvokesPass beside it.
+/// \p fam and calls guard_dispatch_sites (). EliminateDelegateAndGuardDispatchPass
+/// (eliminate-delegate-and-guard-dispatch.hpp) is what the pipeline runs instead,
+/// because it never runs this without EliminateDelegateInvokesPass beside it.
 class GuardDispatchPass : public llvm::PassInfoMixin<GuardDispatchPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);

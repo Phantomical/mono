@@ -10,8 +10,8 @@ using System.Runtime.CompilerServices;
  * asks it for its type is opaque to the model. A compile states a class's
  * vtable as a constant, and the store an allocation carries is the one step
  * from the receiver to that constant. Behind it the dispatch slot and the
- * `System.Type` word both fold, and the arm the type test cannot reach stops
- * being counted.
+ * `System.Type` word both eliminate, and the arm the type test cannot reach
+ * stops being counted.
  *
  * The suite runs twice, once on the defaults and once with every one of those
  * answers off, and reads MONO_INLINE_POLICY to know which arm it is in. The
@@ -24,7 +24,7 @@ using System.Runtime.CompilerServices;
  * offset into itself.
  *
  * Weigh () costs 150 on mono's answers and 335 on LLVM's, and the gap is the
- * four calls in the arm the folded type word makes dead. The suite names a
+ * four calls in the arm the eliminated type word makes dead. The suite names a
  * cold-callsite threshold of 190, which the argument bonus takes to 240 in both
  * arms, so each verdict has around ninety either way.
  *

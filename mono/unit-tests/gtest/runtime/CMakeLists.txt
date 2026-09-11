@@ -97,7 +97,7 @@ mono_unit_test_cases(test-mono-runtime test-etw-profiler
 # The cases above that read a tier-0 caller's behaviour, again with the
 # interpreter as tier 0. The default arms run the classic compiler there, and
 # the two engines answer some of these differently: an interpreted caller
-# misses a detour on a callee it copied in, where a classic one folds nothing.
+# misses a detour on a callee it copied in, where a classic one inlines nothing.
 set(_interp_tier0 "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0")
 mono_unit_test_cases(test-mono-runtime test-function-pointer-interp
                      "FunctionPointer.*" ENV "${_interp_tier0}")

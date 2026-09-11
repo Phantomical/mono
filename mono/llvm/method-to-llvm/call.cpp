@@ -314,8 +314,8 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 /// Reads the vtable of object.
 ///
 /// The read is a load, and mark_object_vtable_read () (passes/vtable-func.cpp)
-/// states on it that the word is invariant. fold_object_vtables ()
-/// (passes/fold-vtable.cpp) names the vtable from the class the IR gives object.
+/// states on it that the word is invariant. eliminate_object_vtables ()
+/// (passes/eliminate-vtable.cpp) names the vtable from the class the IR gives object.
 /// It reaches a receiver no store names: one a sealed slot declares, or one read
 /// out of an initonly static. Where a store does name it, LLVM forwards that
 /// store itself.
@@ -337,7 +337,7 @@ MethodLLVMEmitter::load_vtable (MonoIrBuilder &builder, llvm::Value *object,
 ///
 /// The site is a `mono.vtable.func` call rather than the load it stands for,
 /// which keeps the vtable and the slot as operands. That is the form
-/// fold_dispatch_sites () (passes/devirtualize.cpp) reads once the receiver's
+/// eliminate_dispatch_sites () (passes/devirtualize.cpp) reads once the receiver's
 /// class is settled.
 ///
 /// A method the runtime could give no slot carries an index of -1, which reads

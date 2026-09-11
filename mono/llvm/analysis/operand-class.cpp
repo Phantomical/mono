@@ -207,7 +207,7 @@ initonly_static_value (MonoDomain *domain, MonoClassField *field)
 /// The object \p v reads out of an initonly static, or null where \p v is not
 /// such a read or this compile cannot answer for it.
 ///
-/// Refused before CompileState::past_pgo_hash, so this cannot fold on one
+/// Refused before CompileState::past_pgo_hash, so this cannot settle on one
 /// class for a tier-1 compile and a different one for its tier-2 recompile.
 /// It answers once each tier's own pipeline reaches this point again after
 /// the hash is taken.
@@ -231,8 +231,8 @@ initonly_static_read (const Value *v)
 /// `mono.exact.class` is the ordinary way an allocation states its class, and
 /// it can go missing: `changeToInvokeAndSplitBasicBlock ()`
 /// (`llvm/lib/Transforms/Utils/Local.cpp`) is what `InlineFunction ()` calls
-/// to turn a folded call into an invoke when the call it was folded into sits
-/// in a protected region, and it copies only the debug location, the calling
+/// to turn an inlined call into an invoke when the call it was inlined into
+/// sits in a protected region, and it copies only the debug location, the calling
 /// convention, the attributes and `MD_prof` onto the new instruction. The
 /// vtable operand is not metadata, so it survives that rewrite, and it names
 /// the same class the missing mark would have.

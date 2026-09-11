@@ -71,7 +71,7 @@ struct Barriers {
  *
  * It accepts a getelementptr and a lifetime mark. It accepts the writes this
  * backend makes into an object as well: a store with its barrier, a value copy,
- * and the memcpy or memmove such a copy becomes where the fold opens it.
+ * and the memcpy or memmove such a copy becomes where the elimination opens it.
  * Everything else is a refusal. A load reads the object back, and a call hands
  * it outside the function.
  *

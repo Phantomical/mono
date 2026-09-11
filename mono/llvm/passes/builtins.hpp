@@ -4,9 +4,9 @@
  * standing, and the helpers a new one is written with.
  *
  * A site the front end cannot expand is written as a call to a declaration
- * whose name says what the site means. `MonoBuiltinConstProp` folds such a site
- * where the IR settles it, and `MonoBuiltinLower` writes back the IR every site
- * that is left stands for.
+ * whose name says what the site means. `MonoBuiltinConstProp` eliminates such a
+ * site where the IR settles it, and `MonoBuiltinLower` writes back the IR every
+ * site that is left stands for.
  */
 
 #ifndef MONO_LLVM_PASSES_BUILTINS_HPP
@@ -37,7 +37,7 @@ llvm::Function *builtin_decl (llvm::Module &m, llvm::StringRef name,
 /// The result is a snapshot, so a caller can erase what it rewrites.
 llvm::SmallVector<llvm::CallBase *, 8> builtin_sites (llvm::Module &m, llvm::StringRef name);
 
-/// Every call of it inside \p f alone, which is what a function pass folds.
+/// Every call of it inside \p f alone, which is what a function pass eliminates.
 llvm::SmallVector<llvm::CallBase *, 8> builtin_sites (llvm::Function &f, llvm::StringRef name);
 
 /// Erases the declaration \p name has in \p m, and says whether it was there.
@@ -57,7 +57,7 @@ enum class LowerStage {
 	/// tier compiled it.
 	pre_profile,
 
-	/// Behind the inliners, `GuardDispatchPass` and `fold_type_tests ()`,
+	/// Behind the inliners, `GuardDispatchPass` and `eliminate_type_tests ()`,
 	/// which read a vtable, a slot or a cast's answer straight off the call.
 	/// A site none of them settled turns into a probe here.
 	post_inline,
@@ -72,11 +72,11 @@ enum class LowerStage {
 	post_optimization,
 };
 
-/// Folds every builtin site in a function that the IR settles.
+/// Eliminates every builtin site in a function that the IR settles.
 ///
 /// Runs at the peephole point, behind each round of the simplification that
-/// settles an operand. That is in front of the round which drops the branches a
-/// fold makes dead.
+/// settles an operand. That is in front of the round which drops the branches
+/// an elimination makes dead.
 class MonoBuiltinConstProp : public llvm::PassInfoMixin<MonoBuiltinConstProp> {
 public:
 	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);

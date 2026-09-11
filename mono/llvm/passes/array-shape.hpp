@@ -48,15 +48,15 @@ constexpr llvm::StringRef array_shape_lower_bound = "lower_bound";
 ///
 /// A dimension the IL settled reads as a constant straight away. One that
 /// arrives through an inlined parameter is a load until SROA has run, which is
-/// why the folds take a function's sites up more than once.
-bool fold_array_shapes (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+/// why the eliminations take a function's sites up more than once.
+bool eliminate_array_shapes (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
 /// Rewrites every site left in \p m, erases the declarations, and says whether
 /// it changed anything.
 ///
 /// A dimension this cannot read goes back onto the accessor, which makes the
-/// rank test the icall makes. So this must run behind every fold: a restored
-/// call is one no fold can read again.
+/// rank test the icall makes. So this must run behind every elimination: a
+/// restored call is one no elimination can read again.
 bool lower_array_shapes (llvm::Module &m);
 
 } // namespace mono

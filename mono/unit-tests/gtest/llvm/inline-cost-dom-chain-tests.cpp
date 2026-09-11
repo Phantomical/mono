@@ -1,15 +1,15 @@
 /*
  * Tests for two gaps in CallAnalyzer::visitCmpInst (). Both are about a
- * call whose operand a mono fold already substituted: a null check several
- * one-predecessor blocks above the guard that needs it, and a formal
+ * call whose operand a mono elimination already substituted: a null check
+ * several one-predecessor blocks above the guard that needs it, and a formal
  * argument's own call-site attribute losing to a caller-side substitution
  * that cannot answer.
  *
  * Pure LLVM: CallAnalyzer::analyze ()'s own formal-argument mapping
  * (SimplifiedValues[&FAI] = *CAI) substitutes a caller's operand for a bare
- * argument, the same way folded_type_test () substitutes one for a call.
+ * argument, the same way eliminated_type_test () substitutes one for a call.
  * ir/inline-cost-dom-chain.ll reaches the same code through that mapping,
- * with no mono fold and no runtime under it.
+ * with no mono elimination and no runtime under it.
  */
 
 #include "passes/inline-cost.hpp"

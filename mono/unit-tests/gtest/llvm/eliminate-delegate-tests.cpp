@@ -7,7 +7,7 @@
  * build or to read.
  */
 
-#include "passes/fold-delegate.hpp"
+#include "passes/eliminate-delegate.hpp"
 
 #include "analysis/constant-values.hpp"
 
@@ -131,7 +131,7 @@ struct MergeModule {
 	}
 };
 
-TEST (FoldDelegateTest, ReadsAMarkedProducer)
+TEST (EliminateDelegateTest, ReadsAMarkedProducer)
 {
 	MergeModule m;
 	DelegateTarget found = m.target_at (m.produce (m.left, first));
@@ -140,7 +140,7 @@ TEST (FoldDelegateTest, ReadsAMarkedProducer)
 	EXPECT_TRUE (found.settled);
 }
 
-TEST (FoldDelegateTest, SaysNothingAboutAnUnmarkedValue)
+TEST (EliminateDelegateTest, SaysNothingAboutAnUnmarkedValue)
 {
 	MergeModule m;
 	DelegateTarget found = m.target_at (m.caller->getArg (1));
@@ -149,7 +149,7 @@ TEST (FoldDelegateTest, SaysNothingAboutAnUnmarkedValue)
 	EXPECT_FALSE (found.settled);
 }
 
-TEST (FoldDelegateTest, SettlesAMergeWhoseArmsAgree)
+TEST (EliminateDelegateTest, SettlesAMergeWhoseArmsAgree)
 {
 	MergeModule m;
 	DelegateTarget found = m.target_at (
@@ -159,7 +159,7 @@ TEST (FoldDelegateTest, SettlesAMergeWhoseArmsAgree)
 	EXPECT_TRUE (found.settled);
 }
 
-TEST (FoldDelegateTest, OffersACandidateWhenOneArmIsOpaque)
+TEST (EliminateDelegateTest, OffersACandidateWhenOneArmIsOpaque)
 {
 	MergeModule m;
 	DelegateTarget found = m.target_at (
@@ -169,7 +169,7 @@ TEST (FoldDelegateTest, OffersACandidateWhenOneArmIsOpaque)
 	EXPECT_FALSE (found.settled);
 }
 
-TEST (FoldDelegateTest, RefusesAMergeWhoseArmsDisagree)
+TEST (EliminateDelegateTest, RefusesAMergeWhoseArmsDisagree)
 {
 	MergeModule m;
 	DelegateTarget found = m.target_at (
@@ -181,7 +181,7 @@ TEST (FoldDelegateTest, RefusesAMergeWhoseArmsDisagree)
 	EXPECT_FALSE (found.settled);
 }
 
-TEST (FoldDelegateTest, ReadsThroughASelect)
+TEST (EliminateDelegateTest, ReadsThroughASelect)
 {
 	MergeModule m;
 	IRBuilder<> b (m.merge);
@@ -197,7 +197,7 @@ TEST (FoldDelegateTest, ReadsThroughASelect)
 	EXPECT_TRUE (found.settled);
 }
 
-TEST (FoldDelegateTest, ReadsThroughAFreeze)
+TEST (EliminateDelegateTest, ReadsThroughAFreeze)
 {
 	MergeModule m;
 	IRBuilder<> b (m.merge);
@@ -215,7 +215,7 @@ TEST (FoldDelegateTest, ReadsThroughAFreeze)
 	EXPECT_TRUE (found.settled);
 }
 
-TEST (FoldDelegateTest, TerminatesOnAMergeThatReachesItself)
+TEST (EliminateDelegateTest, TerminatesOnAMergeThatReachesItself)
 {
 	MergeModule m;
 	IRBuilder<> b (m.merge);

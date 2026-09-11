@@ -92,7 +92,7 @@ absolute count rather than a proportion. Both places pass `GetConstantValues`, a
 member with no upstream counterpart, threaded the same way as `GetBFI` from
 `getInlineCost ()`'s caller down through `InlineCostCallAnalyzer`'s constructor.
 It answers a settled walk of the caller's own values, off the same memory model
-`FoldDelegateInvokesPass` reads, which is what a delegate argument bonus needs
+`EliminateDelegateInvokesPass` reads, which is what a delegate argument bonus needs
 and no other bonus here does.
 
 The second is the early return `updateThreshold ()` takes when
@@ -123,14 +123,14 @@ writes a dispatch read as a call to a declaration, and
 outside its list of libm names, without reading an attribute. So a read that
 lowers to one load was charged a call penalty and an argument setup on top of it.
 
-**`CallAnalyzer::visitLoad ()` asks `folded_object_vtable ()` first.** Mono
+**`CallAnalyzer::visitLoad ()` asks `eliminated_object_vtable ()` first.** Mono
 writes the read of an object's vtable word as a load. The walk has no
 memory model of its own, so the answer follows the vtable store an allocation
 carries — one step no other simplification here takes. It goes in front of the
 SROA question, which otherwise consumes the load.
 
-**`CallAnalyzer::visitCallBase ()` asks `folded_type_test ()` and then
-`folded_vtable_read ()`.** A type test is one call each until
+**`CallAnalyzer::visitCallBase ()` asks `eliminated_type_test ()` and then
+`eliminated_vtable_read ()`.** A type test is one call each until
 `lower_type_tests ()`, which runs behind the inliner, so the model sees the form
 `cast_answer ()` settles. A class's vtable is a defined constant while a compile
 optimizes, so the fields it states fold once the walk has that symbol. Both go
@@ -173,7 +173,7 @@ build gives for the same pair, so a comparison against clang or against LLVM's
 own pipeline needs the options off first. Set each `mono-inline-*-bonus` to
 zero, along with `-mono-inline-save-lmf-penalty`, turn off
 `-mono-inline-implicit-null-free`, `-mono-inline-dispatch-is-a-load`,
-`-mono-inline-fold-vtable-fields`, `-mono-inline-answer-casts` and
+`-mono-inline-eliminate-vtable-fields`, `-mono-inline-answer-casts` and
 `-mono-inline-tier2-site-heat`, and turn **on**
 `-mono-inline-boost-indirect-calls`. The last-call-to-static bonus is what a run
 set up that way still does not get back, because no option reaches it: LLVM's

@@ -47,10 +47,11 @@ struct CompileState {
 	llvm::function_ref<llvm::Function *(llvm::Function &decl, MonoMethod *method)> publish;
 
 	/// The symbol standing for \p klass's vtable in \p m, resolved against this
-	/// compile's domain and carrying the facts a fold reads off it.
+	/// compile's domain and carrying the facts an elimination or a guard reads
+	/// off it.
 	///
 	/// A pass reaches this for a class the body never mentioned, which is what
-	/// a fold off a receiver's declared class needs. Null means the runtime
+	/// a guard off a receiver's declared class needs. Null means the runtime
 	/// cannot answer for the class: it is open, or laying it out failed. The
 	/// caller then has to leave its site as it was.
 	llvm::function_ref<llvm::Constant *(llvm::Module &m, MonoClass *klass)> vtable_of;
@@ -59,13 +60,13 @@ struct CompileState {
 	/// PGOInstrumentationGen or PGOInstrumentationUse took the module's CFG
 	/// hash.
 	///
-	/// A fold reading an initonly static's value must not answer before this
-	/// is true, or a tier-1 compile and its tier-2 recompile of the same body
-	/// can hash two different CFGs and lose the tier-1 counts. Checked by
+	/// A read of an initonly static's value must not answer before this is
+	/// true, or a tier-1 compile and its tier-2 recompile of the same body can
+	/// hash two different CFGs and lose the tier-1 counts. Checked by
 	/// initonly_static_read () directly. ClassInitWarmPass and
-	/// StaticConstFoldPass ask the same live question for a class's init flag,
-	/// and stay safe without reading this flag at all: the pipeline places
-	/// both only behind the pass that sets it (`pipelines.cpp`).
+	/// EliminateStaticConstPass ask the same live question for a class's init
+	/// flag, and stay safe without reading this flag at all: the pipeline
+	/// places both only behind the pass that sets it (`pipelines.cpp`).
 	bool past_pgo_hash = false;
 };
 

@@ -12,14 +12,14 @@
  * method, without the two tiers hashing different CFGs for it.
  */
 
-#ifndef MONO_LLVM_PASSES_STATIC_CONST_FOLD_HPP
-#define MONO_LLVM_PASSES_STATIC_CONST_FOLD_HPP
+#ifndef MONO_LLVM_PASSES_ELIMINATE_STATIC_CONST_HPP
+#define MONO_LLVM_PASSES_ELIMINATE_STATIC_CONST_HPP
 
 #include <llvm/IR/PassManager.h>
 
 namespace mono {
 
-class StaticConstFoldPass : public llvm::PassInfoMixin<StaticConstFoldPass> {
+class EliminateStaticConstPass : public llvm::PassInfoMixin<EliminateStaticConstPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 };

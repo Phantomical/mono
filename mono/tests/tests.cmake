@@ -242,7 +242,7 @@ set(MONO_TESTS_CS_SRC
   trivial-inline.cs
   stack-merge-class.cs
   tier2-inline-override.cs
-  cast-fold.cs
+  eliminate-cast.cs
   tier2-inline-cast-bound.cs
   array-devirt.cs
   array-native-int-cast.cs
@@ -251,7 +251,7 @@ set(MONO_TESTS_CS_SRC
   boehm-domain-alloc-shape.cs
   phi-devirt.cs
   invariant-static.cs
-  vtable-fold.cs
+  eliminate-vtable.cs
   reflection-element-type.cs
   reflection-element-type-domain.cs
   tier2-narrow-arg.cs
@@ -576,7 +576,7 @@ set(MONO_TESTS_CS_SRC
   finally-throwing-handler.cs
   finally-gc-move.cs
   finally-nested-resume.cs
-  finally-fold-empty.cs
+  eliminate-empty-finally.cs
   bug-60862.cs
   bug-unity-1.cs
 )
@@ -1153,11 +1153,11 @@ set(MONO_TESTS_TIER2_INLINE_RETURN_SELF_SRC
 )
 
 # Entering a delegate's target instead of reading it off the delegate. It runs
-# twice, on the default and with the fold off, and reads the variable to know
-# which arm it is in. Every value it asserts holds in both; the stack trace that
-# says the fold happened is what they disagree about.
-set(MONO_TESTS_DELEGATE_FOLD_SRC
-  delegate-fold.cs
+# twice, on the default and with the elimination off, and reads the variable
+# to know which arm it is in. Every value it asserts holds in both; the stack
+# trace that says the elimination happened is what they disagree about.
+set(MONO_TESTS_ELIMINATE_DELEGATE_SRC
+  eliminate-delegate.cs
 )
 
 # What the cost model answers about a receiver the call site allocated. Two

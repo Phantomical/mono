@@ -101,8 +101,8 @@ MethodLLVMEmitter::record_barrier_symbols (const GcBarrierLayout &gc)
 ///
 /// klass must hold references. A class with none needs no barrier, and the
 /// caller copies it as plain bytes instead. may_overlap says that the two
-/// addresses can name the same bytes, which the fold behind this reads as the
-/// difference between a memcpy and a memmove.
+/// addresses can name the same bytes, which the elimination behind this reads
+/// as the difference between a memcpy and a memmove.
 llvm::Error
 MethodLLVMEmitter::emit_value_copy (MonoIrBuilder &builder, llvm::Value *dest,
                                     llvm::Value *src, MonoClass *klass, bool may_overlap)
@@ -122,8 +122,9 @@ MethodLLVMEmitter::emit_value_copy (MonoIrBuilder &builder, llvm::Value *dest,
 		gc_value_copy_decl (*module, gc),
 		{ dest, src, builder.getInt32 (1), size, *cls });
 
-	// The alignment the class asks for rides on the site, because a fold that
-	// writes the copy in the open has no other way to read it back.
+	// The alignment the class asks for rides on the site, because an
+	// elimination that writes the copy in the open has no other way to read
+	// it back.
 	copy->addParamAttr (0, llvm::Attribute::getWithAlignment (ctx, llvm::Align (align)));
 	copy->addParamAttr (1, llvm::Attribute::getWithAlignment (ctx, llvm::Align (align)));
 
@@ -255,8 +256,8 @@ MethodLLVMEmitter::vtable_symbol (MonoClass *klass, const std::string &symbol)
 	return global;
 }
 
-/// What a fold can read off klass's vtable symbol, or nothing where this
-/// compile cannot state every field.
+/// What an elimination can read off klass's vtable symbol, or nothing where
+/// this compile cannot state every field.
 ///
 /// Nothing leaves the symbol unmarked rather than marked with a hole in it.
 std::optional<VTableInfo>

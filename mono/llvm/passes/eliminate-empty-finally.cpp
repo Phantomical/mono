@@ -11,7 +11,7 @@
  * once the markers are all that is left of it.
  */
 
-#include "fold-empty-finally.hpp"
+#include "eliminate-empty-finally.hpp"
 
 #include "finally-marker.hpp"
 
@@ -137,12 +137,12 @@ guarded_alloca (llvm::Instruction *begin)
 /// Whether guard's only uses besides begin are stores of the constant zero
 /// enter_finally () always writes and at most one load - the shape that
 /// function and emit_finally_abort_check () build (exceptions.cpp). *load
-/// names that use when it is present. It is absent when an earlier fold
-/// already removed the abort check this clause never needed.
+/// names that use when it is present. It is absent when an earlier
+/// elimination already removed the abort check this clause never needed.
 ///
 /// Anything else using guard's address means some code this pass does not
-/// know about reads or writes the slot, and the fold has nothing safe to say
-/// about it.
+/// know about reads or writes the slot, and the elimination has nothing safe
+/// to say about it.
 bool
 guard_uses_are_simple (llvm::AllocaInst *guard, llvm::Instruction *begin, llvm::LoadInst *&load)
 {
@@ -211,7 +211,7 @@ fold_forward (llvm::BasicBlock *bb)
 /// Removes the branch load's volatile read gates, now that nothing can ever
 /// discover guard's frame slot to set the byte the branch tests.
 void
-fold_abort_check (llvm::LoadInst *load)
+eliminate_abort_check (llvm::LoadInst *load)
 {
 	llvm::BasicBlock *test = load->getParent ();
 	auto *br = llvm::cast<llvm::BranchInst> (test->getTerminator ());
@@ -234,11 +234,11 @@ fold_abort_check (llvm::LoadInst *load)
 }
 
 /// Tries every clause whose begin and end marker both turned up exactly once,
-/// folding each whose body is empty. Returns whether it changed anything, so
-/// the caller can run another round: folding an inner clause can be what
-/// leaves an outer one empty in turn.
+/// eliminating each whose body is empty. Returns whether it changed anything,
+/// so the caller can run another round: eliminating an inner clause can be
+/// what leaves an outer one empty in turn.
 bool
-fold_one_round (llvm::Function &f)
+eliminate_one_round (llvm::Function &f)
 {
 	llvm::DenseMap<std::uint32_t, Marker> begins, ends;
 
@@ -279,7 +279,7 @@ fold_one_round (llvm::Function &f)
 		begin->eraseFromParent ();
 
 		if (load != nullptr)
-			fold_abort_check (load);
+			eliminate_abort_check (load);
 
 		for (llvm::User *user : llvm::make_early_inc_range (guard->users ()))
 			llvm::cast<llvm::StoreInst> (user)->eraseFromParent ();
@@ -294,11 +294,11 @@ fold_one_round (llvm::Function &f)
 } // namespace
 
 llvm::PreservedAnalyses
-FoldEmptyFinallyPass::run (llvm::Function &f, llvm::FunctionAnalysisManager &)
+EliminateEmptyFinallyPass::run (llvm::Function &f, llvm::FunctionAnalysisManager &)
 {
 	bool changed = false;
 
-	while (fold_one_round (f))
+	while (eliminate_one_round (f))
 		changed = true;
 
 	return changed ? llvm::PreservedAnalyses::none () : llvm::PreservedAnalyses::all ();

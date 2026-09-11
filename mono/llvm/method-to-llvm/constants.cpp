@@ -269,7 +269,7 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 ///
 /// Every caller that wants the object as a constant goes through this, so the
 /// object and the symbol are the same pair everywhere. That is what lets a
-/// `typeof` and a `GetType ()` on one class compare equal after folding.
+/// `typeof` and a `GetType ()` on one class compare equal after elimination.
 llvm::Expected<llvm::Constant *>
 MethodLLVMEmitter::typeof_symbol (MonoType *type)
 {
@@ -312,15 +312,15 @@ MethodLLVMEmitter::typeof_symbol (MonoType *type)
 	return address_symbol (symbol, object);
 }
 
-/// Folds `ldtoken` and the `Type::GetTypeFromHandle` call behind it into the
-/// System.Type the pair produces, and says whether it did.
+/// Eliminates `ldtoken` and the `Type::GetTypeFromHandle` call behind it into
+/// the System.Type the pair produces, and says whether it did.
 ///
-/// A fold consumes the call, so `ip` moves past it. A refusal leaves `ip` where
-/// it was, and the caller emits the handle the ordinary way.
+/// An elimination consumes the call, so `ip` moves past it. A refusal leaves
+/// `ip` where it was, and the caller emits the handle the ordinary way.
 ///
 /// `type` is what the token named, byref spelling included.
 llvm::Expected<bool>
-MethodLLVMEmitter::fold_type_from_handle (MonoIrBuilder &builder, MonoType *type)
+MethodLLVMEmitter::eliminate_type_from_handle (MonoIrBuilder &builder, MonoType *type)
 {
 	// One byte of opcode and four of token.
 	if (code_size - ip < 5)
@@ -338,8 +338,8 @@ MethodLLVMEmitter::fold_type_from_handle (MonoIrBuilder &builder, MonoType *type
 		return false;
 
 	/*
-	 * The debugger stops at a statement start, and a fold takes the call's
-	 * offset away. Only a symbol file can put a stop there. The other half of
+	 * The debugger stops at a statement start, and an elimination takes the
+	 * call's offset away. Only a symbol file can put a stop there. The other half of
 	 * wants_seq_point_at () wants an empty evaluation stack, and the handle
 	 * this instruction pushes sits on it.
 	 *
@@ -497,13 +497,13 @@ MethodLLVMEmitter::emit_ldtoken (MonoIrBuilder &builder, uint32_t token)
 	// A C# compiler writes typeof (T) as this instruction and a call to
 	// Type::GetTypeFromHandle. The pair has one answer, and it is known here.
 	if (handle_class == mono_defaults.typehandle_class) {
-		llvm::Expected<bool> folded =
-			fold_type_from_handle (builder, static_cast<MonoType *> (handle));
+		llvm::Expected<bool> eliminated =
+			eliminate_type_from_handle (builder, static_cast<MonoType *> (handle));
 
-		if (!folded)
-			return folded.takeError ();
+		if (!eliminated)
+			return eliminated.takeError ();
 
-		if (*folded)
+		if (*eliminated)
 			return llvm::Error::success ();
 	}
 

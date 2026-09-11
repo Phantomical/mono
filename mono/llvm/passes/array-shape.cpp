@@ -236,7 +236,7 @@ shape_decls (Module &m)
 } // namespace
 
 bool
-fold_array_shapes (Function &f, FunctionAnalysisManager &fam)
+eliminate_array_shapes (Function &f, FunctionAnalysisManager &fam)
 {
 	bool changed = false;
 	const ConstantValues *values = nullptr;

@@ -8,7 +8,7 @@ using System.Runtime.CompilerServices;
  *
  * An array slot admits every array of that rank with the same cast class. So an
  * `int[]` parameter also holds a `uint[]`, and an array of an enum over int.
- * ECMA-335 I.8.7 makes the three interchangeable as values, and `cast-fold.cs`
+ * ECMA-335 I.8.7 makes the three interchangeable as values, and `eliminate-cast.cs`
  * gates the type tests that follow from that.
  *
  * A dispatch does not follow from it. Each of the three classes carries a vtable

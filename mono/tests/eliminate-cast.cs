@@ -5,14 +5,14 @@ using System.Runtime.CompilerServices;
 /*
  * A type test the compiler answers from what the IR says about the operand.
  *
- * fold_type_tests () reads the class an argument's slot is declared with, or the
- * class an allocation made, and answers the test for every class that slot
+ * eliminate_type_tests () reads the class an argument's slot is declared with, or
+ * the class an allocation made, and answers the test for every class that slot
  * admits. Each case below is one arm of that rule, and each is written so that
  * a wrong answer is a wrong value rather than a slower one.
  *
  * Every case runs interpreted and compiled in one process. The interpreter
- * answers each test through the runtime, so a fold that disagrees with it fails
- * here whatever tier it happened at.
+ * answers each test through the runtime, so an elimination that disagrees with
+ * it fails here whatever tier it happened at.
  */
 
 enum E32 : int { A, B }
@@ -31,7 +31,7 @@ sealed class Sealed : Base { }
 class Holder<T> { }
 class IntHolder : Holder<int>, IMarker { }
 
-public class CastFold {
+public class CastEliminate {
 	static int failures;
 
 	static void Check (string what, bool got, bool want)
@@ -283,8 +283,8 @@ public class CastFold {
 		// The first rounds run interpreted, and the later ones run whatever the
 		// thresholds promoted. Both answer through this same code.
 		//
-		// The count reaches tier 2, which is where the fold answers these
-		// tests. A tier-1 body keeps the icall at each of them, so a count that
+		// The count reaches tier 2, which is where the elimination answers
+		// these tests. A tier-1 body keeps the icall at each of them, so a count that
 		// stops at tier 1 gates the runtime alone.
 		for (int i = 0; i < 25000; ++i)
 			Round ();

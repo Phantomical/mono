@@ -29,7 +29,7 @@ using System.Runtime.CompilerServices;
  * against a bound would miss every subclass the parameter admits.
  *
  * `ExactAlloc` is a receiver the compile can name exactly, with
- * nothing to guess. It confirms the plain fold still takes such a
+ * nothing to guess. It confirms the plain elimination still takes such a
  * site before the guard ever sees it, rather than the guard wrapping
  * a compare around an answer that needed none.
  *
@@ -107,8 +107,8 @@ public class ClassDevirt {
 	}
 
 	// The one arm the guess can name: an initonly static, read rather than
-	// allocated here, so the optimizer has no store in this method to fold
-	// the read away with before the merge -- a fresh allocation's own
+	// allocated here, so the optimizer has no store in this method to
+	// eliminate the read with before the merge -- a fresh allocation's own
 	// constant store would let it do exactly that, and answer the guard a
 	// vtable it never compared against.
 	static readonly Shape KnownAlpha = new Alpha ();
@@ -124,8 +124,8 @@ public class ClassDevirt {
 		return s.Which ();
 	}
 
-	// One allocation, nothing merged into it, so the plain fold answers this
-	// before GuardDispatchPass runs. No compare belongs here.
+	// One allocation, nothing merged into it, so the plain elimination
+	// answers this before GuardDispatchPass runs. No compare belongs here.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int ExactAlloc ()
 	{

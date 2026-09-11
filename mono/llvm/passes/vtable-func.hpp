@@ -45,7 +45,7 @@ constexpr llvm::StringRef imt_func_name = "mono.imt.func";
 /// register. key is that method, and it is what makes the site resolvable: the
 /// slot alone serves every instantiation, while the class and the key together
 /// name one. Written as a call rather than as the load so both stay operands
-/// for fold_dispatch_sites () to read.
+/// for eliminate_dispatch_sites () to read.
 constexpr llvm::StringRef vtable_gfunc_name = "mono.vtable.gfunc";
 
 /// `ptr @mono.vtable.klass (ptr vtable)` returns the class the vtable stands
@@ -53,7 +53,7 @@ constexpr llvm::StringRef vtable_gfunc_name = "mono.vtable.gfunc";
 /// and `i8 @mono.vtable.rank (ptr vtable)` its rank.
 ///
 /// Each is a call rather than the load it stands for so that the vtable stays
-/// an operand, which is what `fold_vtable_fields ()` reads once the IR settles
+/// an operand, which is what `eliminate_vtable_fields ()` reads once the IR settles
 /// which vtable a site names. Only the translator writes a call to one.
 constexpr llvm::StringRef vtable_klass_name = "mono.vtable.klass";
 constexpr llvm::StringRef vtable_type_name = "mono.vtable.type";
@@ -93,7 +93,7 @@ bool lower_vtable_reads (llvm::Module &m);
 /// store it emits.
 ///
 /// The mark grants no dereferenceability, so the read stays under the null check
-/// on the object. `fold_object_vtables ()` needs that check to dominate the read
+/// on the object. `eliminate_object_vtables ()` needs that check to dominate the read
 /// before it can take a sealed slot's declared class for the class the object is.
 llvm::LoadInst *mark_object_vtable_read (llvm::LoadInst *load);
 

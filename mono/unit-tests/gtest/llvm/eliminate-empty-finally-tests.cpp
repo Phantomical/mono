@@ -1,5 +1,5 @@
 /*
- * Tests for FoldEmptyFinallyPass, which erases a finally's body markers and
+ * Tests for EliminateEmptyFinallyPass, which erases a finally's body markers and
  * thread-abort check once nothing survives between the markers.
  *
  * Pure LLVM: the pass names no metadata, so these hand-build the marker
@@ -7,7 +7,7 @@
  * than driving method_to_llvm () over a corpus.
  */
 
-#include "passes/fold-empty-finally.hpp"
+#include "passes/eliminate-empty-finally.hpp"
 
 #include "mono_lsda_format.hpp"
 
@@ -116,12 +116,12 @@ run_pass (Function &f)
 {
 	FunctionAnalysisManager fam;
 
-	FoldEmptyFinallyPass ().run (f, fam);
+	EliminateEmptyFinallyPass ().run (f, fam);
 }
 
 } // namespace
 
-TEST (FoldEmptyFinally, EmptyBodyInOneBlockDropsMarkersAndAbortCheck)
+TEST (EliminateEmptyFinally, EmptyBodyInOneBlockDropsMarkersAndAbortCheck)
 {
 	LLVMContext ctx;
 	Module m ("empty-finally", ctx);
@@ -152,7 +152,7 @@ TEST (FoldEmptyFinally, EmptyBodyInOneBlockDropsMarkersAndAbortCheck)
 /// already merged into one block. This one spreads the markers and the abort
 /// check back over the separate blocks exceptions.cpp itself builds, to
 /// prove the walk does not depend on that merge having already happened.
-TEST (FoldEmptyFinally, EmptyBodySpreadOverSeveralBlocksStillFolds)
+TEST (EliminateEmptyFinally, EmptyBodySpreadOverSeveralBlocksStillEliminates)
 {
 	LLVMContext ctx;
 	Module m ("empty-finally-multiblock", ctx);
@@ -187,9 +187,9 @@ TEST (FoldEmptyFinally, EmptyBodySpreadOverSeveralBlocksStillFolds)
 }
 
 /// A finally with real work of its own keeps its markers and its abort
-/// check - the fold only ever answers for a body that already has nothing
-/// in it.
-TEST (FoldEmptyFinally, RealWorkBetweenMarkersIsLeftAlone)
+/// check - the elimination only ever answers for a body that already has
+/// nothing in it.
+TEST (EliminateEmptyFinally, RealWorkBetweenMarkersIsLeftAlone)
 {
 	LLVMContext ctx;
 	Module m ("live-finally", ctx);
@@ -218,8 +218,8 @@ TEST (FoldEmptyFinally, RealWorkBetweenMarkersIsLeftAlone)
 }
 
 /// Two openings naming the same clause is not a shape the front end ever
-/// writes. The fold declines rather than guessing which one is real.
-TEST (FoldEmptyFinally, AmbiguousOpeningMarkerIsLeftAlone)
+/// writes. The elimination declines rather than guessing which one is real.
+TEST (EliminateEmptyFinally, AmbiguousOpeningMarkerIsLeftAlone)
 {
 	LLVMContext ctx;
 	Module m ("ambiguous-finally", ctx);
@@ -242,9 +242,9 @@ TEST (FoldEmptyFinally, AmbiguousOpeningMarkerIsLeftAlone)
 
 /// A finally nested inside another one's body is what an outer clause's own
 /// markers bracket, so the outer region only reads empty once the inner
-/// clause's markers are gone. FoldEmptyFinallyPass has to take another round
-/// after folding the inner one to see that.
-TEST (FoldEmptyFinally, NestedEmptyFinallyFoldsBothOnce)
+/// clause's markers are gone. EliminateEmptyFinallyPass has to take another
+/// round after eliminating the inner one to see that.
+TEST (EliminateEmptyFinally, NestedEmptyFinallyEliminatesBothOnce)
 {
 	LLVMContext ctx;
 	Module m ("nested-empty-finally", ctx);

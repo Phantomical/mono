@@ -4,7 +4,7 @@
  * value copy apart where the IR says an open copy is safe.
  */
 
-#include "fold-barrier.hpp"
+#include "eliminate-barrier.hpp"
 
 #include "builtins.hpp"
 #include "gc-barrier.hpp"
@@ -24,7 +24,7 @@ using namespace llvm;
 namespace mono {
 
 bool
-fold_stack_barriers (Function &f)
+eliminate_stack_barriers (Function &f)
 {
 	bool changed = false;
 

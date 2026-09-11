@@ -83,7 +83,7 @@ constexpr llvm::StringRef gc_barrier_name = "mono.gc.wbarrier";
  * the declaration buys is the claims: the icall on its own carries none, so it
  * captures both pointers and writes every location the module holds.
  *
- * `open_value_copies ()` (`passes/fold-barrier.cpp`) replaces the call with a
+ * `open_value_copies ()` (`passes/eliminate-barrier.cpp`) replaces the call with a
  * bare memcpy or memmove where dest is a stack slot. A card records an
  * old-to-young reference in the heap, and the collector scans a frame as a root
  * at every collection, so a copy that lands in one owes no card.

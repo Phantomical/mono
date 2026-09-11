@@ -664,12 +664,12 @@ public:
 	/// when it was translated without any.
 	const SeqPointGraph &sequence_points () const { return seq_point_graph; }
 
-	/// The symbol standing for \p klass's vtable, carrying the info a fold
-	/// reads off it, or null for a class this compile cannot name.
+	/// The symbol standing for \p klass's vtable, carrying the info an
+	/// elimination reads off it, or null for a class this compile cannot name.
 	///
-	/// It records an external, which the caller has to resolve. A fold reaches
-	/// this through `CompileState::vtable_of` for a class the body itself never
-	/// mentioned.
+	/// It records an external, which the caller has to resolve. An elimination
+	/// reaches this through `CompileState::vtable_of` for a class the body
+	/// itself never mentioned.
 	llvm::Constant *vtable_for (MonoClass *klass);
 
 private:
@@ -1111,7 +1111,7 @@ private:
 	llvm::Error emit_mono_calli_extra_arg (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldstr (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_ldtoken (MonoIrBuilder &builder, uint32_t token);
-	llvm::Expected<bool> fold_type_from_handle (MonoIrBuilder &builder, MonoType *type);
+	llvm::Expected<bool> eliminate_type_from_handle (MonoIrBuilder &builder, MonoType *type);
 	bool class_has_no_cctor (MonoClass *klass);
 	bool eligible_for_invariant_static_read (MonoClassField *field);
 	llvm::Error emit_class_init (MonoIrBuilder &builder, MonoClass *klass);
