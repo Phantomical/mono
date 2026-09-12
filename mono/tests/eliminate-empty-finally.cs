@@ -3,24 +3,21 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
- * Correctness for a finally that ends up with nothing between its body
- * markers: EliminateEmptyFinallyPass (mono/llvm/passes/eliminate-empty-finally.cpp)
- * drops the markers and the thread-abort check built around them once it
- * proves that.
+ * Correctness for a finally EliminateEmptyFinallyPass empties out entirely
+ * (mono/llvm/passes/eliminate-empty-finally.cpp).
  *
  * PlainLeave (), ExceptionUnwind () and Nested () use a literally empty
- * `finally { }`, which the front end gives no IL of its own - the elimination's
- * simplest input. DeadStore ()'s finally has IL, but writes a local nothing
- * reads, so the elimination only sees an empty body once the pipeline's own
- * simplification has removed that store.
+ * `finally { }`. The front end gives it no IL of its own, which is the
+ * elimination's simplest input. DeadStore ()'s finally has IL, but it writes
+ * a local nothing reads. The elimination only sees an empty body once the
+ * pipeline's own simplification has removed that store.
  *
- * Whether the elimination actually fired is not something a method's answer
- * can show: an empty finally behaves the same either way.
- * eliminate-empty-finally-tests.cpp checks that removal directly, against
- * hand-built IR. What this file exercises instead is the CFG surgery around a
- * real compiled try/finally/catch, at both tiers, with whatever debug and
- * sequence-point markers a real compile adds that a hand-built module does
- * not.
+ * An empty finally behaves the same whether or not the elimination ran, so no
+ * return value here can show that it fired. eliminate-empty-finally-tests.cpp
+ * checks the removal itself, against hand-built IR. This file instead
+ * exercises the CFG surgery around a real compiled try/finally/catch, at both
+ * tiers. That includes whatever debug and sequence-point markers a real
+ * compile adds that a hand-built module does not.
  */
 
 namespace Mono.Tiering {
@@ -85,6 +82,7 @@ static class EmptyFinally {
 }
 
 static class Program {
+	// MonoTier::tier1 and MonoTier::tier2, as PromoteNow takes them.
 	const int tier1 = 3;
 	const int tier2 = 4;
 
