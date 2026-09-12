@@ -1,19 +1,19 @@
 ---
 name: comment-review
-description: Review the comments and doc comments in this tree's C/C++ sources against the house rules — cut every block that cannot be proven necessary, catch false claims, move rationale to the line it justifies, translate assistant-written prose back into plain English, and fix register. Use when asked to review, sweep, tighten, de-slop or write comments in mono/llvm, mono/mini, mono/interp or the CMake files, or before committing a change that adds doc comments. Not a code review: it reads the comments, and the code only to check them.
+description: "Reviews comments and doc comments in this tree's C/C++ sources against house rules for necessity, truth, placement, and register, cutting what fails and rewriting the rest. Use when asked to review, sweep, tighten, de-slop, or write comments in mono/llvm, mono/mini, mono/interp, or the CMake files, or before committing a change that adds doc comments. It reads comments, not the code around them."
 ---
 
 # Comment review
 
 This skill holds the house rules, the procedure for applying them, and the catalogue of
-what people write instead. `CLAUDE.md` points here and carries none of them. The full
-evidence — commits, pushback wording, worked before/after pairs — is in
-`.claude/docs/comment-review.md`.
+what people write instead. `CLAUDE.md` points here and carries none of them.
 
 Read `reference/catalogue.md` before reporting anything. Read
 `reference/calibration.md` when a finding feels borderline: it holds the before/after
 pairs and the two fixtures that look like false positives and are not. Read
-`reference/claudish.md` when a block reads well and says little.
+`reference/claudish.md` when a block reads well and says little. Read
+`reference/register.md` before running Pass 4, `reference/cmake.md` when the target is a
+CMake file, and `reference/editing-this-skill.md` before changing this skill's own text.
 
 ## The governing test
 
@@ -73,11 +73,11 @@ caller needs to use it correctly and safely. Explain *what*, not *how* — anyon
 who needs the mechanism reads the implementation. These are internal docs, so a short
 introduction plus whatever heads off a non-obvious misuse is enough.
 
-What earns its place is what a caller cannot see from the signature and would otherwise
-get wrong: a locking rule, a precondition, what NULL means, an operation that can
-silently not happen, a lifetime or stability guarantee. Internal ordering, which helper
-does the work, and why the function exists at all are none of the caller's business.
-Cut them.
+A fact earns its place when a caller cannot see it from the signature and would
+otherwise get it wrong: a locking rule, a precondition, what NULL means, an operation
+that can silently not happen, a lifetime or stability guarantee. Internal ordering,
+which helper does the work, and why the function exists at all are none of the caller's
+business. Cut them.
 
 Before you keep a fact, make sure that this function is what enforces it. A rule some
 caller observes belongs to that caller, and stating it here reads as a guarantee this
@@ -100,8 +100,7 @@ extension, or who calls a function: two copies disagree eventually, and the copy
 reader finds first is the one they believe.
 
 **Do not write:**
-- Archeology. A comment about deleted or legacy code goes stale the next time the code
-  moves.
+- Archeology. A comment about deleted or legacy code goes stale when the code moves.
 - A reference to the current plan or task list. For a later reader without the plan
   documents, these hide what is actually going on.
 - An explanation of what is *not* happening. Justify the code that is there. Do not
@@ -109,7 +108,7 @@ reader finds first is the one they believe.
   non-obvious thing a reader needs to trust the code.
 
 **Do not write a count the reader cannot check from the sentence.** "Its whole surface is
-sixteen functions" is wrong the next time someone adds one, and a reader who doubts it has
+sixteen functions" is wrong when someone adds one, and a reader who doubts it has
 to leave the document to find out. Say what bounds the set instead — "keep that surface
 small" is the actual rule, and the count only ever stood in for it. A count is fine when
 the same sentence enumerates what it counts, as in "the three places a call arrives:" and
@@ -126,7 +125,7 @@ genuinely in the wrong file, move it. Do not shorten it.
 
 Where a quoted block documents the function, it is the whole doc comment. Do not add a
 summary above an emitter saying what the passage below already says. Add a comment only
-for what the standard does not cover: what this backend does with the instruction, which
+for the part the standard leaves out: what this backend does with the instruction, which
 local table governs it, or why it departs from the text.
 
 **A comment is a claim.** Treat every comment that names something — an identifier, a
@@ -206,9 +205,9 @@ This is by a wide margin the most productive check.
 - A fact tied to a transient setting — opt level, ISel, thread count — is already stale.
 
 **A verification that comes back negative is a claim too, and it is the dangerous one.**
-"I grepped and found nothing" is what deletes a true fact, and nothing downstream catches
-it — the sentence is gone and the diff looks like a cleanup. Before you delete a name as
-nonexistent, satisfy yourself you looked where it lives:
+"I grepped and found nothing" is what deletes a true fact — the sentence is gone and the
+diff looks like a cleanup. Before you delete a name as nonexistent, satisfy yourself you
+looked where it lives:
 
 | the name is | where it lives |
 | --- | --- |
@@ -217,7 +216,7 @@ nonexistent, satisfy yourself you looked where it lives:
 | a macro | it can be defined under an `#if` you did not compile |
 | a build fact | `build/compile_commands.json`, and the CMake files |
 
-A one-line grep of the working tree answers none of those. Where a name is real inside a
+A one-line grep of the working tree resolves none of those. Where a name is real inside a
 sentence that is stale in some other way, **fix the stale part and keep the name**. A
 compound false claim is not licence to delete the true clause with it.
 
@@ -234,11 +233,19 @@ nothing new. Uncertain about the **worth**: cut.
 
 Run these in order. Each is a faster way of failing the governing test.
 
-**The subject test.** Strike every sentence whose grammatical subject is not this
-function, one of its parameters, or its return value. What is left is the doc. If
-nothing is left, the block documented some other thing.
+**The subject test applies to every comment, not doc comments alone.** A comment's
+subject must match what its position allows.
 
-Do this on paper, not by eye. For each doc comment, write out the sentences with their
+A doc comment's subject must be the function, a parameter, or the return value. It sits
+above a declaration.
+
+A remark's subject may be whatever explains the line beside it — routinely something
+else. That is what rationale is.
+
+A file header's subject must be the file: what it is, or, for a test file, what it checks
+and what a failure means. It sits above no declaration.
+
+Do this on paper for a doc comment, not by eye. Write out the sentences with their
 subjects before you decide anything:
 
 ```
@@ -251,12 +258,12 @@ Read by eye, the second sentence looks like it belongs, because it is true and i
 about something the function does. Written down next to its subject it is another thing's
 contract.
 
-**Run it on doc comments only.** A remark sitting at a line is *about* the code under it,
-so its subject is routinely something else — that is what rationale is, and the subject
-test deletes it every time. `// An argument a throw helper reports is often a boxed
-value.` above `case MONO_CEE_BOX:` has a throw helper for its subject and is the reason
-that opcode is on the list. Judge a remark by whether the line under it looks arbitrary
-without it, never by its subject.
+Judge a remark by whether the line under it looks arbitrary without it. `// An argument a
+throw helper reports is often a boxed value.` above `case MONO_CEE_BOX:` passes: a throw
+helper is why that opcode is on the list.
+
+A file header fails the same way. A test file's header that spends three sentences on how
+the function under test decides has that function for a subject, not the file.
 
 **Then, of each survivor: contract or mechanism?** A sentence can name this function and
 still be describing how it works. Mechanism goes down to the line it explains.
@@ -304,10 +311,12 @@ Different fault from Pass 2, and cheaper to test, so run it first on any sentenc
 are keeping. A sentence can earn its place and still be assembled wrong.
 
 **Say the sentence out loud, as if to a colleague. If the restatement is shorter or
-sharper, ship the restatement.** This has found a defect every time it has been run, on
-sentences that had already survived several passes. The tell that it fired: your
-restatement contains a term the comment did not (*modulo*), or it leads with what the
-comment buried (*do not dereference this*).
+sharper, ship the restatement.** This is the circumlocution test — `reference/catalogue.md`
+Section E names it and keeps the shapes caught so far, but the table is not the check:
+run this on every sentence, not only ones that already look like a row in it. It has
+found a defect every time it has been run, on sentences that had already survived
+several passes. The tell that it fired: your restatement contains a term the comment did
+not (*modulo*), or it leads with what the comment buried (*do not dereference this*).
 
 **Then run the same test over the whole block.** What Claudish is, and why the other
 passes cannot see it, is in `reference/claudish.md`. Read it before running this.
@@ -315,8 +324,8 @@ passes cannot see it, is in `reference/claudish.md`. Read it before running this
 Write out the smallest set of ordinary propositions the block states, then read the block
 against that list. Whatever the block has and the list has not is ornament, and ornament
 is deleted rather than paraphrased. Do not write one sentence for each sentence you read.
-The four moves are below. Each one over-fires without the carve-out beside it in that
-file:
+Each of the checks below over-fires without the carve-out beside it in
+`reference/claudish.md`:
 
 - collapse sentences that restate one proposition through a second abstraction, a
   metaphorical label, or a contrast with an alternative nobody believes
@@ -329,9 +338,8 @@ file:
   for, where the sentence never states that relationship
 
 **A compression must not strengthen the claim.** *Required* is not *sufficient* and *not
-tested* is not *wrong*. A shorter sentence that claims more than the long one is a Pass 1
-finding against your own edit, and `reference/claudish.md` has the table of the swaps that
-do it.
+tested* is not *wrong* — `reference/claudish.md` has the full table and the rule that
+catches it.
 
 - Use the domain's word. "Returns the address to call a method at" is a circumlocution
   for *function pointer*. A summary that ends on a preposition is the tell
@@ -346,7 +354,7 @@ do it.
   **Check first that the welded clause is a reason and not a duty.** *…and null
   otherwise, which has to be taken back out again when the method is freed* looks like
   the same shape, and is a caller obligation: the record really must reach
-  `mono_jit_info_table_remove ()`. Amputating a duty deletes contract. A reason answers
+  `mono_jit_info_table_remove ()`. Amputating a duty deletes contract. A reason explains
   *why*, and a duty tells the caller what to write
 - A complement spelled out as a set — *for every other method* — is `otherwise`
 - The subject is a noun the code cannot execute (*the order*, *the rule*, *the reason*):
@@ -372,50 +380,13 @@ register. Invoke the `simple-english:simple-english` skill rather than working f
 memory of it. This is not a style preference: the constraints strip out exactly the
 padding that makes a comment take three reads.
 
-- Modals: `can`, `will` and `must` in an indicative sentence. `should` and `might` are
-  hedges — say what happens, or say in the report that you could not establish it.
-  **`would` and `could` are correct in a counterfactual and stay there**: *Without this,
-  the dispatcher would be renamed to the method it dispatches for* cannot be said any
-  other way, and rewriting it indicative asserts that the renaming happens. The tell is a
-  governing clause — *without this*, *left alone*, *rather than*, *otherwise*, *if it
-  were*. Measured over one sweep, nine of ten `would`s sat in one of those and every
-  "fix" to them was a revert. `may` is the same: real possibility about runtime state
-  (*the vtable might not be initialized yet*) is a fact, not a hedge
-- **A FIXME or a TODO is not documentation.** It is a note to whoever picks the work up,
-  in that author's words. Leave its register alone. The register rules govern what the
-  code's documentation claims
-- A **function** summary starts with a verb, indicative, no parenthetical, no "The one
-  X". The one carve-out is a predicate: `Whether mbb leaves inside the clause` is the
-  house form for a function returning `bool`, and is not a defect. A **type** summary is
-  a noun phrase naming the kind of thing — not a relative clause describing what passes
-  through it, and not the type's invariant
-- A **file** doc is `\file` then `\brief` then one sentence of what the file is for. It
-  never opens with the file's own name: the reader has the path
-- Parameters in `\param`, lower case in prose. Never UPPERCASE
-- No semicolons joining clauses. Sentences under 25 words. No `-ing` as a **verb** (a
-  gerund subject — "Calling this while holding the lock" — is a noun phrase and is fine)
-- Name the actor. No "nothing here" or "nothing else". No "load-bearing" — say what
-  breaks
-- Ask **doc or remark** before you ask anything about length. A doc comment sits above a
-  declaration and is `///`, or `/** */` when it runs to paragraphs — never `/* */`,
-  however long it is. That one is unambiguous and always worth fixing. A remark inside a
-  body is `//`, and `/* */` only once it runs to several paragraphs. What the file around
-  you already does decides nothing: fix the marker in the blocks you are rewriting anyway,
-  and report the rest as a sweep with the count
-- Filler out: simply, just, note that, essentially, basically, obviously
-- **Do not flag plain passives.** The diagnosis is almost always circumlocution instead,
-  and the preferred rewrites in the record use passives freely
+The full checklist — modals, markers, summary shape, filler, and the carve-out each
+needs — is in `reference/register.md`. Read it before running this pass.
 
 **A register fix must not change what the sentence claims.** Re-read every sentence you
 touched in this pass against Pass 1 before you keep it. A register nit is the cheapest
-finding in the document, and turning one into a false claim is the most expensive.
-
-Two ways it goes wrong. Removing `would` drops a conditional, so an indicative rewrite
-states as fact something the code does on one path only. And swapping the subject to
-name the actor can empty the sentence: *A marker is the whole transfer function* says
-which fact drives the dataflow, while *transfer () is each block's transfer function*
-restates the name of the function on the next line. If your rewrite is true of any code
-with that name, you deleted the content.
+finding in the document, and turning one into a false claim is the most expensive —
+`reference/register.md` has the two ways that goes wrong.
 
 ### 6. Run the mechanical check — before reporting, and again after editing
 
@@ -481,59 +452,26 @@ cut first, then the wording.
 
 ## CMake files
 
-Everything above applies, with the changes below.
-
-**The marker rules do not.** CMake has one comment marker. A comment above a
-`function ()`, `macro ()` or `option ()` is a doc comment and gets the doc rules — verb
-first, contract not mechanism, `\param` has no counterpart so name the arguments in
-prose. Everything else is a remark and gets the remark rules. A **separator banner**
-(`# -------`) carries nothing and goes.
-
-**The identity proof is different.** There is nothing to preprocess. Prove the change is
-comment-only by reading the diff:
-
-```bash
-git diff -U0 -- <path> | grep -E '^[-+]' | grep -vE '^(\+\+\+|---)' |
-  grep -vE '^[-+][[:space:]]*(#|$)'
-```
-
-Anything that prints is a line you changed that is not a whole-line comment. A trailing
-comment on a code line prints too, so read what comes out rather than requiring silence.
-
-**The names to grep are different, and this is where the yield is.** A build file's
-comments name variables, cache variables, targets, test labels, options, generated files
-and paths. Every one of those is greppable, and a build system that has been rewritten
-carries comments describing the one before it. Check:
-
-| the name is | where it lives |
-| --- | --- |
-| a variable or cache variable | `git grep -n '<name>' -- '*.cmake' '*CMakeLists.txt'` |
-| a target | the `add_*` call that makes it, anywhere in the tree |
-| a test or a label | `ctest --test-dir build -N`, and `--print-labels` |
-| a file the build writes | the `add_custom_command` `OUTPUT` that writes it |
-| an autotools artefact | `configure`, `Makefile.am` and `autogen.sh` are **gone** |
-
-**The house failure mode here is teaching CMake.** A comment explaining what
-`set (... PARENT_SCOPE)` does, what a generator expression is, or how ctest picks tests
-fails the governing test: the reader has the manual. Keep what is local — why *this*
-build makes that choice, which upstream defect a flag works around, what a magic number
-was measured at.
-
-Run `scripts/register-check-cmake.sh <file>...` instead of `register-check.sh`.
+Every rule and pass above applies. The marker rules, the identity proof, which names to
+grep, and the register-check invocation are different — see `reference/cmake.md`.
 
 ## A tic is a sweep, not a review comment
 
-Grep a suspected house tic before filing it. `answers` for `returns` ran 63 times in
-`mono/llvm/`. Sixty instances is a sweep and a style-guide entry. One review comment on
-one site is noise. The count decides the shape of the fix. It never decides whether the
-thing is a defect: that one was, and it has since been swept.
-`reference/catalogue.md` G20 has the four senses of *answer* that are not the tic and
-must not be re-flagged.
+Grep a suspected house tic before filing it. `answer` standing in for *returns*,
+*covers*, *is known by*, *replaces* or *result* runs into the hundreds across
+`mono/llvm/` — one personification wearing several grammatical shapes. That many
+instances is a sweep and a style-guide entry. One review comment on one site is noise.
+The count decides the shape of the fix. It never decides whether the thing is a defect:
+this one is, in every shape it takes, and `reference/catalogue.md` G20 has each shape
+with its plain rewrite.
 
-**Counting the word is not counting the tic.** The grep found 309 uses and 30 of them
-were the defect. *Answers to*, *answers for*, *answers X with Y* and the plain noun are
-all correct, and a sweep run off the raw count would have rewritten ten right sentences
-for every wrong one. Narrow the pattern until it selects the defect, then count that.
+**A different grammatical shape is not a different, legitimate sense.** An earlier pass
+here split off *answers to*, *answers for*, *answers X with Y* and the plain noun as
+correct English and stopped at the literal *answers* → *returns* swap. That was wrong:
+all four shapes are the same tic, and none of them needed the word. Narrowing a pattern
+to the actual defect still matters — a raw word count over-flags too — but narrowing by
+grammatical shape alone can just as easily undercount a tic as a raw count overcounts
+one.
 
 This holds for a **convention** as much as for a word — comment markers, summary mood,
 `\brief` against a bare first line. A file can break one of these from top to bottom, and

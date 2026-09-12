@@ -3,13 +3,29 @@
 The register an assistant writes by default: polished, contrast-heavy, metaphor-led, and
 stating one proposition several times at different levels of abstraction. Adapted from
 the translation protocol at
-`https://github.com/programasweights/claudish/blob/main/specs/claudish-to-english.md`,
-narrowed to comments and fitted to the carve-outs this tree already has.
+`https://github.com/programasweights/claudish/blob/main/specs/claudish-to-english.md` —
+the sections below are the ones that protocol names, restated with this tree's own
+examples, plus the carve-outs the rest of this skill already protects.
 
-**It is the family the other passes cannot see.** A Claudish block is true, so Pass 1
+**No other pass catches it.** A Claudish block is true, so Pass 1
 finds nothing. Its subject is this function, so Pass 2 finds nothing. Its modals are
 indicative, so Pass 4 finds nothing. What is wrong is the ratio between the block and
 what it says, and only a paraphrase measures that.
+
+## Contents
+
+- The test
+- Prefer semantic compression
+- Rewrite at the lowest useful level of abstraction
+- Remove Claudish rhetorical structure
+- Decode structural and process metaphors
+- Preserve logical scope exactly
+- Decompress technical compounds
+- Normalize over-formal register
+- Preserve legitimate terminology
+- Perform a visible rewrite
+- Cases not covered by this pass
+- Worked pair
 
 ---
 
@@ -28,19 +44,29 @@ rather than a rival to it.
 Do not write one sentence for each sentence you read. A five-sentence block that states
 one proposition becomes one sentence.
 
-## The four moves
+## Prefer semantic compression
 
-**1. Collapse restatement.** Sentences that emphasize a claim without adding to it,
-attach a metaphorical label to it, dramatize it, contrast it with an alternative nobody
-believes, summarize a conclusion already drawn, or redescribe the same relationship one
-level up — all of these collapse into the first statement of the claim.
+Claudish states one idea several times through different abstractions. Each of these
+collapses into the first statement of the claim:
+
+- emphasizing it without adding to it
+- attaching a metaphorical label to it
+- dramatizing it
+- contrasting it with an alternative nobody believes
+- summarizing a conclusion already drawn
+- redescribing the same relationship one level up
+
+If deleting a clause changes no fact, condition, permission, or degree of certainty,
+delete it.
 
 The near relatives already in the catalogue are G5, G6, G10 and G13. Each of those names
 one shape. This is the general case, and it fires on a block whose sentences are each
 defensible in isolation.
 
-**2. Lower the abstraction.** Prefer ordinary verbs and direct relationships to
-nominalizations and system metaphors.
+## Rewrite at the lowest useful level of abstraction
+
+Prefer ordinary verbs and direct relationships to rhetorical framing, nominalizations,
+and system metaphors — the simplest phrasing that stays accurate.
 
 | prefer | over |
 | --- | --- |
@@ -48,46 +74,43 @@ nominalizations and system metaphors.
 | "Do not publish the body until every symbol resolves." | "Symbol resolution is a mandatory publication requirement." |
 | "The counter says the body is hot." | "The counter provides evidence of hotness." |
 
-**3. Delete the scaffolding.** These carry no fact and have no shorter form:
+## Remove Claudish rhetorical structure
+
+Delete these outright rather than paraphrase them. A simpler replacement is still
+ornament if the original carried no fact:
 
 - staged emphasis — *the key distinction*, *the deeper point*, *the honest answer*, *the
-  cleanest way to see this*, *the real question*
-- orientation — *in other words*, *put differently*, *in one sentence*, *to be clear*
+  cleanest way to see this*, *the real question*, *the load-bearing constraint*
+- redundant orientation — *in other words*, *put differently*, *in one sentence*, *to be
+  clear*
 - aphoristic endings — *that is the boundary*, *that distinction matters*, *and that is
   the constraint*
+- a contrastive frame built to be rejected — *not X, but Y*, where X is only the
+  reader's own default assumption stated back to them. A contrast that corrects a real
+  surprise is different, and is rare — see "Preserve legitimate terminology" below
 - a claim restated in fresh vocabulary one sentence later
 
-**4. Decode a compound into its relationship.** *X-gated*, *X-backed*, *X-side*,
-*X-level*, *X-first*, *X-safe* and the noun stacks beside them name a relationship
-without stating it. Recover the verb: "release requires approval", not "an
-approval-gated release path".
+## Decode structural and process metaphors
 
-## The dictionary is the trap
+A word standing in for a relationship the sentence never states is ornament. Recover the
+relationship and say it plainly, choosing the simplest reading the surrounding block
+supports rather than swapping from a fixed dictionary. Most of this list is this tree's
+own vocabulary rather than metaphor — "Preserve legitimate terminology" below is the
+other half of the judgment call:
 
-The word lists above are diagnoses, not substitutions. Half the vocabulary that marks
-Claudish elsewhere is this domain's own name for the thing: a fast **path**, a **cold**
-block, the **surface** `runtime.h` publishes, a ctest **gate**, a commit that **landed**,
-profile **drift** across a rebuild. Each of those is the clearest name for the thing, and
-rewriting one costs a reader the term the code uses (G12).
+| the word | decodes to |
+| --- | --- |
+| *X-gated*, *gated on X* | X is required, or must happen first |
+| *owner-gated*, *approval-gated* | only an owner may do it, or sign-off is required — neither role exists in this tree's code |
+| *hard gate*, *hard boundary*, *hard stop* | a strict requirement or blocker |
+| *load-bearing* | essential — say what breaks without it |
+| *handoff* | one thread, phase or tier passing something to the next |
+| *spine* | the central structure |
 
-Rewrite a metaphor only where it stands in for a relationship the sentence never states.
-Where the sentence states the relationship, the metaphor is the domain's word and stays.
+## Preserve logical scope exactly
 
-**Contrast is usually a fact here.** A sample of *rather than* across `mono/llvm/`
-comments is nearly all factual: it names the alternative a reader would otherwise assume
-— "a fatal error rather than a stub", "a rule rather than a tuning choice". The test is
-whether a reader would believe the rejected half. If they would, the contrast is what
-stops them, and it stays. If the rejected half exists only to set up the preferred one,
-cut it and keep the statement.
-
-And a shape that fires across many files is a sweep, not a review comment. SKILL.md's tic
-rule governs: narrow the pattern until it selects the defect, count that, and report the
-rest.
-
-## A compression must not strengthen the claim
-
-This is where a rewrite turns into the most expensive finding in the document. Check each
-of these against the block you started from:
+Be careful decoding a restriction, a prerequisite, a trigger or a dependency: nothing
+here should get stronger or broader than the block that produced it.
 
 | the input says | the rewrite must not say |
 | --- | --- |
@@ -101,9 +124,68 @@ of these against the block you started from:
 
 Where the block is ambiguous, keep the narrowest reading the surrounding code supports.
 A shorter sentence that claims more than the long one is a Pass 1 finding against your
-own edit, and nothing downstream catches it.
+own edit.
 
-## What this pass does not reach
+## Decompress technical compounds
+
+*X-gated*, *X-backed*, *X-side*, *X-level*, *X-first*, *X-safe* and the noun stacks
+beside them name a relationship without stating it. Recover the actual relationship and
+prefer the verb over the invented noun: "release requires approval," not "an
+approval-gated release path."
+
+## Normalize over-formal register
+
+The original protocol's list — *frontier*, *regime*, *trajectory*, *headline*,
+*confirmatory*, *clears*, *survives* — is research-report vocabulary this tree's
+comments essentially never carry. Its own version of the same drift is procedural:
+*canonical*, *the source of truth*, *authoritative* for a value that already has one
+obvious owner. Simplify it the same way — say the plain claim the fancier word stood in
+for — and keep the word where it names a real technical distinction rather than dressing
+up an ordinary one.
+
+## Preserve legitimate terminology
+
+The word lists above are diagnoses, not substitutions. Half the vocabulary that marks
+Claudish elsewhere is this domain's own name for the thing: a fast **path**, a **cold**
+block, the **surface** `runtime.h` publishes, a ctest **gate**, a commit that **landed**,
+profile **drift** across a rebuild. Each of those is the clearest name for the thing, and
+rewriting one costs a reader the term the code uses (G12).
+
+Rewrite a metaphor only where it stands in for a relationship the sentence never
+states — where the sentence states it, the metaphor stays.
+
+**A contrast has to earn its place, not just be true.** Being factual about which half
+really happens is not the bar — the governing test still applies to a `rather than`
+clause the same as anywhere else, and the burden of proof is on the comment. Keep one
+only when the actual behavior is something a reader would not expect by default, to the
+point that it has to be said: "a fatal error rather than a stub" passes, because nothing
+about the name suggests a stub was ever on the table. Most contrasts do not clear this.
+The rejected half is usually the reader's own default assumption, stated back to them
+only to make the preferred half land — restating an assumption is not correcting one,
+and the fix is to cut the whole contrast and keep the plain statement. Default to
+deleting it. A contrast surviving this is rare, not usual.
+
+And a shape that fires across many files is a sweep, not a review comment. SKILL.md's tic
+rule governs: narrow the pattern until it selects the defect, count that, and report the
+rest.
+
+## Perform a visible rewrite
+
+Do not swap a handful of Claudish words while keeping the original's structure. When it
+applies:
+
+- reduce the sentence count
+- collapse redundant clauses
+- lower the abstraction level
+- turn nominalizations into verbs
+- remove a contrast built to be rejected
+- replace a metaphor with the relationship it stands for
+- remove emphasis that adds no fact
+
+The result should read like someone just said what the block means, and it is fine —
+often better — for that to come out shorter than what it replaced.
+
+## Cases not covered by this pass
 
 The four keeps are decided by their own rules and none of them is Claudish:
 

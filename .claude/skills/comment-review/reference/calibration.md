@@ -5,6 +5,17 @@ Worked before/after pairs, and the fixtures that decide whether a reviewer is tu
 Read this when a finding feels borderline. The pairs are the only demonstrations in the
 record that were checked against the bar rather than proposed against it.
 
+## Contents
+
+- The pairs
+  - Pair 1 — `mono_llvm_jit_stub_for`, `runtime.h`
+  - Pair 2 — `CodeArena`, `jitlink-memory.hpp`
+  - Pair 3 — `shift_amount`, `method-to-llvm/bitops.cpp`
+  - Pair 4 — `passes/restore-tail-position.hpp`, the file doc
+  - Pair 5 — `mono_lsda.cpp`, the wire-format block
+- Fixtures — flag these
+- Fixtures — do **not** flag these
+
 ---
 
 ## The pairs
@@ -197,8 +208,8 @@ static void stop_compilation ();
 
 Imperative summaries where the house form is indicative; "Note that" filler;
 UPPERCASE parameter names; `will` where the approved modal is `can`; and "UB" for what is a
-use-after-free — the language's term for a construct the standard does not define, borrowed
-for a runtime lifetime rule it does not govern.
+use-after-free — the language's term for undefined behavior, borrowed for a runtime
+lifetime rule it does not govern.
 
 **The substance under that is fine.** Both are real caller obligations. Do not cut them.
 
@@ -257,14 +268,14 @@ The argument sits next to the two statements whose order it is about, not in the
 doc comment. It names the whole chain and ends with what the chosen order buys. This is the
 shape G8 rationale is supposed to be moved *into*.
 
-**5. A quote plus what the quote does not cover.**
+**5. A quote plus the gap it leaves.**
 
 The ECMA-335 III.2 passages for all six prefixes sit verbatim at the top of
-`method-to-llvm/prefixes.cpp`. The comment above `emit_prefix ()` says only what the
-standard cannot: that a prefix emits no code, that three of the six are consumed elsewhere
-and by whom, and that `no.` records nothing because permission to skip a check is not an
-obligation to skip it. Where a quote documents the function, the quote **is** the doc
-comment, and our text covers only what this backend does.
+`method-to-llvm/prefixes.cpp`. The comment above `emit_prefix ()` states three things
+the standard leaves out: that a prefix emits no code, that three of the six are consumed
+elsewhere and by whom, and that `no.` records nothing because permission to skip a check
+is not an obligation to skip it. Where a quote documents the function, the quote **is**
+the doc comment, and our text covers only what this backend does.
 
 **6. `\param` plus a hoisted convention.**
 
