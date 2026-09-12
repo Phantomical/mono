@@ -78,17 +78,21 @@ public class GCInterop {
 		return (int) boxed;
 	}
 
-	// Allocate () runs on a thread of its own, and this joins it before the
-	// collection. Both stacks are scanned conservatively, so a stale word left
-	// where the node pointer was pins the node and holds the weak reference
-	// alive. A joined thread has no stack left to scan, and every predecessor
-	// then gives the same answer.
+	// The native stack is scanned conservatively, so a dead reference left in a
+	// stack slot still pins its object. A thread that has ended has no stack to
+	// scan, so whatever body allocated becomes collectable.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void RunOnAJoinedThread (ThreadStart body)
+	{
+		Thread t = new Thread (body);
+		t.Start ();
+		t.Join ();
+	}
+
 	public static int test_1_weak_reference_clears ()
 	{
 		WeakReference w = null;
-		Thread t = new Thread (() => { w = Allocate (); });
-		t.Start ();
-		t.Join ();
+		RunOnAJoinedThread (() => { w = Allocate (); });
 		Collect ();
 		return w.IsAlive ? 0 : 1;
 	}
@@ -126,7 +130,7 @@ public class GCInterop {
 	public static int test_2_finalizer_runs ()
 	{
 		GCInteropFinalized.Count = 0;
-		MakeFinalized ();
+		RunOnAJoinedThread (MakeFinalized);
 		Collect ();
 		return GCInteropFinalized.Count == 0 ? 0 : 2;
 	}
