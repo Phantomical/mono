@@ -2,21 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
-/*
- * A type test the compiler answers from what the IR says about the operand.
- *
- * eliminate_type_tests () reads the class an argument's slot is declared with, or
- * the class an allocation made, and answers the test for every class that slot
- * admits. Each case below is one arm of that rule, and each is written so that
- * a wrong answer is a wrong value rather than a slower one.
- *
- * Every case runs interpreted and compiled in one process. The interpreter
- * answers each test through the runtime, so an elimination that disagrees with
- * it fails here whatever tier it happened at.
- */
-
-// We are intentionally testing X is Y statements that we know to be false
-// for constant propagation purposes.
+// Several cases below assert an `is` result the C# compiler can already
+// tell is always false, which triggers CS0184.
 #pragma warning disable CS0184
 
 enum E32 : int { A, B }
@@ -47,11 +34,6 @@ public class CastEliminate {
 		++failures;
 	}
 
-	/*
-	 * An array slot admits every array whose rank and cast class match, so
-	 * `int[]`, `uint[]` and an enum array over int all reach here. The rule
-	 * answers each test off `int[]` alone, and all three have to agree with it.
-	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool IsIntArray (int[] a) => a is int[];
 
@@ -64,25 +46,18 @@ public class CastEliminate {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool IsUnrelatedClass (int[] a) => a is Unrelated;
 
-	// The element type is not sealed, so this slot admits arrays whose element
-	// classes differ. A test the element decides must not be answered off
-	// `Base[]`.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool IsMarkerArray (Base[] a) => a is IMarker[];
 
-	// Single inheritance: no class is under both, so this is answerable no.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool BaseIsUnrelated (Base b) => b is Unrelated;
 
-	// A subclass may implement any interface, so a bound answers nothing here.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool BaseIsMarker (Base b) => b is IMarker;
 
-	// Assignability carries down, so every class the slot admits passes.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool DerivedIsBase (Derived d) => d is Base;
 
-	// A bound says nothing about a class under it.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool BaseIsDerived (Base b) => b is Derived;
 
@@ -92,58 +67,35 @@ public class CastEliminate {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static object CastToDerived (Base b) => (Derived) b;
 
-	// A closed generic instance bounds its slot the way an ordinary class does.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool ListIsCollection (List<int> l) => l is ICollection<int>;
 
-	// Two instantiations of one generic share no class, so this is answerable no.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool HolderIntIsHolderString (Holder<int> h) => h is Holder<string>;
 
-	// A bound says nothing about a class under it.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool HolderIntIsIntHolder (Holder<int> h) => h is IntHolder;
 
-	// A subclass may implement any interface, whether or not the bound is a
-	// generic instance.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool HolderIntIsMarker (Holder<int> h) => h is IMarker;
 
-	/*
-	 * One shared body serves both calls below, so its `Holder<T>` parameter
-	 * states no class at all. A body that answered off the shared signature
-	 * would answer the two the same, and the two disagree.
-	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool IsHolderOfObject<T> (Holder<T> h) => h is Holder<object>;
 
-	/*
-	 * A closed instance beside the shared parameter is the class every
-	 * instantiation gets. A shared body states it, so both arms of the rule
-	 * are answerable off it.
-	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool SharedListIsCollection<T> (List<int> l, T ignored) => l is ICollection<int>;
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool SharedListIsListOfString<T> (List<int> l, T ignored) => l is List<string>;
 
-	// The class of a fresh object is exact, so both directions are answerable.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool FreshDerivedIsBase () => new Derived () is Base;
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool FreshBaseIsDerived () => new Base () is Derived;
 
-	/*
-	 * A fresh array is exact as well, which is the one array operand the bound
-	 * arms above do not cover. Each test goes through `object` so that C#
-	 * answers none of them itself.
-	 *
-	 * `uint[]` is the arm that tests assignability itself. The two classes
-	 * differ but share a cast class, so comparing them directly answers no,
-	 * while the runtime answers yes.
-	 */
+	// Cast through `object` so the C# compiler cannot constant-fold these
+	// itself; the point is to test this backend's elimination, not Roslyn's.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool FreshIntArrayIsIList () => (object) new int[2] is IList<int>;
 
@@ -162,13 +114,6 @@ public class CastEliminate {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static bool FreshBaseArrayIsMarkerArray () => (object) new Base[1] is IMarker[];
 
-	/*
-	 * A call between a store and a load of what it stored leaves `sources ()`
-	 * naming the stored object and reporting that it did not name every value,
-	 * because the call is free to have written the field as well. Answering the
-	 * test off the named value alone gives `true` here, and the call is what
-	 * makes `false` right.
-	 */
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static void Overwrite (Field f) => f.Held = new Unrelated ();
 
@@ -187,7 +132,6 @@ public class CastEliminate {
 		E32[] enums = new E32[2];
 		E8[] bytes = new E8[2];
 
-		// All three reach an `int[]` slot, and the runtime says yes to each.
 		Check ("int[] is int[]", IsIntArray (ints), true);
 		Check ("uint[] is int[]", IsIntArray ((int[]) (object) uints), true);
 		Check ("E32[] is int[]", IsIntArray ((int[]) (object) enums), true);
@@ -203,8 +147,6 @@ public class CastEliminate {
 		Check ("null is int[]", IsIntArray (null), false);
 		Check ("null is IList<int>", IsIList (null), false);
 
-		// E8[] does not reach an int[] slot at all, which is what keeps the
-		// cast class the whole story for the ones that do.
 		Check ("E8[] is int[] the long way", bytes is int[], false);
 
 		Check ("Derived[] is IMarker[]", IsMarkerArray (new Derived[1]), true);
@@ -284,12 +226,9 @@ public class CastEliminate {
 
 	public static int Main ()
 	{
-		// The first rounds run interpreted, and the later ones run whatever the
-		// thresholds promoted. Both answer through this same code.
-		//
-		// The count reaches tier 2, which is where the elimination answers
-		// these tests. A tier-1 body keeps the icall at each of them, so a count that
-		// stops at tier 1 gates the runtime alone.
+		// Long enough to reach tier 2's promotion threshold in every
+		// configuration that promotes: some cases above are still unresolved
+		// at tier 1.
 		for (int i = 0; i < 25000; ++i)
 			Round ();
 
