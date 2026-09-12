@@ -121,17 +121,14 @@ mono_unit_test_cases(test-embed-invoke test-embed-invoke "*")
 #
 # With MONO_SGEN_STRICT_REMSET_CHECK on, a confirmed miss aborts the process by
 # design. ctest counts a signal death as a failure before it reads
-# PASS_REGULAR_EXPRESSION at all (ctest 3.28), so check-remset-missing.sh
+# PASS_REGULAR_EXPRESSION at all (ctest 3.28), so check-remset-missing.cmake
 # judges the outcome instead.
 mono_add_unit_test(test-remset-missing SOURCES harness.cpp test-remset-missing.cpp RUNTIME)
-if(MONO_SGEN_STRICT_REMSET_CHECK)
-  set(_remset_expect on)
-else()
-  set(_remset_expect off)
-endif()
 add_test(NAME test-remset-missing
-         COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/check-remset-missing.sh"
-                 "$<TARGET_FILE:test-remset-missing>" "${_remset_expect}"
+         COMMAND "${CMAKE_COMMAND}"
+                 "-DMONO_SGEN_STRICT_REMSET_CHECK=${MONO_SGEN_STRICT_REMSET_CHECK}"
+                 -P "${CMAKE_CURRENT_SOURCE_DIR}/check-remset-missing.cmake"
+                 -- "$<TARGET_FILE:test-remset-missing>"
          WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(test-remset-missing PROPERTIES
   ENVIRONMENT "MONO_GC_DEBUG=check-remset-consistency;MONO_PATH=${MONO_MCS_LIBDIR}/build"

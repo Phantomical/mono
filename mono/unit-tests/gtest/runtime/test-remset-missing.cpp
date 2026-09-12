@@ -10,7 +10,7 @@
  * This is its own binary rather than a case in test-mono-runtime.
  * check-remset-consistency reads MONO_GC_DEBUG once, at GC init, for the
  * whole process, and MONO_SGEN_STRICT_REMSET_CHECK aborts the process on a
- * confirmed miss. check-remset-missing.sh reads the checker's report, or its
+ * confirmed miss. check-remset-missing.cmake reads the checker's report, or its
  * absence, off the test's own output instead of anything asserted here past
  * the second collection.
  */
@@ -156,7 +156,7 @@ TEST (RemsetMissing, PinnedTargetExcuseNeedsConfirming)
 	 * That is what proves the miss was seen as pinned, not as an ordinary
 	 * one. Restored before the second collection: its report, if
 	 * MONO_SGEN_STRICT_REMSET_CHECK confirms the miss, has to reach the
-	 * process's stderr, where check-remset-missing.sh reads it back.
+	 * process's stderr, where check-remset-missing.cmake reads it back.
 	 */
 	DebugFileCapture capture;
 	ASSERT_NE (nullptr, capture.file ()) << "failed opening the capture file";
