@@ -2549,7 +2549,7 @@ get_delegate_invoke_impl (MonoTrampInfo **info, gboolean has_target, guint32 par
 	}
 
 	g_assertf ((code - start) <= size, "%d %d", (int)(code - start), size);
-	g_assert_checked (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_TRAMPOLINE_UNWINDINFO_SIZE(0)));
+	g_assert (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_TRAMPOLINE_UNWINDINFO_SIZE(0)));
 
 	mono_arch_flush_icache (start, code - start);
 
@@ -2561,8 +2561,6 @@ get_delegate_invoke_impl (MonoTrampInfo **info, gboolean has_target, guint32 par
 		g_free (name);
 	}
 
-	/* The buffer was reserved with MONO_TRAMPOLINE_UNWINDINFO_SIZE bytes
-	 * behind the code, which is where the Windows unwind table goes. */
 	(*info)->has_unwind_table_slack = TRUE;
 
 	if (mono_jit_map_is_enabled ()) {
@@ -2827,15 +2825,13 @@ mono_arch_build_imt_trampoline (MonoVTable *vtable, MonoDomain *domain, MonoIMTC
 	if (!fail_tramp)
 		UnlockedAdd (&mono_stats.imt_trampolines_size, code - start);
 	g_assert (code - start <= size);
-	g_assert_checked (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_TRAMPOLINE_UNWINDINFO_SIZE(0)));
+	g_assert (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_TRAMPOLINE_UNWINDINFO_SIZE(0)));
 
 	MONO_PROFILER_RAISE (jit_code_buffer, (start, code - start, MONO_PROFILER_CODE_BUFFER_IMT_TRAMPOLINE, NULL));
 
 	{
 		MonoTrampInfo *info = mono_tramp_info_create (NULL, start, code - start, NULL, unwind_ops);
 
-	/* The buffer was reserved with MONO_TRAMPOLINE_UNWINDINFO_SIZE bytes
-	 * behind the code, which is where the Windows unwind table goes. */
 		info->has_unwind_table_slack = TRUE;
 		mono_tramp_info_register (info, domain);
 	}

@@ -78,16 +78,13 @@ mono_arch_get_unbox_trampoline (MonoMethod *m, gpointer addr)
 	amd64_mov_reg_imm (code, AMD64_RAX, addr);
 	amd64_jump_reg (code, AMD64_RAX);
 	g_assertf ((code - start) <= size, "%d %d", (int)(code - start), size);
-	g_assert_checked (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_TRAMPOLINE_UNWINDINFO_SIZE(0)));
+	g_assert (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_TRAMPOLINE_UNWINDINFO_SIZE(0)));
 
 	mono_arch_flush_icache (start, code - start);
 	MONO_PROFILER_RAISE (jit_code_buffer, (start, code - start, MONO_PROFILER_CODE_BUFFER_UNBOX_TRAMPOLINE, m));
 
 	{
 		MonoTrampInfo *info = mono_tramp_info_create (NULL, start, code - start, NULL, unwind_ops);
-
-	/* The buffer was reserved with MONO_TRAMPOLINE_UNWINDINFO_SIZE bytes
-	 * behind the code, which is where the Windows unwind table goes. */
 		info->has_unwind_table_slack = TRUE;
 		mono_tramp_info_register (info, domain);
 	}
@@ -125,16 +122,13 @@ mono_arch_get_static_rgctx_trampoline (MonoMemoryManager *mem_manager, MonoMetho
 	amd64_mov_reg_imm (code, MONO_ARCH_RGCTX_REG, arg);
 	amd64_jump_code (code, addr);
 	g_assertf ((code - start) <= buf_len, "%d %d", (int)(code - start), buf_len);
-	g_assert_checked (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_TRAMPOLINE_UNWINDINFO_SIZE(0)));
+	g_assert (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_TRAMPOLINE_UNWINDINFO_SIZE(0)));
 
 	mono_arch_flush_icache (start, code - start);
 	MONO_PROFILER_RAISE (jit_code_buffer, (start, code - start, MONO_PROFILER_CODE_BUFFER_GENERICS_TRAMPOLINE, NULL));
 
 	{
 		MonoTrampInfo *info = mono_tramp_info_create (NULL, start, code - start, NULL, unwind_ops);
-
-	/* The buffer was reserved with MONO_TRAMPOLINE_UNWINDINFO_SIZE bytes
-	 * behind the code, which is where the Windows unwind table goes. */
 		info->has_unwind_table_slack = TRUE;
 		info->method = method;
 		mono_tramp_info_register (info, domain);
@@ -619,13 +613,15 @@ mono_arch_create_generic_trampoline (MonoTrampolineType tramp_type, MonoTrampInf
 	}
 
 	g_assertf ((code - buf) <= kMaxCodeSize, "%d %d", code, buf, (int)(code - buf), kMaxCodeSize);
-	g_assert_checked (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_MAX_TRAMPOLINE_UNWINDINFO_SIZE));
+	g_assert (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_MAX_TRAMPOLINE_UNWINDINFO_SIZE));
 
 	mono_arch_flush_icache (buf, code - buf);
 	MONO_PROFILER_RAISE (jit_code_buffer, (buf, code - buf, MONO_PROFILER_CODE_BUFFER_HELPER, NULL));
 
 	tramp_name = mono_get_generic_trampoline_name (tramp_type);
 	*info = mono_tramp_info_create (tramp_name, buf, code - buf, ji, unwind_ops);
+
+	(*info)->has_unwind_table_slack = TRUE;
 
 	return buf;
 }
@@ -795,12 +791,10 @@ mono_arch_create_rgctx_lazy_fetch_trampoline (guint32 slot, MonoTrampInfo **info
 
 	g_assertf ((code - buf) <= tramp_size, "%d %d", (int)(code - buf), tramp_size);
 
-	g_assert_checked (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_TRAMPOLINE_UNWINDINFO_SIZE(0)));
+	g_assert (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_TRAMPOLINE_UNWINDINFO_SIZE(0)));
 
 	char *name = mono_get_rgctx_fetch_trampoline_name (slot);
 	*info = mono_tramp_info_create (name, buf, code - buf, ji, unwind_ops);
-	/* The buffer was reserved with MONO_TRAMPOLINE_UNWINDINFO_SIZE bytes
-	 * behind the code, which is where the Windows unwind table goes. */
 	(*info)->has_unwind_table_slack = TRUE;
 	g_free (name);
 
@@ -836,13 +830,12 @@ mono_arch_create_general_rgctx_lazy_fetch_trampoline (MonoTrampInfo **info, gboo
 
 	g_assertf ((code - buf) <= tramp_size, "%d %d", (int)(code - buf), tramp_size);
 
-	g_assert_checked (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_TRAMPOLINE_UNWINDINFO_SIZE(0)));
+	g_assert (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_TRAMPOLINE_UNWINDINFO_SIZE(0)));
 
-	if (info)
+	if (info) {
 		*info = mono_tramp_info_create ("rgctx_fetch_trampoline_general", buf, code - buf, ji, unwind_ops);
-		/* The buffer was reserved with MONO_TRAMPOLINE_UNWINDINFO_SIZE bytes
-	 * behind the code, which is where the Windows unwind table goes. */
 		(*info)->has_unwind_table_slack = TRUE;
+	}
 
 	return buf;
 }
@@ -1062,10 +1055,12 @@ mono_arch_create_sdb_trampoline (gboolean single_step, MonoTrampInfo **info, gbo
 	mono_arch_flush_icache (code, code - buf);
 	MONO_PROFILER_RAISE (jit_code_buffer, (buf, code - buf, MONO_PROFILER_CODE_BUFFER_HELPER, NULL));
 	g_assert (code - buf <= tramp_size);
-	g_assert_checked (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_MAX_TRAMPOLINE_UNWINDINFO_SIZE));
+	g_assert (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_MAX_TRAMPOLINE_UNWINDINFO_SIZE));
 
 	const char *tramp_name = single_step ? "sdb_single_step_trampoline" : "sdb_breakpoint_trampoline";
 	*info = mono_tramp_info_create (tramp_name, buf, code - buf, ji, unwind_ops);
+
+	(*info)->has_unwind_table_slack = TRUE;
 
 	return buf;
 }
@@ -1176,13 +1171,16 @@ mono_arch_get_interp_to_native_trampoline (MonoTrampInfo **info)
 
 	g_assertf ((code - start) <= buf_len, "%d %d", (int)(code - start), buf_len);
 
-	g_assert_checked (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_MAX_TRAMPOLINE_UNWINDINFO_SIZE));
+	g_assert (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_MAX_TRAMPOLINE_UNWINDINFO_SIZE));
 
 	mono_arch_flush_icache (start, code - start);
 	MONO_PROFILER_RAISE (jit_code_buffer, (start, code - start, MONO_PROFILER_CODE_BUFFER_HELPER, NULL));
 
-	if (info)
+	if (info) {
 		*info = mono_tramp_info_create ("interp_to_native_trampoline", start, code - start, ji, unwind_ops);
+
+		(*info)->has_unwind_table_slack = TRUE;
+	}
 
 	return start;
 #else
@@ -1273,13 +1271,16 @@ mono_arch_get_native_to_interp_trampoline (MonoTrampInfo **info)
 
 	g_assertf ((code - start) <= buf_len, "%d %d", (int)(code - start), buf_len);
 
-	g_assert_checked (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_MAX_TRAMPOLINE_UNWINDINFO_SIZE));
+	g_assert (mono_arch_unwindinfo_validate_size (unwind_ops, MONO_MAX_TRAMPOLINE_UNWINDINFO_SIZE));
 
 	mono_arch_flush_icache (start, code - start);
 	MONO_PROFILER_RAISE (jit_code_buffer, (start, code - start, MONO_PROFILER_CODE_BUFFER_EXCEPTION_HANDLING, NULL));
 
-	if (info)
+	if (info) {
 		*info = mono_tramp_info_create ("native_to_interp_trampoline", start, code - start, ji, unwind_ops);
+
+		(*info)->has_unwind_table_slack = TRUE;
+	}
 
 	return start;
 #else

@@ -523,6 +523,15 @@ mono_arch_code_chunk_destroy (void *chunk);
 #define MONO_TRAMPOLINE_UNWINDINFO_SIZE(max_code_count) (mono_arch_unwindinfo_get_size (max_code_count))
 #define MONO_MAX_TRAMPOLINE_UNWINDINFO_SIZE (MONO_TRAMPOLINE_UNWINDINFO_SIZE(3))
 
+/**
+ * Whether the unwind info for unwind_ops fits in max_size bytes.
+ *
+ * The caller reserves max_size bytes behind the trampoline's code, and
+ * mono_arch_unwindinfo_install_method_unwind_info () writes the UNWIND_INFO
+ * there with no bound of its own. A trampoline that gains an unwind op and
+ * overruns corrupts whatever the code manager handed out next. Check this under
+ * g_assert, never g_assert_checked: the overrun is silent in a release build.
+ */
 static inline gboolean
 mono_arch_unwindinfo_validate_size (GSList *unwind_ops, guint max_size)
 {
