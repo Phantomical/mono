@@ -50,6 +50,13 @@ typedef struct {
 #define ENABLE_CHECKED_BUILD_UNWINDINFO
 #endif
 
+/// Registers a range of code memory, so that
+/// mono_arch_unwindinfo_insert_rt_func_in_table () can hold records for it.
+/// Memory from a MonoCodeManager is already registered through the chunk_new
+/// callback. Code allocated any other way needs this call first.
+DynamicFunctionTableEntry*
+mono_arch_unwindinfo_insert_range_in_table(const gpointer code_block, gsize block_size);
+
 PRUNTIME_FUNCTION
 mono_arch_unwindinfo_insert_rt_func_in_table(const gpointer code, gsize code_size, const gpointer unwinddata);
 

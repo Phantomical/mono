@@ -321,6 +321,13 @@ struct LazyEntryABI : public llvm::orc::OrcX86_64_SysV {
 	                               llvm::orc::ExecutorAddr resolver_addr,
 	                               llvm::orc::ExecutorAddr reentry_fn,
 	                               llvm::orc::ExecutorAddr reentry_ctx);
+
+	/// Writes the resolver's instructions into the first ResolverCodeSize bytes
+	/// of \p resolver_mem and does nothing else. writeResolverCode () publishes
+	/// the block it wrote.
+	static void write_resolver_body (char *resolver_mem,
+	                                 llvm::orc::ExecutorAddr reentry_fn,
+	                                 llvm::orc::ExecutorAddr reentry_ctx);
 };
 
 /// Builds the frame the re-entry resolver runs on, as a CFI program.

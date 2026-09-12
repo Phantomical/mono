@@ -27,7 +27,12 @@
 #include "debugging/perf/jitdump.hpp"
 
 #include <cstring>
+#include <iterator>
 #include <vector>
+
+#ifdef HOST_WIN32
+#include "mono/mini/mini-windows.h"
+#endif
 
 using namespace llvm;
 using namespace llvm::orc;
@@ -108,6 +113,121 @@ lazy_resolver_frame ()
 #endif
 }
 
+#ifdef HOST_WIN32
+
+namespace {
+
+/// One UNWIND_CODE: the offset of the instruction after the one it describes,
+/// the operation, and the operation's four-bit operand.
+constexpr uint16_t
+unwind_slot (unsigned at, unsigned op, unsigned info)
+{
+	return (uint16_t) (at | (op << 8) | (info << 12));
+}
+
+/*
+ * The same frame as unwind codes, because Windows reads neither the CFI program
+ * above nor the jit dump it goes into. Without these an OS walk - a debugger's,
+ * and the one ETW takes for each event - would stop at the resolver.
+ *
+ * Windows has no CFA to aim at. A walk ends by taking the return address from
+ * wherever the codes leave rsp. So the skip the CFI program writes as a CFA of
+ * [rbp + 0x18] is the last rule's eight bytes here. The pops bring rsp back to
+ * the trampoline's return address, and that rule steps over it onto the
+ * caller's.
+ *
+ * RtlVirtualUnwind reads the codes in the order they are written and each
+ * undoes the instruction it names, so the table is the prologue backwards. Its
+ * offsets are the code's, the same ones lazy_resolver_frame () is tied to.
+ */
+constexpr uint16_t resolver_unwind_codes[] = {
+	/* sub rsp, 0x40 */
+	unwind_slot (0x2d, UWOP_ALLOC_SMALL, (0x40 - 8) / 8),
+
+	/* sub rsp, 0x208, whose size is a slot of its own. */
+	unwind_slot (0x21, UWOP_ALLOC_LARGE, 0),
+	0x208 / 8,
+
+	/* The spills, which are arch::LazyEntryFrame. */
+	unwind_slot (0x1a, UWOP_PUSH_NONVOL, 15), /* push r15 */
+	unwind_slot (0x18, UWOP_PUSH_NONVOL, 14), /* push r14 */
+	unwind_slot (0x16, UWOP_PUSH_NONVOL, 13), /* push r13 */
+	unwind_slot (0x14, UWOP_PUSH_NONVOL, 12), /* push r12 */
+	unwind_slot (0x12, UWOP_PUSH_NONVOL, 11), /* push r11 */
+	unwind_slot (0x10, UWOP_PUSH_NONVOL, 10), /* push r10 */
+	unwind_slot (0x0e, UWOP_PUSH_NONVOL, 9),  /* push r9 */
+	unwind_slot (0x0c, UWOP_PUSH_NONVOL, 8),  /* push r8 */
+	unwind_slot (0x0a, UWOP_PUSH_NONVOL, 7),  /* push rdi */
+	unwind_slot (0x09, UWOP_PUSH_NONVOL, 6),  /* push rsi */
+	unwind_slot (0x08, UWOP_PUSH_NONVOL, 2),  /* push rdx */
+	unwind_slot (0x07, UWOP_PUSH_NONVOL, 1),  /* push rcx */
+	unwind_slot (0x06, UWOP_PUSH_NONVOL, 3),  /* push rbx */
+	unwind_slot (0x05, UWOP_PUSH_NONVOL, 0),  /* push rax */
+
+	/* push rbp, which leaves rsp on the trampoline's return address. */
+	unwind_slot (0x01, UWOP_PUSH_NONVOL, 5),
+
+	// The step over it, onto the caller's. Offset zero keeps this rule at the
+	// resolver's entry, where rbp and both return addresses are the caller's
+	// already.
+	unwind_slot (0x00, UWOP_ALLOC_SMALL, 0),
+};
+
+constexpr unsigned resolver_prologue_size = 0x2d;
+
+/*
+ * Where the rules stop being exact. The `add rsp, 0x40` at 0x75 takes the frame
+ * apart ahead of the epilogue. Windows' own epilogue scan does not recognise
+ * that epilogue either, because an fxrstor64 stands in the middle of it. The
+ * range ends here rather than covering code the rules would unwind wrongly.
+ * Every call in the resolver returns below it, so a walk loses nothing.
+ */
+constexpr unsigned resolver_described_size = 0x7c;
+
+/// The x64 ABI requires the record to be DWORD-aligned and its code array to
+/// hold an even number of slots.
+constexpr unsigned resolver_unwind_offset
+	= (LazyEntryABI::ResolverCodeSize + 3) & ~3u;
+constexpr unsigned resolver_unwind_slots
+	= (std::size (resolver_unwind_codes) + 1) & ~size_t (1);
+constexpr unsigned resolver_published_size
+	= resolver_unwind_offset + 4 + 2 * resolver_unwind_slots;
+
+static_assert (std::size (resolver_unwind_codes) <= 255,
+               "CountOfCodes is one byte");
+
+/// Writes the resolver's unwind record behind its code and registers the range
+/// holding both, so RtlLookupFunctionEntry answers for a return address in the
+/// resolver.
+///
+/// The room behind the code is the rest of the page LocalTrampolinePool asked
+/// the OS for. It is still writable here, because the pool protects the block
+/// after writeResolverCode () returns.
+void
+publish_resolver_unwind_info (char *resolver_mem, ExecutorAddr resolver_addr)
+{
+	uint8_t *record = (uint8_t *) resolver_mem + resolver_unwind_offset;
+
+	record[0] = 1; /* version 1, and no language-specific handler */
+	record[1] = resolver_prologue_size;
+	record[2] = (uint8_t) std::size (resolver_unwind_codes);
+	record[3] = 0; /* no frame register: rsp is fixed across the body */
+
+	std::memset (record + 4, 0, 2 * resolver_unwind_slots);
+	std::memcpy (record + 4, resolver_unwind_codes,
+	             sizeof (resolver_unwind_codes));
+
+	char *code = resolver_addr.toPtr<char *> ();
+
+	mono_arch_unwindinfo_insert_range_in_table (code, resolver_published_size);
+	mono_arch_unwindinfo_insert_rt_func_in_table (code, resolver_described_size,
+	                                              code + resolver_unwind_offset);
+}
+
+} // namespace
+
+#endif /* HOST_WIN32 */
+
 /*
  * ORC's OrcX86_64_SysV::writeResolverCode () with the lazy-entry frame added:
  * everything from `subq $0x20, %rsp` to the `callq` after it, the second half
@@ -134,9 +254,8 @@ lazy_resolver_frame ()
  * mini's trampoline puts it after its `leave`.
  */
 void
-LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
-                                 ExecutorAddr reentry_fn,
-                                 ExecutorAddr reentry_ctx)
+LazyEntryABI::write_resolver_body (char *resolver_mem, ExecutorAddr reentry_fn,
+                                   ExecutorAddr reentry_ctx)
 {
 	static_assert (managed_frame_size == 0x20,
 	               "the frame reservation is an immediate below");
@@ -361,6 +480,18 @@ LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
 	std::memcpy (resolver_mem + leave_fn_offset, &leave_fn, sizeof (leave_fn));
 	std::memcpy (resolver_mem + rethrow_slot_offset, &rethrow_slot,
 	             sizeof (rethrow_slot));
+}
+
+void
+LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
+                                 ExecutorAddr reentry_fn,
+                                 ExecutorAddr reentry_ctx)
+{
+	write_resolver_body (resolver_mem, reentry_fn, reentry_ctx);
+
+#ifdef HOST_WIN32
+	publish_resolver_unwind_info (resolver_mem, resolver_addr);
+#endif
 
 	perf::FrameFunction fn;
 	fn.size = ResolverCodeSize;

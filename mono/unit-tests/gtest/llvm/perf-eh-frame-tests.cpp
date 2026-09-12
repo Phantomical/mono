@@ -342,9 +342,8 @@ TEST (PerfEhFrame, ResolverRulesSitOnInstructionBoundaries)
 {
 	std::vector<char> code (arch::LazyEntryABI::ResolverCodeSize);
 
-	arch::LazyEntryABI::writeResolverCode (
-		code.data (), orc::ExecutorAddr::fromPtr (code.data ()),
-		orc::ExecutorAddr (0x1000), orc::ExecutorAddr (0x2000));
+	arch::LazyEntryABI::write_resolver_body (
+		code.data (), orc::ExecutorAddr (0x1000), orc::ExecutorAddr (0x2000));
 
 	std::vector<UnwindRecord> records = arch::lazy_resolver_frame ();
 
