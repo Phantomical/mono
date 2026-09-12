@@ -34,6 +34,27 @@ walks the reader through what each part does. That is the default for a normal f
 the floor for a terse one. Everything below runs the same assumption through a different
 test — the necessity test, the bias against adding text, and most of the catalogue.
 
+**State the wrong outcome, not the missing topic.** "A reader wouldn't know this is a
+producer" is not a reason to keep a sentence; "a reader would think Boom's exception
+should build inline too, and silently break the offset check below" is. If you cannot
+name the concrete way a competent reader goes wrong, the sentence is ornament, however
+true it reads.
+
+**Two places let a comment hide from this, because it is true right where it sits.** A
+fact `CLAUDE.md` already documents centrally — its architecture section covers most of
+`mono/llvm/`'s mechanisms, one option or one pass at a time — passes a review that only
+checks the comment against the code beside it, since the duplicate lives in a file the
+reviewer never opened. Grep `CLAUDE.md` for a comment's claim before keeping it, the same
+way Pass 1 greps the tree for a name; a paraphrase of an entry there is still a second
+copy (A3), however differently it is worded. **The fix is to cut the sentence, never to
+cite `CLAUDE.md` from the code** — it is the assistant's own operating manual, not
+documentation the tree's other readers are assumed to have open, and a comment that sends
+a human reader there hands them a file that was never written for them. And a sibling
+file is never evidence for how much a comment should say: everything under `mono/tests/`
+and most of `mono/llvm/` was written by the same kind of unreviewed pass this skill
+exists to catch, so a dense header two files over is not precedent, it is the next
+finding.
+
 **Can the caller do something differently because of this sentence?** If not, cut it.
 True, interesting, and relevant to the implementation are all failing grades. So is
 useful. The test is necessity: the comment stays only where the code cannot carry the
@@ -112,9 +133,14 @@ inside a method are otherwise minimal, and explain *why*.
 that builds it, not a piece in each doc comment. The mono vararg cookie was spelled out
 in five places, each carrying the part its own function needed, and none of them said
 what the buffer looks like. Hoist the mechanism, then cut every restatement. A comment
-that points at the home stays. The same rule covers restating the signature, the file
-extension, or who calls a function: two copies disagree eventually, and the copy a
-reader finds first is the one they believe.
+that points at the home stays, and the home has to be in the tree — another function,
+another file's doc comment, a header. `CLAUDE.md` is never that home: it is the
+assistant's own operating manual, not documentation the tree's other readers are assumed
+to have open, so a comment sending a human reader there hands them a file that was never
+meant for them. Where `CLAUDE.md` is the only place a fact is written down, cut the local
+restatement outright rather than citing it. The same rule covers restating the signature,
+the file extension, or who calls a function: two copies disagree eventually, and the copy
+a reader finds first is the one they believe.
 
 **Do not write:**
 - Archeology. A comment about deleted or legacy code goes stale when the code moves.
@@ -233,6 +259,15 @@ looked where it lives:
 | a macro | it can be defined under an `#if` you did not compile |
 | a build fact | `build/compile_commands.json`, and the CMake files |
 
+**Grep `CLAUDE.md` for every architecture-level claim, not just for names.** A sentence
+about an option, a pass, or a general mechanism is checked for truth by the rules above
+and checked for *belonging here at all* by this one: if `CLAUDE.md` already states it,
+the finding is A3, not a pass, and the fix is to cut the sentence — never to replace it
+with a citation to `CLAUDE.md`, which is written for the assistant working in this tree,
+not for the file's own readers. This misses nothing the name-grep catches on its own,
+because the claim survives that grep — it is true, and about a real thing. It only shows
+up when you read the sentence against the doc that owns the fact.
+
 A one-line grep of the working tree resolves none of those. Where a name is real inside a
 sentence that is stale in some other way, **fix the stale part and keep the name**. A
 compound false claim is not licence to delete the true clause with it.
@@ -288,7 +323,8 @@ still be describing how it works. Mechanism goes down to the line it explains.
 **Then the cuts.** Full diagnostics and examples in `reference/catalogue.md`:
 
 - restates the next line, the signature, or the summary
-- a second copy of a fact that has a home elsewhere — point at the home, or say nothing
+- a second copy of a fact that has a home elsewhere — point at the home, or say nothing.
+  If the home is `CLAUDE.md`, say nothing: it is not a home a comment may cite
 - a convention restated per file instead of hoisted to one block above the code
 - documents the default: a reader assumes code memory is readable. Comment the surprise
 - states facts where it could state the decision → "use this when X, otherwise use Y"

@@ -24,6 +24,12 @@ against it — the script finds candidates, this decides which are real.
   is `\file` then `\brief` then one sentence of what the file is for. It never opens with
   the file's own name: the reader has the path.
 - **Parameters** go in `\param`, lower case in prose. Never UPPERCASE.
+- **`.cs` files carry no Doxygen syntax.** No `\param`, `\p`, `\brief`, `\file` — nothing
+  under `mono/tests/*.cs` runs through Doxygen, so a backslash command there is dead
+  syntax copied from the C++ side, not a convention this language shares. Write plain
+  prose instead, with an identifier in backticks: `` `run (7)` ``, not `\p run (7)`. The
+  marker itself still follows the rule below — `///` above a declaration — since that is
+  C#'s own XML-doc comment syntax, not Doxygen's.
 - **Sentence shape.** No semicolons joining clauses. Sentences under 25 words. No `-ing`
   as a **verb** (a gerund subject — "Calling this while holding the lock" — is a noun
   phrase and is fine).
