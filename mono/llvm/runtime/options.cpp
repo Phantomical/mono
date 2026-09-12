@@ -749,6 +749,15 @@ wrapper_runs_at_tier0 (MonoMethod *method, bool for_classic)
 	case WRAPPER_SUBTYPE_INTERP_IN:
 	case WRAPPER_SUBTYPE_INTERP_LMF:
 		return false;
+	/*
+	 * do_jit_call () reaches compiled code through this wrapper where
+	 * mono_llvm_jit_dyn_call_prepare () states no plan for the signature.
+	 * Interpreting it runs the thread out of stack. The wrapper's calli
+	 * arrives at the callee's compiled entry, MINT_CALLI resolves that entry
+	 * back to the callee, and do_jit_call () runs again.
+	 */
+	case WRAPPER_SUBTYPE_GSHAREDVT_OUT_SIG:
+		return false;
 	default:
 		return true;
 	}

@@ -444,6 +444,14 @@ if(MONO_ENABLE_INTERPRETER)
                      TESTS interp-jit-call-wrappers.exe
                      ENV "${_interp_tier0}")
 
+  # do_jit_call () reaches compiled code through a dyn-call plan, or through a
+  # gsharedvt_out_sig wrapper where plan_dyn_call () states no plan. The plan
+  # covers every signature dyn-call.cs holds, so no other arm reaches that
+  # wrapper.
+  mono_runtime_suite(runtime-interp-tier0-dyn-calls-off LABEL interp
+                     TESTS dyn-call.exe
+                     ENV "${_interp_tier0} --llvm-opt=-mono-dyn-calls=0")
+
   # Continuations under the interpreter, where the frame that marked one is
   # interpreted and so has no native stack for Store () to copy. Mark () has to
   # say so rather than walk a stack it cannot describe.
