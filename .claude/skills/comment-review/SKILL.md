@@ -17,6 +17,23 @@ CMake file, and `reference/editing-this-skill.md` before changing this skill's o
 
 ## The governing test
 
+**The default assumption is that the reader is already competent.** They know this
+codebase, they know JIT compilation, and they can read the code in front of them. A
+comment earns its place only by adding what that reader cannot already get by reading —
+never by re-explaining a class hierarchy, a self-describing name, a result two adjacent
+calls already show, or anything else already visible on the page. Challenge every
+sentence: does the reader really need this explained, can they be assumed to already
+know it, does the sentence justify what it costs to read past. This is a mindset to
+bring to every line, not a shape to pattern-match — the catalogue names the shapes this
+has caught so far, and a sentence can fail the assumption while matching none of them.
+
+Calibrate density against this: most files in the tree, read cold, should look closer to
+an old bug-N regression test — a name and a body doing the whole job, with a line of
+prose only where the code would otherwise look like a mistake — than to a file that
+walks the reader through what each part does. That is the default for a normal file, not
+the floor for a terse one. Everything below runs the same assumption through a different
+test — the necessity test, the bias against adding text, and most of the catalogue.
+
 **Can the caller do something differently because of this sentence?** If not, cut it.
 True, interesting, and relevant to the implementation are all failing grades. So is
 useful. The test is necessity: the comment stays only where the code cannot carry the
@@ -60,8 +77,8 @@ and F1 and F2 are what happens when a bias runs over them.
 The tree's style guide. The passes below are how these get applied to a diff, and each
 pass carries the diagnostics for the rules it enforces.
 
-Comments are read by humans who know this codebase and know JIT compilation. Write for
-them. Dense or cryptic comments that cannot be understood are not useful.
+Dense or cryptic comments that cannot be understood by that reader are still not
+useful — competence is a floor, not permission to write badly.
 
 **Length.** Match it to what the thing needs. A subtle invariant is usually arguable in a
 few sentences. If IR or pseudocode conveys the shape of a transform faster than prose,

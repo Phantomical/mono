@@ -431,6 +431,19 @@ the literal return-value swap. That was wrong. Rewrite every shape:
 | *answers X with Y* | "library methods the transform answers with an opcode" | "library methods the transform replaces with an opcode" |
 | *the answer* | "a rule at the wrong offset unwinds to a wrong answer" | "a rule at the wrong offset unwinds to the wrong result" |
 
+**A synonym is not a rewrite either.** A grep for this tic finds only the word `answer`,
+and a correction can drift past it while keeping the same shape: `eliminate_type_tests
+() ... answers the test for every class that slot admits` came back as `... settles the
+test for every class that slot admits`, and a neighboring fix turned `a bound answers
+nothing here` into `the parameter's bound decides nothing here`. Both keep exactly what
+the rule bans — an abstraction (*the rule*, *a bound*) cast as an agent resolving a
+yes/no question — under a word the grep does not know to look for. The test is not "does
+this contain `answer`"; it is "is an abstract noun cast as answering, settling or
+deciding a question". Say what actually happens instead: name the real actor and reuse
+the function's own verb (`eliminate_type_tests () eliminates the test`), or state the
+dependency plainly (`whether the array is IMarker[] depends on its actual element
+class`, not `the element's class decides this`).
+
 ### G21. Documenting something other than this comment's own subject
 
 A comment can be true and not padding, and still document the wrong subject —
@@ -520,3 +533,13 @@ genuinely needed is still written wrong when it is written as a defence.
 Numbers belong to this too. A measurement pinned in a source file goes stale when
 anything upstream moves. Put the counts in the plan document, where a stale number costs
 nothing, and leave the file the sentence that stays true.
+
+### G25. Bare `fold` for one of the two things this tree calls that
+
+`fold` is banned on its own: this tree uses it for constant folding (`is` resolved from
+what the IR already says about the operand) and, in older text, for inlining a callee
+into its caller — two different mechanisms, one word. A reader who does not already know
+which era wrote the sentence cannot tell which is meant. Say `constant fold` when that is
+the one meant, and name the mechanism (`inline`, `eliminate`) otherwise. This is the same
+failure as G20 one level out: the word itself, not a grammatical shape of it, is what
+carries the ambiguity, so the fix is never a synonym — it is saying which of the two.
