@@ -25,14 +25,11 @@ namespace mono {
 uint32_t etw_method_flags (MonoMethod *method, MonoJitInfo *jinfo);
 
 /// Fills \p il_offsets and \p native_offsets, in step, from jinfo's own
-/// per-body map (MonoJitInfo::llvm_seq_points).
+/// per-body map (MonoJitInfo::il_offsets).
 ///
 /// A run of rows sharing an IL offset collapses into the first of them.
 /// Writes at most \p max_entries pairs, in the ascending native-offset order
-/// llvm_seq_points already keeps, and returns how many it wrote.
-///
-/// Zero means jinfo has no per-body map of its own - see
-/// etw-profiler.cpp's classic-tier-0 fallback for that case.
+/// il_offsets already keeps, and returns how many it wrote.
 uint32_t etw_body_il_map (MonoJitInfo *jinfo, uint32_t *il_offsets,
                           uint32_t *native_offsets, uint32_t max_entries);
 

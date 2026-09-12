@@ -357,8 +357,8 @@ TEST_F (EtwProfilerNaming, WrapperKeepsTheTargetsName)
 }
 
 /*
- * jinfo->llvm_seq_points is a per-body map, so a method with three live
- * bodies has to read back three different maps, one per jinfo.
+ * jinfo->il_offsets is a per-body map, so a method with three live bodies has
+ * to read back three different maps, one per jinfo.
  */
 TEST_F (EtwProfiler, ILMapComesFromTheBodyNotTheMethod)
 {
@@ -388,24 +388,26 @@ TEST_F (EtwProfiler, ILMapComesFromTheBodyNotTheMethod)
 	ASSERT_NE (nullptr, bodies[1].jinfo);
 	ASSERT_NE (nullptr, bodies[2].jinfo);
 
-	EXPECT_EQ (0u, bodies[0].jinfo->n_llvm_seq_points)
-		<< "nothing under mono/mini/tier0/ publishes a per-body map";
-
+	uint32_t tier0_il[64], tier0_native[64];
 	uint32_t tier1_il[64], tier1_native[64];
 	uint32_t tier2_il[64], tier2_native[64];
 
+	uint32_t n0 = mono::etw_body_il_map (bodies[0].jinfo, tier0_il, tier0_native, 64);
 	uint32_t n1 = mono::etw_body_il_map (bodies[1].jinfo, tier1_il, tier1_native, 64);
 	uint32_t n2 = mono::etw_body_il_map (bodies[2].jinfo, tier2_il, tier2_native, 64);
 
+	// mono_save_il_offset_map () (mono/mini/tier0/seq-points.c) is what builds
+	// the classic body's map.
+	EXPECT_GT (n0, 0u) << "the classic tier-0 body carries no map of its own";
 	ASSERT_GT (n1, 0u) << "tier 1's translation recovered no map to check";
 	ASSERT_GT (n2, 0u) << "tier 2's translation recovered no map to check";
 
 	// Every pair this reports for a body is a row of that body's own jinfo.
 	for (uint32_t i = 0; i < n1; ++i) {
 		bool found = false;
-		for (uint32_t j = 0; j < bodies[1].jinfo->n_llvm_seq_points; ++j)
-			if (bodies[1].jinfo->llvm_seq_points[j].il_offset == tier1_il[i]
-			    && bodies[1].jinfo->llvm_seq_points[j].native_offset == tier1_native[i])
+		for (uint32_t j = 0; j < bodies[1].jinfo->n_il_offsets; ++j)
+			if (bodies[1].jinfo->il_offsets[j].il_offset == tier1_il[i]
+			    && bodies[1].jinfo->il_offsets[j].native_offset == tier1_native[i])
 				found = true;
 		EXPECT_TRUE (found) << "entry " << i << " is not a row of tier 1's own jinfo";
 	}
@@ -421,14 +423,14 @@ TEST_F (EtwProfiler, ILMapComesFromTheBodyNotTheMethod)
  * directly rather than one a compile produced. */
 TEST (EtwProfilerPure, ILMapDedupesByILOffsetAndStaysSorted)
 {
-	MonoLLVMSeqPoint rows[6] = {
+	MonoILOffsetEntry rows[6] = {
 		{ 0, 0 }, { 4, 0 }, { 8, 3 }, { 12, 3 }, { 16, 7 }, { 20, 7 },
 	};
 
 	MonoJitInfo jinfo;
 	memset (&jinfo, 0, sizeof (jinfo));
-	jinfo.llvm_seq_points = rows;
-	jinfo.n_llvm_seq_points = 6;
+	jinfo.il_offsets = rows;
+	jinfo.n_il_offsets = 6;
 
 	uint32_t il[16], native[16];
 	uint32_t n = mono::etw_body_il_map (&jinfo, il, native, 16);
@@ -449,15 +451,15 @@ TEST (EtwProfilerPure, ILMapDedupesByILOffsetAndStaysSorted)
  * this checks the fill stops there without building 7000 rows. */
 TEST (EtwProfilerPure, ILMapRespectsCap)
 {
-	std::vector<MonoLLVMSeqPoint> rows;
+	std::vector<MonoILOffsetEntry> rows;
 
 	for (uint32_t i = 0; i < 10; ++i)
-		rows.push_back (MonoLLVMSeqPoint { i * 4, i });
+		rows.push_back (MonoILOffsetEntry { i * 4, i });
 
 	MonoJitInfo jinfo;
 	memset (&jinfo, 0, sizeof (jinfo));
-	jinfo.llvm_seq_points = rows.data ();
-	jinfo.n_llvm_seq_points = (guint32) rows.size ();
+	jinfo.il_offsets = rows.data ();
+	jinfo.n_il_offsets = (guint32) rows.size ();
 
 	uint32_t il[4], native[4];
 	uint32_t n = mono::etw_body_il_map (&jinfo, il, native, 4);

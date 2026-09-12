@@ -122,15 +122,15 @@ etw_body_il_map (MonoJitInfo *jinfo, uint32_t *il_offsets, uint32_t *native_offs
 	uint32_t count = 0;
 	uint32_t last_il_offset = (uint32_t) -1;
 
-	for (uint32_t i = 0; i < jinfo->n_llvm_seq_points && count < max_entries; ++i) {
-		uint32_t il_offset = jinfo->llvm_seq_points[i].il_offset;
+	for (uint32_t i = 0; i < jinfo->n_il_offsets && count < max_entries; ++i) {
+		uint32_t il_offset = jinfo->il_offsets[i].il_offset;
 
 		if (il_offset == last_il_offset)
 			continue;
 
 		last_il_offset = il_offset;
 		il_offsets[count] = il_offset;
-		native_offsets[count] = jinfo->llvm_seq_points[i].native_offset;
+		native_offsets[count] = jinfo->il_offsets[i].native_offset;
 		++count;
 	}
 
@@ -167,7 +167,6 @@ etw_rundown_pass (uint32_t control_code, uint64_t match_any_keyword, bool is_run
 #include <mono/metadata/debug-helpers.h>
 #include <mono/metadata/debug-internals.h>
 #include <mono/metadata/debug-mono-ppdb.h>
-#include <mono/metadata/mono-debug.h>
 #include <mono/metadata/profiler.h>
 #include <mono/metadata/tabledefs.h>
 #include <mono/metadata/tokentype.h>
@@ -285,7 +284,7 @@ image_unloading (MonoProfiler *prof, MonoImage *image)
 }
 
 static void
-method_load (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo, EventKind kind)
+method_load (MonoMethod *method, MonoJitInfo *jinfo, EventKind kind)
 {
 	static __declspec(thread) unsigned int il_offsets[MAX_NUM_OFFSETS] = {0};
 	static __declspec(thread) unsigned int native_offsets[MAX_NUM_OFFSETS] = {0};
@@ -305,41 +304,10 @@ method_load (MonoDomain *domain, MonoMethod *method, MonoJitInfo *jinfo, EventKi
 		return;
 	}
 
-	int compressed_num_lines = 0;
-
 	char *sourceFilePath = NULL;
 
-	if (jinfo->n_llvm_seq_points > 0) {
-		compressed_num_lines =
-			(int) mono::etw_body_il_map (jinfo, il_offsets, native_offsets, MAX_NUM_OFFSETS);
-	} else {
-		/*
-		 * A classic tier-0 body's jinfo carries no per-body map:
-		 * n_llvm_seq_points is 0. This reads the method-keyed debug table
-		 * instead.
-		 *
-		 * One IL instruction can lower to several IR instructions, each with
-		 * its own native offset but the same IL offset. Dedupe by IL offset
-		 * the same way etw_body_il_map () does, since PerfView only wants
-		 * the range each IL offset covers.
-		 */
-		MonoDebugMethodJitInfo *dmji = mono_debug_find_method (method, domain);
-		if (dmji != NULL) {
-			uint32_t last_il_offset = (uint32_t) -1;
-			for (int i = 0; i < (int)dmji->num_line_numbers && compressed_num_lines < MAX_NUM_OFFSETS; ++i) {
-				if (dmji->line_numbers[i].il_offset != last_il_offset) {
-					last_il_offset = dmji->line_numbers[i].il_offset;
-
-					native_offsets[compressed_num_lines] = dmji->line_numbers[i].native_offset;
-					il_offsets[compressed_num_lines] = dmji->line_numbers[i].il_offset;
-
-					compressed_num_lines++;
-				}
-			}
-
-			mono_debug_free_method_jit_info (dmji);
-		}
-	}
+	int compressed_num_lines =
+		(int) mono::etw_body_il_map (jinfo, il_offsets, native_offsets, MAX_NUM_OFFSETS);
 
 	MonoClass *klass = mono_method_get_class (method);
 	char *signature = mono_signature_get_desc (mono_method_signature_internal (method), TRUE);
@@ -403,15 +371,7 @@ method_jit_done (MonoProfiler *prof, MonoMethod *method, MonoJitInfo *jinfo)
 	if (mono_jit_info_get_method (jinfo) != method)
 		return;
 
-	/*
-	 * Right even on a compile-worker thread. That thread attaches to the
-	 * root domain, not jinfo's.
-	 *
-	 * MonoBackend::compile_bodies () (backend.cpp) publishes inside a
-	 * DomainScope over jinfo's own domain, and this raise runs inside
-	 * that scope.
-	 */
-	method_load (mono_domain_get (), method, jinfo, EventKind::load);
+	method_load (method, jinfo, EventKind::load);
 }
 
 static void
@@ -434,9 +394,9 @@ on_enumerate_jit_method (MonoDomain *domain, MonoMethod *method, MonoJitInfo *ji
 	enumerationData->mNumMethods++;
 
 	if (enumerationData->pass.start)
-		method_load (domain, method, jinfo, EventKind::dc_start);
+		method_load (method, jinfo, EventKind::dc_start);
 	if (enumerationData->pass.end)
-		method_load (domain, method, jinfo, EventKind::dc_end);
+		method_load (method, jinfo, EventKind::dc_end);
 }
 
 static void
@@ -536,10 +496,6 @@ mono_profiler_init_etw (const char *desc)
 
 	EventRegisterMicrosoft_Windows_DotNETRuntime ();
 	EventRegisterMicrosoft_Windows_DotNETRuntimeRundown ();
-
-	// We currently need debug info to be able to read out the line number information, so force enable it here.
-	if (!mono_debug_enabled ())
-		mono_debug_init (MONO_DEBUG_FORMAT_MONO);
 
 	MonoProfilerHandle handle = mono_profiler_create (NULL);
 	mono_profiler_set_image_loaded_callback (handle, image_loaded);
