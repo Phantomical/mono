@@ -2,9 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
-// This is the whole thing we're testing.
-#pragma warning disable CS0184
-
 /*
  * A type test the compiler answers from what the IR says about the operand.
  *
@@ -17,6 +14,10 @@ using System.Runtime.CompilerServices;
  * answers each test through the runtime, so an elimination that disagrees with
  * it fails here whatever tier it happened at.
  */
+
+// We are intentionally testing X is Y statements that we know to be false
+// for constant propagation purposes.
+#pragma warning disable CS0184
 
 enum E32 : int { A, B }
 enum E8 : byte { A, B }
