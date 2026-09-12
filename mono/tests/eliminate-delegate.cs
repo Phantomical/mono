@@ -1,33 +1,9 @@
-// Entering a delegate's target instead of reading it off the delegate.
+// Checks that entering a delegate's target directly, instead of invoking through the
+// delegate, never changes what a call returns or throws.
 //
-// Two producers name a target. A read of an initonly static names the object
-// itself, so the call becomes a direct one. The cache the C# compiler writes for
-// a lambda or a method group names a candidate only, because the other arm of
-// the merge is a read of a mutable field, so the call becomes a compare against
-// the delegate's own entry with the direct call on the arm that matches.
-//
-// Three layers gate it, because no API reports whether the elimination fired:
-//
-//   - every shape answers the same in both arms, so a wrong target is a wrong
-//     value rather than a slower call;
-//   - a counter on each target says which arm of a guard ran;
-//   - a stack trace says the elimination really happened. An inlined body
-//     owns no code, so its frame reports the offset into the root it was
-//     inlined at. That works only once the target is inlined, which is why
-//     it is asserted at tier 2 alone - the elimination is tier 2's, and
-//     nothing inlines a direct call below it.
-//
-// MONO_ELIMINATE_DELEGATES=off is the other arm. The first two layers hold
-// there as well; the third is what the two arms disagree about.
-//
-// The field-copy cases below are answer-only: a delegate copied into a field
-// of a fresh object, then read back at the call, the shape a LINQ iterator's
-// own cached selector or predicate takes. Nothing here proves whether that
-// case eliminates - only that the answer is right whether it does or not,
-// which covers both a field with one settled writer and a field two different
-// writers can reach.
-
-
+// Nothing reports whether the elimination fired, so this proves it two ways: behavior
+// has to match whether or not the elimination ran, and, at tier 2, a stack trace
+// confirms the target was actually inlined into the caller.
 
 using System;
 using System.Diagnostics;
@@ -60,7 +36,7 @@ class DelegateEliminate {
 		}
 	}
 
-	/* MonoTier::tier1 and MonoTier::tier2, as PromoteNow takes them. */
+	// MonoTier::tier1 and MonoTier::tier2, as PromoteNow takes them.
 	const int tier1 = 3;
 	const int tier2 = 4;
 
@@ -69,18 +45,13 @@ class DelegateEliminate {
 	static int Twice (int x) { calls++; return x * 2; }
 	static int Triple (int x) { calls++; return x * 3; }
 
-	// Every site reaches its delegate through this, so the receiver at the
-	// Invoke is whatever the caller built rather than a parameter.
 	static int Apply (Func<int, int> f, int x) { return f (x); }
 
-	// The initonly producer: the field names the object, so the target is
-	// settled and the call carries no guard.
 	static readonly Func<int, int> Settled = Twice;
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int UseSettled (int x) { return Settled (x); }
 
-	// The cached producer, both spellings the C# compilers write.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int UseCachedLambda (int x) { return Apply (v => { calls++; return v * 2; }, x); }
 
@@ -90,8 +61,6 @@ class DelegateEliminate {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static Func<int, int> Opaque (Func<int, int> f) { return f; }
 
-	// One arm names Twice and the other names nothing, so a guard is written
-	// against Twice. Reaching Triple is what says the guard misses correctly.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int UseMixed (bool fresh, int x)
 	{
@@ -99,8 +68,6 @@ class DelegateEliminate {
 		return f (x);
 	}
 
-	// A delegate over an instance method of an ordinary object, which is the
-	// receiver shape Roslyn's singleton closure also has.
 	class Box {
 		public int n;
 		public int Scale (int x) { calls++; return x * n; }
@@ -114,9 +81,6 @@ class DelegateEliminate {
 		return Apply (b.Scale, x);
 	}
 
-	// A delegate copied into a field of a freshly allocated object, then
-	// invoked through that field: the shape a LINQ iterator's own cached
-	// selector or predicate takes.
 	class Holder {
 		public Func<int, int> f;
 	}
@@ -129,10 +93,6 @@ class DelegateEliminate {
 		return h.f (x);
 	}
 
-	// Two different delegates can reach the field, one on each arm. Neither
-	// arm alone settles what the field holds, so the answer has to come from
-	// whichever delegate this call actually stored, not from an elimination
-	// that guessed one of the two.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int UseFieldCopyMixed (bool useTwice, int x)
 	{
@@ -141,8 +101,6 @@ class DelegateEliminate {
 		return h.f (x);
 	}
 
-	// The field is never written before the call reads it, so the delegate
-	// the call invokes is null.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int UseFieldCopyUnset (int x)
 	{
@@ -153,8 +111,6 @@ class DelegateEliminate {
 	static void One () { calls += 1; }
 	static void Ten () { calls += 10; }
 
-	// A combined delegate calls every target in its list. Its method_ptr is
-	// null, so the compare a guard writes can never match one.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int UseMulticast ()
 	{
@@ -165,8 +121,6 @@ class DelegateEliminate {
 		return calls;
 	}
 
-	// An ldvirtftn delegate resolves its override when it is called, so the
-	// method its construction names is not the one it enters.
 	class Base { public virtual int Of (int x) { return x + 1; } }
 	class Derived : Base { public override int Of (int x) { return x + 100; } }
 
@@ -177,8 +131,6 @@ class DelegateEliminate {
 		return f (x);
 	}
 
-	// A return wide enough that the site's own arity carries a hidden return
-	// pointer beside the delegate, which every shape above is invoked without.
 	struct Vec3 {
 		public float x, y, z;
 
@@ -253,8 +205,7 @@ class DelegateEliminate {
 		CheckVec ("mixed-struct-opaque", UseMixedV (false, 7), 21);
 	}
 
-	/// Whether calling \p run (7) throws NullReferenceException and nothing
-	/// else.
+	/// Whether `run (7)` throws NullReferenceException.
 	static bool ThrowsNullReference (Func<int, int> run)
 	{
 		try {
@@ -266,13 +217,8 @@ class DelegateEliminate {
 		return false;
 	}
 
-	// The target the elimination proof reads. It throws, so it leaves a frame
-	// in the trace, and it is reached only through a delegate.
-	//
-	// The exception is made once and kept, so the body is a field read and a
-	// throw. A body that made one would be larger than the cost model takes,
-	// and then the direct call this writes would stand rather than being
-	// inlined in - which is the thing the offsets below are read for.
+	// Bang is a field rather than a `new` inside Boom, to keep Boom's body a
+	// read and a throw - small enough for tier 2 to inline.
 	static readonly Exception Bang = new InvalidOperationException ("boom");
 
 	static int Boom (int x) { throw Bang; }
@@ -285,9 +231,6 @@ class DelegateEliminate {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int CachedRoot (int x) { return Apply (Boom, x); }
 
-	// The struct-returning analogue of SettledRoot and CachedRoot, so the
-	// stack-trace proof below also covers a site whose arity carries a hidden
-	// return pointer.
 	static Vec3 BoomV (int x) { throw Bang; }
 
 	static readonly Func<int, Vec3> SettledBoomV = BoomV;
@@ -298,7 +241,7 @@ class DelegateEliminate {
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static Vec3 CachedRootV (int x) { return ApplyV (BoomV, x); }
 
-	/// Whether \p bang's frame reports an offset into \p root, which says the
+	/// Whether `bang`'s frame reports an offset into `root`, which says the
 	/// inline took its body into that method rather than leaving a call.
 	static bool InlinedInto (Exception e, string bang, string root)
 	{
