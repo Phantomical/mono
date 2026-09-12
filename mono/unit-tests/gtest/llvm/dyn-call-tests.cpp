@@ -27,6 +27,7 @@
 
 using namespace llvm;
 using mono::arch::ArgPiece;
+using mono::arch::DynCallArg;
 using mono::arch::DynCallPlan;
 using mono::arch::ReturnPlan;
 
@@ -171,9 +172,19 @@ TEST (DynCall, HiddenReturnPointerCanSpillToTheStack)
 	EXPECT_EQ ((int) planned->ret.kind, (int) ReturnPlan::Kind::Hidden);
 	EXPECT_EQ ((int) planned->ret.hidden.file, (int) ArgPiece::File::Stack);
 
-	// Six one-byte leaves fill the integer registers. The other ten each take
-	// an eight-byte stack slot ahead of the pointer's own.
-	EXPECT_EQ (planned->ret.hidden.at, 10u * 8u);
+	ASSERT_EQ (planned->args.size (), 1u);
+
+	const DynCallArg &arg = planned->args[0];
+
+	ASSERT_EQ (arg.piece_count, 16u);
+
+	const ArgPiece &last_leaf = planned->pieces[arg.first_piece + arg.piece_count - 1];
+
+	ASSERT_EQ ((int) last_leaf.file, (int) ArgPiece::File::Stack);
+
+	// The two conventions fill a different number of argument registers, so
+	// the leaves spill to a different offset under each.
+	EXPECT_EQ (planned->ret.hidden.at, last_leaf.at + 8);
 }
 
 TEST (DynCall, WideVectorsAreRefused)

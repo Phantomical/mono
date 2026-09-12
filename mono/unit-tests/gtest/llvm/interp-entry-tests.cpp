@@ -229,9 +229,18 @@ TEST (InterpEntry, HiddenReturnPointerCanSpillToTheStack)
 	EXPECT_EQ ((int) layout.ret.kind, (int) ReturnPlan::Kind::Hidden);
 	EXPECT_EQ ((int) layout.ret.hidden.file, (int) ArgPiece::File::Stack);
 
-	// Six one-byte leaves fill the integer registers. The other ten each take
-	// an eight-byte stack slot ahead of the pointer's own.
-	EXPECT_EQ (layout.ret.hidden.at, 10u * 8u);
+	ASSERT_EQ (layout.args.size (), 1u);
+	ASSERT_EQ ((int) layout.args[0].where, (int) ArgPlan::Where::Pieces);
+	ASSERT_EQ (layout.args[0].piece_count, 16u);
+
+	const ArgPiece &last_leaf =
+		layout.pieces[layout.args[0].first_piece + layout.args[0].piece_count - 1];
+
+	ASSERT_EQ ((int) last_leaf.file, (int) ArgPiece::File::Stack);
+
+	// The two conventions fill a different number of argument registers, so
+	// the leaves spill to a different offset under each.
+	EXPECT_EQ (layout.ret.hidden.at, last_leaf.at + 8);
 }
 
 TEST (InterpEntry, AStructIsFlattenedOneFieldPerRegister)
