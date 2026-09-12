@@ -157,7 +157,6 @@ external/buildscripts/build.gen.*
 *.profraw
 *.profdata
 
-# Working notes and helper scripts under .claude/.  The skills beside them are
-# tracked, so this names the local directories rather than the whole tree.
-/.claude
+# Working notes and helper scripts under .claude/.
+/.claude/*
 !/.claude/skills
