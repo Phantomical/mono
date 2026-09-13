@@ -2,23 +2,14 @@ using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 
-/*
- * Correctness for a finally EliminateEmptyFinallyPass empties out entirely
- * (mono/llvm/passes/eliminate-empty-finally.cpp).
- *
- * PlainLeave (), ExceptionUnwind () and Nested () use a literally empty
- * `finally { }`. The front end gives it no IL of its own, which is the
- * elimination's simplest input. DeadStore ()'s finally has IL, but it writes
- * a local nothing reads. The elimination only sees an empty body once the
- * pipeline's own simplification has removed that store.
- *
- * An empty finally behaves the same whether or not the elimination ran, so no
- * return value here can show that it fired. eliminate-empty-finally-tests.cpp
- * checks the removal itself, against hand-built IR. This file instead
- * exercises the CFG surgery around a real compiled try/finally/catch, at both
- * tiers. That includes whatever debug and sequence-point markers a real
- * compile adds that a hand-built module does not.
- */
+// Checks that removing an empty finally never changes what a try/finally/catch returns
+// or throws, at either compiled tier.
+//
+// An empty finally behaves the same whether or not the elimination ran, so no return
+// value here shows whether it fired. Matching behavior across interpreted and both
+// tiers is the whole test. eliminate-empty-finally-tests.cpp checks the removal itself,
+// against hand-built IR. This file exercises it against a real compiled
+// try/finally/catch instead.
 
 namespace Mono.Tiering {
 	static class MonoTier {
@@ -70,6 +61,8 @@ static class EmptyFinally {
 		}
 	}
 
+	// Its finally only empties out once the pipeline's own simplification clears
+	// this dead store.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	public static int DeadStore (int x)
 	{
