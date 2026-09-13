@@ -297,8 +297,8 @@ else. That is what rationale is.
 A file header's subject must be the file: what it is, or, for a test file, what it checks
 and what a failure means. It sits above no declaration.
 
-Do this on paper for a doc comment, not by eye. Write out the sentences with their
-subjects before you decide anything:
+Do this on paper for a doc comment or a file header, not by eye. Write out the sentences
+with their subjects before you decide anything:
 
 ```
 record_ranges:
@@ -314,8 +314,14 @@ Judge a remark by whether the line under it looks arbitrary without it. `// An a
 throw helper reports is often a boxed value.` above `case MONO_CEE_BOX:` passes: a throw
 helper is why that opcode is on the list.
 
-A file header fails the same way. A test file's header that spends three sentences on how
-the function under test decides has that function for a subject, not the file.
+**Run the same table on a file header, every time — it fails this check silently.** A
+header reads as orientation rather than as a claim about one declaration, so it survives
+a check that only re-derives subjects where a declaration sits below the comment. A test
+file's header that spends three sentences on how the function under test decides has
+that function for a subject, not the file, and a sentence comparing this file's coverage
+to a sibling test's has that sibling for a subject, not this file. Both read as true and
+both survive Pass 1's grep untouched, which is why they keep recurring — G21 has the
+worked example.
 
 **Then, of each survivor: contract or mechanism?** A sentence can name this function and
 still be describing how it works. Mechanism goes down to the line it explains.
@@ -362,6 +368,12 @@ someone looking at exactly one function, so it goes on each function it constrai
 
 Different fault from Pass 2, and cheaper to test, so run it first on any sentence you
 are keeping. A sentence can earn its place and still be assembled wrong.
+
+**This runs on a sentence you just wrote as a fix, not only on one you found already
+in the file.** A rewrite that clears Pass 1 or Pass 2 has never itself been read cold:
+two sentences built to fix one finding can still restate each other from opposite ends,
+and a clause rebuilt to sound more concrete can still nominalize its verb. Read your own
+fix out loud before you report it, the same way you read the sentence it replaced.
 
 **Say the sentence out loud, as if to a colleague. If the restatement is shorter or
 sharper, ship the restatement.** This is the circumlocution test — `reference/catalogue.md`

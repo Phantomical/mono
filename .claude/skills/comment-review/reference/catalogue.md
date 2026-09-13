@@ -474,6 +474,19 @@ This is G8's move, with one extra step: notice the sentence is about something e
 before finding the line to put it beside — or, for a file header, before finding that
 there is no line, only the file itself.
 
+**Two shapes recur specifically in file headers, because both read as orientation
+rather than as a claim.** Narrating how the pass under test reaches its cases — "the
+front end gives it no IL of its own, which is the elimination's simplest input" — has
+the pass for its subject, exactly like a doc comment explaining a called function's
+mechanism above the call site (B1); the pass's own file is the home for that, if
+anywhere, and the fix is still to cut, not to cite it. And a sentence contrasting this
+file's coverage against a sibling test's — "eliminate-empty-finally-tests.cpp checks the
+removal itself against hand-built IR; this file instead exercises a real compiled
+try/finally/catch" — has that sibling for its subject. Both are true, both name
+something real, and both survive Pass 1's grep and a read-by-eye untouched, which is why
+they keep recurring: run the on-paper subject table (SKILL.md Pass 2) on the header
+itself, not only on doc comments sitting above a declaration.
+
 ### G22. A verb that names the caller's decision, not this function's action
 
 > "Refuses a call this method cannot make, and emits a throw in its place." → "Emits a

@@ -43,7 +43,12 @@ against it — the script finds candidates, this decides which are real.
   rewriting anyway, and report the rest as a sweep with the count.
 - **Filler out:** simply, just, note that, essentially, basically, obviously.
 - **Do not flag plain passives.** The diagnosis is almost always circumlocution instead,
-  and the preferred rewrites in the record use passives freely.
+  and the preferred rewrites in the record use passives freely. **This does not cover a
+  nominalized subject that merely reads passive.** "An empty finally has no
+  return-value effect" is grammatically active — there is no "is …ed" anywhere in it —
+  and still fails SKILL.md Pass 3's abstraction check, because "effect" stands in for a
+  verb and no actor appears in the sentence at all. Passive voice is exempt here; a noun
+  standing in for what should be a verb is not, and is Pass 3's finding, not this one's.
 
 ## Two ways a register fix changes the claim
 
