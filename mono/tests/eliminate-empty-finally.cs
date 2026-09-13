@@ -5,11 +5,8 @@ using System.Runtime.CompilerServices;
 // Checks that removing an empty finally never changes what a try/finally/catch returns
 // or throws, at either compiled tier.
 //
-// An empty finally behaves the same whether or not the elimination ran, so no return
-// value here shows whether it fired. Matching behavior across interpreted and both
-// tiers is the whole test. eliminate-empty-finally-tests.cpp checks the removal itself,
-// against hand-built IR. This file exercises it against a real compiled
-// try/finally/catch instead.
+// An empty finally has no observable behavior, so this file catches a codegen bug from
+// the elimination by comparing tiers.
 
 namespace Mono.Tiering {
 	static class MonoTier {
