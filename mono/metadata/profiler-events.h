@@ -50,6 +50,9 @@ MONO_PROFILER_EVENT_2(jit_done, JitDone, MonoMethod *, method, MonoJitInfo *, ji
 MONO_PROFILER_EVENT_2(jit_chunk_created, JitChunkCreated, const mono_byte *, chunk, uintptr_t, size)
 MONO_PROFILER_EVENT_1(jit_chunk_destroyed, JitChunkDestroyed, const mono_byte *, chunk)
 MONO_PROFILER_EVENT_4(jit_code_buffer, JitCodeBuffer, const mono_byte *, buffer, uint64_t, size, MonoProfilerCodeBufferType, type, const void *, data)
+/* A named code range that is not a method body: a trampoline, a thunk or a
+ * stub. The name does not outlive the callback. */
+MONO_PROFILER_EVENT_3(jit_code_stub, JitCodeStub, const mono_byte *, code, uint64_t, size, const char *, name)
 
 MONO_PROFILER_EVENT_1(class_loading, ClassLoading, MonoClass *, klass)
 MONO_PROFILER_EVENT_1(class_failed, ClassFailed, MonoClass *, klass)

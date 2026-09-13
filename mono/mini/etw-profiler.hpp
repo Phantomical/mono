@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief The two ETW event payloads a test can compute without an ETW session.
+ * \brief The ETW event payloads a test can compute without an ETW session.
  *
  * Declared outside etw-profiler.cpp's own HOST_WIN32 block, so a gtest that
  * links mini still finds them off Windows.
@@ -23,6 +23,15 @@ namespace mono {
 /// jinfo, and Dynamic from method. The tier bits at 7-9 are what this
 /// backend maps jinfo's tier to.
 uint32_t etw_method_flags (MonoMethod *method, MonoJitInfo *jinfo);
+
+/// The CLR MethodFlags word for a code range that is not a method body: a
+/// trampoline, a thunk or a stub.
+///
+/// TraceEvent 3.2.6 discards a method-load event carrying neither JitHelper
+/// nor Jitted (ShouldTrackMethodLoad (), TraceLog.cs). Once JitHelper is set
+/// it reads the MethodName field alone, so a stub event needs no namespace
+/// and no signature.
+uint32_t etw_stub_flags ();
 
 /// Fills \p il_offsets and \p native_offsets, in step, from jinfo's own
 /// per-body map (MonoJitInfo::il_offsets).

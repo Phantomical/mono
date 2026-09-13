@@ -32,9 +32,9 @@
 #include <mono/metadata/domain-internals.h>
 #include <mono/metadata/loader.h>
 
-// The two payload computations below take no ETW session and no HOST_WIN32,
-// which is what lets mono/unit-tests/gtest/runtime/test-etw-profiler.cpp call
-// them directly. Everything past the #if is the ETW registration itself.
+// The payload computations below take no ETW session and no HOST_WIN32, which
+// is what lets mono/unit-tests/gtest/runtime/test-etw-profiler.cpp call them
+// directly. Everything past the #if is the ETW registration itself.
 
 namespace mono {
 
@@ -44,6 +44,7 @@ constexpr uint32_t kMethodFlagsDynamic = 0x1;
 constexpr uint32_t kMethodFlagsGeneric = 0x2;
 constexpr uint32_t kMethodFlagsSharedGenericCode = 0x4;
 constexpr uint32_t kMethodFlagsJitted = 0x8;
+constexpr uint32_t kMethodFlagsJitHelper = 0x10;
 
 // CLR-ETW-Generated.h's own CLR_RUNDOWNSTART_KEYWORD and
 // CLR_RUNDOWNEND_KEYWORD - asserted against that header's values below,
@@ -116,6 +117,12 @@ etw_method_flags (MonoMethod *method, MonoJitInfo *jinfo)
 }
 
 uint32_t
+etw_stub_flags ()
+{
+	return kMethodFlagsJitHelper;
+}
+
+uint32_t
 etw_body_il_map (MonoJitInfo *jinfo, uint32_t *il_offsets, uint32_t *native_offsets,
                  uint32_t max_entries)
 {
@@ -162,6 +169,8 @@ etw_rundown_pass (uint32_t control_code, uint64_t match_any_keyword, bool is_run
 } // namespace mono
 
 #if defined (HOST_WIN32)
+#include "mini.h"
+
 #include <mono/metadata/assembly-internals.h>
 #include <mono/metadata/assembly.h>
 #include <mono/metadata/debug-helpers.h>
@@ -283,6 +292,55 @@ image_unloading (MonoProfiler *prof, MonoImage *image)
 	image_event (image, EventKind::unload);
 }
 
+/**
+ * Reports a trampoline, a thunk or a stub the way CoreCLR's
+ * ETW::MethodLog::SendHelperEvent () (vm/eventtrace.cpp) reports a JIT helper.
+ * The MethodID is the code start, there being no MonoMethod to name, and the
+ * token is zero. The ModuleID is zero because TraceEvent answers a JitHelper
+ * event with a synthetic generatedruntimehelpers module of its own
+ * (GetOrCreateMethodModuleFile (), TraceLog.cs).
+ *
+ * No MethodILToNativeMap goes with it, because a stub has no IL.
+ */
+static void
+stub_event (gpointer code, uint64_t size, const char *name, EventKind kind)
+{
+	if (!MICROSOFT_WINDOWS_DOTNETRUNTIME_PROVIDER_Context.IsEnabled && !MICROSOFT_WINDOWS_DOTNETRUNTIME_RUNDOWN_PROVIDER_Context.IsEnabled) {
+		ETW_PROFILER_LOG ("Providers not enabled, skipping stub_event");
+		return;
+	}
+
+	if (code == NULL || size == 0)
+		return;
+
+	uint64_t start = (uint64_t) code;
+	uint32_t flags = mono::etw_stub_flags ();
+	uint32_t code_size = (uint32_t) size;
+	gunichar2 *name_utf16 = u8to16 (name);
+
+	switch (kind) {
+	case EventKind::load:
+		EventWriteMethodLoadVerbose_V2 (start, 0, start, code_size, 0, flags, L"", name_utf16, L"", 0, 0);
+		break;
+	case EventKind::dc_start:
+		EventWriteMethodDCStartVerbose_V2 (start, 0, start, code_size, 0, flags, L"", name_utf16, L"", 0, 0);
+		break;
+	case EventKind::dc_end:
+		EventWriteMethodDCEndVerbose_V2 (start, 0, start, code_size, 0, flags, L"", name_utf16, L"", 0, 0);
+		break;
+	case EventKind::unload:
+		g_assert_not_reached ();
+	}
+
+	g_free (name_utf16);
+}
+
+static void
+code_stub_loaded (MonoProfiler *prof, const mono_byte *code, uint64_t size, const char *name)
+{
+	stub_event ((gpointer) code, size, name, EventKind::load);
+}
+
 static void
 method_load (MonoMethod *method, MonoJitInfo *jinfo, EventKind kind)
 {
@@ -294,13 +352,19 @@ method_load (MonoMethod *method, MonoJitInfo *jinfo, EventKind kind)
 		return;
 	}
 
-	// Ignore trampolines; it's not possible to get any of the regular info we get for other methods from trampoline. They have no debug data,
-	// no signature, etc.
-	//
-	// Note: in the Unity's current Mono version, we don't receive this callback for trampolines anyway (they're filtered out in mono_jit_info_table_foreach).
-	// However, in a future Mono version, the is_trampoline filter will be removed from mono_jit_info_table_foreach, so we keep this check here so that it will
-	// work regardless of which Mono version is used.
+	/*
+	 * A trampoline has no MonoMethod, so none of the fields below exist for
+	 * one: no token, signature, declaring class or IL map.
+	 *
+	 * method is not a MonoMethod on this branch. The rundown walk hands this
+	 * function jinfo->d.method (mono_jit_info_table_foreach_internal (),
+	 * jit-info.c), and MonoJitInfo::d holds the MonoTrampInfo once
+	 * is_trampoline is set.
+	 */
 	if (jinfo->is_trampoline) {
+		stub_event (mono_jit_info_get_code_start (jinfo),
+		            (uint64_t) mono_jit_info_get_code_size (jinfo),
+		            mono_tramp_info_display_name (jinfo->d.tramp_info), kind);
 		return;
 	}
 
@@ -501,6 +565,7 @@ mono_profiler_init_etw (const char *desc)
 	mono_profiler_set_image_loaded_callback (handle, image_loaded);
 	mono_profiler_set_image_unloading_callback (handle, image_unloading);
 	mono_profiler_set_jit_done_callback (handle, method_jit_done);
+	mono_profiler_set_jit_code_stub_callback (handle, code_stub_loaded);
 	mono_profiler_set_cleanup_callback(handle, mono_profiler_cleanup_etw);
 
 	is_initialized = TRUE;

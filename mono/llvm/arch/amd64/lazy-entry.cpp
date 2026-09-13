@@ -26,6 +26,8 @@
 
 #include "debugging/perf/jitdump.hpp"
 
+#include "mono/metadata/profiler-private.h"
+
 #include <cstring>
 #include <iterator>
 #include <vector>
@@ -500,12 +502,20 @@ LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
 	std::vector<perf::FrameFunction> functions;
 	functions.push_back (std::move (fn));
 
+	const char *name = "mono_lazy_entry_resolver";
+
 	/* The pool gives the resolver a mapping of its own, so the room behind it
 	 * is the rest of a page. */
-	perf::publish ("mono_lazy_entry_resolver",
+	perf::publish (name,
 	               { resolver_addr.toPtr<const uint8_t *> (), ResolverCodeSize,
 	                 ResolverCodeSize + perf::code_slack () },
 	               std::move (functions));
+
+	/* The resolver carries no MonoTrampInfo, so raise_code_stub ()
+	 * (mono/mini/mini-runtime.c) never reaches it. */
+	MONO_PROFILER_RAISE (jit_code_stub,
+	                     (resolver_addr.toPtr<const mono_byte *> (),
+	                      ResolverCodeSize, name));
 }
 
 } // namespace mono::arch

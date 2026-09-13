@@ -1,7 +1,7 @@
 /*
- * test-etw-profiler.cpp: Unit tests for the two payload computations
- * mono/mini/etw-profiler.cpp's HOST_WIN32 half calls: etw_method_flags () and
- * etw_body_il_map (). Both take no ETW session, so these run on every host.
+ * test-etw-profiler.cpp: Unit tests for the payload computations
+ * mono/mini/etw-profiler.cpp's HOST_WIN32 half calls. None of them takes an
+ * ETW session, so these run on every host.
  */
 
 #include "config.h"
@@ -216,6 +216,36 @@ TEST_F (EtwProfiler, FlagsCarryJittedAndTheRightTierBits)
 		EXPECT_TRUE (flags & 0x8) << "Jitted must be set on body " << i;
 		EXPECT_EQ (expected_tier[i], (flags >> 7) & 0x7) << "wrong tier bits on body " << i;
 	}
+}
+
+/*
+ * TraceEvent 3.2.6 keys a stub's whole treatment on the JitHelper bit.
+ * ShouldTrackMethodLoad () discards a load event carrying neither JitHelper
+ * nor Jitted, and GetFullName () reads the MethodName field alone once
+ * JitHelper is set (TraceLog.cs). A stub reported as Jitted instead renders
+ * with a leading "." and is looked up in a managed module by its zero
+ * ModuleID.
+ */
+TEST (EtwProfilerPure, StubFlagsCarryJitHelperAlone)
+{
+	uint32_t flags = mono::etw_stub_flags ();
+
+	EXPECT_TRUE (flags & 0x10) << "JitHelper has to be set";
+	EXPECT_FALSE (flags & 0x8) << "a stub is not a jitted method body";
+	EXPECT_EQ (0u, (flags >> 7) & 0x7) << "a stub runs at no tier";
+}
+
+/* A method body must not carry JitHelper, or TraceEvent renders every one of
+ * them under the synthetic helper module. */
+TEST_F (EtwProfilerNaming, MethodFlagsNeverCarryJitHelper)
+{
+	MonoMethod *method = method_named ("Probe", 1);
+	ASSERT_NE (nullptr, method);
+
+	MonoJitInfo jinfo;
+	memset (&jinfo, 0, sizeof (jinfo));
+
+	EXPECT_FALSE (mono::etw_method_flags (method, &jinfo) & 0x10);
 }
 
 /*

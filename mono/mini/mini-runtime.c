@@ -524,6 +524,23 @@ mono_tramp_info_free (MonoTrampInfo *info)
 	g_free (info);
 }
 
+const char *
+mono_tramp_info_display_name (MonoTrampInfo *info)
+{
+	return info->name ? info->name : "trampoline";
+}
+
+static void
+raise_code_stub (MonoTrampInfo *info)
+{
+	if (!info->code || !info->code_size)
+		return;
+
+	MONO_PROFILER_RAISE (jit_code_stub,
+			     ((const mono_byte *) info->code, info->code_size,
+			      mono_tramp_info_display_name (info)));
+}
+
 static void
 init_trampoline_jit_info (MonoJitInfo *ji, MonoTrampInfo *info)
 {
@@ -590,6 +607,7 @@ mono_tramp_info_register_reclaimable (MonoDomain *domain, MonoMethod *method, gp
 	mixed_callstack_plugin_save_trampoline_info (info, domain);
 	if (mono_jit_map_is_enabled ())
 		mono_emit_jit_tramp (info->code, info->code_size, info->name);
+	raise_code_stub (info);
 
 	mono_jit_info_table_add (domain, ji);
 
@@ -651,9 +669,11 @@ mono_tramp_info_register_internal (MonoTrampInfo *info, MonoDomain *domain, gboo
 	 * image's own symbol table.
 	 */
 	if (!aot && copy->code && copy->code_size && !copy->perf_dump_deferred)
-		mono_llvm_perf_dump_stub (copy->name ? copy->name : "trampoline",
+		mono_llvm_perf_dump_stub (mono_tramp_info_display_name (copy),
 					  copy->code, copy->code_size, copy->uw_info,
 					  copy->uw_info_len);
+
+	raise_code_stub (copy);
 
 	mono_lldb_save_trampoline_info (info);
 	mixed_callstack_plugin_save_trampoline_info (info, domain);
