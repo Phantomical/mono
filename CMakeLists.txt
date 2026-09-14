@@ -166,6 +166,8 @@ add_subdirectory(runtime)
 if(MONO_ENABLE_MCS_BUILD)
   add_subdirectory(mcs)
 endif()
+# After mcs/: package-ksp packages what it built.
+include(MonoKspPackage)
 # After runtime/: these need the mono-wrapper and the class libraries it drives.
 add_subdirectory(samples)
 add_subdirectory(docs)
