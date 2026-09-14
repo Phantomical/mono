@@ -376,11 +376,18 @@ enum {
 void sgen_init_internal_allocator (void);
 
 #define SGEN_DEFINE_OBJECT_VTABLE
+/*
+ * The client header reaches class-internals.h and threads-types.h, both of
+ * which assume no extern "C" is already open. Nested inside this file's own
+ * G_BEGIN_DECLS, their declarations land at the wrong linkage instead.
+ */
+G_END_DECLS
 #ifdef SGEN_CLIENT_HEADER
 #include SGEN_CLIENT_HEADER
 #else
 #include "metadata/sgen-client-mono.h"
 #endif
+G_BEGIN_DECLS
 #undef SGEN_DEFINE_OBJECT_VTABLE
 
 #include "mono/sgen/sgen-descriptor.h"
