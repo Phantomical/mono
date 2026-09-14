@@ -36,7 +36,6 @@ else()
   set(_ksp_runtime_name    "libmonobdwgc-2.0.so")
   set(_ksp_native_pal      "${MONO_ENABLE_MONO_NATIVE}")
 endif()
-string(REPLACE ".dll" ".pdb" _ksp_runtime_pdb_name "${_ksp_runtime_name}")
 
 set(_ksp_stage    "${CMAKE_BINARY_DIR}/ksp-package")
 set(_ksp_zip      "${CMAKE_BINARY_DIR}/mono-llvm-jit-ksp-${_ksp_platform_tag}.zip")
@@ -141,9 +140,12 @@ endif()
 if(MONO_HOST_WINDOWS)
   # MSVC links every target with /DEBUG (cmake/MonoCompilerFlags.cmake), so
   # both the runtime and mono-overrides always have a PDB to bring along.
+  # Kept under its own build-time name rather than renamed to match the dll.
+  # A debugger locates a pdb by the name recorded in the dll's debug
+  # directory, not by the dll's own file name.
   list(APPEND _ksp_copy_commands
        COMMAND "${CMAKE_COMMAND}" -E copy
-               "$<TARGET_PDB_FILE:${_ksp_runtime_target}>" "${_ksp_stage}/${_ksp_native_subdir}/${_ksp_runtime_pdb_name}")
+               "$<TARGET_PDB_FILE:${_ksp_runtime_target}>" "${_ksp_stage}/${_ksp_native_subdir}/$<TARGET_PDB_FILE_NAME:${_ksp_runtime_target}>")
 endif()
 
 add_custom_target(package-ksp
