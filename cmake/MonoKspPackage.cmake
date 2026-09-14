@@ -37,6 +37,21 @@ else()
   set(_ksp_native_pal      "${MONO_ENABLE_MONO_NATIVE}")
 endif()
 
+if(NOT MONO_HOST_WINDOWS)
+  # MonoLLVM.cmake bakes the build machine's own LLVM_LIBRARY_DIRS into every
+  # runtime's rpath, alongside the $ORIGIN that finds a bundled copy
+  # (mono/mini/CMakeLists.txt). Harmless during development -- it is what
+  # lets a locally built mono-boehm run without LD_LIBRARY_PATH -- but a path
+  # that exists on no machine but this one has no business in a package
+  # meant for another one, so it comes back off here.
+  find_program(MONO_PATCHELF patchelf)
+  if(NOT MONO_PATCHELF)
+    message(WARNING
+      "patchelf not found; package-ksp will leave the runtime's build-machine "
+      "rpath in place instead of stripping it down to \$ORIGIN")
+  endif()
+endif()
+
 set(_ksp_stage    "${CMAKE_BINARY_DIR}/ksp-package")
 set(_ksp_zip      "${CMAKE_BINARY_DIR}/mono-llvm-jit-ksp-${_ksp_platform_tag}.zip")
 set(_ksp_overrides "${CMAKE_BINARY_DIR}/mono/mini/mono-overrides.dll")
@@ -147,6 +162,11 @@ foreach(_llvm_lib IN LISTS MONO_LLVM_SHARED_LIBRARY_TARGETS)
        COMMAND "${CMAKE_COMMAND}" -E copy
                "$<TARGET_FILE:${_llvm_lib}>" "${_ksp_stage}/${_ksp_native_subdir}/$<TARGET_FILE_NAME:${_llvm_lib}>")
 endforeach()
+if(MONO_PATCHELF)
+  list(APPEND _ksp_copy_commands
+       COMMAND "${MONO_PATCHELF}" --set-rpath "\$ORIGIN"
+               "${_ksp_stage}/${_ksp_native_subdir}/${_ksp_runtime_name}")
+endif()
 if(MONO_HOST_WINDOWS)
   # MSVC links every target with /DEBUG (cmake/MonoCompilerFlags.cmake), so
   # both the runtime and mono-overrides always have a PDB to bring along.
