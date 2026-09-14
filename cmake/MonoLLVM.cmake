@@ -125,4 +125,18 @@ if(NOT MSVC)
   target_link_options(mono_llvm INTERFACE "-Wl,-rpath,${LLVM_LIBRARY_DIRS}")
 endif()
 
+# Named so a packaging step (MonoKspPackage.cmake) can copy each one beside
+# the runtime it links into. Empty under MONO_UNITY_BUILD's static archive,
+# and under any other install where llvm_map_components_to_libnames resolved
+# static component archives instead of shared libraries.
+set(MONO_LLVM_SHARED_LIBRARY_TARGETS "")
+foreach(_lib IN LISTS _llvm_libs)
+  if(TARGET "${_lib}")
+    get_target_property(_lib_type "${_lib}" TYPE)
+    if(_lib_type STREQUAL "SHARED_LIBRARY")
+      list(APPEND MONO_LLVM_SHARED_LIBRARY_TARGETS "${_lib}")
+    endif()
+  endif()
+endforeach()
+
 message(STATUS "LLVM ${LLVM_PACKAGE_VERSION} at ${LLVM_INSTALL_PREFIX} (API version ${MONO_LLVM_API_VERSION})")

@@ -137,6 +137,16 @@ if(_ksp_native_pal)
        COMMAND "${CMAKE_COMMAND}" -E copy
                "$<TARGET_FILE:mono-native>" "${_ksp_stage}/${_ksp_native_subdir}/libmono-native.so")
 endif()
+# MONO_UNITY_BUILD links LLVM as a static archive, absorbed into the runtime
+# below with nothing left to copy. Off that switch -- the only option on
+# Windows, where it is forced off (MonoOptions.cmake) -- LLVM is a shared
+# library the runtime loads dynamically, found through its own $ORIGIN
+# runpath (mono/mini/CMakeLists.txt), so it has to ride along too.
+foreach(_llvm_lib IN LISTS MONO_LLVM_SHARED_LIBRARY_TARGETS)
+  list(APPEND _ksp_copy_commands
+       COMMAND "${CMAKE_COMMAND}" -E copy
+               "$<TARGET_FILE:${_llvm_lib}>" "${_ksp_stage}/${_ksp_native_subdir}/$<TARGET_FILE_NAME:${_llvm_lib}>")
+endforeach()
 if(MONO_HOST_WINDOWS)
   # MSVC links every target with /DEBUG (cmake/MonoCompilerFlags.cmake), so
   # both the runtime and mono-overrides always have a PDB to bring along.
