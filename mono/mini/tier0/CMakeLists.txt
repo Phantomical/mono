@@ -4,6 +4,10 @@ if(NOT MONO_ENABLE_TIER0_CLASSIC)
   return()
 endif()
 
+# The root's find_package is guarded on MONO_ENABLE_MCS_BUILD, and genmdesc
+# runs with the class libraries off.
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
 add_custom_command(
   OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/cpu-amd64.h"
   COMMAND Python3::Interpreter
