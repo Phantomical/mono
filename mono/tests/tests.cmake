@@ -584,6 +584,7 @@ set(MONO_TESTS_CS_SRC
 # Tests written directly in IL, assembled with ilasm.
 set(MONO_TESTS_IL_SRC
   tbaa-straddle.il
+  typeload-isclass-no-layout.il
   float-stack-precision.il
   tailcall/2.il
   tailcall/3.il

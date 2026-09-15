@@ -864,7 +864,29 @@ namespace System
 			if (rtType == null)
 				return false;
 
-			return RuntimeTypeHandle.IsSubclassOf (this, rtType);
+			// Walked here rather than through RuntimeTypeHandle.IsSubclassOf,
+			// whose icall lays both classes out. A layout resolves every
+			// field's type, so asking this about a type whose field's assembly
+			// has not loaded yet records a failure the class keeps for good.
+			// mono/tests/typeload-isclass-no-layout.il is that case, and
+			// rttype.cs's own #if !MONO arm is this same walk.
+			RuntimeType baseType = GetBaseType();
+
+			while (baseType != null)
+			{
+				if (baseType == rtType)
+					return true;
+
+				baseType = baseType.GetBaseType();
+			}
+
+			// pretty much everything is a subclass of object, even interfaces
+			// notice that interfaces are really odd because they do not have a BaseType
+			// yet IsSubclassOf(typeof(object)) returns true
+			if (rtType == RuntimeType.ObjectType && rtType != this)
+				return true;
+
+			return false;
 		}
 
 		public override bool IsByRefLike {
