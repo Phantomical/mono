@@ -62,6 +62,26 @@ if(ZLIB_FOUND)
     target_compile_definitions(MonoPosixHelper PRIVATE HAVE_UNISTD_H)
   endif()
 endif()
+if(MONO_HOST_WINDOWS)
+  # Nothing here carries __declspec(dllexport): zlib-helper.c defines MONO_API
+  # away when nothing else has, and map.c's generated entry points never took
+  # it. Without this the DLL links clean and exports nothing, so the first
+  # P/Invoke into it throws EntryPointNotFoundException -- and the class
+  # libraries reach it for DeflateStream and every Mono.Posix call.
+  #
+  # The entries dropped below have bodies only in the POSIX sources the Windows
+  # source list leaves out, and lld-link fails an export it cannot resolve
+  # rather than skipping it.
+  file(STRINGS "${CMAKE_SOURCE_DIR}/msvc/monoposixhelper.def" _mph_def_lines)
+  list(REMOVE_ITEM _mph_def_lines
+       Mono_Posix_Syscall_get_at_fdcwd
+       Mono_Posix_Syscall_get_utime_now
+       Mono_Posix_Syscall_get_utime_omit)
+  string(REPLACE ";" "\n" _mph_def "${_mph_def_lines}")
+  set(_mph_def_file "${CMAKE_CURRENT_BINARY_DIR}/MonoPosixHelper.def")
+  file(WRITE "${_mph_def_file}" "${_mph_def}\n")
+  target_sources(MonoPosixHelper PRIVATE "${_mph_def_file}")
+endif()
 # glibc has the xattr calls in libc. Elsewhere they come from libattr.
 if(NOT HAVE_LSETXATTR)
   if(MONO_XATTR_LIB)
