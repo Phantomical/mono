@@ -10,10 +10,17 @@ include(CheckCCompilerFlag)
 # is a GUI subsystem one, and mono/mini/main.c reads it to pick wWinMain over
 # main; the mono binaries are console programs.  WIN32 stays, since it is what
 # the runtime's own sources test.
+#
+# CMake seeds CXX with /EHsc as well.  The `c` lets cl.exe assume an extern "C"
+# function never throws.  mono_llvm_cpp_throw_exception () is one that does: it
+# is how a managed exception leaves a jit call for the catch in
+# mono/interp/runtime/jit-call.cpp.  clang-cl ignores the assumption, so the
+# warning (C4297) is cl.exe's alone.
 if(MSVC)
   foreach(_lang C CXX)
     string(REPLACE "/D_WINDOWS" "" CMAKE_${_lang}_FLAGS "${CMAKE_${_lang}_FLAGS}")
   endforeach()
+  string(REPLACE "/EHsc" "/EHs" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 endif()
 
 # --- mono::warnings ---------------------------------------------------------
