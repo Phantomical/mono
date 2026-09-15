@@ -33,7 +33,10 @@ target_compile_definitions(test-eglib PRIVATE
   EGLIB_TESTS=1 _FORTIFY_SOURCE=2
   EGLIB_TEST_DATA_SRCDIR="${CMAKE_CURRENT_SOURCE_DIR}"
   EGLIB_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data")
-target_compile_options(test-eglib PRIVATE -Wall)
+# cl.exe reads -Wall as /Wall.  mono::common above carries the MSVC level.
+if(NOT MSVC)
+  target_compile_options(test-eglib PRIVATE -Wall)
+endif()
 
 # path/find_program_in_path_cwd needs to run from here.  See the test itself
 # for why.

@@ -59,11 +59,14 @@ if(NOT MONO_HOST_WINDOWS)
   target_compile_definitions(monogc PRIVATE USE_PTHREAD_LOCKS)
 endif()
 
-target_compile_options(monogc PRIVATE
-  -fno-strict-aliasing
-  # The collector deliberately calls a few deprecated APIs.
-  -Wno-deprecated-declarations
-  -Wall -Wextra -Wno-long-long)
+# The collector deliberately calls a few deprecated APIs.
+if(MSVC)
+  target_compile_options(monogc PRIVATE /W3 /wd4996)
+else()
+  target_compile_options(monogc PRIVATE
+    -fno-strict-aliasing -Wno-deprecated-declarations
+    -Wall -Wextra -Wno-long-long)
+endif()
 
 set_target_properties(monogc PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(monogc PUBLIC Threads::Threads ${CMAKE_DL_LIBS})

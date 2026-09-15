@@ -125,6 +125,12 @@ include(MonoCorpus)
 # Coverage instrumentation, applied after the configure checks so that none of
 # them is compiled with it.
 if(MONO_ENABLE_COVERAGE)
+  # cl.exe ignores the flags below with a warning, so the build silently
+  # reports no coverage.  clang-cl takes them.
+  if(CMAKE_C_COMPILER_ID STREQUAL "MSVC")
+    message(FATAL_ERROR "MONO_ENABLE_COVERAGE has no cl.exe spelling")
+  endif()
+
   add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
   add_link_options(-fprofile-instr-generate)
 endif()
