@@ -3,12 +3,13 @@
 # .claude/scripts/install-to-ksp.sh copies into a local ~/KSP, for a machine
 # with no build tree of its own. `cmake --build build --target package-ksp`.
 #
-# The Linux layout is checked against a real install, ~/KSP. The Windows one
-# -- MonoBleedingEdge/EmbedRuntime, mono-2.0-bdwgc.dll -- is Unity's
-# documented convention, taken on faith with no install here to check it
-# against. etc/mono/config is assumed to sit beside them at the same level on
-# both platforms, rather than under the per-arch directory, for the same
-# reason.
+# Both layouts are checked against a real install: Linux against ~/KSP, Windows
+# against "Kerbal Space Program - Test 5". etc/mono/config sits beside the
+# per-arch directory on both, rather than under it.
+#
+# On Windows the zip unpacks over the install root with nothing left to move:
+# the managed assemblies carry KSP_x64_Data/Managed with them, and z.dll lands
+# at the root beside KSP_x64.exe.
 
 if(NOT MONO_ENABLE_MCS_BUILD OR NOT MONO_ENABLE_LIBRARIES)
   return()
@@ -30,11 +31,17 @@ if(MONO_HOST_WINDOWS)
   set(_ksp_native_subdir   "MonoBleedingEdge/EmbedRuntime")
   set(_ksp_runtime_name    "mono-2.0-bdwgc.dll")
   set(_ksp_native_pal      OFF)
+  set(_ksp_managed_subdir  "KSP_x64_Data/Managed")
 else()
   set(_ksp_platform_tag    "linux")
   set(_ksp_native_subdir   "MonoBleedingEdge/x86_64")
   set(_ksp_runtime_name    "libmonobdwgc-2.0.so")
   set(_ksp_native_pal      "${MONO_ENABLE_MONO_NATIVE}")
+  # Which <Game>_Data a Linux install carries is unchecked, so the assemblies
+  # stay at the root of the zip and the README says where to put them. Name
+  # the directory here once one can be read, and this zip unpacks in place
+  # like the Windows one.
+  set(_ksp_managed_subdir  "Managed")
 endif()
 
 if(NOT MONO_HOST_WINDOWS)
@@ -56,7 +63,10 @@ set(_ksp_stage    "${CMAKE_BINARY_DIR}/ksp-package")
 set(_ksp_zip      "${CMAKE_BINARY_DIR}/mono-llvm-jit-ksp-${_ksp_platform_tag}.zip")
 set(_ksp_overrides "${CMAKE_BINARY_DIR}/mono/mini/mono-overrides.dll")
 set(_ksp_overrides_pdb "${CMAKE_BINARY_DIR}/mono/mini/mono-overrides.pdb")
-set(_ksp_managed_dir "${CMAKE_BINARY_DIR}/mcs/class/lib/net_4_x-${MONO_MANAGED_PLATFORM}")
+# unityjit rather than net_4_x: an icall's native half is compiled into the
+# runtime beside these and its managed half into mscorlib, so both have to come
+# from the profile the runtime is built as.
+set(_ksp_managed_dir "${CMAKE_BINARY_DIR}/mcs/class/lib/unityjit-${MONO_MANAGED_PLATFORM}")
 set(_ksp_config_subdir "MonoBleedingEdge/etc/mono")
 
 # Mono.Cecil is deliberately absent: mods bind against the game's own copy,
@@ -70,10 +80,33 @@ set(_ksp_assemblies
 # Written outside the staging directory: the target's own rm -rf clears that
 # on every run, before the build-time copies below put these back.
 set(_ksp_readme "${CMAKE_BINARY_DIR}/ksp-package-readme.txt")
+if(MONO_HOST_WINDOWS)
+  set(_ksp_readme_install
+"Unpack it over the KSP install root -- the directory holding KSP_x64.exe --
+and every file lands where the game already looks for it.
+
+z.dll sits at that root rather than beside the runtime that imports it,
+because Windows resolves an import against the application directory. Moved
+into MonoBleedingEdge\\EmbedRuntime it stops being found, and Unity reports
+only \"Unable to load mono library\".")
+else()
+  set(_ksp_readme_install
+"Unpack MonoBleedingEdge/ over the KSP install root, and copy the contents of
+Managed/ over <Game>_Data/Managed -- which of those this install carries is
+not something the packaging step could check, so the assemblies are left at
+the root of the zip for you to place.")
+endif()
 file(WRITE "${_ksp_readme}"
 "This zip replaces a Unity KSP install's own Mono runtime and class
 libraries with a build of Unity Technologies' LLVM-JIT mono fork. Back up
 whatever it overwrites first -- there is no undo once the copy lands.
+
+${_ksp_readme_install}
+
+The runtime and the assemblies beside it are one build and do not come apart:
+an icall's native half ships in the runtime and its managed half in
+mscorlib.dll, both from this tree. Keeping Unity's own mscorlib.dll while
+swapping only the runtime is what made CultureInfo's static constructor throw.
 
 If <Game>_Data/boot.config has player-connection-debug=1, the player starts
 with sequence points on and both inliners refused. Launch it with
@@ -145,7 +178,7 @@ set(_ksp_copy_commands "")
 foreach(_asm IN LISTS _ksp_assemblies)
   list(APPEND _ksp_copy_commands
        COMMAND "${CMAKE_COMMAND}" -E copy
-               "${_ksp_managed_dir}/${_asm}.dll" "${_ksp_stage}/Managed/${_asm}.dll")
+               "${_ksp_managed_dir}/${_asm}.dll" "${_ksp_stage}/${_ksp_managed_subdir}/${_asm}.dll")
 endforeach()
 if(_ksp_native_pal)
   list(APPEND _ksp_copy_commands
@@ -168,6 +201,25 @@ if(MONO_PATCHELF)
                "${_ksp_stage}/${_ksp_native_subdir}/${_ksp_runtime_name}")
 endif()
 if(MONO_HOST_WINDOWS)
+  # Unity ships a MonoPosixHelper of its own. Leaving it there pairs this
+  # tree's System.dll with a stranger's helper, across the P/Invoke surface
+  # DeflateStream and Mono.Posix both reach it through.
+  list(APPEND _ksp_copy_commands
+       COMMAND "${CMAKE_COMMAND}" -E copy
+               "$<TARGET_FILE:MonoPosixHelper>" "${_ksp_stage}/${_ksp_native_subdir}/MonoPosixHelper.dll"
+       COMMAND "${CMAKE_COMMAND}" -E copy
+               "$<TARGET_PDB_FILE:MonoPosixHelper>" "${_ksp_stage}/${_ksp_native_subdir}/$<TARGET_PDB_FILE_NAME:MonoPosixHelper>")
+
+  # Windows resolves an import against the application directory, not against
+  # the directory of the DLL naming it, so z.dll goes to the root beside
+  # KSP_x64.exe. Moved into EmbedRuntime it stops being found, and Unity
+  # reports only "Unable to load mono library".
+  if(ZLIB_FOUND)
+    list(APPEND _ksp_copy_commands
+         COMMAND "${CMAKE_COMMAND}" -E copy
+                 "$<TARGET_FILE_DIR:${_ksp_runtime_target}>/z.dll" "${_ksp_stage}/z.dll")
+  endif()
+
   # MSVC links every target with /DEBUG (cmake/MonoCompilerFlags.cmake), so
   # both the runtime and mono-overrides always have a PDB to bring along.
   # Kept under its own build-time name rather than renamed to match the dll.
@@ -182,7 +234,7 @@ add_custom_target(package-ksp
   COMMAND "${CMAKE_COMMAND}" -E rm -rf "${_ksp_stage}"
   COMMAND "${CMAKE_COMMAND}" -E make_directory "${_ksp_stage}/${_ksp_native_subdir}"
   COMMAND "${CMAKE_COMMAND}" -E make_directory "${_ksp_stage}/${_ksp_config_subdir}"
-  COMMAND "${CMAKE_COMMAND}" -E make_directory "${_ksp_stage}/Managed"
+  COMMAND "${CMAKE_COMMAND}" -E make_directory "${_ksp_stage}/${_ksp_managed_subdir}"
   # libmonobdwgc-2.0 (mono-2.0-bdwgc.dll on Windows) is Unity's fixed name for
   # its embedded runtime, whichever collector backs it. The rename below is
   # the same whether _ksp_runtime_target built under that name already or
@@ -205,13 +257,18 @@ add_custom_target(package-ksp
   # unlinked inode, and every relative path after that, this one included,
   # resolves nowhere. -E chdir instead spawns tar fresh, after the rm -rf and
   # the copies above it are done.
+  #
+  # `.` rather than a list of top-level names. libarchive writes the entries
+  # with no `./` prefix, so the zip is the staging directory's contents.
   COMMAND "${CMAKE_COMMAND}" -E chdir "${_ksp_stage}"
-          "${CMAKE_COMMAND}" -E tar cf "${_ksp_zip}" --format=zip --
-          "MonoBleedingEdge" Managed "README-mono-llvm-jit.txt"
+          "${CMAKE_COMMAND}" -E tar cf "${_ksp_zip}" --format=zip -- .
   COMMENT "Packaging ${_ksp_zip}"
   VERBATIM)
 
-add_dependencies(package-ksp ${_ksp_runtime_target} mono-overrides mcs-net_4_x)
+add_dependencies(package-ksp ${_ksp_runtime_target} mono-overrides mcs-unityjit)
+if(MONO_HOST_WINDOWS)
+  add_dependencies(package-ksp MonoPosixHelper)
+endif()
 if(_ksp_native_pal)
   add_dependencies(package-ksp mono-native)
 endif()
