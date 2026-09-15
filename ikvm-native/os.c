@@ -27,7 +27,7 @@
 
 	JNIEXPORT void* JNICALL ikvm_LoadLibrary(char* psz)
 	{
-		return LoadLibrary(psz);
+		return LoadLibraryA(psz);
 	}
 
 	JNIEXPORT void JNICALL ikvm_FreeLibrary(HMODULE handle)
