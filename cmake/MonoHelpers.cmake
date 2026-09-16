@@ -46,6 +46,11 @@ function(mono_add_object_library name)
   endif()
 endfunction()
 
+# On CMake 4.4.1 and newer, a property value ending in ] closes the bracket
+# argument gtest_discover_tests writes it into.  The file it generates then
+# gives ctest no tests at all.  The trailing .* keeps this regex off that ].
+set(MONO_GTEST_SKIPPED_REGEX "\\[  SKIPPED \\].*")
+
 # Registers the cases of a gtest binary as ctest tests.
 #
 #   mono_gtest_tests(<target>
@@ -59,7 +64,10 @@ endfunction()
 # call instead adds one test called <prefix>, which runs its cases in one
 # process -- so a binary that takes several calls keeps that many tests.
 function(mono_gtest_tests target)
-  cmake_parse_arguments(ARG "" "PREFIX;FILTER;WORKING_DIRECTORY;SKIP_REGEX" "PROPERTIES" ${ARGN})
+  # PARSE_ARGV, because a two-entry ENVIRONMENT holds a `;` that the plain form
+  # reads as an argument boundary, dropping the entry past it.
+  cmake_parse_arguments(PARSE_ARGV 1 ARG
+                        "" "PREFIX;FILTER;WORKING_DIRECTORY;SKIP_REGEX" "PROPERTIES")
 
   set(_workdir "")
   if(ARG_WORKING_DIRECTORY)
@@ -143,6 +151,14 @@ function(mono_link_directory target link)
   if(EXISTS "${link}")
     return()
   endif()
+
+  # A name EXISTS reads as free can still be taken.  CI's build-tree cache
+  # restores one: tar has no junction, so it archives this alias as a symlink
+  # and recreates it ahead of the directory it names, which lands it as a
+  # file's symlink onto a directory -- something Windows resolves and CMake
+  # does not.
+  file(REMOVE_RECURSE "${link}")
+
   if(WIN32)
     file(TO_NATIVE_PATH "${target}" _native_target)
     file(TO_NATIVE_PATH "${link}"   _native_link)

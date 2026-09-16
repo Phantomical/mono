@@ -1189,18 +1189,31 @@ build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &
  * pointer beside the code, where a displacement does reach.
  *
  * The intrinsics are left alone: they are lowered rather than called, and one
- * that survives to a call resolves against the runtime's own image.
+ * that survives to a call resolves against the runtime's own image.  A hidden
+ * declaration is left alone as well, because the verifier rejects dllimport on
+ * one.  LLVM's profiling instrumentation writes one: `__llvm_profile_runtime`.
  */
 void
 mark_external_imports (Module &m)
 {
+	auto mark = [] (GlobalValue &g) {
+		if (!g.hasDefaultVisibility ())
+			return;
+
+		g.setDLLStorageClass (GlobalValue::DLLImportStorageClass);
+
+		// A definition this compile made internal and then stripped back
+		// leaves dso_local set, which the verifier rejects beside dllimport.
+		g.setDSOLocal (false);
+	};
+
 	for (GlobalVariable &g : m.globals ())
 		if (g.isDeclaration ())
-			g.setDLLStorageClass (GlobalValue::DLLImportStorageClass);
+			mark (g);
 
 	for (Function &f : m)
 		if (f.isDeclaration () && !f.isIntrinsic ())
-			f.setDLLStorageClass (GlobalValue::DLLImportStorageClass);
+			mark (f);
 }
 
 /// Runs the pipeline over m, which codegen consumes. The triple is the target

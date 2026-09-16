@@ -19,9 +19,32 @@ if(NOT EXISTS "${MONO_BTLS_ROOT}/CMakeLists.txt")
     "or configure with -DMONO_ENABLE_BTLS=OFF")
 endif()
 
+# BoringSSL assembles its x86_64 asm with nasm on Windows. A miss surfaces
+# deep in the sub-build, as a bare CMAKE_ASM_NASM_COMPILER error naming
+# neither BoringSSL nor the option that turns it off.
+if(MONO_HOST_WINDOWS)
+  find_program(MONO_BTLS_NASM nasm)
+  if(NOT MONO_BTLS_NASM)
+    message(FATAL_ERROR
+      "nasm is not on PATH, and BoringSSL assembles its x86_64 asm with it -- "
+      "install nasm, or configure with -DMONO_ENABLE_BTLS=OFF")
+  endif()
+endif()
+
 set(MONO_BTLS_BINARY_DIR "${CMAKE_BINARY_DIR}/mono/btls")
 set(MONO_BTLS_LIBRARY
     "${MONO_BTLS_BINARY_DIR}/libmono-btls-shared${CMAKE_SHARED_LIBRARY_SUFFIX}")
+
+# The sub-build's policy floor is 3.5, where CMAKE_MSVC_RUNTIME_LIBRARY is not
+# read and the CRT comes from the build-type flags instead.  That leaves btls on
+# /MD while the rest of the build follows LLVM's own CRT, so the choice goes in
+# here with the policy that reads it.
+set(MONO_BTLS_CRT_ARGS "")
+if(MSVC AND CMAKE_MSVC_RUNTIME_LIBRARY)
+  set(MONO_BTLS_CRT_ARGS
+      "-DCMAKE_POLICY_DEFAULT_CMP0091:STRING=NEW"
+      "-DCMAKE_MSVC_RUNTIME_LIBRARY:STRING=${CMAKE_MSVC_RUNTIME_LIBRARY}")
+endif()
 
 ExternalProject_Add(mono-btls
   SOURCE_DIR      "${CMAKE_SOURCE_DIR}/mono/btls"
@@ -34,6 +57,7 @@ ExternalProject_Add(mono-btls
     # compatibility flag CMake's own error suggests, kept off the parent
     # configure so it does not mask a real floor violation there too.
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+    ${MONO_BTLS_CRT_ARGS}
     -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
     -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}

@@ -4,6 +4,20 @@ cmake_minimum_required(VERSION 3.28)
 # down with the rest of the configuration.
 set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_LIST_DIR}/vcpkg-triplets")
 
+# The ports have to use the CRT LLVM's own archives were built against.
+# LLVMConfig.cmake states that by setting CMAKE_MSVC_RUNTIME_LIBRARY on whoever
+# finds it, but find_package(LLVM) runs below, by which time the toolchain
+# project() loads has already built every port.
+set(MONO_MSVC_CRT dynamic)
+if(CMAKE_HOST_WIN32 AND EXISTS "${MONO_LLVM_PREFIX}/lib/cmake/llvm/LLVMConfig.cmake")
+  file(STRINGS "${MONO_LLVM_PREFIX}/lib/cmake/llvm/LLVMConfig.cmake" _llvm_crt
+       REGEX "^set[(]CMAKE_MSVC_RUNTIME_LIBRARY +MultiThreaded")
+  if(_llvm_crt AND NOT _llvm_crt MATCHES "DLL")
+    set(MONO_MSVC_CRT static)
+    set(VCPKG_TARGET_TRIPLET x64-windows-static-crt)
+  endif()
+endif()
+
 project(mono
         VERSION 6.13.0
         DESCRIPTION "Mono runtime (Unity fork, LLVM 18 tiered JIT)"
@@ -78,8 +92,34 @@ if(MONO_ENABLE_MCS_BUILD AND MONO_ENABLE_EXECUTABLES)
 endif()
 
 if(MONO_ENABLE_LLVM)
+  # LLVMSupport's link interface names zstd::libzstd_static, which
+  # LLVMConfig.cmake imports through LLVM's own Findzstd.cmake -- and that
+  # module takes a library as the static one only when the file is called
+  # zstd_static.lib, a suffix vcpkg patches off.  So the module finds vcpkg's
+  # zstd.lib, defines no target, and CMake reports the dangling one at generate
+  # time against LLVMExports.cmake.  Config mode names the target rather than
+  # the file, and the module's own NOT TARGET guards leave it standing.
+  if(MSVC)
+    find_package(zstd CONFIG REQUIRED)
+  endif()
+
   # We check the actual version in MonoLLVM.cmake
   find_package(LLVM CONFIG QUIET PATHS "${MONO_LLVM_PREFIX}" NO_DEFAULT_PATH)
+endif()
+
+# A miss here gets as far as the link and fails on a port's dllimport CRT
+# symbols, naming zlib rather than the CRT or LLVM.
+if(MSVC)
+  set(_crt dynamic)
+  if(CMAKE_MSVC_RUNTIME_LIBRARY AND NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL")
+    set(_crt static)
+  endif()
+  if(NOT _crt STREQUAL MONO_MSVC_CRT)
+    message(FATAL_ERROR
+      "LLVM at ${MONO_LLVM_PREFIX} wants the ${_crt} CRT and vcpkg built its "
+      "ports against the ${MONO_MSVC_CRT} one -- the triplet is picked from "
+      "CMAKE_MSVC_RUNTIME_LIBRARY in LLVMConfig.cmake, read before project()")
+  endif()
 endif()
 
 find_program(MONO_BOOTSTRAP_RUNTIME NAMES mono mono-sgen)
@@ -92,7 +132,16 @@ find_program(MONO_SYSTEM_RUNTIME_EXECUTABLE NAMES mono-sgen mono)
 # The host's own strong-name tool.  A managed program the host runs itself has
 # to carry a signature that host will accept, and the bootstrap profile's
 # sn.exe is one of the programs that needs signing.
-find_program(MONO_HOST_SN sn)
+#
+# By .exe on Windows rather than by the bare name.  Mono ships an sn of its own
+# whose Windows spelling is a shell script, so a mono on PATH otherwise wins
+# this search, and the signing it feeds is optional -- the bootstrap assemblies
+# then stay delay-signed and the first ilasm run refuses to load one.
+if(WIN32)
+  find_program(MONO_HOST_SN NAMES sn.exe)
+else()
+  find_program(MONO_HOST_SN sn)
+endif()
 
 find_program(MONO_PERL perl)
 find_program(MONO_DOXYGEN doxygen)
