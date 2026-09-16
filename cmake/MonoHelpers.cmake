@@ -64,7 +64,10 @@ set(MONO_GTEST_SKIPPED_REGEX "\\[  SKIPPED \\].*")
 # call instead adds one test called <prefix>, which runs its cases in one
 # process -- so a binary that takes several calls keeps that many tests.
 function(mono_gtest_tests target)
-  cmake_parse_arguments(ARG "" "PREFIX;FILTER;WORKING_DIRECTORY;SKIP_REGEX" "PROPERTIES" ${ARGN})
+  # PARSE_ARGV, because a two-entry ENVIRONMENT holds a `;` that the plain form
+  # reads as an argument boundary, dropping the entry past it.
+  cmake_parse_arguments(PARSE_ARGV 1 ARG
+                        "" "PREFIX;FILTER;WORKING_DIRECTORY;SKIP_REGEX" "PROPERTIES")
 
   set(_workdir "")
   if(ARG_WORKING_DIRECTORY)
