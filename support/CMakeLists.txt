@@ -13,7 +13,9 @@ set(_mph_sources
   zlib-helper.c
   minizip/ioapi.c
   minizip/unzip.c
-  minizip/zip.c)
+  minizip/zip.c
+  fcntl.c
+  sys-stat.c)
 
 # The POSIX half.  Each of these wraps a call the Windows CRT does not have, so
 # Mono.Posix on Windows gets the ANSI half above and throws for the rest --
@@ -21,7 +23,6 @@ set(_mph_sources
 if(NOT MONO_HOST_WINDOWS)
   list(APPEND _mph_sources
     dirent.c
-    fcntl.c
     fstab.c
     grp.c
     macros.c
@@ -32,7 +33,6 @@ if(NOT MONO_HOST_WINDOWS)
     sys-mman.c
     sys-sendfile.c
     sys-socket.c
-    sys-stat.c
     sys-statvfs.c
     sys-time.c
     sys-uio.c
@@ -66,21 +66,10 @@ if(MONO_HOST_WINDOWS)
   # Nothing here carries __declspec(dllexport): zlib-helper.c defines MONO_API
   # away when nothing else has, and map.c's generated entry points never took
   # it. Without this the DLL links clean and exports nothing, so the first
-  # P/Invoke into it throws EntryPointNotFoundException -- and the class
-  # libraries reach it for DeflateStream and every Mono.Posix call.
-  #
-  # The entries dropped below have bodies only in the POSIX sources the Windows
-  # source list leaves out, and lld-link fails an export it cannot resolve
-  # rather than skipping it.
-  file(STRINGS "${CMAKE_SOURCE_DIR}/msvc/monoposixhelper.def" _mph_def_lines)
-  list(REMOVE_ITEM _mph_def_lines
-       Mono_Posix_Syscall_get_at_fdcwd
-       Mono_Posix_Syscall_get_utime_now
-       Mono_Posix_Syscall_get_utime_omit)
-  string(REPLACE ";" "\n" _mph_def "${_mph_def_lines}")
-  set(_mph_def_file "${CMAKE_CURRENT_BINARY_DIR}/MonoPosixHelper.def")
-  file(WRITE "${_mph_def_file}" "${_mph_def}\n")
-  target_sources(MonoPosixHelper PRIVATE "${_mph_def_file}")
+  # P/Invoke into it throws DllNotFoundException -- and the class libraries
+  # reach it for DeflateStream and every Mono.Posix call.
+  target_sources(MonoPosixHelper PRIVATE
+    "${CMAKE_SOURCE_DIR}/msvc/monoposixhelper.def")
 endif()
 # glibc has the xattr calls in libc. Elsewhere they come from libattr.
 if(NOT HAVE_LSETXATTR)
