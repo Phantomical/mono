@@ -51,6 +51,8 @@ mono_lock_rank_of (RuntimeLocks kind)
 		return MONO_LOCK_RANK_LOADER;
 	case DomainLock:
 		return MONO_LOCK_RANK_DOMAIN;
+	case ImageDataLock:
+		return MONO_LOCK_RANK_LEAF;
 	default:
 		return MONO_LOCK_RANK_NONE;
 	}

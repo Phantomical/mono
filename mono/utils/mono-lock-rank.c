@@ -20,6 +20,7 @@ static const char *const rank_names [MONO_LOCK_RANK_COUNT] = {
 	"domain-method-table",
 	"domain-method",
 	"engine",
+	"leaf",
 };
 
 /* Outermost first, which is the order they were taken in. */

@@ -27,6 +27,10 @@ typedef enum {
 	MONO_LOCK_RANK_DOMAIN_METHOD_TABLE,
 	MONO_LOCK_RANK_DOMAIN_METHOD,
 	MONO_LOCK_RANK_ENGINE,
+	/* Innermost, so every acquisition made while one is held fires. That is the
+	 * rule a leaf lock keeps, rather than a position among the others: the image
+	 * lock's own declaration states it and nothing enforced it. */
+	MONO_LOCK_RANK_LEAF,
 	MONO_LOCK_RANK_COUNT
 } MonoLockRank;
 
@@ -39,11 +43,15 @@ typedef enum {
 /*
  * The ranks the runtime initializes recursive. Re-entering any other rank is a
  * deadlock against this thread itself rather than an ordering mistake.
+ *
+ * MONO_LOCK_RANK_LEAF is here because several unrelated locks share it, so two
+ * of them held at once would otherwise read as one re-entered.
  */
 #define MONO_LOCK_RANKS_RECURSIVE \
 	((1u << MONO_LOCK_RANK_DOMAIN_UNLOAD) \
 	 | (1u << MONO_LOCK_RANK_LOADER) \
-	 | (1u << MONO_LOCK_RANK_DOMAIN))
+	 | (1u << MONO_LOCK_RANK_DOMAIN) \
+	 | (1u << MONO_LOCK_RANK_LEAF))
 
 typedef struct {
 	/* Bit r is set while rank r is held. */
@@ -117,6 +125,13 @@ mono_lock_rank_is_held (MonoLockRank rank)
 	       && (mono_lock_rank_state.held & (1u << rank)) != 0;
 }
 
+/** The ranks this thread holds, as a bitmask, or 0 where nothing is ranked. */
+static inline guint32
+mono_lock_ranks_held (void)
+{
+	return mono_lock_rank_state.held;
+}
+
 /**
  * Aborts if this thread holds anything that outranks \p rank.
  *
@@ -143,6 +158,8 @@ mono_lock_rank_is_held (MonoLockRank rank)
 	(void) rank;
 	return FALSE;
 }
+
+static inline guint32 mono_lock_ranks_held (void) { return 0; }
 
 #define MONO_ASSERT_NO_LOCK_ABOVE(rank) do { } while (0)
 
