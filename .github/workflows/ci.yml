@@ -126,7 +126,7 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DCMAKE_C_COMPILER=clang-18 \
             -DCMAKE_CXX_COMPILER=clang++-18 \
-            -DMONO_LLVM_PREFIX=/usr/lib/llvm-22 \
+            -DMONO_LLVM_PREFIX=/usr/lib/llvm-23 \
             -DCMAKE_INSTALL_PREFIX="$PWD/tmp" \
             -DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
@@ -231,7 +231,7 @@ jobs:
           cmake -S . -B build -G Ninja \
             -DCMAKE_C_COMPILER=gcc \
             -DCMAKE_CXX_COMPILER=g++ \
-            -DMONO_LLVM_PREFIX=/usr/lib/llvm-22 \
+            -DMONO_LLVM_PREFIX=/usr/lib/llvm-23 \
             -DCMAKE_INSTALL_PREFIX="$PWD/tmp" \
             -DMONO_ENABLE_MCS_BUILD=OFF \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
