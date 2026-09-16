@@ -62,7 +62,7 @@ is_zeroinit (const CallBase &alloc)
 	return (kind & AllocFnKind::Zeroed) != AllocFnKind::Unknown;
 }
 
-/// A pointer's own base with any constant GEP offsets folded in.
+/// The base an address peels to, with any constant GEP offsets folded in.
 using AddrKey = std::pair<Value *, int64_t>;
 
 /// \p ptr as (base, byte offset), or nothing where a non-constant index
@@ -75,6 +75,13 @@ std::optional<AddrKey>
 normalize_address (Value *ptr, const DataLayout &dl)
 {
 	ptr = const_cast<Value *> (strip_casts (ptr));
+
+	// strip_casts () peels an inttoptr, so this can come back an integer.
+	// getIndexTypeSizeInBits () takes a pointer alone.
+	// stripAndAccumulateConstantOffsets () returns a non-pointer unchanged, so
+	// this is the key it would have left anyway.
+	if (!ptr->getType ()->isPtrOrPtrVectorTy ())
+		return AddrKey (ptr, 0);
 
 	APInt offset (dl.getIndexTypeSizeInBits (ptr->getType ()), 0);
 	Value *base = ptr->stripAndAccumulateConstantOffsets (dl, offset,
