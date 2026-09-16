@@ -1246,7 +1246,19 @@ sgen_check_section_scan_starts (GCMemSection *section)
 	size_t i;
 	for (i = 0; i < section->num_scan_start; ++i) {
 		if (section->scan_starts [i]) {
-			mword size = safe_object_get_size ((GCObject*) section->scan_starts [i]);
+			GCObject *obj = (GCObject*) section->scan_starts [i];
+			mword size;
+
+			/*
+			 * sgen_clear_range () puts a scan start on the filler it lays over
+			 * a free fragment, and a fragment is bounded by the nursery rather
+			 * than by the small-object size. Without this the check fires on
+			 * any nursery holding a fragment over MAX_SMALL_OBJ_SIZE.
+			 */
+			if (sgen_client_object_is_array_fill (obj))
+				continue;
+
+			size = safe_object_get_size (obj);
 			SGEN_ASSERT (0, size >= SGEN_CLIENT_MINIMUM_OBJECT_SIZE && size <= MAX_SMALL_OBJ_SIZE, "Weird object size at scan starts.");
 		}
 	}
@@ -3784,6 +3796,12 @@ sgen_gc_init (void)
 				char *filename = strchr (opt, '=') + 1;
 				char *colon = strrchr (filename, ':');
 				size_t limit = 0;
+				/* `binary-protocol=C:\dir\file` otherwise reads the
+				 * drive-letter colon as the size separator and writes to a
+				 * file called `C`. */
+				if (colon == filename + 1 && g_ascii_isalpha (filename [0]) &&
+						(colon [1] == '\\' || colon [1] == '/'))
+					colon = NULL;
 				if (colon) {
 					if (!mono_gc_parse_environment_string_extract_number (colon + 1, &limit)) {
 						sgen_env_var_error (MONO_GC_DEBUG_NAME, "Ignoring limit.", "Binary protocol file size limit must be an integer.");
