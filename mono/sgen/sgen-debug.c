@@ -273,6 +273,128 @@ check_consistency_callback (GCObject *obj, size_t size, void *dummy)
 #include "sgen-scan-object.h"
 }
 
+#ifdef SGEN_HEAP_FORENSICS
+
+/* How many stale references the collection now finishing has found. */
+static int stale_nursery_ref_count;
+
+#undef HANDLE_PTR
+#define HANDLE_PTR(ptr,obj)	do {	\
+		char *__p = *(char**)(ptr);	\
+		if (__p && sgen_ptr_in_nursery (__p)) {	\
+			mword __w = *(mword*)__p;	\
+			if (!SGEN_VTABLE_IS_PINNED (__w)) {	\
+				GCVTable __vt = SGEN_LOAD_VTABLE ((GCObject*)(obj));	\
+				int __off = (int)((char*)(ptr) - (char*)(obj));	\
+				const char *__f = sgen_client_field_name_for_offset (__vt, __off);	\
+				if (stale_nursery_ref_count++ < 12)	\
+					SGEN_LOG (0, "[stale] %p (word %p forwarded=%d) still named by %p (%s.%s) field %s offset %d holder_in_nursery=%d",	\
+							__p, (void*)__w, (int)!!SGEN_VTABLE_IS_FORWARDED (__w),	\
+							(obj), sgen_client_vtable_get_namespace (__vt),	\
+							sgen_client_vtable_get_name (__vt),	\
+							__f ? __f : "?", __off, (int)sgen_ptr_in_nursery (obj));	\
+			}	\
+		}	\
+	} while (0)
+
+static void
+check_stale_nursery_refs_callback (GCObject *obj, size_t size, void *data)
+{
+	char *start = (char*)obj;
+	SgenDescriptor desc = sgen_obj_get_descriptor_safe (obj);
+
+#include "sgen-scan-object.h"
+}
+
+/*
+ * The nursery survivors are the pinned objects: a forwarded one is the corpse
+ * the copy left behind and the rest is garbage, so only a pinned object's
+ * fields still have to be right once the collection is done.
+ */
+static void
+check_stale_pinned_nursery_callback (GCObject *obj, size_t size, void *data)
+{
+	char *start = (char*)obj;
+	SgenDescriptor desc;
+
+	if (SGEN_OBJECT_IS_FORWARDED (obj) || !SGEN_OBJECT_IS_PINNED (obj))
+		return;
+	if (sgen_client_object_is_array_fill (obj))
+		return;
+
+	desc = sgen_obj_get_descriptor_safe (obj);
+
+#include "sgen-scan-object.h"
+}
+
+/*
+ * A conservative scan pins what it finds, so an address a thread stack or a
+ * saved register holds cannot also be one this collection moved from. Anything
+ * reported here is an object the scan failed to pin and the collection then
+ * moved out from under the thread that still names it.
+ */
+static void
+dbg_check_threads_for_moved_from (void)
+{
+#ifndef SGEN_WITHOUT_MONO
+	int reported = 0;
+
+	FOREACH_THREAD_EXCLUDE (info, MONO_THREAD_INFO_FLAGS_NO_GC) {
+		char **start = (char**)info->client_info.stack_start;
+		char **end = (char**)info->client_info.info.stack_end;
+		mword *c, *cend;
+
+		if (info->client_info.skip || !start)
+			continue;
+
+		for (; start < end; start++) {
+			if (!sgen_dbg_moved_test (*start))
+				continue;
+			if (reported++ < 12)
+				SGEN_LOG (0, "[movedstk] %p moved from this collection, still on thread %p stack slot %p",
+						*start, info, (void*)start);
+		}
+
+		for (c = (mword*)&info->client_info.ctx, cend = (mword*)(&info->client_info.ctx + 1); c < cend; c++) {
+			if (!sgen_dbg_moved_test ((void*)*c))
+				continue;
+			if (reported++ < 12)
+				SGEN_LOG (0, "[movedreg] %p moved from this collection, still in thread %p ctx word %d",
+						(void*)*c, info, (int)(c - (mword*)&info->client_info.ctx));
+		}
+	} FOREACH_THREAD_END
+
+	if (reported)
+		SGEN_LOG (0, "[movedstk] %d thread location(s) name an address this collection moved from", reported);
+#endif
+}
+
+/*
+ * Run once the gray stack is drained and before the fragments are rebuilt,
+ * where every reference the collection reached has already been updated. A
+ * reference into the nursery may then only name a pinned object: anything else
+ * is a slot the collection did not update, reported while the object holding it
+ * is still the one that had it, rather than a collection later once the mutator
+ * has copied the stale value around.
+ */
+void
+sgen_dbg_check_no_stale_nursery_refs (void)
+{
+	stale_nursery_ref_count = 0;
+
+	dbg_check_threads_for_moved_from ();
+
+	sgen_major_collector.iterate_objects (ITERATE_OBJECTS_SWEEP_ALL, check_stale_nursery_refs_callback, NULL);
+	sgen_los_iterate_objects (check_stale_nursery_refs_callback, NULL);
+	sgen_scan_area_with_callback (sgen_nursery_section->data, sgen_nursery_section->end_data,
+			check_stale_pinned_nursery_callback, NULL, TRUE, FALSE);
+
+	if (stale_nursery_ref_count)
+		SGEN_LOG (0, "[stale] %d stale nursery reference(s) survived the collection", stale_nursery_ref_count);
+}
+
+#endif /* SGEN_HEAP_FORENSICS */
+
 /*
  * Perform consistency check of the heap.
  *
@@ -315,7 +437,10 @@ is_major_or_los_object_marked (GCObject *obj)
 	if (*(ptr) && !sgen_ptr_in_nursery ((char*)*(ptr)) && !is_major_or_los_object_marked ((GCObject*)*(ptr))) { \
 		if (!cards || !sgen_get_remset ()->find_address_with_cards (start, cards, (char*)(ptr))) { \
 			GCVTable __vt = SGEN_LOAD_VTABLE (obj);	\
-			SGEN_LOG (0, "major->major reference %p at offset %ld in object %p (%s.%s) not found in remsets.", *(ptr), (long)((char*)(ptr) - (char*)(obj)), (obj), sgen_client_vtable_get_namespace (__vt), sgen_client_vtable_get_name (__vt)); \
+			/* The regular card separates the two ways this happens: marked
+			 * means the barrier ran and the fold into the mod-union lost it,
+			 * clear means no barrier ran for the store. */ \
+			SGEN_LOG (0, "major->major reference %p at offset %ld in object %p (%s.%s) not found in remsets. regular_card=%d cards=%d", *(ptr), (long)((char*)(ptr) - (char*)(obj)), (obj), sgen_client_vtable_get_namespace (__vt), sgen_client_vtable_get_name (__vt), (int)sgen_card_table_address_is_marked ((mword)(ptr)), (int)(cards != NULL)); \
 			sgen_binary_protocol_missing_remset ((obj), __vt, (int) ((char*)(ptr) - (char*)(obj)), *(ptr), (gpointer)LOAD_VTABLE(*(ptr)), object_is_pinned (*(ptr))); \
 			missing_remsets = TRUE;				\
 		}																\
@@ -444,6 +569,123 @@ find_object_in_nursery_dump (char *object)
 	return FALSE;
 }
 
+#ifdef SGEN_HEAP_FORENSICS
+
+/* The object whose extent covers `p`, by binary search over the nursery walk
+ * setup_valid_nursery_objects () builds, so an interior pointer resolves to the
+ * object it points into rather than being discarded for not being a start. */
+static GCObject*
+dbg_nursery_object_containing (char *p)
+{
+	int first = 0, last = valid_nursery_object_count;
+	GCObject *obj;
+
+	while (first < last) {
+		int middle = first + ((last - first) >> 1);
+
+		if ((char*)valid_nursery_objects [middle] <= p)
+			first = middle + 1;
+		else
+			last = middle;
+	}
+	if (first == 0)
+		return NULL;
+
+	obj = valid_nursery_objects [first - 1];
+	if (p < (char*)obj + safe_object_get_size (obj))
+		return obj;
+	return NULL;
+}
+
+/*
+ * A conservative stack scan pins rather than updates, so a stack slot keeps the
+ * address it holds and stays correct only because the object it names does not
+ * move. Run after pinning and before anything is copied, this asserts the other
+ * half: every nursery object a scanned stack word points at is pinned. What it
+ * reports is an object about to move out from under a live stack reference.
+ */
+void
+sgen_dbg_check_stack_pins (void)
+{
+#ifndef SGEN_WITHOUT_MONO
+	int reported = 0;
+	int ctx_reported = 0;
+
+	setup_valid_nursery_objects ();
+
+	FOREACH_THREAD_EXCLUDE (info, MONO_THREAD_INFO_FLAGS_NO_GC) {
+		char **start = (char**)info->client_info.stack_start;
+		char **end = (char**)info->client_info.info.stack_end;
+
+		if (info->client_info.skip) {
+			SGEN_LOG (0, "[stackpin] thread %p skipped, stack %p-%p", info, (void*)start, (void*)end);
+			continue;
+		}
+
+		for (; start < end; start++) {
+			char *p = *start;
+			GCObject *obj;
+			GCVTable vt;
+
+			if (!sgen_ptr_in_nursery (p))
+				continue;
+			obj = dbg_nursery_object_containing (p);
+			if (!obj || sgen_client_object_is_array_fill (obj) || SGEN_OBJECT_IS_PINNED (obj))
+				continue;
+
+			vt = SGEN_LOAD_VTABLE (obj);
+			if (reported++ < 12)
+				SGEN_LOG (0, "[stackpin] UNPINNED %p (+%d in %p %s.%s) thread %p slot %p stack %p-%p word %d",
+						p, (int)(p - (char*)obj), obj,
+						sgen_client_vtable_get_namespace (vt), sgen_client_vtable_get_name (vt),
+						info, (void*)start,
+						(void*)info->client_info.stack_start, (void*)end,
+						(int)(start - (char**)info->client_info.stack_start));
+		}
+
+		/* The saved register context, which the stack loop above does not
+		 * cover. A reference living only in a callee-saved register is pinned
+		 * from here or from nowhere. */
+		{
+			mword *c = (mword*)&info->client_info.ctx;
+			mword *cend = (mword*)(&info->client_info.ctx + 1);
+			int nonzero = 0;
+			mword *w;
+
+			for (w = c; w < cend; w++) {
+				char *p = (char*)*w;
+				GCObject *obj;
+
+				if (*w)
+					nonzero++;
+				if (!sgen_ptr_in_nursery (p))
+					continue;
+				obj = dbg_nursery_object_containing (p);
+				if (!obj || sgen_client_object_is_array_fill (obj) || SGEN_OBJECT_IS_PINNED (obj))
+					continue;
+
+				SGEN_LOG (0, "[regpin] UNPINNED %p (+%d in %p %s.%s) thread %p ctx word %d",
+						p, (int)(p - (char*)obj), obj,
+						sgen_client_vtable_get_namespace (SGEN_LOAD_VTABLE (obj)),
+						sgen_client_vtable_get_name (SGEN_LOAD_VTABLE (obj)),
+						info, (int)(w - c));
+				reported++;
+			}
+			if (ctx_reported++ < 4)
+				SGEN_LOG (0, "[regpin] thread %p ctx %d words, %d non-zero, ip %p sp %p",
+						info, (int)(cend - c), nonzero,
+						MONO_CONTEXT_GET_IP (&info->client_info.ctx),
+						MONO_CONTEXT_GET_SP (&info->client_info.ctx));
+		}
+	} FOREACH_THREAD_END
+
+	if (reported)
+		SGEN_LOG (0, "[stackpin] %d unpinned nursery object(s) referenced from a scanned stack", reported);
+#endif
+}
+
+#endif /* SGEN_HEAP_FORENSICS */
+
 static void
 iterate_valid_nursery_objects (IterateObjectCallbackFunc callback, void *data)
 {
@@ -494,16 +736,253 @@ is_valid_object_pointer (char *object)
 	return FALSE;
 }
 
+#ifdef SGEN_HEAP_FORENSICS
+
+/*
+ * Windows only; reports nothing on other hosts, which have no implementation of
+ * this walk rather than nothing to find.
+ *
+ * Where a stale address lives once the heap, the roots and the stacks have all
+ * been ruled out. Walks the committed address space and names the region each
+ * copy of the value sits in, so executable memory -- an address baked into
+ * generated code, which nothing updates when the object moves -- is told apart
+ * from ordinary data.
+ */
+static void
+dbg_find_ptr_in_address_space (char *ptr)
+{
+#ifdef HOST_WIN32
+	MEMORY_BASIC_INFORMATION mbi;
+	char *addr = NULL;
+	int reported = 0;
+	int exec_hits = 0, image_hits = 0, nursery_hits = 0, other_hits = 0;
+	char *nursery_lo = sgen_nursery_start, *nursery_hi = sgen_nursery_end;
+	void *log_start, *log_end;
+
+	sgen_dbg_move_log_range (&log_start, &log_end);
+
+	while (VirtualQuery (addr, &mbi, sizeof (mbi)) == sizeof (mbi)) {
+		DWORD prot = mbi.Protect & 0xff;
+		gboolean readable = mbi.State == MEM_COMMIT &&
+				(prot == PAGE_READONLY || prot == PAGE_READWRITE || prot == PAGE_WRITECOPY ||
+				 prot == PAGE_EXECUTE_READ || prot == PAGE_EXECUTE_READWRITE || prot == PAGE_EXECUTE_WRITECOPY);
+
+		if (readable && !(mbi.Protect & PAGE_GUARD)) {
+			char **p = (char**)mbi.BaseAddress;
+			char **e = (char**)((char*)mbi.BaseAddress + mbi.RegionSize);
+
+			gboolean executable = prot == PAGE_EXECUTE_READ || prot == PAGE_EXECUTE_READWRITE ||
+					prot == PAGE_EXECUTE_WRITECOPY;
+
+			/*
+			 * An address baked into generated code is an immediate inside an
+			 * instruction, which is not aligned to anything. The word-stepping
+			 * loop below cannot see one, so executable memory is searched a
+			 * byte at a time instead.
+			 */
+			if (executable) {
+				const char *b = (const char*)mbi.BaseAddress;
+				const char *bend = b + mbi.RegionSize - sizeof (void*);
+
+				for (; b <= bend; b++) {
+					if (memcmp (b, &ptr, sizeof (void*)) != 0)
+						continue;
+					exec_hits++;
+					reported++;
+					if (exec_hits <= 16) {
+						SGEN_LOG (0, "    [mem-code] %p as an immediate at %p  region %p+%x prot=%x type=%x",
+								ptr, (void*)b, mbi.BaseAddress, (unsigned)mbi.RegionSize,
+								(unsigned)mbi.Protect, (unsigned)mbi.Type);
+						sgen_client_describe_code_address ((gpointer)b);
+					}
+				}
+				addr = (char*)mbi.BaseAddress + mbi.RegionSize;
+				if (addr < (char*)mbi.BaseAddress)
+					break;
+				continue;
+			}
+
+			for (; p < e; p++) {
+				if (*p != ptr)
+					continue;
+				if ((void*)p >= log_start && (void*)p < log_end)
+					continue;
+				reported++;
+
+				if (executable)
+					exec_hits++;
+				else if (mbi.Type == MEM_IMAGE)
+					image_hits++;
+				else if ((char*)p >= nursery_lo && (char*)p < nursery_hi)
+					nursery_hits++;
+				else
+					other_hits++;
+
+				/* Executable memory is the interesting one: generated code and
+				 * the arena beside it hold an address nothing updates when the
+				 * object moves. A mapped image is a global of the runtime's
+				 * own. Neither is ever hidden behind the cap. */
+				if (executable || mbi.Type == MEM_IMAGE) {
+					char name [MAX_PATH];
+					DWORD n = mbi.Type == MEM_IMAGE
+							? GetModuleFileNameA ((HMODULE)mbi.AllocationBase, name, sizeof (name)) : 0;
+
+					SGEN_LOG (0, "    [mem-%s] %p at %p  base %p  off 0x%x  prot=%x  %s",
+							executable ? "exec" : "image",
+							ptr, (void*)p, mbi.AllocationBase,
+							(unsigned)((char*)p - (char*)mbi.AllocationBase),
+							(unsigned)mbi.Protect, n ? name : "");
+				} else if (other_hits + nursery_hits <= 6) {
+					SGEN_LOG (0, "    [mem] %p at %p in region %p+%x prot=%x type=%x",
+							ptr, (void*)p, mbi.BaseAddress, (unsigned)mbi.RegionSize,
+							(unsigned)mbi.Protect, (unsigned)mbi.Type);
+				}
+			}
+		}
+
+		addr = (char*)mbi.BaseAddress + mbi.RegionSize;
+		if (addr < (char*)mbi.BaseAddress)
+			break;
+	}
+	SGEN_LOG (0, "    [mem] %d location(s) hold %p: %d executable, %d image, %d nursery, %d other",
+			reported, ptr, exec_hits, image_hits, nursery_hits, other_hits);
+#endif
+}
+
+/* Unlike find_pinning_ref_from_thread (), a thread the collector skips is
+ * reported rather than passed over: a live reference parked on such a thread is
+ * what a conservative scan would fail to pin. */
+static void
+dbg_find_ptr_on_threads (char *ptr)
+{
+#ifndef SGEN_WITHOUT_MONO
+	FOREACH_THREAD_EXCLUDE (info, MONO_THREAD_INFO_FLAGS_NO_GC) {
+		char **start = (char**)info->client_info.stack_start;
+		char **end = (char**)info->client_info.info.stack_end;
+		mword *ctxstart, *ctxcurrent, *ctxend;
+
+		while (start < end) {
+			if (*start == ptr)
+				SGEN_LOG (0, "    [stk] %p on thread %p slot %p skip=%d stack %p-%p",
+						ptr, info, (void*)start, info->client_info.skip,
+						info->client_info.stack_start, info->client_info.info.stack_end);
+			start++;
+		}
+
+		for (ctxstart = ctxcurrent = (mword*)&info->client_info.ctx, ctxend = (mword*)(&info->client_info.ctx + 1);
+		     ctxcurrent < ctxend; ctxcurrent++) {
+			if (*ctxcurrent == (mword)ptr)
+				SGEN_LOG (0, "    [reg] %p in saved word %d of thread %p skip=%d",
+						ptr, (int)(ctxcurrent - ctxstart), info, info->client_info.skip);
+		}
+	} FOREACH_THREAD_END
+#endif
+}
+
+#endif /* SGEN_HEAP_FORENSICS */
+
 static void
 bad_pointer_spew (char *obj, char **slot)
 {
 	char *ptr = *slot;
 	GCVTable vtable = LOAD_VTABLE ((GCObject*)obj);
+	const char *fname = sgen_client_field_name_for_offset (vtable, (int)((char*)slot - obj));
 
-	SGEN_LOG (0, "Invalid object pointer %p at offset %ld in object %p (%s.%s):", ptr,
-			(long)((char*)slot - obj),
-			obj, sgen_client_vtable_get_namespace (vtable), sgen_client_vtable_get_name (vtable));
+	SGEN_LOG (0, "Invalid object pointer %p at offset %ld (field %s) in object %p (%s.%s) holder_in_nursery=%d holder_pinned=%d minor_gcs=%d:", ptr,
+			(long)((char*)slot - obj), fname ? fname : "?",
+			obj, sgen_client_vtable_get_namespace (vtable), sgen_client_vtable_get_name (vtable),
+			(int)sgen_ptr_in_nursery (obj),
+			(int)(SGEN_OBJECT_IS_PINNED ((GCObject*)obj) ? 1 : 0),
+			(int)mono_atomic_load_i32 (&mono_gc_stats.minor_gc_count));
 	describe_pointer (ptr, FALSE);
+
+#ifdef SGEN_HEAP_FORENSICS
+	/* Dumping the holder word by word beside its field names says whether the
+	 * bad value is a stale reference in the right slot or the right value in
+	 * the wrong slot. Everything below it reports where the value came from. */
+	{
+		static int dumped;
+
+		if (dumped++ < 2) {
+			size_t size = sgen_safe_object_get_size ((GCObject*)obj);
+			size_t i;
+
+			for (i = 0; i < size / sizeof (void*) && i < 24; ++i) {
+				const char *n = sgen_client_field_name_for_offset (vtable, (int)(i * sizeof (void*)));
+				SGEN_LOG (0, "    [%02d] off %3d %-28s = %p", (int)i, (int)(i * sizeof (void*)),
+						n ? n : "-", ((void**)obj) [i]);
+			}
+
+			/* The first words at the bad pointer say whether it is an object
+			 * start the nursery walk failed to find, or memory that holds no
+			 * object at all. */
+			SGEN_LOG (0, "    [tgt] %p = %p %p %p %p", ptr,
+					((void**)ptr) [0], ((void**)ptr) [1], ((void**)ptr) [2], ((void**)ptr) [3]);
+
+			/*
+			 * Whether the target reads back as a live object. The verdict above
+			 * rests on an exact match against a linear walk of the nursery, so a
+			 * walk that has lost step calls every real object after it invalid.
+			 * A readable class name here says the walk is what is wrong.
+			 */
+			{
+				mword w = ((mword*)ptr) [0];
+				gpointer vt = (gpointer)SGEN_POINTER_UNTAG_ALL (w);
+				MEMORY_BASIC_INFORMATION mbi;
+
+				if (w && !(w & 7) && VirtualQuery (vt, &mbi, sizeof (mbi)) == sizeof (mbi) &&
+						mbi.State == MEM_COMMIT && !(mbi.Protect & PAGE_GUARD) &&
+						(mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE))) {
+					MonoClass *klass = ((MonoVTable*)vt)->klass;
+
+					if (klass && VirtualQuery (klass, &mbi, sizeof (mbi)) == sizeof (mbi) &&
+							mbi.State == MEM_COMMIT && !(mbi.Protect & PAGE_GUARD))
+						SGEN_LOG (0, "    [asobj] %p reads as %s.%s (vtable %p)", ptr,
+								m_class_get_name_space (klass), m_class_get_name (klass), vt);
+					else
+						SGEN_LOG (0, "    [asobj] %p vtable %p has no readable class", ptr, vt);
+				} else {
+					SGEN_LOG (0, "    [asobj] %p word %p is not a vtable", ptr, (void*)w);
+				}
+			}
+
+			/* Whether a registered root -- static field storage among them --
+			 * holds the same bad value. Scanned word by word rather than
+			 * through each root's descriptor, so a slot the descriptor fails to
+			 * mark is found too. */
+			{
+				int root_type;
+				int hits = 0;
+
+				for (root_type = 0; root_type < ROOT_TYPE_NUM; ++root_type) {
+					void **start_root;
+					RootRecord *root;
+
+					SGEN_HASH_TABLE_FOREACH (&sgen_roots_hash [root_type], void **, start_root, RootRecord *, root) {
+						void **p;
+
+						for (p = start_root; p < (void**)root->end_root; ++p) {
+							if (*p != ptr)
+								continue;
+							hits++;
+							SGEN_LOG (0, "    [root] type=%d range %p-%p slot %p word %d desc %p",
+									root_type, (void*)start_root, (void*)root->end_root,
+									(void*)p, (int)(p - start_root), (void*)root->root_desc);
+						}
+					} SGEN_HASH_TABLE_FOREACH_END;
+				}
+				SGEN_LOG (0, "    [root] %d registered root slot(s) hold %p", hits, ptr);
+			}
+
+			sgen_client_report_static_source (vtable, (int)((char*)slot - obj), ptr);
+			sgen_dbg_report_moves (ptr);
+			sgen_dbg_find_gchandles_holding (ptr);
+			dbg_find_ptr_on_threads (ptr);
+			dbg_find_ptr_in_address_space (ptr);
+		}
+	}
+#endif /* SGEN_HEAP_FORENSICS */
+
 	broken_heap = TRUE;
 }
 

@@ -249,6 +249,205 @@ static gboolean dynamic_nursery = FALSE;
 static size_t min_nursery_size = 0;
 static size_t max_nursery_size = 0;
 
+#ifdef SGEN_HEAP_FORENSICS
+
+/* Every nursery copy passes through par_copy_object_no_checks (), so recording
+ * them here separates the two ways an address goes bad: the object that lived
+ * there moved and the referrer kept the old address, or it never moved and was
+ * simply collected. */
+#define DBG_MOVE_LOG_SIZE (1 << 20)
+
+typedef struct {
+	char *from;
+	char *to;
+	int size;
+	int collection;
+} DbgMove;
+
+/* 24MB, so it is mapped when the first collection arms it rather than carried
+ * in .bss by every process that links this. */
+static DbgMove *dbg_moves;
+static gint32 dbg_move_next;
+
+/*
+ * A bit per nursery word, set where this collection moved an object from. It
+ * is exact about the collection now finishing, which the ring above cannot be:
+ * the nursery recycles its addresses every collection, so one address matches
+ * whichever older ring entries happen to name it too.
+ */
+static guint8 *dbg_moved_bitmap;
+static size_t dbg_moved_bitmap_size;
+
+/*
+ * Arms both logs, and is what allocates them. Called at the head of a
+ * collection, with the world stopped, which is the only reason the allocation
+ * below can race nothing: every other entry point here runs while collector
+ * threads are copying in parallel.
+ *
+ * Every reader of the logs runs only under whole_heap_check_before_collection,
+ * the same guard sgen_check_whole_heap () itself runs under, so a run that
+ * never takes a whole-heap check never pays for either.
+ */
+void
+sgen_dbg_moved_clear (void)
+{
+	if (!dbg_moves)
+		dbg_moves = (DbgMove*) g_malloc0 (sizeof (DbgMove) * DBG_MOVE_LOG_SIZE);
+	if (!dbg_moved_bitmap) {
+		dbg_moved_bitmap_size = (sgen_nursery_max_size / sizeof (void*) / 8) + 1;
+		dbg_moved_bitmap = (guint8*)g_malloc0 (dbg_moved_bitmap_size);
+	}
+	memset (dbg_moved_bitmap, 0, dbg_moved_bitmap_size);
+}
+
+gboolean
+sgen_dbg_moved_test (void *p)
+{
+	size_t idx;
+
+	/* An object starts on an aligned address, and the index below truncates,
+	 * so without this an unaligned word reads the bit of the moved address it
+	 * sits inside and is reported as one. */
+	if (!dbg_moved_bitmap || ((mword)p & (sizeof (void*) - 1)) || !sgen_ptr_in_nursery (p))
+		return FALSE;
+	idx = ((char*)p - sgen_nursery_start) / sizeof (void*);
+	return (dbg_moved_bitmap [idx >> 3] >> (idx & 7)) & 1;
+}
+
+void
+sgen_dbg_note_move (void *from, void *to, size_t size)
+{
+	gint32 i;
+	DbgMove *m;
+
+	if (!dbg_moves)
+		return;
+
+	i = mono_atomic_inc_i32 (&dbg_move_next) - 1;
+	m = &dbg_moves [i & (DBG_MOVE_LOG_SIZE - 1)];
+
+	m->from = (char*)from;
+	m->to = (char*)to;
+	m->size = (int)size;
+	m->collection = mono_atomic_load_i32 (&mono_gc_stats.minor_gc_count);
+
+	if (dbg_moved_bitmap && sgen_ptr_in_nursery (from)) {
+		size_t idx = ((char*)from - sgen_nursery_start) / sizeof (void*);
+		dbg_moved_bitmap [idx >> 3] |= 1 << (idx & 7);
+	}
+}
+
+void
+sgen_dbg_move_log_range (void **start, void **end)
+{
+	*start = dbg_moves;
+	*end = (char*)dbg_moves + (dbg_moves ? sizeof (DbgMove) * DBG_MOVE_LOG_SIZE : 0);
+}
+
+void
+sgen_dbg_report_moves (void *ptr)
+{
+	gint32 n = mono_atomic_load_i32 (&dbg_move_next);
+	gint32 start = n > DBG_MOVE_LOG_SIZE ? n - DBG_MOVE_LOG_SIZE : 0;
+	gint32 i;
+	int hits = 0;
+
+	if (!dbg_moves) {
+		SGEN_LOG (0, "    [mov] no move log");
+		return;
+	}
+
+	for (i = n - 1; i >= start; --i) {
+		DbgMove *m = &dbg_moves [i & (DBG_MOVE_LOG_SIZE - 1)];
+
+		if ((char*)ptr < m->from || (char*)ptr >= m->from + m->size)
+			continue;
+		SGEN_LOG (0, "    [mov] %p was +%d inside %p(%d) moved to %p at collection %d",
+				ptr, (int)((char*)ptr - m->from), m->from, m->size, m->to, m->collection);
+		if (++hits >= 8)
+			break;
+	}
+	if (!hits)
+		SGEN_LOG (0, "    [mov] %p never moved (%d copies logged)", ptr, (int)(n - start));
+}
+
+/* Scans every registered root range word by word rather than through its
+ * descriptor, so a slot the descriptor fails to mark is found too -- which is
+ * the case a scan driven by the descriptor cannot report by construction. */
+static void
+dbg_report_roots_holding (void *referent)
+{
+	int root_type;
+
+	for (root_type = 0; root_type < ROOT_TYPE_NUM; ++root_type) {
+		void **start_root;
+		RootRecord *root;
+
+		SGEN_HASH_TABLE_FOREACH (&sgen_roots_hash [root_type], void **, start_root, RootRecord *, root) {
+			void **p;
+
+			for (p = start_root; p < (void**)root->end_root; ++p) {
+				if (*p != referent)
+					continue;
+				fprintf (stderr,
+				         "[badroot] type=%d range %p-%p slot %p word %d desc %p descwords %d\n",
+				         root_type, (void*)start_root, (void*)root->end_root, (void*)p,
+				         (int)(p - start_root), (void*)root->root_desc,
+				         (int)((char*)root->end_root - (char*)start_root) / (int)sizeof (void*));
+			}
+		} SGEN_HASH_TABLE_FOREACH_END;
+	}
+	fflush (stderr);
+}
+
+/*
+ * Reports a slot the minor scan left naming the nursery, with the card that
+ * covered it and the first words of what it names.
+ *
+ * The leading test keeps this to values that cannot be objects: a plain scan
+ * reaches this for every live nursery reference too, and printing those buries
+ * the one that matters.
+ */
+void
+sgen_dbg_report_badref (GCObject *container, void **slot, void *referent)
+{
+	static int reported;
+	mword *w = (mword*)referent;
+	GCVTable vt;
+	const char *field = NULL;
+	int offset = -1;
+
+	if ((w [0] & ~(mword)7) >= 0x10000)
+		return;
+
+	vt = container ? SGEN_LOAD_VTABLE_UNCHECKED (container) : NULL;
+	if (container) {
+		offset = (int)((char*)slot - (char*)container);
+		if (vt)
+			field = sgen_client_field_name_for_offset (vt, offset);
+	}
+
+	fprintf (stderr,
+	         "[badref] container %p (%s.%s) in_nursery=%d field %s offset %d slot %p card=%d "
+	         "referent %p words %p %p %p %p nursery %p-%p\n",
+	         (void*)container,
+	         vt ? sgen_client_vtable_get_namespace (vt) : "?",
+	         vt ? sgen_client_vtable_get_name (vt) : "?",
+	         container ? (int)sgen_ptr_in_nursery (container) : -1,
+	         field ? field : "?", offset, (void*)slot,
+	         (int)sgen_card_table_address_is_marked ((mword)slot),
+	         referent, (void*)w [0], (void*)w [1], (void*)w [2], (void*)w [3],
+	         (void*)sgen_nursery_start, (void*)sgen_nursery_end);
+	fflush (stderr);
+
+	/* Each scan walks every registered root, so the cap is what keeps a heap
+	 * with many bad slots from multiplying that by however many it has. */
+	if (reported++ < 3)
+		dbg_report_roots_holding (referent);
+}
+
+#endif /* SGEN_HEAP_FORENSICS */
+
 #ifdef HEAVY_STATISTICS
 guint64 stat_objects_alloced_degraded = 0;
 guint64 stat_bytes_alloced_degraded = 0;
@@ -1246,7 +1445,19 @@ sgen_check_section_scan_starts (GCMemSection *section)
 	size_t i;
 	for (i = 0; i < section->num_scan_start; ++i) {
 		if (section->scan_starts [i]) {
-			mword size = safe_object_get_size ((GCObject*) section->scan_starts [i]);
+			GCObject *obj = (GCObject*) section->scan_starts [i];
+			mword size;
+
+			/*
+			 * sgen_clear_range () puts a scan start on the filler it lays over
+			 * a free fragment, and a fragment is bounded by the nursery rather
+			 * than by the small-object size. Without this the check fires on
+			 * any nursery that holds a fragment over MAX_SMALL_OBJ_SIZE.
+			 */
+			if (sgen_client_object_is_array_fill (obj))
+				continue;
+
+			size = safe_object_get_size (obj);
 			SGEN_ASSERT (0, size >= SGEN_CLIENT_MINIMUM_OBJECT_SIZE && size <= MAX_SMALL_OBJ_SIZE, "Weird object size at scan starts.");
 		}
 	}
@@ -1803,6 +2014,11 @@ collect_nursery (const char *reason, gboolean is_overflow)
 
 	reset_pinned_from_failed_allocation ();
 
+#ifdef SGEN_HEAP_FORENSICS
+	if (whole_heap_check_before_collection)
+		sgen_dbg_moved_clear ();
+#endif
+
 	check_scan_starts ();
 
 	sgen_nursery_alloc_prepare_for_minor ();
@@ -1851,6 +2067,11 @@ collect_nursery (const char *reason, gboolean is_overflow)
 
 	if (whole_heap_check_before_collection) {
 		sgen_clear_nursery_fragments ();
+#ifdef SGEN_HEAP_FORENSICS
+		/* In front of the whole-heap check, which aborts, so a collection that
+		 * is about to break the heap still reports what it was going to move. */
+		sgen_dbg_check_stack_pins ();
+#endif
 		sgen_check_whole_heap (FALSE);
 	}
 
@@ -1924,6 +2145,10 @@ collect_nursery (const char *reason, gboolean is_overflow)
 	if (remset_consistency_checks)
 		sgen_check_remset_consistency ();
 
+#ifdef SGEN_HEAP_FORENSICS
+	if (whole_heap_check_before_collection)
+		sgen_dbg_check_no_stale_nursery_refs ();
+#endif
 
 	if (sgen_max_pause_time) {
 		int duration;
@@ -2304,6 +2529,14 @@ major_finish_collection (SgenGrayQueue *gc_thread_gray_queue, const char *reason
 	finish_gray_stack (GENERATION_OLD, CONTEXT_FROM_OBJECT_OPERATIONS (object_ops_nopar, gc_thread_gray_queue));
 	TV_GETTIME (atv);
 	time_major_finish_gray_stack += TV_ELAPSED (btv, atv);
+
+	/*
+	 * No stale-reference check belongs here. sgen_dbg_check_no_stale_nursery_refs ()
+	 * reaches the major heap through iterate_objects (ITERATE_OBJECTS_SWEEP_ALL),
+	 * and at this point the collection has marked but not swept, so the walk
+	 * still reports objects that are about to go. A dead object holding a
+	 * forwarded address here is correct, not a missed update.
+	 */
 
 	SGEN_ASSERT (0, sgen_workers_all_done (), "Can't have workers working after joining");
 
@@ -3784,6 +4017,12 @@ sgen_gc_init (void)
 				char *filename = strchr (opt, '=') + 1;
 				char *colon = strrchr (filename, ':');
 				size_t limit = 0;
+				/* `binary-protocol=C:\dir\file` otherwise reads the
+				 * drive-letter colon as the size separator and writes to a
+				 * file called `C`. */
+				if (colon == filename + 1 && g_ascii_isalpha (filename [0]) &&
+						(colon [1] == '\\' || colon [1] == '/'))
+					colon = NULL;
 				if (colon) {
 					if (!mono_gc_parse_environment_string_extract_number (colon + 1, &limit)) {
 						sgen_env_var_error (MONO_GC_DEBUG_NAME, "Ignoring limit.", "Binary protocol file size limit must be an integer.");

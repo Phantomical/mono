@@ -134,6 +134,9 @@
 /* Confirm a pinned target's missing remset across a collection before reporting it. */
 #cmakedefine SGEN_STRICT_REMSET_CHECK 1
 
+/* Build SGen's heap-forensics probes, which report where a bad reference came from. */
+#cmakedefine SGEN_HEAP_FORENSICS 1
+
 /* Disable gc bridge support in SGEN. */
 #cmakedefine DISABLE_SGEN_GC_BRIDGE 1
 

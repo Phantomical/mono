@@ -1155,6 +1155,43 @@ GCObject* sgen_alloc_obj_mature (GCVTable vtable, size_t size)
 /* Debug support */
 
 void sgen_check_remset_consistency (void);
+
+#ifdef SGEN_HEAP_FORENSICS
+/*
+ * Where a bad reference came from, rather than that there is one. Each reports
+ * what it finds for one question about a value; none of them decides anything,
+ * so a caller runs whichever ones its own failure makes worth asking.
+ */
+void sgen_dbg_report_badref (GCObject *container, void **slot, void *referent);
+void sgen_dbg_note_move (void *from, void *to, size_t size);
+void sgen_dbg_report_moves (void *ptr);
+/* The move log is this library's own storage, so a scan of the address space
+ * finds every entry in it. Its bounds are handed out so that scan can skip it. */
+void sgen_dbg_move_log_range (void **start, void **end);
+void sgen_dbg_check_stack_pins (void);
+void sgen_dbg_check_no_stale_nursery_refs (void);
+int sgen_dbg_find_gchandles_holding (gpointer value);
+/* sgen_dbg_moved_test () is exact, where the log above is not, but only for the
+ * collection that called sgen_dbg_moved_clear () last. */
+void sgen_dbg_moved_clear (void);
+gboolean sgen_dbg_moved_test (void *p);
+
+/*
+ * Reports a reference into the nursery found by a scan that has already
+ * updated everything it reached, which makes it one the collection missed.
+ *
+ * A macro because it sits under HANDLE_PTR, which every minor scan runs for
+ * every field of every object it reaches: with the forensics off, the nursery
+ * test has to go with the call rather than stay behind as a branch.
+ */
+#define SGEN_DBG_BADREF(holder,slot,value)	do {			\
+		if (sgen_ptr_in_nursery (value))			\
+			sgen_dbg_report_badref ((holder), (void**)(slot), (value)); \
+	} while (0)
+#else
+#define SGEN_DBG_BADREF(holder,slot,value)	do { } while (0)
+#endif
+
 void sgen_check_mod_union_consistency (void);
 void sgen_check_major_refs (void);
 void sgen_check_whole_heap (gboolean allow_missing_pinning);

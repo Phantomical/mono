@@ -88,6 +88,18 @@
 		/*Nothing to do*/
 		break;
 	default:
+#if defined (SGEN_HEAP_FORENSICS) && !defined (SCAN_OBJECT_NOVTABLE)
+		/*
+		 * In this mode the descriptor came off the object's own header word, so
+		 * reaching here means that word is not a vtable. Naming the object and
+		 * what the word holds says which, where the assert below says only that
+		 * the scan was handed something it could not read.
+		 */
+		fprintf (stderr, "[baddesc] obj %p word %p desc %p nursery %p-%p\n",
+		         (void*)start, *(void**)start, (void*)desc,
+		         (void*)sgen_nursery_start, (void*)sgen_nursery_end);
+		fflush (stderr);
+#endif
 		g_assert_not_reached ();
 	}
 }

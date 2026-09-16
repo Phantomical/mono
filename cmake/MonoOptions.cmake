@@ -43,6 +43,10 @@ option(MONO_SGEN_STRICT_REMSET_CHECK
        "Confirm a pinned target's missing remset across a collection before reporting it"
        OFF)
 
+option(MONO_ENABLE_SGEN_HEAP_FORENSICS
+       "Enable additional tracing checks for bad heap references and their sources"
+       OFF)
+
 # --- the LLVM tier ----------------------------------------------------------
 # The autotools spelling was --with-llvm=<prefix>; --enable-llvm on its own was
 # an error.  Same rule here: point MONO_LLVM_PREFIX at an LLVM install (or leave
