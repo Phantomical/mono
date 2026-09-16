@@ -35,6 +35,17 @@ set(MONO_BTLS_BINARY_DIR "${CMAKE_BINARY_DIR}/mono/btls")
 set(MONO_BTLS_LIBRARY
     "${MONO_BTLS_BINARY_DIR}/libmono-btls-shared${CMAKE_SHARED_LIBRARY_SUFFIX}")
 
+# The sub-build's policy floor is 3.5, where CMAKE_MSVC_RUNTIME_LIBRARY is not
+# read and the CRT comes from the build-type flags instead.  That leaves btls on
+# /MD while the rest of the build follows LLVM's own CRT, so the choice goes in
+# here with the policy that reads it.
+set(MONO_BTLS_CRT_ARGS "")
+if(MSVC AND CMAKE_MSVC_RUNTIME_LIBRARY)
+  set(MONO_BTLS_CRT_ARGS
+      "-DCMAKE_POLICY_DEFAULT_CMP0091:STRING=NEW"
+      "-DCMAKE_MSVC_RUNTIME_LIBRARY:STRING=${CMAKE_MSVC_RUNTIME_LIBRARY}")
+endif()
+
 ExternalProject_Add(mono-btls
   SOURCE_DIR      "${CMAKE_SOURCE_DIR}/mono/btls"
   BINARY_DIR      "${MONO_BTLS_BINARY_DIR}"
@@ -46,6 +57,7 @@ ExternalProject_Add(mono-btls
     # compatibility flag CMake's own error suggests, kept off the parent
     # configure so it does not mask a real floor violation there too.
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+    ${MONO_BTLS_CRT_ARGS}
     -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
     -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
