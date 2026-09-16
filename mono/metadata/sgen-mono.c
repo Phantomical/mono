@@ -31,6 +31,7 @@
 #include "metadata/gc-internals.h"
 #include "metadata/handle.h"
 #include "metadata/abi-details.h"
+#include "metadata/debug-helpers.h"
 #include "utils/mono-memory-model.h"
 #include "utils/mono-logger-internals.h"
 #include "utils/mono-threads-coop.h"
@@ -3143,6 +3144,101 @@ sgen_client_field_name_for_offset (MonoVTable *vt, int offset)
 
 	return NULL;
 }
+
+#ifdef SGEN_HEAP_FORENSICS
+/*
+ * An address the scan found inside the code arena says only that some compile
+ * wrote it down. Naming the method is what explains it: the compile that baked
+ * it is the one whose emission has to account for the value.
+ */
+void
+sgen_client_describe_code_address (gpointer addr)
+{
+	MonoJitInfo *ji = mono_jit_info_table_find (mono_get_root_domain (), (char*)addr);
+
+	if (ji == NULL) {
+		SGEN_LOG (0, "    [code] %p belongs to no jit info", addr);
+		return;
+	}
+	{
+		MonoMethod *m = mono_jit_info_get_method (ji);
+		char *name = m ? mono_method_full_name (m, TRUE) : NULL;
+
+		SGEN_LOG (0, "    [code] %p is +%d in %s", addr,
+				(int)((char*)addr - (char*)mono_jit_info_get_code_start (ji)),
+				name ? name : "<no method>");
+		g_free (name);
+	}
+}
+
+/*
+ * A field of a value type is commonly assigned from a static readonly of that
+ * same type, so the field's own type names the class whose statics the bad
+ * value most likely came from. Printing them separates the two cases the
+ * collector cannot tell apart: a static the collector failed to update when
+ * the object moved still holds \p stale, where one it did update does not, and
+ * the staleness came from wherever the value was copied to afterwards.
+ */
+void
+sgen_client_report_static_source (MonoVTable *vt, int offset, gpointer stale)
+{
+	MonoClass *klass, *fklass;
+	MonoClassField *field = NULL, *sf;
+	MonoVTable *fvt;
+	gpointer iter = NULL;
+	char *sdata;
+	ERROR_DECL (error);
+
+	for (klass = vt->klass; klass && !field; klass = m_class_get_parent (klass)) {
+		iter = NULL;
+		while ((sf = mono_class_get_fields_internal (klass, &iter))) {
+			if (sf->type->attrs & (FIELD_ATTRIBUTE_STATIC | FIELD_ATTRIBUTE_HAS_FIELD_RVA))
+				continue;
+			if (sf->offset == offset) {
+				field = sf;
+				break;
+			}
+		}
+	}
+	if (!field)
+		return;
+
+	fklass = mono_class_from_mono_type_internal (field->type);
+	if (!fklass || !m_class_is_valuetype (fklass))
+		return;
+
+	SGEN_LOG (0, "    [src] field type %s.%s has_static_refs=%d",
+			m_class_get_name_space (fklass), m_class_get_name (fklass),
+			(int)m_class_has_static_refs (fklass));
+
+	fvt = mono_class_vtable_checked (vt->domain, fklass, error);
+	if (!fvt || !is_ok (error)) {
+		mono_error_cleanup (error);
+		SGEN_LOG (0, "    [src] no vtable for the field's type");
+		return;
+	}
+	sdata = (char*)mono_vtable_get_static_field_data (fvt);
+	if (!sdata) {
+		SGEN_LOG (0, "    [src] the field's type has no static data");
+		return;
+	}
+
+	iter = NULL;
+	while ((sf = mono_class_get_fields_internal (fklass, &iter))) {
+		gpointer v;
+
+		if (!(sf->type->attrs & FIELD_ATTRIBUTE_STATIC) || (sf->type->attrs & FIELD_ATTRIBUTE_LITERAL))
+			continue;
+		if (sf->offset == -1)
+			continue;
+		v = *(gpointer*)(sdata + sf->offset);
+		SGEN_LOG (0, "    [src] static %s.%s::%s = %p%s",
+				m_class_get_name_space (fklass), m_class_get_name (fklass),
+				mono_field_get_name (sf), v,
+				v == stale ? "   <-- HOLDS THE STALE VALUE" : "");
+	}
+}
+#endif /* SGEN_HEAP_FORENSICS */
 
 /*
  * Initialization

@@ -49,6 +49,10 @@ par_copy_object_no_checks (char *destination, GCVTable vt, void *obj, mword objs
 	sgen_client_pre_copy_checks (destination, vt, obj, objsize);
 	sgen_binary_protocol_copy (obj, destination, vt, objsize);
 
+#ifdef SGEN_HEAP_FORENSICS
+	sgen_dbg_note_move (obj, destination, objsize);
+#endif
+
 	/* FIXME: assumes object layout */
 	memcpy ((char*)destination + sizeof (mword), (char*)obj + sizeof (mword), objsize - sizeof (mword));
 

@@ -161,6 +161,21 @@ const char* sgen_client_vtable_get_name (GCVTable vtable);
  * ancestors, or returns NULL if none is declared there.
  */
 const char* sgen_client_field_name_for_offset (GCVTable vtable, int offset);
+#ifdef SGEN_HEAP_FORENSICS
+/*
+ * Prints every static field of the *type* of the instance field at `offset`,
+ * marking any that holds `stale`. What it settles is whether a bad value is one
+ * the collector failed to update in the static it came from, or one that went
+ * bad after it was read out of a static that is correct.
+ */
+void sgen_client_report_static_source (GCVTable vtable, int offset, gpointer stale);
+/*
+ * Names the method whose compiled code covers `addr`, which is what identifies
+ * an address found inside a method body rather than in any data the collector
+ * knows about.
+ */
+void sgen_client_describe_code_address (gpointer addr);
+#endif
 
 /*
  * Called before starting collections.  The world is already stopped.  No action is

@@ -69,6 +69,7 @@ extern guint64 stat_scan_object_called_nursery;
 		SGEN_OBJECT_LAYOUT_STATISTICS_MARK_BITMAP ((obj), (ptr)); \
 		sgen_binary_protocol_scan_process_reference ((full_object), (ptr), __old); \
 		if (__old) {	\
+			SGEN_DBG_BADREF ((full_object), (ptr), __old);	\
 			SERIAL_COPY_OBJECT_FROM_OBJ ((ptr), queue);	\
 			SGEN_COND_LOG (9, __old != *(ptr), "Overwrote field at %p with %p (was: %p)", (ptr), *(ptr), __old); \
 		}	\

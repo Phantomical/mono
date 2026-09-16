@@ -151,6 +151,44 @@ sgen_mark_normal_gc_handles (void *addr, SgenUserMarkFunc mark_func, void *gc_da
 	} SGEN_ARRAY_LIST_END_FOREACH_SLOT;
 }
 
+#ifdef SGEN_HEAP_FORENSICS
+/*
+ * Handle storage is reached only through the mark function of a user root whose
+ * own address is NULL and whose size is zero, so a scan that walks a root's
+ * address range sees nothing of it. This walks the buckets directly, over every
+ * handle type rather than the normal ones alone.
+ */
+int
+sgen_dbg_find_gchandles_holding (gpointer value)
+{
+	int found = 0;
+	int type;
+
+	for (type = 0; type < HANDLE_TYPE_MAX; ++type) {
+		HandleData *handles = gc_handles_for_type ((GCHandleType)type);
+		SgenArrayList *array = &handles->entries_array;
+		volatile gpointer *slot;
+
+		SGEN_ARRAY_LIST_FOREACH_SLOT (array, slot) {
+			gpointer hidden = *slot;
+			gpointer revealed;
+
+			if (!MONO_GC_HANDLE_IS_OBJECT_POINTER (hidden))
+				continue;
+			revealed = MONO_GC_REVEAL_POINTER (hidden, MONO_GC_HANDLE_TYPE_IS_WEAK (type));
+			if (revealed != value)
+				continue;
+
+			SGEN_LOG (0, "    [gch] %p held by handle type %d slot %p", value, type, (void*)slot);
+			found++;
+		} SGEN_ARRAY_LIST_END_FOREACH_SLOT;
+	}
+
+	SGEN_LOG (0, "    [gch] %d gc handle(s) hold %p", found, value);
+	return found;
+}
+#endif /* SGEN_HEAP_FORENSICS */
+
 void
 sgen_gc_handles_report_roots (SgenUserReportRootFunc report_func, void *gc_data)
 {
