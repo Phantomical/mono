@@ -151,6 +151,14 @@ function(mono_link_directory target link)
   if(EXISTS "${link}")
     return()
   endif()
+
+  # A name EXISTS reads as free can still be taken.  CI's build-tree cache
+  # restores one: tar has no junction, so it archives this alias as a symlink
+  # and recreates it ahead of the directory it names, which lands it as a
+  # file's symlink onto a directory -- something Windows resolves and CMake
+  # does not.
+  file(REMOVE_RECURSE "${link}")
+
   if(WIN32)
     file(TO_NATIVE_PATH "${target}" _native_target)
     file(TO_NATIVE_PATH "${link}"   _native_link)
