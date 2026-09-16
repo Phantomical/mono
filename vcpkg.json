@@ -18,6 +18,10 @@
     {
       "name": "gtest",
       "$comment": "The C++ unit tests under mono/unit-tests. -DBUILD_TESTING=OFF drops the dependency."
+    },
+    {
+      "name": "zstd",
+      "$comment": "LLVMSupport in an official LLVM Windows release is built against zstd and links it."
     }
   ]
 }

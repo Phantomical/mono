@@ -92,6 +92,17 @@ if(MONO_ENABLE_MCS_BUILD AND MONO_ENABLE_EXECUTABLES)
 endif()
 
 if(MONO_ENABLE_LLVM)
+  # LLVMSupport's link interface names zstd::libzstd_static, which
+  # LLVMConfig.cmake imports through LLVM's own Findzstd.cmake -- and that
+  # module takes a library as the static one only when the file is called
+  # zstd_static.lib, a suffix vcpkg patches off.  So the module finds vcpkg's
+  # zstd.lib, defines no target, and CMake reports the dangling one at generate
+  # time against LLVMExports.cmake.  Config mode names the target rather than
+  # the file, and the module's own NOT TARGET guards leave it standing.
+  if(MSVC)
+    find_package(zstd CONFIG REQUIRED)
+  endif()
+
   # We check the actual version in MonoLLVM.cmake
   find_package(LLVM CONFIG QUIET PATHS "${MONO_LLVM_PREFIX}" NO_DEFAULT_PATH)
 endif()
