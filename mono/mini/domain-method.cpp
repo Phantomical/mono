@@ -198,8 +198,8 @@ MonoDomainMethod::interop_entry ()
 	 * vtable, so either lock held here closes that cycle. Registering the jit
 	 * info the compile produces takes the domain lock on its own account.
 	 *
-	 * The cost is that threads arriving together each compile the entry.
-	 * set_interop_entry () settles which one every caller then reaches.
+	 * Threads arriving together are settled inside the compile instead, by the
+	 * engine giving one of them the turn.
 	 */
 	if (llvm::Error err = attach_interop_entry (*this))
 		return std::move (err);

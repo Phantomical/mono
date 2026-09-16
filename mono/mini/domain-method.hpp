@@ -231,10 +231,16 @@ public:
 	/// redirects this too and no tier ever has to rebuild it.
 	llvm::Expected<void *> interop_entry ();
 
-	/// Publishes \p code as the entry, and answers what callers will reach -
-	/// which is another thread's body where one got here first. Compiling this
-	/// entry takes no lock, so two threads can build one each, and the loser's
-	/// is superseded rather than freed.
+	/// The entry if one has been published, without compiling one.
+	void *interop_entry_if_ready () const
+	{
+		return interop_entry_.load (std::memory_order_acquire);
+	}
+
+	/// Publishes \p code as the entry, and returns what callers will reach -
+	/// which is another thread's body where one got here first. Two threads
+	/// build one each only when neither could wait for the other, and the
+	/// loser's is superseded rather than freed.
 	void *set_interop_entry (void *code)
 	{
 		void *first = nullptr;

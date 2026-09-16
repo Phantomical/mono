@@ -182,8 +182,8 @@ private:
 	/// form misses it from then on.
 	///
 	/// Threads that want one shared body at once build it once, the losers
-	/// waiting for the winner. That wait is bounded, so a loser can end up
-	/// building the body beside the winner; see claim_shared_body ().
+	/// waiting for the winner. A loser that cannot wait builds it beside the
+	/// winner instead; see take_compile_turn ().
 	llvm::Expected<Compiled> enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 	                                            MonoMethod *shared, MonoTier tier);
 
@@ -196,32 +196,35 @@ private:
 	/// Marks \p result checked either way, so a caller may take its error.
 	static bool answered_by_sharing (llvm::Expected<Compiled> &result);
 
-	/// What a thread that asked to build a shared body found.
-	enum class SharedClaim {
-		/// This thread holds the claim and must build the body.
-		held,
-		/// The thread that held the claim released it. The record shows
-		/// what it left, which can be nothing.
-		done,
-		/// Another thread has held the claim for longer than a compile is
-		/// given. This thread builds the body beside it.
-		expired,
+	/// A piece of compile work a record needs done once.
+	enum class CompileWork : unsigned {
+		/// The body of the shared form several instantiations reach.
+		shared_body,
+		/// The C-convention entry native callers arrive at.
+		interop_entry,
 	};
 
-	/// Takes the claim to build \p owner's shared body.
-	///
-	/// A claim this returns as held must be given back with
-	/// release_shared_body (). A thread that finds the claim taken waits for
-	/// it and comes back with the claim, with done, or with expired.
-	///
-	/// The wait is bounded because a thread that arrives here can hold a
-	/// runtime lock the holder's compile goes on to want. Such a pair makes
-	/// progress by the waiter giving up rather than by either of them noticing.
-	SharedClaim claim_shared_body (MonoDomainMethod *owner);
+	/// What a thread that asked to do a record's compile work found.
+	enum class CompileTurn {
+		/// This thread's turn, and it must do the work.
+		mine,
+		/// Another thread did it. The record shows what it left, which
+		/// can be nothing.
+		done,
+		/// Another thread is doing it and this one cannot wait, so both
+		/// do it and whichever result lands first is the one published.
+		duplicate,
+	};
 
-	/// Gives back the claim \p owner is built under and wakes what waits for
-	/// it.
-	void release_shared_body (MonoDomainMethod *owner);
+	/// Takes this thread's turn at \p work for \p record.
+	///
+	/// A turn this returns as mine must be given back with
+	/// finish_compile_turn (). A thread that finds another already at it waits,
+	/// unless waiting could deadlock, and is then told to go ahead anyway.
+	CompileTurn take_compile_turn (MonoDomainMethod *record, CompileWork work);
+
+	/// Ends this thread's turn at \p work for \p record and wakes what waits.
+	void finish_compile_turn (MonoDomainMethod *record, CompileWork work);
 
 	/// Returns the stub \p dm's entry is published as when its shared body
 	/// has no receiver to read a context out of. It writes this
@@ -283,16 +286,18 @@ private:
 	llvm::DenseMap<MonoDomain *, std::unique_ptr<DomainState>> domains_;
 
 	/*
-	 * The shared bodies a thread is compiling right now. Several instantiations
-	 * share one form, so two threads compiling two of them reach the same
-	 * record - and the second must not compile it again while the first is
-	 * still publishing it. Guarded by mutex_, and held only around the set
-	 * itself rather than across the compile.
+	 * The compile work threads are doing right now, so that a second thread
+	 * arriving at the same piece waits for it rather than repeating it.
+	 *
+	 * A lock of its own rather than mutex_: a waiter parks here for as long as
+	 * a compile takes, and mutex_ covers domains_, which the rest of the engine
+	 * needs meanwhile. Held around the set alone, never across a compile.
 	 */
-	llvm::DenseSet<MonoDomainMethod *> sharing_;
-	/// Signalled when a record leaves sharing_. It covers every record, so a
+	std::mutex compiling_mutex_;
+	llvm::DenseSet<std::pair<MonoDomainMethod *, unsigned>> compiling_;
+	/// Signalled when anything leaves compiling_. It covers every record, so a
 	/// waiter reads the set again to find out whether the wake was its own.
-	std::condition_variable shared_claims_;
+	std::condition_variable compiling_changed_;
 };
 
 } // namespace mono

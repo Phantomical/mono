@@ -608,14 +608,37 @@ MonoBackend::attach_interop (MonoDomainMethod &dm)
 		}
 	};
 
-	llvm::Expected<void *> code =
-		compile_interop_entry (*(*domain)->jit, (*domain)->domain, method, dm.thunk.code (), note);
+	/*
+	 * Every native caller of one method reaches one entry, so threads arriving
+	 * together would otherwise each compile it. The turn is taken here rather
+	 * than around interop_entry (): the compile below takes the loader lock and
+	 * the domain lock, and a thread holding either is told to compile rather
+	 * than to wait, which is what keeps the wait off every runtime lock.
+	 */
+	for (;;) {
+		if (dm.interop_entry_if_ready () != nullptr)
+			return llvm::Error::success ();
 
-	if (!code)
-		return code.takeError ();
+		CompileTurn turn = self->take_compile_turn (&dm, CompileWork::interop_entry);
 
-	dm.set_interop_entry (*code);
-	return llvm::Error::success ();
+		if (turn == CompileTurn::done)
+			continue;
+
+		bool mine = turn == CompileTurn::mine;
+		llvm::scope_exit end_turn ([&] {
+			if (mine)
+				self->finish_compile_turn (&dm, CompileWork::interop_entry);
+		});
+
+		llvm::Expected<void *> code = compile_interop_entry (
+			*(*domain)->jit, (*domain)->domain, method, dm.thunk.code (), note);
+
+		if (!code)
+			return code.takeError ();
+
+		dm.set_interop_entry (*code);
+		return llvm::Error::success ();
+	}
 }
 
 static MonoMethod *shared_form (MonoMethod *method);
@@ -959,35 +982,40 @@ shared_form (MonoMethod *method)
 }
 
 /*
- * One thread at a time per shared form. Two instantiations of one generic reach
- * the same record, and two threads that both find it unbuilt would both compile
- * it, which is work the second of them need not do.
+ * Whether this thread may block waiting for another thread's compile.
  *
- * A wait for a claim cannot cycle, because no thread that holds one comes to
- * want a second. The holder compiles the shared method, which reduces to
- * itself, so shared_form () answers null and that nested compile takes no
- * claim.
- *
- * It can still wait behind a runtime lock. A compile takes the loader lock, and
- * a mutator that arrives here can already hold it, so a waiter and a holder can
- * each be what the other is waiting for. That is what the bound below is for:
- * the waiter gives up, builds the body itself, and drops the lock the holder
- * wants on the way out. mini takes the same way out of the same shape, with the
- * same second - see wait_or_register_method_to_compile ().
+ * A compile takes the loader lock and the domain lock. A thread holding either
+ * one that parks here waits for a thread that goes on to want it, and the two
+ * make progress only by one of them giving up. So a thread holding anything
+ * ranked does the work itself instead, and every wait below is a thread with
+ * nothing held and no cycle to close.
  */
-static constexpr std::chrono::milliseconds shared_body_wait { 1000 };
-
-MonoBackend::SharedClaim
-MonoBackend::claim_shared_body (MonoDomainMethod *owner)
+static bool
+can_wait_for_compile ()
 {
-	std::unique_lock<std::mutex> lock (mutex_);
+	return mono_lock_ranks_held () == 0 && !mono_loader_lock_is_owned_by_self ();
+}
 
-	/* A deadline rather than a duration for each wait: the variable covers
-	 * every record, so an unrelated release restarts a duration. */
-	auto expires = std::chrono::steady_clock::now () + shared_body_wait;
+/*
+ * One thread at a time per piece of work. Two instantiations of one generic
+ * reach the same shared form, and every native caller of one method reaches the
+ * same interop entry, so a second thread finding either unbuilt would repeat a
+ * compile the first is already doing.
+ *
+ * A wait cannot cycle among the claims themselves, because no thread that holds
+ * one comes to want a second: the shared method reduces to itself, so its own
+ * compile takes no further claim, and an interop entry compiles a wrapper whose
+ * claims are the wrapper's own record.
+ */
+MonoBackend::CompileTurn
+MonoBackend::take_compile_turn (MonoDomainMethod *record, CompileWork work)
+{
+	auto key = std::make_pair (record, static_cast<unsigned> (work));
+	std::unique_lock<std::mutex> lock (compiling_mutex_);
 
-	while (!sharing_.insert (owner).second) {
-		std::cv_status waited;
+	while (!compiling_.insert (key).second) {
+		if (!can_wait_for_compile ())
+			return CompileTurn::duplicate;
 
 		/*
 		 * A thread parked here reaches no safepoint, so a collection that
@@ -996,25 +1024,24 @@ MonoBackend::claim_shared_body (MonoDomainMethod *owner)
 		 * of it.
 		 */
 		MONO_ENTER_GC_SAFE;
-		waited = shared_claims_.wait_until (lock, expires);
+		compiling_changed_.wait (lock);
 		MONO_EXIT_GC_SAFE;
 
-		if (sharing_.count (owner) == 0)
-			return SharedClaim::done;
-
-		if (waited == std::cv_status::timeout)
-			return SharedClaim::expired;
+		if (compiling_.count (key) == 0)
+			return CompileTurn::done;
 	}
 
-	return SharedClaim::held;
+	return CompileTurn::mine;
 }
 
 void
-MonoBackend::release_shared_body (MonoDomainMethod *owner)
+MonoBackend::finish_compile_turn (MonoDomainMethod *record, CompileWork work)
 {
-	MONO_LOCK (mutex_) { sharing_.erase (owner); }
+	auto key = std::make_pair (record, static_cast<unsigned> (work));
 
-	shared_claims_.notify_all ();
+	MONO_LOCK (compiling_mutex_) { compiling_.erase (key); }
+
+	compiling_changed_.notify_all ();
 }
 
 /*
@@ -1035,10 +1062,10 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 	std::optional<MonoMethodBody> ready = (*owner)->body ();
 
 	while (!ready || ready->tier < tier) {
-		SharedClaim claim = claim_shared_body (*owner);
+		CompileTurn claim = take_compile_turn (*owner, CompileWork::shared_body);
 
-		if (claim == SharedClaim::done) {
-			// claim_shared_body () decides under mutex_, and a read of
+		if (claim == CompileTurn::done) {
+			// take_compile_turn () decides under compiling_mutex_, and a read of
 			// the body takes the record's own lock, so the read is here.
 			ready = (*owner)->body ();
 
@@ -1049,10 +1076,10 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 			continue;
 		}
 
-		bool holding = claim == SharedClaim::held;
+		bool holding = claim == CompileTurn::mine;
 		llvm::scope_exit unclaim ([&] {
 			if (holding)
-				release_shared_body (*owner);
+				finish_compile_turn (*owner, CompileWork::shared_body);
 		});
 
 		if (!holding && is_jit_trace_enabled ())
