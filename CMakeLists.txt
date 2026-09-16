@@ -4,6 +4,20 @@ cmake_minimum_required(VERSION 3.28)
 # down with the rest of the configuration.
 set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_LIST_DIR}/vcpkg-triplets")
 
+# The ports have to use the CRT LLVM's own archives were built against.
+# LLVMConfig.cmake states that by setting CMAKE_MSVC_RUNTIME_LIBRARY on whoever
+# finds it, but find_package(LLVM) runs below, by which time the toolchain
+# project() loads has already built every port.
+set(MONO_MSVC_CRT dynamic)
+if(CMAKE_HOST_WIN32 AND EXISTS "${MONO_LLVM_PREFIX}/lib/cmake/llvm/LLVMConfig.cmake")
+  file(STRINGS "${MONO_LLVM_PREFIX}/lib/cmake/llvm/LLVMConfig.cmake" _llvm_crt
+       REGEX "^set[(]CMAKE_MSVC_RUNTIME_LIBRARY +MultiThreaded")
+  if(_llvm_crt AND NOT _llvm_crt MATCHES "DLL")
+    set(MONO_MSVC_CRT static)
+    set(VCPKG_TARGET_TRIPLET x64-windows-static-crt)
+  endif()
+endif()
+
 project(mono
         VERSION 6.13.0
         DESCRIPTION "Mono runtime (Unity fork, LLVM 18 tiered JIT)"
@@ -80,6 +94,21 @@ endif()
 if(MONO_ENABLE_LLVM)
   # We check the actual version in MonoLLVM.cmake
   find_package(LLVM CONFIG QUIET PATHS "${MONO_LLVM_PREFIX}" NO_DEFAULT_PATH)
+endif()
+
+# A miss here gets as far as the link and fails on a port's dllimport CRT
+# symbols, naming zlib rather than the CRT or LLVM.
+if(MSVC)
+  set(_crt dynamic)
+  if(CMAKE_MSVC_RUNTIME_LIBRARY AND NOT CMAKE_MSVC_RUNTIME_LIBRARY MATCHES "DLL")
+    set(_crt static)
+  endif()
+  if(NOT _crt STREQUAL MONO_MSVC_CRT)
+    message(FATAL_ERROR
+      "LLVM at ${MONO_LLVM_PREFIX} wants the ${_crt} CRT and vcpkg built its "
+      "ports against the ${MONO_MSVC_CRT} one -- the triplet is picked from "
+      "CMAKE_MSVC_RUNTIME_LIBRARY in LLVMConfig.cmake, read before project()")
+  endif()
 endif()
 
 find_program(MONO_BOOTSTRAP_RUNTIME NAMES mono mono-sgen)
