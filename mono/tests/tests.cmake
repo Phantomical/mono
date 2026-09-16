@@ -1162,6 +1162,13 @@ set(MONO_TESTS_ELIMINATE_DELEGATE_SRC
   eliminate-delegate.cs
 )
 
+# Whether a readonly static's folded bytes survive the collector moving what
+# they name. It runs once per compiled tier, and reads the variable to know
+# which tier to ask its readers to compile at.
+set(MONO_TESTS_STATIC_CONST_MOVE_SRC
+  static-const-move.cs
+)
+
 # What the cost model answers about a receiver the call site allocated. Two
 # arms the same way, and the file says why it names a threshold of its own.
 set(MONO_TESTS_TIER2_INLINE_DISPATCH_SRC

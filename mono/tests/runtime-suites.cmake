@@ -884,6 +884,20 @@ mono_runtime_suite(runtime-eliminate-delegate-off TESTS ${_eliminate_delegate}
                    ENV "MONO_ELIMINATE_DELEGATES=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-eliminate-delegates=0")
 
+# An object address folded into compiled code out of a readonly static, against a
+# collector that then moves the object. SGen only: nothing moves under Boehm, so
+# that arm would pass whatever the fold wrote down. Both thresholds are zero, so
+# the only compile is the one the test asks for by name. An automatic promotion
+# landing after the collection would fold the object's current, already-moved
+# address, so the bug would have nothing to show. One arm per compiled tier,
+# because each runs the pass in a pipeline of its own.
+_mono_exe_list(_static_const_move ${MONO_TESTS_STATIC_CONST_MOVE_SRC})
+mono_runtime_suite(runtime-static-const-move TESTS ${_static_const_move} GC sgen
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0")
+mono_runtime_suite(runtime-static-const-move-tier1 TESTS ${_static_const_move} GC sgen
+                   ENV "MONO_STATIC_CONST_TIER=1"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0")
+
 # Each SIMD operation is computed at tier 0 and at both compiled tiers, where
 # the backend's written body runs instead of tier 0's IL. The tier-1 and tier-2
 # thresholds are zero so the test's own PromoteNow calls decide which tier ran,

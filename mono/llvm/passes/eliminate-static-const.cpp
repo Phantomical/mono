@@ -67,19 +67,40 @@ constant_of (Type *type, const char *bytes)
 	return nullptr;
 }
 
+/// Whether a value of \p type has a GC reference anywhere in it.
+bool
+holds_a_reference (MonoType *type)
+{
+	if (MONO_TYPE_IS_REFERENCE (type))
+		return true;
+
+	MonoClass *klass = mono_class_from_mono_type_internal (type);
+
+	return klass != nullptr && m_class_is_valuetype (klass)
+	       && m_class_has_references (klass);
+}
+
 /// The constant load reads, or null where this compile cannot state one: the
 /// field is not both initonly and a scalar, or its class is not yet warm.
 ///
-/// A reference field is left alone. Its value is safe from the class
-/// initializer once read - `initonly_static_value ()`'s own subject - but not
-/// from the collector, which is free to move what it names between this
-/// compile and the object's every later use.
+/// A field with a reference among its bytes is left alone. Its value is safe
+/// from the class initializer once read - `initonly_static_value ()`'s own
+/// subject - but not from the collector, which is free to move what it names
+/// between this compile and the object's every later use.
+///
+/// Asking that of the field's whole type rather than of the bytes this load
+/// covers is what keeps the answer right for a value type: a struct wrapping
+/// one reference, `ImmutableArray<T>`'s shape, is not itself a reference type,
+/// though a body that only copies it on - returning it, storing it, passing
+/// it - leaves SROA a plain scalar for `constant_of ()` to fold. What it folds
+/// is the address the object had while this compiled, and nothing rewrites an
+/// immediate when the object moves.
 Constant *
 warm_static_constant (const LoadInst &load)
 {
 	auto [field, offset] = initonly_static_field (&load);
 
-	if (field == nullptr || MONO_TYPE_IS_REFERENCE (mono_field_get_type_internal (field)))
+	if (field == nullptr || holds_a_reference (mono_field_get_type_internal (field)))
 		return nullptr;
 
 	MonoDomain *domain = current_compile ().domain;
