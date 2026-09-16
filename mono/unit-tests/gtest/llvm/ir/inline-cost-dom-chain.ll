@@ -149,3 +149,25 @@ entry:
   %r = call ptr @raw_operand(ptr %arbitrary, ptr %p)
   ret ptr %r
 }
+
+; %p is the caller's parameter 0 and lands in this site's argument 1, and the
+; attribute sits on argument 0. So reading %p's own number against this site
+; finds %arbitrary's attribute and proves a value nothing proved. The number
+; stays in range here; root_late_argument below is where it does not. Nothing
+; proves %p non-null, so the price owed is root_raw_operand_unproven's.
+define ptr @root_crossed_argument(ptr %p) {
+entry:
+  %arbitrary = call ptr @opaque_ptr()
+  %r = call ptr @raw_operand(ptr nonnull %arbitrary, ptr %p)
+  ret ptr %r
+}
+
+; %late sits at parameter index 2, and the call below passes two arguments, so
+; that site has no argument at index 2. Nothing proves %late non-null, so the
+; price owed is root_raw_operand_unproven's.
+define ptr @root_late_argument(ptr %a, ptr %b, ptr %late) {
+entry:
+  %arbitrary = call ptr @opaque_ptr()
+  %r = call ptr @raw_operand(ptr %arbitrary, ptr %late)
+  ret ptr %r
+}

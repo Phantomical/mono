@@ -165,6 +165,33 @@ TEST (InlineCostDomChain, AFormalArgumentsOwnAttributeAnswersDespiteAnUnprovable
 	          m.cost_of ("root_raw_operand_unproven", "raw_operand"));
 }
 
+/*
+ * The half that reaches a build with assertions off, where an out-of-range
+ * number is a harmless false. root_crossed_argument's number is in range and
+ * names another argument, so a regression folds @raw_operand's guard on an
+ * attribute that was never about %o and prices the dead arm out.
+ */
+TEST (InlineCostDomChain, ACallerArgumentIsNotReadAgainstTheSitesOtherArguments)
+{
+	DomChainModule m;
+
+	EXPECT_EQ (m.cost_of ("root_crossed_argument", "raw_operand"),
+	          m.cost_of ("root_raw_operand_unproven", "raw_operand"));
+}
+
+/*
+ * root_late_argument passes its third parameter to a site that takes two
+ * arguments. Under an assertions LLVM a regression aborts this test rather
+ * than failing it.
+ */
+TEST (InlineCostDomChain, ACallerArgumentPastTheSitesOwnCountLeavesTheGuardUnfolded)
+{
+	DomChainModule m;
+
+	EXPECT_EQ (m.cost_of ("root_late_argument", "raw_operand"),
+	          m.cost_of ("root_raw_operand_unproven", "raw_operand"));
+}
+
 } // namespace
 } // namespace test
 } // namespace mono
