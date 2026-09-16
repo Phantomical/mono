@@ -71,6 +71,11 @@ set (MONO_BTLS 1)
 
 set(BUILD_SHARED_LIBS_SAVED "${BUILD_SHARED_LIBS}")
 set(BUILD_SHARED_LIBS OFF)
+# BoringSSL picks its flags by compiler id, and clang-cl reports Clang.  So it
+# takes the gcc arm and misses the Windows definitions on the MSVC arm.
+if (MSVC AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+	add_definitions (-DWIN32_LEAN_AND_MEAN)
+endif ()
 add_subdirectory (${BTLS_ROOT} boringssl)
 set(BUILD_SHARED_LIBS "${BUILD_SHARED_LIBS_SAVED}")
 
