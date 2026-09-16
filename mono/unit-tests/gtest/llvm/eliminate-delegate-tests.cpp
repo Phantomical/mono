@@ -120,6 +120,13 @@ struct MergeModule {
 		return phi;
 	}
 
+	/// Terminates merge with a null return, for a test that reads a value
+	/// without joining the arms through joined ().
+	void close ()
+	{
+		IRBuilder<> (merge).CreateRet (ConstantPointerNull::get (PointerType::get (*context, 0)));
+	}
+
 	/// What \p receiver says about the delegate it holds.
 	///
 	/// A member rather than a `values_for ()` call beside the receiver, because
@@ -134,7 +141,11 @@ struct MergeModule {
 TEST (EliminateDelegateTest, ReadsAMarkedProducer)
 {
 	MergeModule m;
-	DelegateTarget found = m.target_at (m.produce (m.left, first));
+	Value *value = m.produce (m.left, first);
+
+	m.close ();
+
+	DelegateTarget found = m.target_at (value);
 
 	EXPECT_EQ (found.method, first);
 	EXPECT_TRUE (found.settled);
@@ -143,6 +154,9 @@ TEST (EliminateDelegateTest, ReadsAMarkedProducer)
 TEST (EliminateDelegateTest, SaysNothingAboutAnUnmarkedValue)
 {
 	MergeModule m;
+
+	m.close ();
+
 	DelegateTarget found = m.target_at (m.caller->getArg (1));
 
 	EXPECT_EQ (found.method, nullptr);

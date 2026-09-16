@@ -70,9 +70,9 @@ RestoreTailPositionPass::run (llvm::Function &f, llvm::FunctionAnalysisManager &
 		 * Codegen must then look through whatever sits between the call and
 		 * the terminator, and deciding whether it can is not this pass's job.
 		 */
-		auto *branch = llvm::dyn_cast<llvm::BranchInst> (block.getTerminator ());
+		auto *branch = llvm::dyn_cast<llvm::UncondBrInst> (block.getTerminator ());
 
-		if (branch == nullptr || !branch->isUnconditional ())
+		if (branch == nullptr)
 			continue;
 
 		auto *call = llvm::dyn_cast_or_null<llvm::CallInst> (branch->getPrevNode ());

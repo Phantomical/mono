@@ -1133,7 +1133,7 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 			// Falling into a block is an edge like any other. So the stack goes
 			// through memory here too, rather than staying in the values the
 			// previous block happened to leave behind.
-			if (builder.GetInsertBlock ()->getTerminator () == nullptr) {
+			if (builder.GetInsertBlock ()->getTerminatorOrNull () == nullptr) {
 				if (auto error = enter_block (builder, ip, spill_stack (builder)))
 					return error;
 
@@ -1158,7 +1158,7 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 				if (clauses[i].flags == MONO_EXCEPTION_CLAUSE_FINALLY)
 					emit_finally_body_marker (builder, i, /* opening */ true);
 			}
-		} else if (builder.GetInsertBlock ()->getTerminator () != nullptr) {
+		} else if (builder.GetInsertBlock ()->getTerminatorOrNull () != nullptr) {
 			return invalid_il ("unreachable instruction is not the start of a block");
 		}
 
@@ -1185,7 +1185,7 @@ MethodLLVMEmitter::translate_range (MonoIrBuilder &builder, size_t begin, size_t
 			return error;
 	}
 
-	if (builder.GetInsertBlock ()->getTerminator () == nullptr)
+	if (builder.GetInsertBlock ()->getTerminatorOrNull () == nullptr)
 		return invalid_il ("method body ends without returning");
 
 	return llvm::Error::success ();
@@ -1345,7 +1345,7 @@ MethodLLVMEmitter::emit_stackmap_marker (MonoIrBuilder &builder, uint64_t id,
 	args.insert (args.end (), vars.begin (), vars.end ());
 
 	llvm::CallInst *marker =
-		builder.CreateIntrinsic (llvm::Intrinsic::experimental_stackmap, {}, args);
+		builder.CreateIntrinsicWithoutFolding (llvm::Intrinsic::experimental_stackmap, args);
 
 	marker->setDoesNotThrow ();
 	return marker;
@@ -2028,7 +2028,7 @@ MethodLLVMEmitter::next_check_index ()
 
 /// Throw the corlib exception `name` when `condition` holds, and go on emitting into
 /// the block where it did not.
-llvm::BranchInst *
+llvm::CondBrInst *
 MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
                                         const char *name)
 {
@@ -2038,7 +2038,7 @@ MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *con
 	llvm::BasicBlock *throw_bb = create_cold_block (site + "throw_" + name + index);
 	llvm::BasicBlock *next_bb =
 		llvm::BasicBlock::Create (context (), site + "no_throw" + index, function);
-	llvm::BranchInst *branch = builder.CreateCondBr (condition, throw_bb, next_bb);
+	llvm::CondBrInst *branch = builder.CreateCondBr (condition, throw_bb, next_bb);
 
 	// These guards sit in the fallthrough path of ordinary arithmetic, so this states
 	// which way they go. Otherwise the throw looks as likely as the work it protects.
@@ -2070,7 +2070,7 @@ MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *con
 void
 MethodLLVMEmitter::emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer)
 {
-	llvm::BranchInst *branch = emit_cond_exception (builder, builder.CreateIsNull (pointer),
+	llvm::CondBrInst *branch = emit_cond_exception (builder, builder.CreateIsNull (pointer),
 	                                                "NullReferenceException");
 
 	branch->setMetadata (llvm::LLVMContext::MD_make_implicit,

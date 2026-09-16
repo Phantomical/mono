@@ -882,7 +882,7 @@ private:
 	llvm::Error emit_switch (MonoIrBuilder &builder);
 
 	void emit_throw_corlib_exception (MonoIrBuilder &builder, const char *name);
-	llvm::BranchInst *emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
+	llvm::CondBrInst *emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
 	                                       const char *name);
 	void emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer);
 

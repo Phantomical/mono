@@ -1,7 +1,7 @@
 # The copy of LLVM's inline cost model
 
 `inline-cost.cpp` is `llvm/lib/Analysis/InlineCost.cpp`, taken from
-`llvmorg-22.1.8`. `CallAnalyzer` and `InlineCostCallAnalyzer` are in no header,
+`llvmorg-23.1.1`. `CallAnalyzer` and `InlineCostCallAnalyzer` are in no header,
 so a subclass outside LLVM cannot reach them. A copy is what lets mono tell the
 model what the managed metadata knows about a call site: the class a caller
 already settled its argument to, a type test that class answers, and a dispatch

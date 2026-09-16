@@ -470,7 +470,7 @@ split_normal_edge (InvokeInst *invoke)
 		BasicBlock::Create (to->getContext (), to->getName () + ".readback",
 		                    from->getParent (), to);
 
-	BranchInst::Create (to, edge);
+	UncondBrInst::Create (to, edge);
 	invoke->setNormalDest (edge);
 	to->replacePhiUsesWith (from, edge);
 	return edge;

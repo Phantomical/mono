@@ -96,7 +96,7 @@ parse_spec (const CallBase *site)
 /// Weights the edge to the fill call as unlikely, matching what the translator
 /// puts on its own guards.
 void
-mark_unlikely (BranchInst *branch)
+mark_unlikely (CondBrInst *branch)
 {
 	MDBuilder md (branch->getContext ());
 

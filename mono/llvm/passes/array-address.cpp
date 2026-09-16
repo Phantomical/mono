@@ -109,7 +109,7 @@ load_bounds (IRBuilder<> &b, Value *array)
 /// Weights a branch's throw edge as unlikely, matching what the translator
 /// puts on its own guards.
 void
-mark_unlikely (BranchInst *branch)
+mark_unlikely (CondBrInst *branch)
 {
 	MDBuilder md (branch->getContext ());
 

@@ -136,7 +136,7 @@ answer_with (CallBase *site, Value *value)
 	if (auto *invoke = dyn_cast<InvokeInst> (site)) {
 		BasicBlock *head = invoke->getParent ();
 
-		BranchInst::Create (invoke->getNormalDest (), invoke->getIterator ());
+		UncondBrInst::Create (invoke->getNormalDest (), invoke->getIterator ());
 		invoke->getUnwindDest ()->removePredecessor (head);
 	}
 
@@ -883,7 +883,7 @@ guard_entry (CallBase &site, Function *entry, Receiver receiver, MDNode *weights
 
 	// head is left without a terminator either way: an invoke was the
 	// terminator, and a call left the branch the split wrote.
-	if (Instruction *stale = head->getTerminator ())
+	if (Instruction *stale = head->getTerminatorOrNull ())
 		stale->eraseFromParent ();
 
 	IRBuilder<> guard (head);
