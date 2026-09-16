@@ -15,6 +15,8 @@
 
 #include "thunk.hpp"
 
+#include <mono/utils/mono-lock-rank.h>
+
 #include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/Error.h>
@@ -94,11 +96,12 @@ struct MonoMethodBody {
 	MonoJitInfo *jinfo = nullptr;
 };
 
+using RecordLock = MonoRankedMutex<std::mutex, MONO_LOCK_RANK_DOMAIN_METHOD>;
+
 /// Everything the runtime knows about one method in one domain.
 ///
 /// The atomic reads - the tier, the call count and the interpreter's two slots -
-/// take no lock. Everything else takes the record's lock, which is inside the
-/// domain lock and the table's, and outside an engine's own.
+/// take no lock. Everything else takes the record's lock.
 class MonoDomainMethod {
 public:
 	MonoDomainMethod (MonoMethod *method, MonoDomain *domain) : method (method), domain (domain) {}
@@ -110,8 +113,8 @@ public:
 	MonoMethod *const method;
 	MonoDomain *const domain;
 
-	/// The symbol the method's thunk is published under. Empty until the engine
-	/// has attached, since only the engine has a mangling.
+	/// The symbol the method's thunk is published under. method_stub_symbol ()
+	/// produces it, and the table sets it before attaching the record.
 	std::string name;
 
 	/// The tier that owns the entry now.
@@ -228,9 +231,20 @@ public:
 	/// redirects this too and no tier ever has to rebuild it.
 	llvm::Expected<void *> interop_entry ();
 
-	void set_interop_entry (void *code)
+	/// Publishes \p code as the entry, and answers what callers will reach -
+	/// which is another thread's body where one got here first. Compiling this
+	/// entry takes no lock, so two threads can build one each, and the loser's
+	/// is superseded rather than freed.
+	void *set_interop_entry (void *code)
 	{
-		interop_entry_.store (code, std::memory_order_release);
+		void *first = nullptr;
+
+		if (interop_entry_.compare_exchange_strong (first, code,
+		                                            std::memory_order_release,
+		                                            std::memory_order_acquire))
+			return code;
+
+		return first;
 	}
 
 	/// The one entry every caller reaches the method at.
@@ -333,21 +347,39 @@ private:
 
 	std::atomic<InterpMethod *> interp_method_ { nullptr };
 
-	mutable std::mutex lock_;
+	mutable RecordLock lock_;
 };
 
 /// Gives \p dm the thunk it is called through, and whatever state the engine
 /// keeps behind it.
 ///
 /// The compiling engine defines this, and each record goes through it once. A
-/// failure leaves the record unpublished, and nothing keeps it.
+/// failure leaves the record unpublished, and nothing keeps it. Whatever \p dm
+/// needs the loader lock for is settled before it arrives, because attaching
+/// runs under the domain lock.
 llvm::Error attach_method_entries (MonoDomainMethod &dm);
+
+/// The symbol \p method's thunk is published under.
+///
+/// The compiling engine defines this, since only it has a mangling. Call it
+/// with the domain lock unheld: naming describes the method's signature, and a
+/// description resolves the classes a custom modifier names, which takes the
+/// loader lock.
+std::string method_stub_symbol (MonoMethod *method);
+
+/// What \p method's tier-0 counter starts at, or 0 for a method that does not
+/// run at tier 0.
+///
+/// The compiling engine defines this, since the tier policy is its own. Call it
+/// with the domain lock unheld, for the same reason method_stub_symbol () is:
+/// deciding can name the method.
+int32_t method_tier0_budget (MonoMethod *method);
 
 /// Gives \p dm the entry native code enters the method through.
 ///
-/// The compiling engine defines this. Called with \p dm's lock held, and with
-/// the domain's, since registering the jit info takes it. A method nothing
-/// native enters is left with none and is not an error.
+/// The compiling engine defines this. Called with no lock held: it compiles,
+/// which takes the loader lock, and registering the jit info takes the domain
+/// lock. A method nothing native enters is left with none and is not an error.
 llvm::Error attach_interop_entry (MonoDomainMethod &dm);
 
 /// The address that stands for \p dm's method wherever one is handed out: an

@@ -403,9 +403,6 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 	dm.engine_data = {engine.release (),
 	                  [] (void *data) { delete static_cast<MethodState *> (data); }};
 
-	/* Tier policy is this engine's, so the record is told rather than asked. */
-	dm.tier_budget.store (tier0_budget (method), std::memory_order_relaxed);
-
 	/*
 	 * Two trampolines rather than one, so that deciding and compiling are
 	 * separate calls. The policy one below is what the thunk is published
@@ -427,8 +424,6 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 		domain.callbacks->release (*compiling);
 		return trampoline.takeError ();
 	}
-
-	dm.name = stub_symbol (method);
 
 	/*
 	 * The record, not the method: the interp entry thunk needs the domain this
@@ -548,6 +543,18 @@ llvm::Error
 attach_method_entries (MonoDomainMethod &dm)
 {
 	return MonoBackend::attach (dm);
+}
+
+std::string
+method_stub_symbol (MonoMethod *method)
+{
+	return stub_symbol (method);
+}
+
+int32_t
+method_tier0_budget (MonoMethod *method)
+{
+	return tier0_budget (method);
 }
 
 llvm::Error
@@ -1926,12 +1933,9 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 }
 
 /*
- * The wrapper is resolved here rather than in attach_interop (), which runs
- * under the record's lock. Compiling the wrapper translates its body, the
- * trivial inliner inlines this method into it, and note_inlined_into () then wants
- * that same lock. Nothing is cached on this record: the marshalling layer
- * caches the wrapper and the wrapper's own record caches its entry, so the
- * address is the same on every ask.
+ * Nothing is cached on this record: the marshalling layer caches the wrapper and
+ * the wrapper's own record caches its entry, so the address is the same on every
+ * ask.
  */
 llvm::Expected<void *>
 MonoBackend::published_entry (MonoDomainMethod &dm)

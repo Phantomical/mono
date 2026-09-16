@@ -89,6 +89,7 @@ set(monoutils_sources
   mono-threads-coop.c
   mono-utility-thread.c
   mono-tls.c
+  mono-lock-rank.c
   mono-utils-debug.c
   atomic.c
   mono-hwcap.c

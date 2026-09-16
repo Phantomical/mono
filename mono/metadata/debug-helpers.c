@@ -20,6 +20,7 @@
 #include "mono/metadata/tabledefs.h"
 #include "mono/metadata/appdomain.h"
 #include "mono/metadata/abi-details.h"
+#include "mono/utils/mono-lock-rank.h"
 #ifdef MONO_CLASS_DEF_PRIVATE
 /* Rationale: we want the functions in this file to work even when everything
  * is broken.  They may be called from a debugger session, for example.  If
@@ -983,6 +984,15 @@ char *
 mono_method_full_name (MonoMethod *method, gboolean signature)
 {
 	char *res;
+
+	/*
+	 * Naming a method describes its signature, and that resolves the classes a
+	 * custom modifier names, which takes the loader lock. How far it gets
+	 * depends on what the caches hold, so a caller that gets away with this
+	 * under the domain lock on one run deadlocks on the next.
+	 */
+	MONO_ASSERT_NO_LOCK_ABOVE (MONO_LOCK_RANK_LOADER);
+
 	MONO_ENTER_GC_UNSAFE;
 	res = mono_method_get_name_full (method, signature, FALSE, MONO_TYPE_NAME_FORMAT_IL);
 	MONO_EXIT_GC_UNSAFE;

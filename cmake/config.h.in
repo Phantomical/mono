@@ -173,6 +173,9 @@
 /* Disables the verifier */
 #cmakedefine DISABLE_VERIFIER 1
 
+/* Check the lock order at every ranked acquisition */
+#cmakedefine MONO_ENABLE_LOCK_RANK_CHECKS 1
+
 /* Enable checked build */
 #cmakedefine ENABLE_CHECKED_BUILD 1
 

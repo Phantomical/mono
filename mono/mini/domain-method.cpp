@@ -45,8 +45,10 @@ private:
  * A lookup takes the lock shared. Every interpreted call that has to name a
  * method reads this table, and those reads must not queue behind each other.
  */
+using TableLock = MonoRankedMutex<std::shared_mutex, MONO_LOCK_RANK_DOMAIN_METHOD_TABLE>;
+
 struct DomainMethodTable {
-	std::shared_mutex lock;
+	TableLock lock;
 	llvm::DenseMap<MonoMethod *, std::unique_ptr<MonoDomainMethod>> methods;
 };
 
@@ -64,7 +66,7 @@ table_of (MonoDomain *domain)
 bool
 MonoDomainMethod::publish (MonoTier tier, void *code, std::optional<uint32_t> epoch)
 {
-	std::lock_guard<std::mutex> held (lock_);
+	std::lock_guard<RecordLock> held (lock_);
 
 	if (tier < tier_.load (std::memory_order_relaxed))
 		return false;
@@ -116,7 +118,7 @@ MonoDomainMethod::promote ()
 void *
 MonoDomainMethod::thunk_address () const
 {
-	std::lock_guard<std::mutex> held (lock_);
+	std::lock_guard<RecordLock> held (lock_);
 
 	return thunk.code ();
 }
@@ -124,7 +126,7 @@ MonoDomainMethod::thunk_address () const
 Thunk
 MonoDomainMethod::take_thunk ()
 {
-	std::lock_guard<std::mutex> held (lock_);
+	std::lock_guard<RecordLock> held (lock_);
 
 	return thunk;
 }
@@ -138,7 +140,7 @@ static_assert (static_cast<unsigned> (MonoTier::tier2) <= 0xF,
 void
 MonoDomainMethod::attach_body (MonoTier tier, void *code, MonoJitInfo *jinfo)
 {
-	std::lock_guard<std::mutex> held (lock_);
+	std::lock_guard<RecordLock> held (lock_);
 
 	if (!bodies_.empty ()) {
 		if (bodies_.back ().jinfo != nullptr)
@@ -156,7 +158,7 @@ MonoDomainMethod::attach_body (MonoTier tier, void *code, MonoJitInfo *jinfo)
 std::optional<MonoMethodBody>
 MonoDomainMethod::body () const
 {
-	std::lock_guard<std::mutex> held (lock_);
+	std::lock_guard<RecordLock> held (lock_);
 
 	if (bodies_.empty () || bodies_.back ().state != BodyState::current)
 		return std::nullopt;
@@ -166,7 +168,7 @@ MonoDomainMethod::body () const
 void
 MonoDomainMethod::foreach_body (llvm::function_ref<void (const MonoMethodBody &)> visit) const
 {
-	std::lock_guard<std::mutex> held (lock_);
+	std::lock_guard<RecordLock> held (lock_);
 
 	for (const MonoMethodBody &body : bodies_)
 		visit (body);
@@ -191,20 +193,18 @@ MonoDomainMethod::interop_entry ()
 		return ready;
 
 	/*
-	 * The domain lock outside the record's, because attaching registers jit
-	 * info and that takes it. It is recursive, so a mutator already holding it
-	 * - mono_class_proxy_vtable is one - arrives here safely.
+	 * No lock across the compile below. It takes the loader lock, and a thread
+	 * in class init holds that one and then takes the domain lock to build a
+	 * vtable, so either lock held here closes that cycle. Registering the jit
+	 * info the compile produces takes the domain lock on its own account.
+	 *
+	 * The cost is that threads arriving together each compile the entry.
+	 * set_interop_entry () settles which one every caller then reaches.
 	 */
-	DomainLock domain_lock (domain);
-	std::lock_guard<std::mutex> held (lock_);
-
-	if (void *ready = interop_entry_.load (std::memory_order_relaxed))
-		return ready;
-
 	if (llvm::Error err = attach_interop_entry (*this))
 		return std::move (err);
 
-	return interop_entry_.load (std::memory_order_relaxed);
+	return interop_entry_.load (std::memory_order_acquire);
 }
 
 void
@@ -239,7 +239,7 @@ MonoDomainMethod::install_detour (void *target)
 void
 MonoDomainMethod::note_inlined_into (MonoMethod *root)
 {
-	std::lock_guard<std::mutex> held (lock_);
+	std::lock_guard<RecordLock> held (lock_);
 
 	if (!llvm::is_contained (inlined_into_, root))
 		inlined_into_.push_back (root);
@@ -248,7 +248,7 @@ MonoDomainMethod::note_inlined_into (MonoMethod *root)
 void
 MonoDomainMethod::unwind_inlined_body ()
 {
-	std::lock_guard<std::mutex> held (lock_);
+	std::lock_guard<RecordLock> held (lock_);
 
 	// Before every return below: a compile reads the epoch as it starts and
 	// publishes only while it has not moved.
@@ -300,7 +300,7 @@ MonoDomainMethod::drop_inlined_bodies ()
 	llvm::SmallVector<MonoMethod *, 2> roots;
 
 	{
-		std::lock_guard<std::mutex> held (lock_);
+		std::lock_guard<RecordLock> held (lock_);
 
 		roots = inlined_into_;
 	}
@@ -364,7 +364,7 @@ domain_method_find (MonoDomain *domain, MonoMethod *method)
 	if (table == nullptr)
 		return nullptr;
 
-	std::shared_lock<std::shared_mutex> held (table->lock);
+	std::shared_lock<TableLock> held (table->lock);
 	auto it = table->methods.find (method);
 
 	return it != table->methods.end () ? it->second.get () : nullptr;
@@ -381,14 +381,22 @@ domain_method_intern (MonoDomain *domain, MonoMethod *method)
 		return llvm::createStringError (llvm::inconvertibleErrorCode (),
 		                                "the domain has no method table");
 
+	/* A record that already exists needs neither the naming below nor the
+	 * table's write lock. */
+	if (MonoDomainMethod *interned = domain_method_find (domain, method))
+		return interned;
+
 	/*
-	 * Naming the method reads its signature, and a signature that is not cached
-	 * yet is parsed from metadata - which loads the classes it names, and takes
-	 * the loader lock to do it. Ask for it here, above the locks: a lock held
+	 * All three read metadata the loader lock covers: a signature not cached
+	 * yet is parsed from it, naming describes that signature, which resolves
+	 * the classes a custom modifier names, and a tier-0 filter names the method
+	 * to match against. They happen here, above the locks, because a lock held
 	 * across the loader lock deadlocks against a thread in class init, which
 	 * holds the loader lock and then takes the domain lock to build a vtable.
 	 */
 	mono_method_signature_internal (method);
+	std::string name = method_stub_symbol (method);
+	int32_t tier0_budget = method_tier0_budget (method);
 
 	/*
 	 * The domain lock is the outermost of the three. A mutator can arrive here
@@ -397,13 +405,16 @@ domain_method_intern (MonoDomain *domain, MonoMethod *method)
 	 * well.
 	 */
 	DomainLock domain_lock (domain);
-	std::unique_lock<std::shared_mutex> held (table->lock);
+	std::unique_lock<TableLock> held (table->lock);
 
 	auto it = table->methods.find (method);
 	if (it != table->methods.end ())
 		return it->second.get ();
 
 	auto record = std::make_unique<MonoDomainMethod> (method, domain);
+
+	record->name = std::move (name);
+	record->tier_budget.store (tier0_budget, std::memory_order_relaxed);
 
 	if (llvm::Error err = attach_method_entries (*record))
 		return std::move (err);
@@ -439,7 +450,7 @@ domain_method_foreach (MonoDomain *domain, llvm::function_ref<void (MonoDomainMe
 	if (table == nullptr)
 		return;
 
-	std::shared_lock<std::shared_mutex> held (table->lock);
+	std::shared_lock<TableLock> held (table->lock);
 
 	for (const auto &entry : table->methods)
 		visit (*entry.second);
@@ -453,7 +464,7 @@ domain_method_take (MonoDomain *domain, MonoMethod *method)
 	if (table == nullptr)
 		return nullptr;
 
-	std::unique_lock<std::shared_mutex> held (table->lock);
+	std::unique_lock<TableLock> held (table->lock);
 	auto it = table->methods.find (method);
 
 	if (it == table->methods.end ())

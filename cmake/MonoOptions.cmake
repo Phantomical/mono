@@ -132,6 +132,12 @@ endif()
 # --- instrumentation --------------------------------------------------------
 option(MONO_ENABLE_COVERAGE "Instrument the whole native build for llvm-cov" OFF)
 
+# Check the runtime's lock order at every ranked acquisition, and abort on an
+# inversion rather than waiting for the deadlock it admits.
+option(MONO_ENABLE_LOCK_RANK_CHECKS
+       "Abort on a lock taken out of rank order"
+       ON)
+
 # --- test registration ------------------------------------------------------
 # The gtest suites and the managed method suites hold many cases in one binary.
 # Each lists its cases when ctest starts and registers one ctest test per case,

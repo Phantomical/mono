@@ -160,6 +160,9 @@ mono_loader_trylock (void)
 {
 	if (mono_coop_mutex_trylock (&loader_mutex) != 0)
 		return FALSE;
+	/* No order check: a lock this thread did not wait for cannot close a cycle.
+	 * The rank is still recorded, because mono_loader_unlock () gives it back. */
+	mono_lock_rank_acquired (MONO_LOCK_RANK_LOADER);
 	mono_locks_lock_acquired (LoaderLock, &loader_mutex);
 	mono_native_tls_set_value (loader_lock_nest_id, GUINT_TO_POINTER (GPOINTER_TO_UINT (mono_native_tls_get_value (loader_lock_nest_id)) + 1));
 	return TRUE;

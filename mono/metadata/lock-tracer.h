@@ -10,6 +10,7 @@
 
 #include "mono/utils/mono-os-mutex.h"
 #include "mono/utils/mono-coop-mutex.h"
+#include "mono/utils/mono-lock-rank.h"
 
 typedef enum {
 	InvalidLock = 0,
@@ -41,27 +42,47 @@ void mono_locks_lock_released (RuntimeLocks kind, gpointer lock);
 
 #endif
 
+/** The rank of \p kind, or MONO_LOCK_RANK_NONE where the order is not established. */
+static inline MonoLockRank
+mono_lock_rank_of (RuntimeLocks kind)
+{
+	switch (kind) {
+	case LoaderLock:
+		return MONO_LOCK_RANK_LOADER;
+	case DomainLock:
+		return MONO_LOCK_RANK_DOMAIN;
+	default:
+		return MONO_LOCK_RANK_NONE;
+	}
+}
+
 #define mono_locks_os_acquire(LOCK,NAME)	\
 	do {	\
+		mono_lock_rank_acquiring (mono_lock_rank_of (NAME));	\
 		mono_os_mutex_lock (LOCK);	\
+		mono_lock_rank_acquired (mono_lock_rank_of (NAME));	\
 		mono_locks_lock_acquired (NAME, LOCK);	\
 	} while (0)
 
 #define mono_locks_os_release(LOCK,NAME)	\
 	do {	\
 		mono_locks_lock_released (NAME, LOCK);	\
+		mono_lock_rank_released (mono_lock_rank_of (NAME));	\
 		mono_os_mutex_unlock (LOCK);	\
 	} while (0)
 
 #define mono_locks_coop_acquire(LOCK,NAME)	\
 	do {	\
+		mono_lock_rank_acquiring (mono_lock_rank_of (NAME));	\
 		mono_coop_mutex_lock (LOCK);	\
+		mono_lock_rank_acquired (mono_lock_rank_of (NAME));	\
 		mono_locks_lock_acquired (NAME, LOCK);	\
 	} while (0)
 
 #define mono_locks_coop_release(LOCK,NAME)	\
 	do {	\
 		mono_locks_lock_released (NAME, LOCK);	\
+		mono_lock_rank_released (mono_lock_rank_of (NAME));	\
 		mono_coop_mutex_unlock (LOCK);	\
 	} while (0)
 
