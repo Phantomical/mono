@@ -166,6 +166,16 @@ jobs:
           ./build/mono/mini/mono-sgen --version
           ./build/mono/mini/mono-sgen --version | grep -q 'LLVM:.*yes'
 
+      - name: Package the KSP zip
+        run: cmake --build build --target package-ksp -j "$(nproc)"
+
+      - name: Upload the KSP package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ksp-package-linux-x64
+          path: build/mono-llvm-jit-ksp-linux.zip
+          if-no-files-found: error
+
       # The whole tree rather than a selection of it. 1.6G goes to 410M in 18s,
       # which is far below what any pruning could be worth, and a prune that
       # dropped a data file some corpus reads would surface as one red test in
