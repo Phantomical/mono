@@ -7,11 +7,13 @@
 #define MONO_LLVM_ANALYSIS_CONSTANT_VALUES_HPP
 
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/GlobalValue.h>
 #include <llvm/IR/Instruction.h>
 #include <llvm/IR/PassManager.h>
+#include <llvm/IR/ValueHandle.h>
 #include <llvm/Support/Casting.h>
 
 namespace llvm {
@@ -35,16 +37,38 @@ class ConstantValuesSolver;
 ///
 /// Giving up latches, so the state moves one way and the walk settles.
 struct ValueSources {
-	llvm::SmallPtrSet<llvm::Value *, 4> sources;
+	/// Each source is held by a handle rather than a raw pointer, so a pass
+	/// that replaces one carries the set with it: the handle follows a RAUW to
+	/// whatever took the value's place, and nulls itself where the value was
+	/// destroyed outright. `max_sources` keeps the search linear.
+	llvm::SmallVector<llvm::WeakTrackingVH, 4> sources;
 
 	/// Sources past which the walk gives up.
 	static constexpr unsigned max_sources = 4;
 
 	ValueSources () = default;
 
-	explicit ValueSources (llvm::Value *v) { sources.insert (v); }
+	explicit ValueSources (llvm::Value *v) { sources.emplace_back (v); }
+
+	/// A set that names no path, for a walk that gave up.
+	static ValueSources gave_up ()
+	{
+		ValueSources empty;
+
+		empty.widened = true;
+		return empty;
+	}
 
 	bool is_empty () const { return sources.empty (); }
+
+	/// Whether a source was destroyed with nothing put in its place.
+	///
+	/// The set no longer names every path that reaches the owner, so a rule
+	/// folding over it would find an agreement the missing path denies.
+	bool lost_a_source () const
+	{
+		return llvm::is_contained (sources, nullptr);
+	}
 
 	/// Whether the walk gave up on the owner rather than name what reaches it.
 	///
@@ -57,9 +81,10 @@ struct ValueSources {
 	/// \returns true if the value was not already contained in the set
 	bool insert (llvm::Value *value)
 	{
-		if (widened || !sources.insert (value).second)
+		if (widened || llvm::is_contained (sources, value))
 			return false;
 
+		sources.emplace_back (value);
 		widen_past_limit ();
 		return true;
 	}
@@ -77,7 +102,9 @@ struct ValueSources {
 
 		std::size_t isz = sources.size ();
 
-		sources.insert_range (other.sources);
+		for (const llvm::WeakTrackingVH &source : other.sources)
+			if (!llvm::is_contained (sources, source))
+				sources.emplace_back (source);
 
 		if (isz == sources.size ())
 			return false;
@@ -112,7 +139,11 @@ struct ValueSources {
 			if (held == nullptr)
 				held = owner;
 
-			modified |= sources.insert (held).second;
+			if (llvm::is_contained (sources, held))
+				continue;
+
+			sources.emplace_back (held);
+			modified = true;
 		}
 
 		if (modified)

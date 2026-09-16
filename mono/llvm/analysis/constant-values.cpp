@@ -875,6 +875,7 @@ private:
 };
 
 static const ValueSources nothing;
+static const ValueSources lost = ValueSources::gave_up ();
 
 const ValueSources &
 ConstantValues::sources (llvm::Value *v) const
@@ -882,6 +883,9 @@ ConstantValues::sources (llvm::Value *v) const
 	auto found = lookup.find (v);
 	if (found == lookup.end ())
 		return nothing;
+
+	if (found->second.lost_a_source ())
+		return lost;
 
 	return found->second;
 }
