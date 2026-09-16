@@ -336,3 +336,271 @@ jobs:
             build/Testing/Temporary/LastTest*.log
           if-no-files-found: warn
           retention-days: 14
+
+  build-windows:
+    name: Build (clang-cl)
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository
+    runs-on: windows-2025
+    timeout-minutes: 180
+
+    env:
+      LLVM_VERSION: 23.1.1
+      LLVM_PREFIX: C:\llvm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Restore LLVM
+        id: llvm-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.LLVM_PREFIX }}
+          key: llvm-win64-${{ env.LLVM_VERSION }}
+
+      - name: Download LLVM
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $name = "clang+llvm-$env:LLVM_VERSION-x86_64-pc-windows-msvc"
+          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$env:LLVM_VERSION/$name.tar.xz"
+          curl.exe -fsSL --retry 3 -o llvm.tar.xz $url
+          New-Item -ItemType Directory -Force -Path C:\llvm-unpack | Out-Null
+          tar -xf llvm.tar.xz -C C:\llvm-unpack
+          Move-Item "C:\llvm-unpack\$name" $env:LLVM_PREFIX
+          Remove-Item -Recurse -Force C:\llvm-unpack, llvm.tar.xz
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue `
+            "$env:LLVM_PREFIX\share", "$env:LLVM_PREFIX\libexec"
+          Remove-Item -Force -ErrorAction SilentlyContinue `
+            "$env:LLVM_PREFIX\bin\flang*.exe", "$env:LLVM_PREFIX\bin\mlir*.exe", `
+            "$env:LLVM_PREFIX\bin\lldb*.exe", "$env:LLVM_PREFIX\bin\clangd.exe", `
+            "$env:LLVM_PREFIX\bin\clang-tidy.exe", "$env:LLVM_PREFIX\bin\clang-query.exe"
+
+      - name: Save LLVM
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ env.LLVM_PREFIX }}
+          key: llvm-win64-${{ env.LLVM_VERSION }}
+
+      # LLVMDebugInfoPDB names diaguids.lib by the absolute path it had on the
+      # machine LLVM was released from, which is llvm-project#152268. Every
+      # component this build links reaches that target, so the path has to name
+      # a real file here before anything links LLVM. It ships under the VS
+      # install on some images and under the Windows SDK on others, so the
+      # candidates below are tried in turn rather than one being assumed.
+      - name: Point LLVM at this image's diaguids.lib
+        shell: pwsh
+        run: |
+          $cands = @()
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            foreach ($p in & $vswhere -latest -products * -property installationPath) {
+              $cands += Join-Path $p 'DIA SDK\lib\amd64\diaguids.lib'
+            }
+          }
+          $cands += Get-ChildItem `
+            "${env:ProgramFiles(x86)}\Windows Kits\10\Lib\*\um\x64\diaguids.lib" `
+            -ErrorAction SilentlyContinue | ForEach-Object FullName
+          $lib = $cands | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+          if (-not $lib) {
+            Write-Host "Tried:"; $cands | ForEach-Object { Write-Host "  $_" }
+            Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022" -ErrorAction SilentlyContinue
+            throw "no diaguids.lib on this image"
+          }
+          Write-Host "diaguids.lib: $lib"
+          $exports = "$env:LLVM_PREFIX\lib\cmake\llvm\LLVMExports.cmake"
+          (Get-Content $exports -Raw) -replace '[^;"]*diaguids\.lib', ($lib -replace '\\','/') `
+            | Set-Content $exports -NoNewline
+
+      - name: Restore vcpkg packages
+        id: vcpkg-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: build/vcpkg_installed
+          key: vcpkg-x64-windows-${{ hashFiles('vcpkg.json', 'vcpkg-triplets/**') }}
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: ccache-windows-x64
+          max-size: 3G
+
+      # _mono_csc_command () hands csc.exe to the host here, so the class
+      # libraries need no mono. The test corpora go through
+      # mono_tools_runtime (), which compiles them on the runtime
+      # MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS names below.
+      - name: Install mono
+        shell: pwsh
+        run: |
+          choco install mono --no-progress -y
+          "$env:ProgramFiles\Mono\bin" `
+            | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Managed build cache key
+        id: managed-key
+        shell: bash
+        run: |
+          mono --version | head -1
+          printf '%s\n' \
+            "$(git rev-parse HEAD:mcs)" \
+            "$(git rev-parse HEAD:cmake)" \
+            "$(git rev-parse HEAD:mono/tests)" \
+            "$(git rev-parse HEAD:external)" \
+            "$(mono --version | head -1)" \
+            | sha256sum | cut -c1-40 \
+            | sed 's/^/key=managed-windows-x64-v1-/' >> "$GITHUB_OUTPUT"
+
+      - name: Restore managed build
+        id: managed-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/mcs
+            build/mono/tests
+            build/.ninja_log
+            build/.ninja_deps
+          key: ${{ steps.managed-key.outputs.key }}
+
+      - name: Backdate sources behind the restored outputs
+        if: steps.managed-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          find . -name .git -prune -o -path ./build -prune -o -print0 \
+            | xargs -0r touch -h -d "@$SOURCE_DATE_EPOCH"
+
+      # CMakeLists.txt enables ASM_MASM on Windows, so the build needs ml64.exe
+      # in PATH, and vcvars64 is what puts it there. It pins INCLUDE and LIB too.
+      - name: Set up the MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure
+        shell: pwsh
+        run: |
+          # ccache refuses /Zi, CMAKE_MSVC_DEBUG_INFORMATION_FORMAT's default:
+          # that debug info goes to a PDB shared across the target, so the object
+          # is not the whole output. Embedded is /Z7, which puts it in the object.
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+            -DCMAKE_C_COMPILER="$env:LLVM_PREFIX/bin/clang-cl.exe" `
+            -DCMAKE_CXX_COMPILER="$env:LLVM_PREFIX/bin/clang-cl.exe" `
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded `
+            -DMONO_LLVM_PREFIX="$env:LLVM_PREFIX" `
+            -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/tmp" `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON `
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache `
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        id: build
+        shell: pwsh
+        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Save vcpkg packages
+        if: >-
+          steps.build.outcome == 'success' &&
+          steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: build/vcpkg_installed
+          key: vcpkg-x64-windows-${{ hashFiles('vcpkg.json', 'vcpkg-triplets/**') }}
+
+      - name: Save managed build
+        if: >-
+          steps.build.outcome == 'success' &&
+          steps.managed-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            build/mcs
+            build/mono/tests
+            build/.ninja_log
+            build/.ninja_deps
+          key: ${{ steps.managed-key.outputs.key }}
+
+      - name: ccache statistics
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          which ccache
+          ccache --version | head -1
+          ccache --show-stats --verbose
+
+      - name: Runtime identifies itself
+        shell: bash
+        run: |
+          ./build/mono/mini/mono-sgen.exe --version
+          ./build/mono/mini/mono-sgen.exe --version | grep -q 'LLVM:.*yes'
+
+      - name: Pack the build tree
+        shell: bash
+        run: tar --exclude='*.obj' -I 'zstd -3 -T0' -cf build.tzst build
+
+      - name: Upload the build tree
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-tree-windows-x64
+          path: build.tzst
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  test-windows:
+    name: Test Windows ${{ matrix.shard }}/${{ strategy.job-total }}
+    needs: build-windows
+    runs-on: windows-2025
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Download the build tree
+        uses: actions/download-artifact@v8
+        with:
+          name: build-tree-windows-x64
+
+      - name: Unpack the build tree
+        shell: bash
+        run: tar --zstd -xf build.tzst
+
+      - name: Runtime identifies itself
+        shell: bash
+        run: |
+          ./build/mono/mini/mono-sgen.exe --version
+          ./build/mono/mini/mono-sgen.exe --version | grep -q 'LLVM:.*yes'
+
+      - name: Test
+        shell: bash
+        env:
+          MONO_LLVM_JIT_VERIFY: "1"
+        run: >
+          ctest --test-dir build -j "$NUMBER_OF_PROCESSORS" --output-on-failure
+          --output-junit junit-shard-${{ matrix.shard }}.xml
+          -LE "bcl|slow|stress|acceptance|interp-mixed"
+          -I ${{ matrix.shard }},,${{ strategy.job-total }}
+
+      - name: Upload test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-results-windows-x64-${{ matrix.shard }}
+          path: |
+            build/junit-*.xml
+            build/Testing/Temporary/LastTest*.log
+          if-no-files-found: warn
+          retention-days: 14
