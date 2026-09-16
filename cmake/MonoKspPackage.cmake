@@ -8,8 +8,7 @@
 # per-arch directory on both, rather than under it.
 #
 # On Windows the zip unpacks over the install root with nothing left to move:
-# the managed assemblies carry KSP_x64_Data/Managed with them, and z.dll lands
-# at the root beside KSP_x64.exe.
+# the managed assemblies carry KSP_x64_Data/Managed with them.
 
 if(NOT MONO_ENABLE_MCS_BUILD OR NOT MONO_ENABLE_LIBRARIES)
   return()
@@ -83,12 +82,7 @@ set(_ksp_readme "${CMAKE_BINARY_DIR}/ksp-package-readme.txt")
 if(MONO_HOST_WINDOWS)
   set(_ksp_readme_install
 "Unpack it over the KSP install root -- the directory holding KSP_x64.exe --
-and every file lands where the game already looks for it.
-
-z.dll sits at that root rather than beside the runtime that imports it,
-because Windows resolves an import against the application directory. Moved
-into MonoBleedingEdge\\EmbedRuntime it stops being found, and Unity reports
-only \"Unable to load mono library\".")
+and every file lands where the game already looks for it.")
 else()
   set(_ksp_readme_install
 "Unpack MonoBleedingEdge/ over the KSP install root, and copy the contents of
@@ -209,16 +203,6 @@ if(MONO_HOST_WINDOWS)
                "$<TARGET_FILE:MonoPosixHelper>" "${_ksp_stage}/${_ksp_native_subdir}/MonoPosixHelper.dll"
        COMMAND "${CMAKE_COMMAND}" -E copy
                "$<TARGET_PDB_FILE:MonoPosixHelper>" "${_ksp_stage}/${_ksp_native_subdir}/$<TARGET_PDB_FILE_NAME:MonoPosixHelper>")
-
-  # Windows resolves an import against the application directory, not against
-  # the directory of the DLL naming it, so z.dll goes to the root beside
-  # KSP_x64.exe. Moved into EmbedRuntime it stops being found, and Unity
-  # reports only "Unable to load mono library".
-  if(ZLIB_FOUND)
-    list(APPEND _ksp_copy_commands
-         COMMAND "${CMAKE_COMMAND}" -E copy
-                 "$<TARGET_FILE_DIR:${_ksp_runtime_target}>/z.dll" "${_ksp_stage}/z.dll")
-  endif()
 
   # MSVC links every target with /DEBUG (cmake/MonoCompilerFlags.cmake), so
   # both the runtime and mono-overrides always have a PDB to bring along.

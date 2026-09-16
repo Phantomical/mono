@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.28)
 
+# The vcpkg toolchain reads this as project() loads it below, so it cannot move
+# down with the rest of the configuration.
+set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_LIST_DIR}/vcpkg-triplets")
+
 project(mono
         VERSION 6.13.0
         DESCRIPTION "Mono runtime (Unity fork, LLVM 18 tiered JIT)"
