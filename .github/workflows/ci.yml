@@ -121,6 +121,10 @@ jobs:
       # than the one being built, which is worth roughly 4x on the C# half and
       # takes it off the critical path behind the native link.  Only the
       # compiler's host moves; the tests still run on the runtime built here.
+      #
+      # MONO_UNITY_BUILD statically links LLVM the way a Unity player does,
+      # instead of the libLLVM.so apt.llvm.org ships otherwise, so CI covers
+      # that link shape too.
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
@@ -129,6 +133,7 @@ jobs:
             -DMONO_LLVM_PREFIX=/usr/lib/llvm-23 \
             -DCMAKE_INSTALL_PREFIX="$PWD/tmp" \
             -DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON \
+            -DMONO_UNITY_BUILD=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
@@ -244,6 +249,7 @@ jobs:
             -DMONO_LLVM_PREFIX=/usr/lib/llvm-23 \
             -DCMAKE_INSTALL_PREFIX="$PWD/tmp" \
             -DMONO_ENABLE_MCS_BUILD=OFF \
+            -DMONO_UNITY_BUILD=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
