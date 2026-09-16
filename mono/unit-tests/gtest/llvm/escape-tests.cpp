@@ -98,7 +98,7 @@ struct EscapeModule {
 	/// objects it takes away in one round.
 	bool escapes (CallInst &alloc, ArrayRef<CallInst *> vouched = {})
 	{
-		if (caller->getEntryBlock ().getTerminator () == nullptr)
+		if (caller->getEntryBlock ().getTerminatorOrNull () == nullptr)
 			b.CreateRet (ConstantPointerNull::get (b.getPtrTy ()));
 
 		EXPECT_FALSE (verifyModule (*module, &errs ()));

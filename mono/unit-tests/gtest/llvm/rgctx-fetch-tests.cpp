@@ -136,9 +136,8 @@ TEST (RgctxFetch, EachOffsetInTheWalkIsALoadOfItsOwn)
 	// One test for each load, and every one of them reaches the call.
 	EXPECT_EQ (fetch.count (Instruction::ICmp), 3u);
 	for (const BasicBlock &block : *fetch.caller)
-		if (const auto *branch = dyn_cast<BranchInst> (block.getTerminator ()))
-			if (branch->isConditional ())
-				EXPECT_EQ (branch->getSuccessor (0), fetch.fill_block ());
+		if (const auto *branch = dyn_cast<CondBrInst> (block.getTerminator ()))
+			EXPECT_EQ (branch->getSuccessor (0), fetch.fill_block ());
 }
 
 TEST (RgctxFetch, TheValueTheSiteHandedOnComesFromEitherPath)

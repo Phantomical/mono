@@ -101,9 +101,9 @@ region_is_empty (llvm::Instruction *begin, llvm::Instruction *end)
 			++it;
 		}
 
-		const auto *br = llvm::dyn_cast<llvm::BranchInst> (term);
+		const auto *br = llvm::dyn_cast<llvm::UncondBrInst> (term);
 
-		if (br == nullptr || br->isConditional ())
+		if (br == nullptr)
 			return false;
 
 		llvm::BasicBlock *next = br->getSuccessor (0);
@@ -214,7 +214,7 @@ void
 eliminate_abort_check (llvm::LoadInst *load)
 {
 	llvm::BasicBlock *test = load->getParent ();
-	auto *br = llvm::cast<llvm::BranchInst> (test->getTerminator ());
+	auto *br = llvm::cast<llvm::CondBrInst> (test->getTerminator ());
 	llvm::BasicBlock *a = br->getSuccessor (0);
 	llvm::BasicBlock *b = br->getSuccessor (1);
 

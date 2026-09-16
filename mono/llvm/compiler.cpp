@@ -771,7 +771,7 @@ private:
 		MCStreamer &streamer = *streamer_;
 		MCContext &ctx = streamer.getContext ();
 		const std::vector<MCCFIInstruction> &initial =
-			ctx.getAsmInfo ()->getInitialFrameState ();
+			ctx.getAsmInfo ().getInitialFrameState ();
 		bool switched = false;
 
 		/*
@@ -825,7 +825,7 @@ private:
 		 * program either way: it says where the return address the call pushed
 		 * sits, which no unwind code states.
 		 */
-		if (ctx.getAsmInfo ()->usesWindowsCFI ()) {
+		if (ctx.getAsmInfo ().usesWindowsCFI ()) {
 			for (const WinUnwindHandler::Function &fn : win_->functions ())
 				emit_block (ctx.getOrCreateSymbol (fn.name), fn.records);
 			return;
@@ -945,10 +945,10 @@ Expected<std::unique_ptr<MCStreamer>>
 make_streamer (TargetMachine &tm, MCContext &ctx, raw_pwrite_stream &out,
                OutputKind kind)
 {
-	const MCSubtargetInfo &sti = *tm.getMCSubtargetInfo ();
-	const MCAsmInfo &mai = *tm.getMCAsmInfo ();
+	const MCSubtargetInfo &sti = tm.getMCSubtargetInfo ();
+	const MCAsmInfo &mai = tm.getMCAsmInfo ();
 	const MCInstrInfo &mii = *tm.getMCInstrInfo ();
-	const MCRegisterInfo &mri = *tm.getMCRegisterInfo ();
+	const MCRegisterInfo &mri = tm.getMCRegisterInfo ();
 	std::unique_ptr<MCAsmBackend> mab (
 		tm.getTarget ().createMCAsmBackend (sti, mri, tm.Options.MCOptions));
 

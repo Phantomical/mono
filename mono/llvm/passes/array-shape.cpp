@@ -73,7 +73,7 @@ load_bounds (IRBuilder<> &b, Value *array)
 /// Weights a branch's throw edge as unlikely, matching what the translator
 /// puts on its own guards.
 void
-mark_unlikely (BranchInst *branch)
+mark_unlikely (CondBrInst *branch)
 {
 	MDBuilder md (branch->getContext ());
 
@@ -103,7 +103,7 @@ lower_call (CallBase *site, bool lower_bound)
 	BasicBlock *flat = BasicBlock::Create (ctx, "array_shape_szarray", fn, cont);
 	BasicBlock *shaped = BasicBlock::Create (ctx, "array_shape_bounds", fn, cont);
 	IRBuilder<> b (head);
-	BranchInst *guard = b.CreateCondBr (b.CreateIsNull (array), raise, live);
+	CondBrInst *guard = b.CreateCondBr (b.CreateIsNull (array), raise, live);
 
 	mark_unlikely (guard);
 

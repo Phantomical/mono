@@ -94,7 +94,7 @@ int getCallsiteCost (const llvm::TargetTransformInfo &TTI, const llvm::CallBase 
 
 llvm::InlineParams getInlineParams ();
 llvm::InlineParams getInlineParams (int Threshold);
-llvm::InlineParams getInlineParams (unsigned OptLevel, unsigned SizeOptLevel);
+llvm::InlineParams getInlineParamsFromOptLevel (unsigned OptLevel);
 
 } // namespace mono
 

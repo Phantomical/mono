@@ -6,11 +6,11 @@ translator in `mono/llvm/method-to-llvm/`, developed on branch `llvm18-tiered-ji
 It is the runtime's only JIT. Every compile routes through it, the classic mini back
 end never engages, and no command-line switch selects a backend.
 
-It builds against **unmodified upstream LLVM 22** — a local RelWithDebInfo build of
-`llvmorg-22.1.8`, installed at `~/projects/llvm-project/install`. That prefix is the
+It builds against **unmodified upstream LLVM 23** — a local RelWithDebInfo build of
+`llvmorg-23.1.1`, installed at `~/projects/llvm-project/install`. That prefix is the
 production configuration and it has **assertions off**. If the backend fails to build
 against an LLVM that looks correct, make sure that `llvm-config --version` in that
-prefix says 22.x.
+prefix says 23.x.
 
 `llvm-config --assertion-mode` is worth reading before you measure anything, because
 the two builds are not interchangeable. A runtime built against an assertions LLVM and
@@ -1093,7 +1093,7 @@ do not inline that target, which `is_inlinable ()` already enforces. A caller wi
 inlines, off the static frequencies BFI falls back to.
 
 **The `getInlineCost ()` it calls is a copy of LLVM's**, `passes/inline-cost.cpp`, taken
-from `llvm/lib/Analysis/InlineCost.cpp` at `llvmorg-22.1.8`. `CallAnalyzer` is in no
+from `llvm/lib/Analysis/InlineCost.cpp` at `llvmorg-23.1.1`. `CallAnalyzer` is in no
 header, so a subclass outside LLVM cannot reach it. Two kinds of change touch the copy:
 the mechanical ones that let it build outside LLVM, and the calls below into
 `passes/inline-policy.cpp`. `passes/inline-cost.md` records both and how to read them

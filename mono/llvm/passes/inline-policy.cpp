@@ -681,9 +681,9 @@ eliminated_type_test (CallBase &call, SettledValue settled)
 }
 
 BasicBlock *
-implicit_null_check_successor (const BranchInst &branch)
+implicit_null_check_successor (const CondBrInst &branch)
 {
-	if (!ImplicitNullCheckFree || !branch.isConditional ()
+	if (!ImplicitNullCheckFree
 	    || branch.getMetadata (LLVMContext::MD_make_implicit) == nullptr)
 		return nullptr;
 
@@ -744,9 +744,9 @@ reaches_only_noreturn (const BasicBlock &block, SmallPtrSetImpl<const BasicBlock
 }
 
 BasicBlock *
-noreturn_free_successor (const BranchInst &branch)
+noreturn_free_successor (const CondBrInst &branch)
 {
-	if (!NoreturnArmFree || !branch.isConditional ())
+	if (!NoreturnArmFree)
 		return nullptr;
 
 	BasicBlock *first = branch.getSuccessor (0), *second = branch.getSuccessor (1);

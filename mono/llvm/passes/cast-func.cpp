@@ -383,7 +383,7 @@ lower (CallBase *site, bool throw_on_fail)
 
 	// head is left without a terminator either way: an invoke was the
 	// terminator, and a call left the branch the split wrote.
-	if (Instruction *stale = head->getTerminator ())
+	if (Instruction *stale = head->getTerminatorOrNull ())
 		stale->eraseFromParent ();
 
 	b.SetInsertPoint (head);

@@ -1610,7 +1610,8 @@ MonoJit::create (CodeArena *arena)
 	 * MonoJit to hold it, so the lambda carries what it needs instead.
 	 */
 	builder.setObjectLinkingLayerCreator (
-		[arena] (ExecutionSession &es) -> Expected<std::unique_ptr<ObjectLayer>> {
+		[arena] (ExecutionSession &es, jitlink::JITLinkMemoryManager &)
+			-> Expected<std::unique_ptr<ObjectLayer>> {
 			return std::make_unique<ObjectLinkingLayer> (
 				es, std::make_unique<CodeMemoryManager> (arena));
 		});

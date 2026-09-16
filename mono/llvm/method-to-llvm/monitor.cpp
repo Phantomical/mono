@@ -141,7 +141,7 @@ MethodLLVMEmitter::emit_monitor_fast_path (MonoIrBuilder &builder, MonoMethod *c
 		llvm::BasicBlock::Create (context (), "monitor_declined", function);
 	llvm::BasicBlock *done =
 		llvm::BasicBlock::Create (context (), "monitor_done", function);
-	llvm::BranchInst *branch =
+	llvm::CondBrInst *branch =
 		builder.CreateCondBr (builder.CreateIsNotNull (answered), done, declined);
 
 	// Most of these calls are on an uncontended lock, which is the case the

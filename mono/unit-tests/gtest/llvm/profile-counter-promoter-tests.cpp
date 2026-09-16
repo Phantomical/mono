@@ -91,7 +91,7 @@ struct LoopCounterModule {
 	{
 		BasicBlock *after = nullptr;
 
-		if (auto *br = dyn_cast_or_null<BranchInst> (from->getTerminator ())) {
+		if (auto *br = dyn_cast_or_null<UncondBrInst> (from->getTerminatorOrNull ())) {
 			after = br->getSuccessor (0);
 			br->eraseFromParent ();
 		}
@@ -136,12 +136,12 @@ struct LoopCounterModule {
 	BasicBlock *add_early_exit (Loop &l, StringRef tag)
 	{
 		BasicBlock *early = BasicBlock::Create (*context, tag, body);
-		BranchInst *to_latch = cast<BranchInst> (l.header->getTerminator ());
+		UncondBrInst *to_latch = cast<UncondBrInst> (l.header->getTerminator ());
 
 		IRBuilder<> (to_latch).CreateCondBr (flag (), early, l.latch);
 		to_latch->eraseFromParent ();
 
-		if (auto *br = dyn_cast_or_null<BranchInst> (l.exit->getTerminator ())) {
+		if (auto *br = dyn_cast_or_null<UncondBrInst> (l.exit->getTerminatorOrNull ())) {
 			IRBuilder<> (early).CreateBr (br->getSuccessor (0));
 		} else {
 			BasicBlock *join = BasicBlock::Create (*context, tag + ".join", body);
@@ -158,7 +158,7 @@ struct LoopCounterModule {
 	BasicBlock *split_header_on_a_condition (Loop &l, StringRef tag)
 	{
 		BasicBlock *taken = BasicBlock::Create (*context, tag, body, l.latch);
-		BranchInst *to_latch = cast<BranchInst> (l.header->getTerminator ());
+		UncondBrInst *to_latch = cast<UncondBrInst> (l.header->getTerminator ());
 
 		IRBuilder<> (to_latch).CreateCondBr (flag (), taken, l.latch);
 		to_latch->eraseFromParent ();
@@ -172,7 +172,7 @@ struct LoopCounterModule {
 	void give_the_header_a_second_entry (Loop &l)
 	{
 		BasicBlock &entry = body->getEntryBlock ();
-		BranchInst *to_preheader = cast<BranchInst> (entry.getTerminator ());
+		UncondBrInst *to_preheader = cast<UncondBrInst> (entry.getTerminator ());
 
 		IRBuilder<> (to_preheader).CreateCondBr (flag (), l.preheader, l.header);
 		to_preheader->eraseFromParent ();
@@ -184,7 +184,7 @@ struct LoopCounterModule {
 	void branch_to_the_exit_from_outside (Loop &l)
 	{
 		BasicBlock &entry = body->getEntryBlock ();
-		BranchInst *to_preheader = cast<BranchInst> (entry.getTerminator ());
+		UncondBrInst *to_preheader = cast<UncondBrInst> (entry.getTerminator ());
 
 		IRBuilder<> (to_preheader).CreateCondBr (flag (), l.preheader, l.exit);
 		to_preheader->eraseFromParent ();
@@ -195,7 +195,7 @@ struct LoopCounterModule {
 	{
 		IRBuilder<> b (bb);
 
-		if (bb->getTerminator () != nullptr)
+		if (bb->getTerminatorOrNull () != nullptr)
 			b.SetInsertPoint (bb->getTerminator ());
 
 		b.CreateIntrinsic (Intrinsic::instrprof_increment,
@@ -207,7 +207,7 @@ struct LoopCounterModule {
 	/// Closes the function and runs the pass over it.
 	PreservedAnalyses promote (PromotionPolicy policy = PromotionPolicy ())
 	{
-		if (tail != nullptr && tail->getTerminator () == nullptr)
+		if (tail != nullptr && tail->getTerminatorOrNull () == nullptr)
 			IRBuilder<> (tail).CreateRetVoid ();
 
 		ModuleAnalysisManager mam;

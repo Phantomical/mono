@@ -356,7 +356,7 @@ MonoPassBuilder::buildCommonFunctionSimplificationPipeline ()
 	invokeLateLoopOptimizationsEPCallbacks (LPM2, optLevel);
 
 	LPM2.addPass (llvm::LoopDeletionPass ());
-	LPM2.addPass (llvm::LoopFullUnrollPass (optLevel.getSpeedupLevel (),
+	LPM2.addPass (llvm::LoopFullUnrollPass (static_cast<int> (optLevel),
 	                                        /* OnlyWhenForced= */ !PTO.LoopUnrolling,
 	                                        PTO.ForgetAllSCEVInLoopUnroll));
 
@@ -811,7 +811,7 @@ MonoPassBuilder::buildTier2FunctionSimplificationPipeline ()
 	invokeLateLoopOptimizationsEPCallbacks (LPM2, optLevel);
 
 	LPM2.addPass (llvm::LoopDeletionPass ());
-	LPM2.addPass (llvm::LoopFullUnrollPass (optLevel.getSpeedupLevel (),
+	LPM2.addPass (llvm::LoopFullUnrollPass (static_cast<int> (optLevel),
 	                                        /* OnlyWhenForced= */ !PTO.LoopUnrolling,
 	                                        PTO.ForgetAllSCEVInLoopUnroll));
 

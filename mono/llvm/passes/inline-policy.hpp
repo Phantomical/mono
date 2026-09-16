@@ -18,8 +18,8 @@
 namespace llvm {
 class BasicBlock;
 class BlockFrequencyInfo;
-class BranchInst;
 class CallBase;
+class CondBrInst;
 class Function;
 class LoadInst;
 class Value;
@@ -91,7 +91,7 @@ llvm::Value *eliminated_type_test (llvm::CallBase &call, SettledValue settled);
 /// a null check that codegen folds.
 ///
 /// A caller can walk that successor alone and leave the raising arm uncounted.
-llvm::BasicBlock *implicit_null_check_successor (const llvm::BranchInst &branch);
+llvm::BasicBlock *implicit_null_check_successor (const llvm::CondBrInst &branch);
 
 /// The successor of \p branch that a run reaches, or null if neither arm's
 /// every path ends at a noreturn call.
@@ -99,7 +99,7 @@ llvm::BasicBlock *implicit_null_check_successor (const llvm::BranchInst &branch)
 /// Generalizes implicit_null_check_successor () past the null-check shape: a
 /// caller can walk the named successor alone and leave the arm that only
 /// throws uncounted.
-llvm::BasicBlock *noreturn_free_successor (const llvm::BranchInst &branch);
+llvm::BasicBlock *noreturn_free_successor (const llvm::CondBrInst &branch);
 
 /// Whether \p call passes an argument this compile can already tell, from the
 /// caller's own IR alone, is a fresh allocation still flowing toward

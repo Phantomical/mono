@@ -56,7 +56,7 @@ emit_marker (IRBuilder<> &b, std::uint64_t id, ArrayRef<Value *> vars = {})
 		                      b.getInt64 (marker_owner) };
 
 	args.insert (args.end (), vars.begin (), vars.end ());
-	return b.CreateIntrinsic (Intrinsic::experimental_stackmap, {}, args);
+	return b.CreateIntrinsicWithoutFolding (Intrinsic::experimental_stackmap, args);
 }
 
 /// Builds the load/branch/deliver/leaving shape emit_finally_abort_check ()

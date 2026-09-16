@@ -314,7 +314,7 @@ tags_nested_calls (MonoMethod *method)
 void
 MethodLLVMEmitter::emit_after_call_seq_point (MonoIrBuilder &builder, bool nests)
 {
-	if (ip >= code_size || builder.GetInsertBlock ()->getTerminator () != nullptr)
+	if (ip >= code_size || builder.GetInsertBlock ()->getTerminatorOrNull () != nullptr)
 		return;
 	if (wants_seq_point_at (ip))
 		return;

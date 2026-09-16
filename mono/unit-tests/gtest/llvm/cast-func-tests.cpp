@@ -204,10 +204,9 @@ TEST (CastFuncTest, TheNullCheckStandsInFrontOfEveryVtableRead)
 	ASSERT_FALSE (verifyModule (*m.module, &errs ()));
 
 	BasicBlock &entry = m.caller->getEntryBlock ();
-	auto *branch = dyn_cast<BranchInst> (entry.getTerminator ());
+	auto *branch = dyn_cast<CondBrInst> (entry.getTerminator ());
 
 	ASSERT_NE (branch, nullptr);
-	ASSERT_TRUE (branch->isConditional ());
 
 	// The taken edge answers null, and it reads nothing off the object.
 	for (Instruction &in : entry)
