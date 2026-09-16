@@ -38,7 +38,7 @@ mono_gtest_binary(test-interp
 
 mono_gtest_tests(test-interp
   PREFIX test-interp
-  SKIP_REGEX "\\[  SKIPPED \\]"
+  SKIP_REGEX "${MONO_GTEST_SKIPPED_REGEX}"
   PROPERTIES
     LABELS interp-unit
     ENVIRONMENT "MONO_CFG_DIR=${CMAKE_BINARY_DIR}/runtime/etc")

@@ -46,6 +46,11 @@ function(mono_add_object_library name)
   endif()
 endfunction()
 
+# On CMake 4.4.1 and newer, a property value ending in ] closes the bracket
+# argument gtest_discover_tests writes it into.  The file it generates then
+# gives ctest no tests at all.  The trailing .* keeps this regex off that ].
+set(MONO_GTEST_SKIPPED_REGEX "\\[  SKIPPED \\].*")
+
 # Registers the cases of a gtest binary as ctest tests.
 #
 #   mono_gtest_tests(<target>

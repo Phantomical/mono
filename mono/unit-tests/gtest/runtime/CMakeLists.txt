@@ -47,7 +47,7 @@ function(mono_unit_test_cases target prefix filter)
     PREFIX ${prefix}
     FILTER ${filter}
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-    SKIP_REGEX "\\[  SKIPPED \\]"
+    SKIP_REGEX "${MONO_GTEST_SKIPPED_REGEX}"
     PROPERTIES ENVIRONMENT "${_env}")
 endfunction()
 

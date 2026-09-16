@@ -67,7 +67,7 @@ mono_gtest_binary(test-llvm
 mono_gtest_tests(test-llvm
   PREFIX test-llvm
   FILTER "-JitProfile.*"
-  SKIP_REGEX "\\[  SKIPPED \\]"
+  SKIP_REGEX "${MONO_GTEST_SKIPPED_REGEX}"
   PROPERTIES
     LABELS llvm
     ENVIRONMENT "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2=0")
@@ -80,7 +80,7 @@ mono_gtest_tests(test-llvm
 mono_gtest_tests(test-llvm
   PREFIX test-llvm-profile
   FILTER "JitProfile.*"
-  SKIP_REGEX "\\[  SKIPPED \\]"
+  SKIP_REGEX "${MONO_GTEST_SKIPPED_REGEX}"
   PROPERTIES
     LABELS llvm
     ENVIRONMENT "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=1000000000")
