@@ -385,15 +385,18 @@ sgen_gchandle_free (guint32 gchandle)
 	if (!handles)
 		return;
 
-	slot = sgen_array_list_get_slot (&handles->entries_array, index);
-	entry = *slot;
+	/* Bound the index before the slot is read: past the end it addresses
+	 * something else, and managed code reaches here with whatever value it
+	 * built a handle out of. */
+	if (index < handles->entries_array.capacity) {
+		slot = sgen_array_list_get_slot (&handles->entries_array, index);
+		entry = *slot;
 
-	if (index < handles->entries_array.capacity && MONO_GC_HANDLE_OCCUPIED (entry)) {
-		*slot = NULL;
-		protocol_gchandle_update (handles->type, (gpointer)slot, entry, NULL);
-		HEAVY_STAT (mono_atomic_dec_i32 ((volatile gint32 *)&stat_gc_handles_allocated));
-	} else {
-		/* print a warning? */
+		if (MONO_GC_HANDLE_OCCUPIED (entry)) {
+			*slot = NULL;
+			protocol_gchandle_update (handles->type, (gpointer)slot, entry, NULL);
+			HEAVY_STAT (mono_atomic_dec_i32 ((volatile gint32 *)&stat_gc_handles_allocated));
+		}
 	}
 	sgen_client_gchandle_destroyed ((GCHandleType)handles->type, gchandle);
 }

@@ -406,6 +406,7 @@ set(MONO_TESTS_CS_SRC
   bug-508538.cs
   bug-472692.2.cs
   gchandles.cs
+  gchandle-bogus.cs
   interlocked-3.cs
   interlocked-4.2.cs
   w32message.cs

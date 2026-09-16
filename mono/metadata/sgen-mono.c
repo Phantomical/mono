@@ -2848,6 +2848,12 @@ gboolean
 mono_gchandle_is_in_domain_internal (MonoGCHandle gchandle, MonoDomain *domain)
 {
 	MonoDomain *gchandle_domain = (MonoDomain *)sgen_gchandle_get_metadata (MONO_GC_HANDLE_TO_UINT (gchandle));
+
+	/* sgen_gchandle_get_metadata () returns NULL for a handle that names no
+	 * live slot. */
+	if (gchandle_domain == NULL)
+		return FALSE;
+
 	return domain->domain_id == gchandle_domain->domain_id;
 }
 

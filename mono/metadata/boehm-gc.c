@@ -2119,10 +2119,27 @@ mono_gchandle_from_u32 (guint32 gchandle)
 	return (MonoGCHandle)((guint8 *)handles + (gchandle & HANDLE_OFFSET_MASK));
 }
 
+static gboolean
+handle_block_is_registered (HandleData *handles)
+{
+	return handles->block_id < HANDLE_BLOCK_MAX
+	       && handle_blocks [handles->block_id] == handles;
+}
+
+/*
+ * The block the handle points into, or NULL where it points at no block.
+ *
+ * Managed code hands a handle over as a bare pointer, so a bad one aligns down
+ * to whatever page holds it and every field reads as that page's bytes.
+ */
 static HandleData*
 handle_lookup (MonoGCHandle handle, guint* slot)
 {
 	HandleData* handles = get_handle_data_from_handle (handle);
+
+	if (!handle_block_is_registered (handles))
+		return NULL;
+
 	if (slot)
 		*slot = (int)(ptrdiff_t)((gpointer*)handle_untag_weak (handle) - &handles->entries[0]);
 	return handles;
@@ -2248,7 +2265,7 @@ mono_gchandle_get_target_internal (MonoGCHandle gchandle)
 	guint slot = 0;
 	HandleData* handles = handle_lookup (gchandle, &slot);
 	MonoObject *obj = NULL;
-	if (handles->type >= HANDLE_TYPE_MAX)
+	if (handles == NULL)
 		return NULL;
 
 	lock_handles (handles);
@@ -2273,7 +2290,9 @@ mono_gchandle_set_target (MonoGCHandle gchandle, MonoObject *obj)
 	HandleData* handles = handle_lookup (gchandle, &slot);
 	MonoObject *old_obj = NULL;
 
-	g_assert (handles->type < HANDLE_TYPE_MAX);
+	if (handles == NULL)
+		return;
+
 	lock_handles (handles);
 	if (slot < handles->size && slot_occupied (handles, slot)) {
 		if (MONO_GC_HANDLE_TYPE_IS_WEAK (handles->type)) {
@@ -2305,7 +2324,11 @@ GCHandleType
 mono_gchandle_get_type_internal (MonoGCHandle gchandle)
 {
 	HandleData* handles = handle_lookup (gchandle, NULL);
-	return handles->type;
+
+	if (handles == NULL)
+		return HANDLE_TYPE_MAX;
+
+	return (GCHandleType)handles->type;
 }
 
 /**
@@ -2328,7 +2351,7 @@ mono_gchandle_is_in_domain_internal (MonoGCHandle gchandle, MonoDomain *domain)
 	HandleData* handles = handle_lookup (gchandle, &slot);
 	gboolean result = FALSE;
 
-	if (handles->type >= HANDLE_TYPE_MAX)
+	if (handles == NULL)
 		return FALSE;
 
 	lock_handles (handles);
@@ -2367,7 +2390,7 @@ mono_gchandle_is_in_domain_internal_unsafe(MonoGCHandle gchandle, MonoDomain* do
 	HandleData* handles = handle_lookup(gchandle, &slot);
 	gboolean result = FALSE;
 
-	if (handles->type >= HANDLE_TYPE_MAX)
+	if (handles == NULL)
 		return FALSE;
 
 	if (slot < handles->size && slot_occupied(handles, slot)) {
@@ -2403,7 +2426,7 @@ mono_gchandle_free_internal (MonoGCHandle gchandle)
 
 	guint slot = 0;
 	HandleData* handles = handle_lookup (gchandle, &slot);
-	if (handles->type >= HANDLE_TYPE_MAX)
+	if (handles == NULL)
 		return;
 
 	lock_handles (handles);
