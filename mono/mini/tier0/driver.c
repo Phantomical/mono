@@ -4263,9 +4263,17 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 		if (cfg->method->dynamic)
 			mono_dynamic_code_hash_lookup (cfg->domain, cfg->method)->ji = cfg->jit_info;
 
-		mono_postprocess_patches_after_ji_publish (cfg);
-
 		mono_domain_unlock (cfg->domain);
+
+		/*
+		 * Left outside the lock: a MONO_PATCH_INFO_METHOD_JUMP patch resolves
+		 * its target's shared form, which can take the loader lock to name a
+		 * generic instantiation for the first time. mini_register_jump_site ()
+		 * retakes the domain lock on its own once that resolution is done, so
+		 * this only needs the jit info mono_jit_info_table_add () already
+		 * published.
+		 */
+		mono_postprocess_patches_after_ji_publish (cfg);
 	}
 
 #if 0
