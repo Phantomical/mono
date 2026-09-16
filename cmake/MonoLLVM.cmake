@@ -65,6 +65,45 @@ else()
   llvm_map_components_to_libnames(_llvm_libs ${_llvm_components})
 endif()
 
+# LLVM's own dependencies beyond zlib (already static via ZLIB::ZLIB,
+# CMakeLists.txt) still ride along as libzstd.so and libxml2.so unless
+# resolved here directly. LLVM's own CMake package names zstd through a
+# hardcoded shared target (zstd::libzstd_shared) that no
+# CMAKE_FIND_LIBRARY_SUFFIXES override reaches. Putting both ahead of
+# everything else in _llvm_libs resolves every symbol either one defines
+# before the linker reaches that reference. --as-needed, which both
+# compilers use by default here, then drops the now-redundant reference
+# instead of linking it again.
+#
+# A static libxml2 carries none of what its own libxml2.so.2 needs. A shared
+# library records that in its own NEEDED entries, and a plain archive has no
+# such table. liblzma, libicuuc and libicudata are libxml2.so.2's own
+# transitive dependencies, confirmed with readelf -d on the dynamic
+# libraries. Each is appended here by hand because nothing else will name it.
+if(MONO_UNITY_BUILD)
+  find_library(MONO_ZSTD_STATIC NAMES libzstd.a)
+  find_library(MONO_XML2_STATIC NAMES libxml2.a)
+  foreach(_extra IN LISTS MONO_ZSTD_STATIC MONO_XML2_STATIC)
+    if(_extra)
+      list(PREPEND _llvm_libs "${_extra}")
+      get_filename_component(_extra_name "${_extra}" NAME)
+      list(APPEND _llvm_archives "${_extra_name}")
+    endif()
+  endforeach()
+  if(MONO_XML2_STATIC)
+    find_library(MONO_LZMA_STATIC NAMES liblzma.a)
+    find_library(MONO_ICUUC_STATIC NAMES libicuuc.a)
+    find_library(MONO_ICUDATA_STATIC NAMES libicudata.a)
+    foreach(_extra IN LISTS MONO_LZMA_STATIC MONO_ICUUC_STATIC MONO_ICUDATA_STATIC)
+      if(_extra)
+        list(APPEND _llvm_libs "${_extra}")
+        get_filename_component(_extra_name "${_extra}" NAME)
+        list(APPEND _llvm_archives "${_extra_name}")
+      endif()
+    endforeach()
+  endif()
+endif()
+
 # A static LLVM otherwise reaches the dynamic symbol table, because
 # --export-dynamic puts everything there: mono-sgen exported 45506 symbols
 # against 6322, 24130 of them llvm::.  --exclude-libs names the archives to

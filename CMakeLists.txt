@@ -70,7 +70,19 @@ if(BUILD_TESTING)
 endif()
 
 find_package(Threads REQUIRED)
+
+# ZLIB::ZLIB reaches libz.a rather than libz.so under MONO_UNITY_BUILD, since
+# linking LLVM statically (MonoLLVM.cmake) gains nothing if libz.so still
+# rides along beside it. This project links the same target into
+# MonoPosixHelper, mono/dis and other consumers besides LLVM.
+if(MONO_UNITY_BUILD)
+  set(_mono_find_library_suffixes "${CMAKE_FIND_LIBRARY_SUFFIXES}")
+  set(CMAKE_FIND_LIBRARY_SUFFIXES ".a")
+endif()
 find_package(ZLIB)
+if(MONO_UNITY_BUILD)
+  set(CMAKE_FIND_LIBRARY_SUFFIXES "${_mono_find_library_suffixes}")
+endif()
 find_package(Git QUIET)
 
 if(MONO_ENABLE_MCS_BUILD AND MONO_ENABLE_EXECUTABLES)
