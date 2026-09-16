@@ -101,7 +101,7 @@ promote (CallInst &alloc, uint64_t bytes)
 bool
 promote_allocations (Function &f, const LoopInfo &loops, const ConstantValues &values)
 {
-	SmallVector<AllocaInst *, 4> slots;
+	SmallVector<std::pair<CallInst *, uint64_t>, 4> promotable;
 
 	for (CallBase *site : builtin_sites (f, alloc_object_name)) {
 		// An invoke names the pads its edges reach, and erasing one asks for
@@ -128,10 +128,13 @@ promote_allocations (Function &f, const LoopInfo &loops, const ConstantValues &v
 		if (allocation_escapes (*alloc, [] (CallBase &) { return false; }))
 			continue;
 
-		slots.push_back (promote (*alloc, *bytes));
+		promotable.emplace_back (alloc, *bytes);
 	}
 
-	return !slots.empty ();
+	for (auto [alloc, bytes] : promotable)
+		promote (*alloc, bytes);
+
+	return !promotable.empty ();
 }
 
 PreservedAnalyses
