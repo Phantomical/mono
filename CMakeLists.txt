@@ -92,7 +92,16 @@ find_program(MONO_SYSTEM_RUNTIME_EXECUTABLE NAMES mono-sgen mono)
 # The host's own strong-name tool.  A managed program the host runs itself has
 # to carry a signature that host will accept, and the bootstrap profile's
 # sn.exe is one of the programs that needs signing.
-find_program(MONO_HOST_SN sn)
+#
+# By .exe on Windows rather than by the bare name.  Mono ships an sn of its own
+# whose Windows spelling is a shell script, so a mono on PATH otherwise wins
+# this search, and the signing it feeds is optional -- the bootstrap assemblies
+# then stay delay-signed and the first ilasm run refuses to load one.
+if(WIN32)
+  find_program(MONO_HOST_SN NAMES sn.exe)
+else()
+  find_program(MONO_HOST_SN sn)
+endif()
 
 find_program(MONO_PERL perl)
 find_program(MONO_DOXYGEN doxygen)
