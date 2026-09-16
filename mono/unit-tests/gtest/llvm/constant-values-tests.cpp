@@ -147,7 +147,7 @@ struct Settled {
 	const ValueSources &sources () const { return values.sources (&question ()); }
 
 	/// Whether the walk settled every path into the marked instruction.
-	bool complete () const { return !sources ().sources.contains (&question ()); }
+	bool complete () const { return !is_contained (sources ().sources, &question ()); }
 
 	/// The values the marked instruction is reached by, named the way
 	/// `answer ()` names one. The instruction itself is left out, because
