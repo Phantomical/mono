@@ -19,6 +19,18 @@ if(NOT EXISTS "${MONO_BTLS_ROOT}/CMakeLists.txt")
     "or configure with -DMONO_ENABLE_BTLS=OFF")
 endif()
 
+# BoringSSL assembles its x86_64 asm with nasm on Windows. A miss surfaces
+# deep in the sub-build, as a bare CMAKE_ASM_NASM_COMPILER error naming
+# neither BoringSSL nor the option that turns it off.
+if(MONO_HOST_WINDOWS)
+  find_program(MONO_BTLS_NASM nasm)
+  if(NOT MONO_BTLS_NASM)
+    message(FATAL_ERROR
+      "nasm is not on PATH, and BoringSSL assembles its x86_64 asm with it -- "
+      "install nasm, or configure with -DMONO_ENABLE_BTLS=OFF")
+  endif()
+endif()
+
 set(MONO_BTLS_BINARY_DIR "${CMAKE_BINARY_DIR}/mono/btls")
 set(MONO_BTLS_LIBRARY
     "${MONO_BTLS_BINARY_DIR}/libmono-btls-shared${CMAKE_SHARED_LIBRARY_SUFFIX}")

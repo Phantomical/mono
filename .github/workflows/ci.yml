@@ -441,6 +441,16 @@ jobs:
           "$env:ProgramFiles\Mono\bin" `
             | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
+      # BoringSSL assembles its x86_64 asm with nasm. The copy CMake finds on
+      # this image is Strawberry Perl's, so without this step the btls build
+      # depends on a package nothing here asks for.
+      - name: Install nasm
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress -y
+          "$env:ProgramFiles\NASM" `
+            | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
       - name: Managed build cache key
         id: managed-key
         shell: bash
