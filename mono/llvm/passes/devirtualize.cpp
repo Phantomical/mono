@@ -440,15 +440,18 @@ eliminate_dispatch_sites (Function &f, FunctionAnalysisManager &fam)
 	if (compile.domain == nullptr || !compile.publish)
 		return false;
 
+	SmallVector<CallBase *, 8> calls = indirect_calls (f);
 	bool changed = false;
-	const ConstantValues *values = nullptr;
 
-	for (CallBase *call : indirect_calls (f)) {
-		if (values == nullptr)
-			values = &fam.getResult<MonoConstantValues> (f);
+	if (calls.empty ())
+		return false;
 
+	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
+	SmallVector<std::tuple<CallBase *, Function *, bool, bool>, 8> entries;
+
+	for (CallBase *call : calls) {
 		std::optional<Reached> found =
-			reached_target (call->getCalledOperand (), *values);
+			reached_target (call->getCalledOperand (), values);
 
 		if (!found)
 			continue;
@@ -472,7 +475,12 @@ eliminate_dispatch_sites (Function &f, FunctionAnalysisManager &fam)
 		if (entry == nullptr)
 			continue;
 
-		enter_at (call, entry, publishes_unbox_entry (found->target), drops_key);
+		entries.emplace_back (call, entry, publishes_unbox_entry (found->target),
+		                      drops_key);
+	}
+
+	for (auto [call, entry, unboxes, drops_key] : entries) {
+		enter_at (call, entry, unboxes, drops_key);
 		changed = true;
 	}
 

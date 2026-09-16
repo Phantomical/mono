@@ -197,22 +197,23 @@ bool
 eliminate_sites (Function &f, StringRef name, bool throw_on_fail,
                 FunctionAnalysisManager &fam)
 {
-	bool changed = false;
-	const ConstantValues *values = nullptr;
+	SmallVector<CallBase *, 8> sites = builtin_sites (f, name);
 
-	for (CallBase *site : builtin_sites (f, name)) {
-		if (values == nullptr)
-			values = &fam.getResult<MonoConstantValues> (f);
+	if (sites.empty ())
+		return false;
 
+	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
+	SmallVector<std::pair<CallBase *, Value *>, 8> replacements;
+
+	for (CallBase *site : sites) {
 		Value *obj = site->getArgOperand (0);
-		MonoClass *target = tested_class (site, *values);
-		CastAnswer answer = answer_for (obj, target, f, *values);
+		MonoClass *target = tested_class (site, values);
+		CastAnswer answer = answer_for (obj, target, f, values);
 
 		// Both forms answer the operand where the test passes, since both
 		// answer null for null and neither changes what it is handed.
 		if (answer == CastAnswer::Yes) {
-			answer_with (site, obj);
-			changed = true;
+			replacements.emplace_back (site, obj);
 			continue;
 		}
 
@@ -220,9 +221,8 @@ eliminate_sites (Function &f, StringRef name, bool throw_on_fail,
 		// InvalidCastException for every operand but null, which is a site this
 		// leaves for the lowering to write as it stands.
 		if (answer == CastAnswer::No && !throw_on_fail) {
-			answer_with (site, ConstantPointerNull::get (
-						   PointerType::get (f.getContext (), 0)));
-			changed = true;
+			replacements.emplace_back (site, ConstantPointerNull::get (
+						     PointerType::get (f.getContext (), 0)));
 			continue;
 		}
 
@@ -235,16 +235,17 @@ eliminate_sites (Function &f, StringRef name, bool throw_on_fail,
 			continue;
 
 		Value *rebuilt = rebuild_isinst_over_incoming (*phi, [&] (Value *incoming) {
-			return answer_for (incoming, target, f, *values);
+			return answer_for (incoming, target, f, values);
 		});
 
-		if (rebuilt != nullptr) {
-			answer_with (site, rebuilt);
-			changed = true;
-		}
+		if (rebuilt != nullptr)
+			replacements.emplace_back (site, rebuilt);
 	}
 
-	return changed;
+	for (auto [site, value] : replacements)
+		answer_with (site, value);
+
+	return !replacements.empty ();
 }
 
 } // namespace
@@ -283,15 +284,17 @@ field_of (StringRef name, const VTableInfo &info, Type *held)
 bool
 eliminate_field (Function &f, StringRef name, FunctionAnalysisManager &fam)
 {
-	bool changed = false;
-	const ConstantValues *values = nullptr;
+	SmallVector<CallBase *, 8> sites = builtin_sites (f, name);
 
-	for (CallBase *site : builtin_sites (f, name)) {
-		if (values == nullptr)
-			values = &fam.getResult<MonoConstantValues> (f);
+	if (sites.empty ())
+		return false;
 
+	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
+	SmallVector<std::pair<CallBase *, Constant *>, 8> replacements;
+
+	for (CallBase *site : sites) {
 		const auto *vtable = dyn_cast_or_null<GlobalObject> (
-			values->global (site->getArgOperand (0)));
+			values.global (site->getArgOperand (0)));
 
 		if (vtable == nullptr)
 			continue;
@@ -301,12 +304,15 @@ eliminate_field (Function &f, StringRef name, FunctionAnalysisManager &fam)
 		if (!info)
 			continue;
 
-		site->replaceAllUsesWith (field_of (name, *info, site->getType ()));
-		site->eraseFromParent ();
-		changed = true;
+		replacements.emplace_back (site, field_of (name, *info, site->getType ()));
 	}
 
-	return changed;
+	for (auto [site, value] : replacements) {
+		site->replaceAllUsesWith (value);
+		site->eraseFromParent ();
+	}
+
+	return !replacements.empty ();
 }
 
 } // namespace
@@ -327,15 +333,14 @@ eliminate_object_vtables (Function &f, FunctionAnalysisManager &fam)
 		if (object_vtable_read (&i) != nullptr)
 			reads.push_back (cast<LoadInst> (&i));
 
-	bool changed = false;
+	if (reads.empty ())
+		return false;
 
-	const ConstantValues *values = nullptr;
+	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
+	SmallVector<std::pair<LoadInst *, Constant *>, 8> replacements;
 
 	for (LoadInst *read : reads) {
-		if (values == nullptr)
-			values = &fam.getResult<MonoConstantValues> (f);
-
-		MonoClass *klass = exact_class (object_vtable_read (read), f, *values);
+		MonoClass *klass = exact_class (object_vtable_read (read), f, values);
 
 		if (klass == nullptr)
 			continue;
@@ -345,12 +350,15 @@ eliminate_object_vtables (Function &f, FunctionAnalysisManager &fam)
 		if (vtable == nullptr)
 			continue;
 
-		read->replaceAllUsesWith (vtable);
-		read->eraseFromParent ();
-		changed = true;
+		replacements.emplace_back (read, vtable);
 	}
 
-	return changed;
+	for (auto [read, vtable] : replacements) {
+		read->replaceAllUsesWith (vtable);
+		read->eraseFromParent ();
+	}
+
+	return !replacements.empty ();
 }
 
 bool

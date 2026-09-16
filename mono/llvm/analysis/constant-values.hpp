@@ -143,6 +143,10 @@ private:
 };
 
 /// Contains known constants for all values in the current function.
+///
+/// A result holds pointers to the instructions it walked, so a caller that
+/// rewrites what it finds collects the rewrites first and erases nothing until
+/// it has stopped reading.
 class ConstantValues {
 public:
 	/// If \p v has a known constant value then return that, null otherwise.

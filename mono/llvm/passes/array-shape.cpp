@@ -238,26 +238,30 @@ shape_decls (Module &m)
 bool
 eliminate_array_shapes (Function &f, FunctionAnalysisManager &fam)
 {
-	bool changed = false;
-	const ConstantValues *values = nullptr;
+	auto decls = shape_decls (*f.getParent ());
 
-	for (auto [decl, kind] : shape_decls (*f.getParent ())) {
+	if (decls.empty ())
+		return false;
+
+	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
+	SmallVector<std::pair<CallBase *, bool>, 8> lowerings;
+
+	for (auto [decl, kind] : decls) {
 		for (CallBase *site : builtin_sites (f, decl->getName ())) {
-			if (values == nullptr)
-				values = &fam.getResult<MonoConstantValues> (f);
-
 			const auto *dimension = dyn_cast_or_null<ConstantInt> (
-				values->value (site->getArgOperand (1)));
+				values.value (site->getArgOperand (1)));
 
 			if (dimension == nullptr || !dimension->isZero ())
 				continue;
 
-			lower_call (site, kind == array_shape_lower_bound);
-			changed = true;
+			lowerings.emplace_back (site, kind == array_shape_lower_bound);
 		}
 	}
 
-	return changed;
+	for (auto [site, lower_bound] : lowerings)
+		lower_call (site, lower_bound);
+
+	return !lowerings.empty ();
 }
 
 bool
