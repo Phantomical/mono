@@ -306,8 +306,8 @@ bool collect_overrides (MonoImage *image)
 
 /// Whether \p assembly says it holds overrides.
 ///
-/// Reading its methods is what costs, so this is the gate in front of that and
-/// it is all most assemblies pay.
+/// Reading its methods is what costs. This check runs first, and it is all
+/// most assemblies pay.
 bool declares_overrides (MonoAssembly *assembly)
 {
 	ERROR_DECL (error);

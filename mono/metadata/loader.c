@@ -339,8 +339,8 @@ field_from_memberref (MonoImage *image, guint32 token, MonoClass **retklass,
 		 * recorded instead. That is the TypeLoadException .NET raises for a field
 		 * token that names a type which does not load.
 		 *
-		 * The miss is the gate. A class that carries a failure and still answers
-		 * the lookup keeps its field.
+		 * Only a lookup that missed reaches this. Where the lookup found the
+		 * field, a class that carries a failure keeps it.
 		 */
 		if (mono_class_has_failure (klass))
 			mono_error_set_for_class_failure (error, klass);
