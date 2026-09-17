@@ -827,7 +827,7 @@ between them and no more. Both sites read the counter first and leave it alone o
 count is spent, so a body past its promotion neither writes nor calls anything of its
 own at either one (`tier0/tier-counter.c`). A stack overflow in such a body therefore
 faults in managed code, where `mono_handle_soft_stack_ovf ()` raises a catchable
-StackOverflowException instead of aborting. `mono/tests/bug-60862.cs` is the gate.
+StackOverflowException instead of aborting. `mono/tests/bug-60862.cs` covers it.
 The charge that takes the count to zero or below calls `mono_tier0_spent ()`, which calls
 `MonoDomainMethod::promote ()`, which is engine-neutral. It takes the decision on the
 `MonoDomainMethod`, so however many counters run out at once, only one request reaches
@@ -1028,8 +1028,8 @@ declared the way the site's own declaration was, so the two agree on the generic
 a shared body is entered with, and both inliners assert that before moving a site.
 
 **A host that starts the debugger agent turns every inline off.**
-`inlining_off_for_seq_points ()` (`runtime/inline-scope.cpp`) is the gate both inliners
-read, and the agent sets `gen_sdb_seq_points` as it starts
+Both inliners read `inlining_off_for_seq_points ()` (`runtime/inline-scope.cpp`),
+and the agent sets `gen_sdb_seq_points` as it starts
 (`mono/mini/debugger-agent.c`). An embedding host starts it before it reads
 `MONO_ENV_OPTIONS`: a Unity player carrying `player-connection-debug=1` in its
 `boot.config` logs `Starting managed debugger on port …` and passes a
@@ -1055,9 +1055,8 @@ checks all reach one of those two. So an inline does not change what managed cod
 its own callers, and no gate refuses a callee for reaching such an icall.
 
 Such a frame owns no code: it reports the native offset of the call site it was inlined
-at. `mono/tests/test-inline-call-stack.cs` is the gate, and it fails on
-`GetCurrentMethod`, `GetExecutingAssembly` and `GetCallingAssembly` if either half of
-this is taken out.
+at. `mono/tests/test-inline-call-stack.cs` fails on `GetCurrentMethod`,
+`GetExecutingAssembly` and `GetCallingAssembly` if either half of this is taken out.
 
 Two walks stay blind to an inlined frame, and both are async-safe: the thread dump
 (`mono/metadata/threads.c`) and `mono_stack_walk_async_safe ()`. Neither reads caller
@@ -1171,8 +1170,8 @@ methods that inlined it (`note_inlined_into ()`), and `install_detour ()` takes 
 those entries back to the lazy resolver it started at, so the next call compiles the
 method again, and `is_inlinable ()` keeps the method's copy out of that compile. It reads
 the override registry as well as the record. An inline is decided before the site that
-names the callee is resolved, so the record can still be missing then, and
-`mono/tests/override-basic.cs` is the gate on that.
+names the callee is resolved, so the record can still be missing then, which
+`mono/tests/override-basic.cs` covers.
 Both compiled tiers run the pre-pass,
 so an earlier body is no safer than the newest one — that is why the entry goes back past
 all of them rather than down one tier. `mono/tests/tier2-inline-override.cs` holds both

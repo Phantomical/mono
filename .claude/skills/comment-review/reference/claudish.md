@@ -89,6 +89,18 @@ ornament if the original carried no fact:
   reader's own default assumption stated back to them. A contrast that corrects a real
   surprise is different, and is rare — see "Preserve legitimate terminology" below
 - a claim restated in fresh vocabulary one sentence later
+- *X is the gate*. An assistant tic, and it must not appear anywhere: a comment, a
+  commit message, a plan, a handoff, a review report. The frame announces a role the
+  file it sits in already carries and says nothing about what the fixture holds. Say
+  what it holds, or cut the sentence. Its relatives go with it — *X is what gates
+  this*, *X is the thing that catches it*, *that is the gate*
+- *X answers Y*, and any abstract noun cast as **settling** or **deciding** a
+  question. The second assistant tic, banned in the same places as the first. A
+  function returns, a table covers, a stub is known by a symbol, a rule holds — each
+  of those is an ordinary relation the word stood in for. `reference/catalogue.md`
+  G20 has every grammatical shape with its plain rewrite, and the note there that a
+  synonym is not a rewrite: *settles* and *decides* keep the shape under a word the
+  grep does not find. Name the real actor and reuse its own verb
 
 ## Decode structural and process metaphors
 
@@ -150,6 +162,9 @@ Claudish elsewhere is this domain's own name for the thing: a fast **path**, a *
 block, the **surface** `runtime.h` publishes, a ctest **gate**, a commit that **landed**,
 profile **drift** across a rebuild. Each of those is the clearest name for the thing, and
 rewriting one costs a reader the term the code uses (G12).
+
+**Gate** appears on that list as a noun. Nothing on the list licenses the frame *X is
+the gate*, which is banned outright above.
 
 Rewrite a metaphor only where it stands in for a relationship the sentence never
 states — where the sentence states it, the metaphor stays.

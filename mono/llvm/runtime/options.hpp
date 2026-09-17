@@ -255,9 +255,9 @@ uint32_t costed_inline_il_limit ();
 
 /// costed_inline_il_limit (), but for a site tier2_site_heat () answers hot.
 ///
-/// A hot site is where the IL gate actually binds: the cost model's own
-/// budget at a hot site is generous enough that it is the gate, not the cost,
-/// that refuses a large profitable callee. 0 takes costed_inline_il_limit ().
+/// A hot site is where the IL limit actually binds: the cost model's own
+/// budget there is generous enough that nothing declines by cost once
+/// translated, so the limit decides. 0 takes costed_inline_il_limit ().
 uint32_t costed_inline_il_limit_hot ();
 
 /// costed_inline_il_limit (), but for a site tier2_site_heat () answers cold.
