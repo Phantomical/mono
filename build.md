@@ -22,7 +22,7 @@ C# class-library profiles (`build`, `net_4_x`, `unityjit`, `xbuild_12`,
 > you *are* on-network.
 
 Verified on: **Ubuntu 24.04.4 LTS (WSL2), x86_64**, gcc 13.3, CMake 3.28, Ninja
-1.11, LLVM 22.1.8. Full build time was roughly 10 minutes on 16 cores.
+1.11, LLVM 23.1.1. Full build time was roughly 10 minutes on 16 cores.
 
 ---
 
@@ -52,10 +52,11 @@ Notes:
   `libgtest-dev` (1.14) ships the CMake config package, so nothing else is
   needed; on distros that ship only sources, build and install googletest and
   point `GTest_DIR` at it.
-- The LLVM back end builds against LLVM 22 built from source at
+- The LLVM back end builds against LLVM 23 built from source at
   `~/projects/llvm-project` (installed to `~/projects/llvm-project/install`,
-  RelWithDebInfo with assertions on); no distro package ships 22 yet. Configure
-  without `MONO_LLVM_PREFIX` to build with the classic JIT only.
+  RelWithDebInfo with assertions on); Noble's own archive stops at 20, so a
+  packaged 23 comes from apt.llvm.org instead. Configure without
+  `MONO_LLVM_PREFIX` to build with the classic JIT only.
 - No system Mono is needed: the class libraries are compiled by the Roslyn
   binaries under `external/roslyn-binaries`, running on the runtime this build
   produces.
@@ -208,15 +209,15 @@ a configure error.
 
 ### Extra prerequisites
 
-Build an upstream LLVM 22 from source (the backend needs 22's ORC
-redirection stack, which no distro package ships yet):
+Build an upstream LLVM 23 from source (the backend is written against 23's
+APIs, and Noble's own archive stops at 20):
 
 ```bash
 cd ~/projects/llvm-project/build
 cmake -B . -S ../llvm -DCMAKE_BUILD_TYPE=RelWithDebInfo -DLLVM_ENABLE_ASSERTIONS=TRUE \
   -DCMAKE_INSTALL_PREFIX="$HOME/projects/llvm-project/install" -DLLVM_BUILD_LLVM_DYLIB=TRUE
 cmake --build . && cmake --install .
-# provides ~/projects/llvm-project/install/bin/llvm-config (must say 22.x)
+# provides ~/projects/llvm-project/install/bin/llvm-config (must say 23.x)
 ```
 
 ### Configure + build
@@ -510,6 +511,6 @@ result.
 - **`No usable version of libssl was found`** — this only affects the older
   `build_classlibs_wsl.pl` path (see `Unity-build.md`), not these instructions.
 - **`No llvm-config under <prefix>/bin`** → there is no in-tree LLVM any more;
-  build an upstream LLVM 22 and point `MONO_LLVM_PREFIX` at its install, e.g.
+  build an upstream LLVM 23 and point `MONO_LLVM_PREFIX` at its install, e.g.
   `-DMONO_LLVM_PREFIX=$HOME/projects/llvm-project/install`. See
   [§ build with the LLVM backend](#optional-build-with-the-llvm-backend).
