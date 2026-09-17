@@ -32,12 +32,14 @@ struct FetchModule {
 	std::unique_ptr<LLVMContext> context = std::make_unique<LLVMContext> ();
 	std::unique_ptr<Module> module;
 	Function *fill = nullptr;
+	Function *placeholder = nullptr;
 	Function *caller = nullptr;
 	CallBase *site = nullptr;
 
-	/// The icall's signature spells the context and the slot as integers, which
-	/// is what the runtime registered it with. as_pointer builds the same fetch
-	/// with both of them as pointers.
+	/// The site names a placeholder that takes the context as a pointer, the
+	/// bundle names fill_rgctx, the icall behind it. as_pointer spells fill_rgctx's
+	/// own signature with the context as a pointer too, the shape the icall never
+	/// actually has but the pass still has to leave alone when it does not.
 	FetchModule (StringRef walk, bool protect = false, bool as_pointer = false)
 	{
 		module = std::make_unique<Module> ("rgctx", *context);
@@ -49,15 +51,20 @@ struct FetchModule {
 		fill = Function::Create (FunctionType::get (word, { word, i32 }, false),
 		                         GlobalValue::ExternalLinkage, "fill_rgctx",
 		                         module.get ());
-		fill->addFnAttr (rgctx_fetch_attribute);
 
-		caller = Function::Create (FunctionType::get (word, { word }, false),
+		placeholder = Function::Create (FunctionType::get (word, { ptr, i32 }, false),
+		                                GlobalValue::ExternalLinkage,
+		                                "mono.rgctx.fetch.class", module.get ());
+		placeholder->addFnAttr (rgctx_fetch_attribute);
+
+		caller = Function::Create (FunctionType::get (word, { ptr }, false),
 		                           GlobalValue::ExternalLinkage, "caller",
 		                           module.get ());
 
 		BasicBlock *entry = BasicBlock::Create (*context, "entry", caller);
 		IRBuilder<> b (entry);
 		Value *args[] = { caller->getArg (0), ConstantInt::get (i32, 2) };
+		OperandBundleDef fill_bundle (rgctx_fill_bundle.str (), ArrayRef<Value *> (fill));
 
 		if (protect) {
 			BasicBlock *returned = BasicBlock::Create (*context, "returned", caller);
@@ -66,7 +73,7 @@ struct FetchModule {
 			caller->setPersonalityFn (Function::Create (
 				FunctionType::get (i32, true), GlobalValue::ExternalLinkage,
 				"personality", module.get ()));
-			site = b.CreateInvoke (fill, returned, pad, args);
+			site = b.CreateInvoke (placeholder, returned, pad, args, { fill_bundle });
 
 			IRBuilder<> in_pad (pad);
 			LandingPadInst *caught = in_pad.CreateLandingPad (
@@ -76,7 +83,7 @@ struct FetchModule {
 			in_pad.CreateRet (Constant::getNullValue (word));
 			b.SetInsertPoint (returned);
 		} else {
-			site = b.CreateCall (fill, args);
+			site = b.CreateCall (placeholder, args, { fill_bundle });
 		}
 
 		b.CreateRet (site);
@@ -123,6 +130,9 @@ TEST (RgctxFetch, AOneStepWalkReadsTheSlotBeforeTheCall)
 	EXPECT_EQ (fetch.count (Instruction::Load), 1u);
 	EXPECT_EQ (fetch.count (Instruction::PHI), 1u);
 	EXPECT_EQ (fetch.count (Instruction::Call), 1u);
+
+	// fill_rgctx takes the context as an integer; the site took it as a pointer.
+	EXPECT_EQ (fetch.count (Instruction::PtrToInt), 1u);
 }
 
 TEST (RgctxFetch, EachOffsetInTheWalkIsALoadOfItsOwn)
@@ -174,13 +184,13 @@ TEST (RgctxFetch, AProtectedFetchKeepsItsHandler)
 	EXPECT_EQ (invoke->getUnwindDest ()->getName (), "pad");
 }
 
-TEST (RgctxFetch, AContextThatArrivesAsAPointerIsWalkedAsOne)
+TEST (RgctxFetch, AFillThatTakesAPointerNeedsNoConversion)
 {
 	FetchModule fetch ("40:24", /*protect=*/false, /*as_pointer=*/true);
 
 	fetch.lower ();
 	EXPECT_FALSE (verifyFunction (*fetch.caller, &errs ()));
-	EXPECT_EQ (fetch.count (Instruction::IntToPtr), 0u);
+	EXPECT_EQ (fetch.count (Instruction::PtrToInt), 0u);
 	EXPECT_EQ (fetch.count (Instruction::Load), 2u);
 }
 

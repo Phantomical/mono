@@ -547,7 +547,8 @@ llvm::Value *
 MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCallee callee,
                                         llvm::ArrayRef<llvm::Value *> args,
                                         llvm::function_ref<void (llvm::CallBase *)> describe,
-                                        llvm::Type *hidden, unsigned at)
+                                        llvm::Type *hidden, unsigned at,
+                                        llvm::ArrayRef<llvm::OperandBundleDef> bundles)
 {
 	if (auto *target = llvm::dyn_cast<llvm::Function> (callee.getCallee ())) {
 		hidden = hidden_return_type (target);
@@ -566,7 +567,7 @@ MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCa
 	llvm::CallBase *call;
 
 	if (clause < 0) {
-		llvm::CallInst *plain = builder.CreateCall (callee, operands);
+		llvm::CallInst *plain = builder.CreateCall (callee, operands, bundles);
 
 		/*
 		 * A managed frame is observable: stack traces, StackFrame, and the
@@ -583,7 +584,7 @@ MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCa
 			llvm::BasicBlock::Create (context (), "returned", function);
 
 		call = builder.CreateInvoke (callee, returned, landing_pad (clause),
-		                             operands);
+		                             operands, bundles);
 		builder.SetInsertPoint (returned);
 	}
 

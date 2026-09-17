@@ -20,6 +20,13 @@ constexpr llvm::StringRef rgctx_fetch_attribute = "mono-rgctx-fetch";
 /// the translator writes it.
 constexpr llvm::StringRef rgctx_walk_attribute = "mono-rgctx-walk";
 
+/// The operand bundle each fetch site carries: the icall that actually fills
+/// the slot the site names. The site itself takes the context as a pointer;
+/// this pass converts to what the bundled icall takes when it lowers the
+/// fetch. A bundle rather than an attribute, so a rename or a merge of that
+/// icall's declaration elsewhere in the module carries over automatically.
+constexpr llvm::StringRef rgctx_fill_bundle = "mono-rgctx-fill";
+
 /// Reads each fetch site's slot before the call, and takes the call only when
 /// the slot is still empty.
 ///

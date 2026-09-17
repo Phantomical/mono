@@ -18,7 +18,8 @@
  *     %have = icmp ne ptr %info, null
  *     br i1 %have, label %done, label %fill
  *   fill:
- *     %filled = call ptr @fill_rgctx (ptr %context, i32 2)
+ *     %word   = ptrtoint ptr %context to i64
+ *     %filled = call ptr @fill_rgctx (i64 %word, i32 2)
  *     br label %done
  *   done:
  *     %slot = phi ptr [ %info, %step ], [ %filled, %fill ]
@@ -108,11 +109,19 @@ bool
 is_fetch (const CallBase *site, const Function *decl)
 {
 	return site->getCalledFunction () == decl && !site->getType ()->isVoidTy ()
-	       && site->hasFnAttr (rgctx_walk_attribute);
+	       && site->hasFnAttr (rgctx_walk_attribute)
+	       && site->getOperandBundle (rgctx_fill_bundle);
+}
+
+/// The icall a fetch site's rgctx_fill_bundle names.
+Function *
+real_fill_for (const CallBase *site)
+{
+	return cast<Function> (site->getOperandBundle (rgctx_fill_bundle)->Inputs[0].get ());
 }
 
 void
-lower_site (CallBase *site, const FetchSpec &spec)
+lower_site (CallBase *site, const FetchSpec &spec, Function *real_fill)
 {
 	Function *fn = site->getFunction ();
 	LLVMContext &ctx = fn->getContext ();
@@ -148,11 +157,7 @@ lower_site (CallBase *site, const FetchSpec &spec)
 	// The walk stands where the fetch did, so it carries the fetch's own line.
 	b.SetCurrentDebugLocation (site->getDebugLoc ());
 
-	// The icall takes the context as an integer, which is what its signature
-	// says. The walk needs an address.
-	Value *base = context->getType ()->isPointerTy ()
-	                      ? context
-	                      : b.CreateIntToPtr (context, ptr);
+	Value *base = context;
 	Value *found = nullptr;
 
 	for (unsigned step = 0; step < spec.walk.size (); ++step) {
@@ -173,6 +178,29 @@ lower_site (CallBase *site, const FetchSpec &spec)
 		base = found;
 	}
 
+	/*
+	 * site named a placeholder that takes the context as a pointer. real_fill
+	 * is the icall behind it, which takes its context the way its own
+	 * signature declares, so that conversion happens here, in front of the
+	 * one call that reaches it.
+	 */
+	SmallVector<Value *, 2> real_args (site->arg_begin (), site->arg_end ());
+	Type *want = real_fill->getFunctionType ()->getParamType (spec.context);
+
+	if (want != context->getType ())
+		real_args[spec.context] = CastInst::Create (Instruction::PtrToInt, context, want, "",
+		                                            site->getIterator ());
+
+	CallBase *filled =
+		invoke != nullptr
+			? static_cast<CallBase *> (InvokeInst::Create (
+				  real_fill, invoke->getNormalDest (), invoke->getUnwindDest (),
+				  real_args, "", site->getIterator ()))
+			: static_cast<CallBase *> (
+				  CallInst::Create (real_fill, real_args, "", site->getIterator ()));
+
+	filled->setDebugLoc (site->getDebugLoc ());
+
 	IRBuilder<> db (done, done->begin ());
 
 	db.SetCurrentDebugLocation (site->getDebugLoc ());
@@ -181,7 +209,8 @@ lower_site (CallBase *site, const FetchSpec &spec)
 
 	site->replaceAllUsesWith (slot);
 	slot->addIncoming (found, b.GetInsertBlock ());
-	slot->addIncoming (site, fill);
+	slot->addIncoming (filled, fill);
+	site->eraseFromParent ();
 }
 
 } // namespace
@@ -212,7 +241,7 @@ RgctxFetchPass::run (Module &m, ModuleAnalysisManager &)
 			if (spec.walk.empty () || spec.context >= site->arg_size ())
 				continue;
 
-			lower_site (site, spec);
+			lower_site (site, spec, real_fill_for (site));
 			changed = true;
 		}
 	}
