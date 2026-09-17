@@ -504,13 +504,9 @@ namespace System.Globalization
 					if (!constructed)
 						Construct ();
 
-					lock (this) {
-						if(compareInfo==null) {
-							compareInfo=new CompareInfo (this);
-						}
-					}
+					compareInfo=new CompareInfo (this);
 				}
-				
+
 				return(compareInfo);
 			}
 		}
