@@ -938,10 +938,10 @@ retry_contended:
 		}
 		mono_thread_info_uninstall_interrupt (&interrupted);
 	}
-	mono_thread_clr_state (thread, ThreadState_WaitSleepJoin);
 
 	mon_add_entry_count (mon, -1);
 	mono_coop_mutex_unlock (mon->entry_mutex);
+	mono_thread_clr_state (thread, ThreadState_WaitSleepJoin);
 
 #ifndef DISABLE_PERFCOUNTERS
 	mono_atomic_dec_i32 (&mono_perfcounters->thread_queue_len);
