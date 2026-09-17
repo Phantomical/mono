@@ -117,6 +117,17 @@ same value, so every block reads hot. `tier2_site_heat ()` answers against the
 caller's entry count instead. It answers nothing for a caller that carries no
 tier-2 counter, and the summary then decides as before.
 
+**`CallAnalyzer::visitCmpInst ()` tries the operand's settled value beside the
+operand itself, and walks more than one dominating block.**
+`eliminated_type_test ()` settles a test call to the call's own operand, so a
+null compare on that call's result reaches the object only through
+`SimplifiedValues`. A folded cascade also leaves several one-predecessor blocks
+between the check that proves the object non-null and the guard that needs it.
+`isImpliedByDomChain ()` is the walk over those. Only a value the callee owns
+reaches `isKnownNonNullInCallee ()`. `analyze ()` settles a formal argument to
+the caller's own operand, whose `getArgNo ()` counts against the caller rather
+than this site.
+
 **`CallAnalyzer::isLoweredToCall ()` asks `lowers_to_a_load ()` first.** Mono
 writes a dispatch read as a call to a declaration, and
 `TargetTransformInfoImpl::isLoweredToCall ()` answers true for any declaration
@@ -160,9 +171,9 @@ against the old one and apply what it says to the copy by hand. A new `cl::opt`
 needs the `mono-` prefix, and a new definition in `namespace llvm` needs the
 same decision the ones above got: drop it when a header declares it, keep it when
 no header does. Watch the block walk in `analyze ()`, the head and the tail of
-`updateThreshold ()`, the head of `isLoweredToCall ()`, the head of
-`visitLoad ()`, the head of `visitCallBase ()`, the heads of
-`isColdCallSite ()`, `getHotCallSiteThreshold ()` and
+`updateThreshold ()`, the head of `isLoweredToCall ()`, the null compare in
+`visitCmpInst ()`, the head of `visitLoad ()`, the head of `visitCallBase ()`,
+the heads of `isColdCallSite ()`, `getHotCallSiteThreshold ()` and
 `isCostBenefitAnalysisEnabled ()`, and the coldcc check in `onAnalysisStart ()`,
 because that is where the mono calls sit.
 `isLoweredToCall ()` and `visitLoad ()` churn upstream more than the rest do,

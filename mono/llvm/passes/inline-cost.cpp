@@ -2352,8 +2352,16 @@ bool CallAnalyzer::visitCmpInst(CmpInst &I) {
     // Settled instead resolves to the caller's own operand, which carries no
     // attribute of this call site's.
     Value *Settled = getSimplifiedValueUnchecked(I.getOperand(0));
+    // getArgNo () counts against the function an Argument belongs to. Asking
+    // this site about an Argument of the caller therefore runs past its own
+    // argument list.
+    auto *SettledArg = dyn_cast_or_null<Argument>(Settled);
+    bool SettledIsTheCallersArgument =
+        SettledArg != nullptr && SettledArg->getParent() != &F;
+
     if (isKnownNonNullInCallee(I.getOperand(0)) ||
-        (Settled && isKnownNonNullInCallee(Settled))) {
+        (Settled && !SettledIsTheCallersArgument &&
+         isKnownNonNullInCallee(Settled))) {
       bool IsNotEqual = I.getPredicate() == CmpInst::ICMP_NE;
       SimplifiedValues[&I] = IsNotEqual ? ConstantInt::getTrue(I.getType())
                                         : ConstantInt::getFalse(I.getType());
