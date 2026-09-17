@@ -91,9 +91,16 @@ ornament if the original carried no fact:
 - a claim restated in fresh vocabulary one sentence later
 - *X is the gate*. An assistant tic, and it must not appear anywhere: a comment, a
   commit message, a plan, a handoff, a review report. The frame announces a role the
-  file it sits in already carries and says nothing about what the fixture holds or
-  what it settles. Say what it holds, or cut the sentence. Its relatives go with it —
-  *X is what gates this*, *X is the thing that catches it*, *that is the gate*
+  file it sits in already carries and says nothing about what the fixture holds. Say
+  what it holds, or cut the sentence. Its relatives go with it — *X is what gates
+  this*, *X is the thing that catches it*, *that is the gate*
+- *X answers Y*, and any abstract noun cast as **settling** or **deciding** a
+  question. The second assistant tic, banned in the same places as the first. A
+  function returns, a table covers, a stub is known by a symbol, a rule holds — each
+  of those is an ordinary relation the word stood in for. `reference/catalogue.md`
+  G20 has every grammatical shape with its plain rewrite, and the note there that a
+  synonym is not a rewrite: *settles* and *decides* keep the shape under a word the
+  grep does not find. Name the real actor and reuse its own verb
 
 ## Decode structural and process metaphors
 
