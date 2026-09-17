@@ -156,8 +156,13 @@ math(EXPR _last "${_shards} - 1")
 foreach(_i RANGE ${_last})
   string(REGEX REPLACE "^(.)$" "0\\1" _nn "${_i}")
   mono_path_join(_shard_path "${_pdir}" "${_bin}/run-${_nn}")
+  # On the command rather than in ENVIRONMENT, for the reason
+  # mcs/tests/CMakeLists.txt gives at the same place.
   add_test(NAME compiler-error-tests/${_nn}
-           COMMAND "${MONO_RUNTIME_WRAPPER}" --debug
+           COMMAND "${CMAKE_COMMAND}" -E env
+                   "MONO_PATH=${_shard_path}"
+                   "MONO_RUNTIME=${MONO_RUNTIME_WRAPPER}"
+                   "${MONO_RUNTIME_WRAPPER}" --debug
                    "${_pdir}/compiler-tester.exe"
                    -mode:neg -files:v4
                    "-compiler:${_pdir}/mcs.exe"
@@ -168,6 +173,5 @@ foreach(_i RANGE ${_last})
            WORKING_DIRECTORY "${_bin}/run-${_nn}")
   set_tests_properties(compiler-error-tests/${_nn} PROPERTIES
     LABELS "compiler"
-    TIMEOUT 1800
-    ENVIRONMENT "MONO_PATH=${_shard_path};MONO_RUNTIME=${MONO_RUNTIME_WRAPPER}")
+    TIMEOUT 1800)
 endforeach()
