@@ -413,6 +413,24 @@ entry:
 	EXPECT_EQ (m.reached (), std::vector<std::string> { "vtable_Bar" });
 }
 
+/// An `inttoptr` address peels to the integer behind it, which names one
+/// address like any other, so the store reaches the load.
+TEST (ConstantValuesTest, AFieldAddressedThroughAnIntegerSettles)
+{
+	Settled m (R"(
+define ptr @caller(i1 %c, ptr %p, i64 %n) {
+entry:
+  %a = inttoptr i64 %n to ptr
+  store ptr @vtable_Bar, ptr %a, align 8
+  %held = load ptr, ptr %a, align 8, !ask !0
+  ret ptr %held
+}
+)");
+
+	EXPECT_TRUE (m.complete ());
+	EXPECT_EQ (m.reached (), std::vector<std::string> { "vtable_Bar" });
+}
+
 /// The second store always runs after the first, so only what it wrote is
 /// still there when the load reads.
 /// A wider store names no value this walk can read, and it still covers the
