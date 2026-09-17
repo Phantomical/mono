@@ -103,6 +103,25 @@ if(MONO_ENABLE_LLVM)
     find_package(zstd CONFIG REQUIRED)
   endif()
 
+  # LLVMDebugInfoPDB's link interface names DIASDK::Diaguids, and the
+  # FindDIASDK.cmake that defines it locates the SDK from VSINSTALLDIR, which
+  # only a developer prompt sets.  From any other shell that target dangles the
+  # same way.
+  if(MSVC AND NOT DEFINED MSVC_DIA_SDK_DIR AND NOT DEFINED ENV{VSINSTALLDIR})
+    find_program(MONO_VSWHERE vswhere
+      PATHS "$ENV{ProgramFiles\(x86\)}/Microsoft Visual Studio/Installer")
+    if(MONO_VSWHERE)
+      execute_process(
+        COMMAND "${MONO_VSWHERE}" -latest -products * -property installationPath
+        OUTPUT_VARIABLE _vs_install
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+      if(IS_DIRECTORY "${_vs_install}/DIA SDK")
+        set(MSVC_DIA_SDK_DIR "${_vs_install}/DIA SDK")
+      endif()
+    endif()
+  endif()
+
   # We check the actual version in MonoLLVM.cmake
   find_package(LLVM CONFIG QUIET PATHS "${MONO_LLVM_PREFIX}" NO_DEFAULT_PATH)
 endif()

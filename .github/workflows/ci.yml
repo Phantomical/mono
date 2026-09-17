@@ -397,36 +397,6 @@ jobs:
           path: ${{ env.LLVM_PREFIX }}
           key: llvm-win64-${{ env.LLVM_VERSION }}
 
-      # LLVMDebugInfoPDB names diaguids.lib by the absolute path it had on the
-      # machine LLVM was released from, which is llvm-project#152268. Every
-      # component this build links reaches that target, so the path has to name
-      # a real file here before anything links LLVM. It ships under the VS
-      # install on some images and under the Windows SDK on others, so the
-      # candidates below are tried in turn rather than one being assumed.
-      - name: Point LLVM at this image's diaguids.lib
-        shell: pwsh
-        run: |
-          $cands = @()
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (Test-Path $vswhere) {
-            foreach ($p in & $vswhere -latest -products * -property installationPath) {
-              $cands += Join-Path $p 'DIA SDK\lib\amd64\diaguids.lib'
-            }
-          }
-          $cands += Get-ChildItem `
-            "${env:ProgramFiles(x86)}\Windows Kits\10\Lib\*\um\x64\diaguids.lib" `
-            -ErrorAction SilentlyContinue | ForEach-Object FullName
-          $lib = $cands | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
-          if (-not $lib) {
-            Write-Host "Tried:"; $cands | ForEach-Object { Write-Host "  $_" }
-            Get-ChildItem "C:\Program Files\Microsoft Visual Studio\2022" -ErrorAction SilentlyContinue
-            throw "no diaguids.lib on this image"
-          }
-          Write-Host "diaguids.lib: $lib"
-          $exports = "$env:LLVM_PREFIX\lib\cmake\llvm\LLVMExports.cmake"
-          (Get-Content $exports -Raw) -replace '[^;"]*diaguids\.lib', ($lib -replace '\\','/') `
-            | Set-Content $exports -NoNewline
-
       - name: Restore vcpkg packages
         id: vcpkg-cache
         uses: actions/cache/restore@v6
