@@ -512,6 +512,8 @@ mono_threads_detach_coop_internal (MonoDomain *orig_domain, gpointer cookie, Mon
 G_EXTERN_C void mono_threads_begin_abort_protected_block (void);
 G_EXTERN_C gboolean mono_threads_end_abort_protected_block (void);
 
+G_EXTERN_C void mono_threads_end_abort_protected_block_discard (void);
+
 gboolean
 mono_thread_internal_current_is_attached (void);
 

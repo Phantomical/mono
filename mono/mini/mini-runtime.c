@@ -4387,6 +4387,8 @@ register_icalls (void)
 	}
 	register_icall (mono_thread_get_undeniable_exception, mono_icall_sig_object, FALSE);
 	register_icall (ves_icall_thread_finish_async_abort, mono_icall_sig_void, FALSE);
+	register_icall (mono_threads_begin_abort_protected_block, mono_icall_sig_void, FALSE);
+	register_icall (mono_threads_end_abort_protected_block_discard, mono_icall_sig_void, FALSE);
 	register_icall (mono_thread_interruption_checkpoint, mono_icall_sig_object, FALSE);
 	register_icall (mono_thread_force_interruption_checkpoint_noraise, mono_icall_sig_object, FALSE);
 

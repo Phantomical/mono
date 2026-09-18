@@ -375,6 +375,12 @@ mono_threads_end_abort_protected_block (void)
 	return mono_thread_state_has_interruption (new_state);
 }
 
+void
+mono_threads_end_abort_protected_block_discard (void)
+{
+	mono_threads_end_abort_protected_block ();
+}
+
 static gboolean
 mono_thread_get_interruption_requested (MonoInternalThread *thread)
 {

@@ -360,6 +360,8 @@ MONO_JIT_ICALL (ves_icall_string_alloc) \
 MONO_JIT_ICALL (ves_icall_string_new_specific) \
 MONO_JIT_ICALL (ves_icall_string_new_wrapper) \
 MONO_JIT_ICALL (ves_icall_thread_finish_async_abort) \
+MONO_JIT_ICALL (mono_threads_begin_abort_protected_block) \
+MONO_JIT_ICALL (mono_threads_end_abort_protected_block_discard) \
 MONO_JIT_ICALL (mono_marshal_lookup_pinvoke) \
 	\
 MONO_JIT_ICALL (count) \
