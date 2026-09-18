@@ -33,11 +33,10 @@ class Program {
 		if (args.Length > 0)
 			width = Math.Max (width, Int32.Parse (args [0]));
 
-		// Windows x64 only has 1 MB of stack per thread which is less than other x86 64-bit OSes.
-		// Using 10000 for depth will cause a stack overflow on Windows x64. 5000 will fit.
+		// Windows x64 gives a thread 1 MB of stack.
 		int platform = (int) Environment.OSVersion.Platform;
 		bool isWin64 = !(platform == 4 || platform == 128) && Environment.Is64BitProcess;
-		int depth = isWin64 ? 5000 : 10000;
+		int depth = isWin64 ? 4000 : 10000;
 		if (args.Length > 1)
 			depth = Math.Max (depth, Int32.Parse (args [1]));
 
