@@ -860,9 +860,10 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 	// argument can carry anything that can point into it: a value type's this,
 	// managed pointers, unmanaged pointers, function pointers. An indirect
 	// target's this is a pointer to nobody-knows-what, so it gets the same
-	// treatment as a value type's this. Aggregates need no test: on this
-	// convention they pass as first-class values, and only the C lowering ever
-	// hands over a pointer to one.
+	// treatment as a value type's this. An aggregate needs no test on the System
+	// V convention, where it passes as a first-class value. The Windows one
+	// hands it over as a pointer to a private copy, which the loop below refuses
+	// like any other pointer into this frame.
 	if (callee_sig->hasthis
 	    && (callee_method == nullptr || m_class_is_valuetype (callee_method->klass)))
 		return llvm::CallInst::TCK_None;
@@ -872,6 +873,17 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 
 		if (param->byref || param->type == MONO_TYPE_PTR || param->type == MONO_TYPE_FNPTR)
 			return llvm::CallInst::TCK_None;
+
+#ifdef HOST_WIN32
+		llvm::Expected<llvm::Type *> declared = convert_type (param, false);
+
+		if (!declared) {
+			llvm::consumeError (declared.takeError ());
+			return llvm::CallInst::TCK_None;
+		}
+		if (win64_indirect (*declared))
+			return llvm::CallInst::TCK_None;
+#endif
 	}
 
 	// The transition into native code saves state that a tail call skips.
