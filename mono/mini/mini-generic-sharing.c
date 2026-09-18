@@ -1314,6 +1314,13 @@ get_wrapper_shared_type_full (MonoType *t, gboolean is_field)
 			return get_wrapper_shared_type (mono_get_object_type ());
 
 		klass = mono_class_from_mono_type_internal (t);
+		/*
+		 * Check before canonicalizing the type arguments. Otherwise Vector<long>
+		 * becomes Vector<IntPtr>, which is not recognized as a SIMD type.
+		 */
+		if (m_class_is_simd_type (klass))
+			return t;
+
 		orig_ctx = &mono_class_get_generic_class (klass)->context;
 
 		memset (&ctx, 0, sizeof (MonoGenericContext));
