@@ -1,4 +1,4 @@
-/* Tests LLVM lowering for System.Runtime.Intrinsics.X86.Sse, Sse2 and Sse3. */
+/* Tests LLVM lowering for System.Runtime.Intrinsics.X86.Sse, Sse2, Sse3 and Ssse3. */
 using System;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
@@ -97,6 +97,66 @@ class Tests
 	{
 		double[] r = ToArray (v);
 		Check (what, r [0] == e0 && r [1] == e1);
+	}
+
+	static unsafe Vector128<sbyte> LoadI8 (params sbyte[] e)
+	{
+		fixed (sbyte* p = e)
+			return Sse2.LoadVector128 (p);
+	}
+
+	static unsafe sbyte[] ToArrayI8 (Vector128<sbyte> v)
+	{
+		sbyte[] r = new sbyte[16];
+		fixed (sbyte* p = r)
+			Sse2.Store (p, v);
+		return r;
+	}
+
+	static unsafe byte[] ToArrayU8 (Vector128<byte> v)
+	{
+		byte[] r = new byte[16];
+		fixed (byte* p = r)
+			Sse2.Store (p, v);
+		return r;
+	}
+
+	static void CheckArrayI8 (string what, sbyte[] got, params sbyte[] expected)
+	{
+		bool ok = got.Length == expected.Length;
+		for (int i = 0; ok && i < got.Length; i++)
+			ok &= got [i] == expected [i];
+		Check (what, ok);
+	}
+
+	static void CheckArrayU8 (string what, byte[] got, params byte[] expected)
+	{
+		bool ok = got.Length == expected.Length;
+		for (int i = 0; ok && i < got.Length; i++)
+			ok &= got [i] == expected [i];
+		Check (what, ok);
+	}
+
+	static unsafe Vector128<short> LoadI16 (params short[] e)
+	{
+		fixed (short* p = e)
+			return Sse2.LoadVector128 (p);
+	}
+
+	static unsafe short[] ToArrayI16 (Vector128<short> v)
+	{
+		short[] r = new short[8];
+		fixed (short* p = r)
+			Sse2.Store (p, v);
+		return r;
+	}
+
+	static void CheckArrayI16 (string what, short[] got, params short[] expected)
+	{
+		bool ok = got.Length == expected.Length;
+		for (int i = 0; ok && i < got.Length; i++)
+			ok &= got [i] == expected [i];
+		Check (what, ok);
 	}
 
 	static unsafe int Main ()
@@ -236,6 +296,119 @@ class Tests
 				CheckLanesI32 ("Sse3.LoadDquVector128", Sse3.LoadDquVector128 (e), 11, -22, 33,
 				              -44);
 			}
+		}
+
+		Check ("Ssse3.IsSupported", Ssse3.IsSupported);
+
+		if (Ssse3.IsSupported) {
+			CheckArrayU8 ("Ssse3.Abs(sbyte)",
+			             ToArrayU8 (Ssse3.Abs (LoadI8 (-1, 2, -3, 4, -128, 127, -5, 0, 0, 0, 0, 0,
+			                                           0, 0, 0, 0))),
+			             1, 2, 3, 4, 128, 127, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+			{
+				Vector128<sbyte> ar = LoadI8 (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+				                              15);
+				Vector128<sbyte> al = LoadI8 (16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
+				                              29, 30, 31);
+
+				CheckArrayI8 ("Ssse3.AlignRight(mask=5)", ToArrayI8 (Ssse3.AlignRight (al, ar, 5)),
+				             5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20);
+				CheckArrayI8 ("Ssse3.AlignRight(mask=0)", ToArrayI8 (Ssse3.AlignRight (al, ar, 0)),
+				             0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+				CheckArrayI8 ("Ssse3.AlignRight(mask=20)",
+				             ToArrayI8 (Ssse3.AlignRight (al, ar, 20)),
+				             20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 0, 0, 0, 0);
+				CheckArrayI8 ("Ssse3.AlignRight(mask=32)",
+				             ToArrayI8 (Ssse3.AlignRight (al, ar, 32)),
+				             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+			}
+
+			{
+				Vector128<short> sl = LoadI16 (1, 2, 3, 4, 5, 6, 7, 8);
+				Vector128<short> sr = LoadI16 (10, 20, 30, 40, 50, 60, 70, 80);
+
+				CheckArrayI16 ("Ssse3.HorizontalAdd(short)",
+				              ToArrayI16 (Ssse3.HorizontalAdd (sl, sr)),
+				              3, 7, 11, 15, 30, 70, 110, 150);
+				CheckArrayI16 ("Ssse3.HorizontalSubtract(short)",
+				              ToArrayI16 (Ssse3.HorizontalSubtract (sl, sr)),
+				              -1, -1, -1, -1, -10, -10, -10, -10);
+
+				Vector128<short> satAdd = LoadI16 (30000, 30000, 0, 0, 0, 0, 0, 0);
+				CheckArrayI16 ("Ssse3.HorizontalAddSaturate",
+				              ToArrayI16 (Ssse3.HorizontalAddSaturate (satAdd,
+				                                                       LoadI16 (0, 0, 0, 0, 0, 0,
+				                                                                0, 0))),
+				              32767, 0, 0, 0, 0, 0, 0, 0);
+
+				Vector128<short> satSub = LoadI16 (-30000, 30000, 0, 0, 0, 0, 0, 0);
+				CheckArrayI16 ("Ssse3.HorizontalSubtractSaturate",
+				              ToArrayI16 (Ssse3.HorizontalSubtractSaturate (satSub,
+				                                                           LoadI16 (0, 0, 0, 0,
+				                                                                    0, 0, 0, 0))),
+				              -32768, 0, 0, 0, 0, 0, 0, 0);
+			}
+
+			CheckLanesI32 ("Ssse3.HorizontalAdd(int)",
+			              Ssse3.HorizontalAdd (LoadI32 (1, 2, 3, 4), LoadI32 (10, 20, 30, 40)),
+			              3, 7, 30, 70);
+			CheckLanesI32 ("Ssse3.HorizontalSubtract(int)",
+			              Ssse3.HorizontalSubtract (LoadI32 (1, 2, 3, 4), LoadI32 (10, 20, 30,
+			                                                                      40)),
+			              -1, -1, -10, -10);
+
+			unsafe {
+				byte* lp = stackalloc byte[16] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+				                                 16 };
+				sbyte* rp = stackalloc sbyte[16] { 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6, 7, -7,
+				                                   8, -8 };
+				Vector128<byte> ml = Sse2.LoadVector128 (lp);
+				Vector128<sbyte> mr = Sse2.LoadVector128 (rp);
+
+				CheckArrayI16 ("Ssse3.MultiplyAddAdjacent",
+				              ToArrayI16 (Ssse3.MultiplyAddAdjacent (ml, mr)),
+				              -1, -2, -3, -4, -5, -6, -7, -8);
+			}
+
+			CheckArrayI16 ("Ssse3.MultiplyHighRoundScale",
+			              ToArrayI16 (Ssse3.MultiplyHighRoundScale (
+				              LoadI16 (16384, 8192, 4096, 2048, 1024, 512, 256, 128),
+				              LoadI16 (16384, 16384, 16384, 16384, 16384, 16384, 16384,
+				                      16384))),
+			              8192, 4096, 2048, 1024, 512, 256, 128, 64);
+
+			CheckArrayI8 ("Ssse3.Shuffle(sbyte)",
+			             ToArrayI8 (Ssse3.Shuffle (
+				             LoadI8 (100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111,
+				                    112, 113, 114, 115),
+				             LoadI8 (15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, -128))),
+			             115, 114, 113, 112, 111, 110, 109, 108, 107, 106, 105, 104, 103, 102,
+			             101, 0);
+
+			unsafe {
+				byte* vp = stackalloc byte[16] { 200, 201, 202, 203, 204, 205, 206, 207, 208, 209,
+				                                 210, 211, 212, 213, 214, 215 };
+				byte* mp = stackalloc byte[16] { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+				                                 0x80 };
+				CheckArrayU8 ("Ssse3.Shuffle(byte)",
+				             ToArrayU8 (Ssse3.Shuffle (Sse2.LoadVector128 (vp),
+				                                       Sse2.LoadVector128 (mp))),
+				             200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213,
+				             214, 0);
+			}
+
+			CheckArrayI8 ("Ssse3.Sign(sbyte)",
+			             ToArrayI8 (Ssse3.Sign (
+				             LoadI8 (5, -5, 3, -3, 7, -7, 9, -9, 0, 0, 0, 0, 0, 0, 0, 0),
+				             LoadI8 (1, 1, -1, -1, 0, 0, 2, -2, 0, 0, 0, 0, 0, 0, 0, 0))),
+			             5, -5, -3, 3, 0, 0, 9, 9, 0, 0, 0, 0, 0, 0, 0, 0);
+			CheckArrayI16 ("Ssse3.Sign(short)",
+			              ToArrayI16 (Ssse3.Sign (LoadI16 (5, -5, 3, -3, 7, -7, 9, -9),
+			                                     LoadI16 (1, 1, -1, -1, 0, 0, 2, -2))),
+			              5, -5, -3, 3, 0, 0, 9, 9);
+			CheckLanesI32 ("Ssse3.Sign(int)",
+			              Ssse3.Sign (LoadI32 (5, -5, 3, -3), LoadI32 (1, -1, 0, 2)), 5, 5, 0, -3);
 		}
 
 		if (failures == 0)

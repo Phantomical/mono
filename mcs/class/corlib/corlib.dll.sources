@@ -1659,7 +1659,7 @@ System.Runtime.Intrinsics/Vector256.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse2.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse3.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Ssse3.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Ssse3.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse41.PlatformNotSupported.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse42.PlatformNotSupported.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Avx.PlatformNotSupported.cs
