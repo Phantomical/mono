@@ -108,6 +108,11 @@ MethodLLVMEmitter::resolve_method (uint32_t token)
 	if (target == nullptr)
 		return runtime_error (metadata_error);
 
+	/* Calls to methods on generic types must specify an instantiated declaring type. */
+	if (mono_class_is_gtd (target->klass))
+		return invalid_il (llvm::Twine ("call target ") + target->name
+		                   + "'s declaring class is an uninstantiated generic type definition");
+
 	return target;
 }
 

@@ -32,6 +32,35 @@
 	}
   }
 
+  // Calls to methods on a generic type must specify the declaring type's
+  // instantiation with a TypeSpec.
+  .class private sequential ansi sealed beforefieldinit GenSibling`1<T>
+  extends [mscorlib]System.ValueType
+  {
+	.method public hidebysig instance int32 Direct () cil managed
+	{
+		.maxstack 8
+		sizeof !T
+		ret
+	}
+
+	.method public hidebysig instance int32 ViaSiblingBad () cil managed
+	{
+		.maxstack 8
+		ldarg.0
+		call instance int32 class GenSibling`1::Direct()
+		ret
+	}
+
+	.method public hidebysig instance int32 ViaSiblingGood () cil managed
+	{
+		.maxstack 8
+		ldarg.0
+		call instance int32 class GenSibling`1<!0>::Direct()
+		ret
+	}
+  }
+
 .class public auto ansi sealed beforefieldinit Tests {
 
 	.method static public int32 Main(string[] args) il managed {
@@ -4239,6 +4268,43 @@ L3:
 	}
 	DONE:
 		ldloc.0
+		ret
+	}
+
+	.method public hidebysig static default int32 test_0_generic_sibling_call_with_typespec () cil managed
+	{
+		.maxstack 2
+		.locals init (valuetype GenSibling`1<int32> V_0)
+
+		ldloca.s V_0
+		call instance int32 valuetype GenSibling`1<int32>::ViaSiblingGood()
+		ldc.i4.4
+		ceq
+		ldc.i4.0
+		ceq
+		ret
+	}
+
+	.method public hidebysig static default int32 test_0_generic_sibling_call_without_typespec_throws () cil managed
+	{
+		.maxstack 2
+		.locals init (valuetype GenSibling`1<int32> V_0)
+
+	.try {
+		ldloca.s V_0
+		call instance int32 valuetype GenSibling`1<int32>::ViaSiblingBad()
+		pop
+		leave.s FAIL
+	}
+	catch [mscorlib]System.InvalidProgramException {
+		pop
+		leave.s OK
+	}
+	FAIL:
+		ldc.i4.1
+		ret
+	OK:
+		ldc.i4.0
 		ret
 	}
 

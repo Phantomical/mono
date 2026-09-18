@@ -5047,7 +5047,16 @@ mini_get_method (MonoCompile *cfg, MonoMethod *m, guint32 token, MonoClass *klas
 	ERROR_DECL (error);
 	MonoMethod *method = mini_get_method_allow_open (m, token, klass, context, cfg ? cfg->error : error);
 
-	if (method && cfg && !cfg->gshared && mono_class_is_open_constructed_type (m_class_get_byval_arg (method->klass))) {
+	/*
+	 * A method on a generic type must be resolved against an instantiated
+	 * declaring type. Reject a bare generic type definition even during
+	 * generic-sharing compilation, where the open-type check below is skipped.
+	 */
+	if (method && mono_class_is_gtd (method->klass)) {
+		mono_error_set_bad_image (cfg ? cfg->error : error, m_class_get_image (method->klass),
+			"Method %s.%s's declaring class is an uninstantiated generic type definition", m_class_get_name (method->klass), method->name);
+		method = NULL;
+	} else if (method && cfg && !cfg->gshared && mono_class_is_open_constructed_type (m_class_get_byval_arg (method->klass))) {
 		mono_error_set_bad_image (cfg->error, m_class_get_image (cfg->method->klass), "Method with open type while not compiling gshared");
 		method = NULL;
 	}
@@ -7606,7 +7615,8 @@ mono_method_to_ir (MonoCompile *cfg, MonoMethod *method, MonoBasicBlock *start_b
 
 			n = fsig->param_count + fsig->hasthis;
 
-			if (!cfg->gshared && mono_class_is_gtd (cmethod->klass))
+			/* Constrained resolution can replace the method after mini_get_method () validates it. */
+			if (mono_class_is_gtd (cmethod->klass))
 				UNVERIFIED;
 
 			if (!cfg->gshared)
