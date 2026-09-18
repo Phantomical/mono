@@ -18,7 +18,7 @@ set(_src      "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_bin      "${CMAKE_CURRENT_BINARY_DIR}")
 set(_class    "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
 set(_buildcls "${MONO_MCS_LIBDIR}/build")
-set(_wrapper  "${MONO_RUNTIME_WRAPPER}")
+set(_wrapper  ${MONO_RUNTIME_COMMAND})
 
 # csc and ilasm run on whichever mono MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS selected,
 # against the build profile of the class libraries. See MonoToolsRuntime.cmake.

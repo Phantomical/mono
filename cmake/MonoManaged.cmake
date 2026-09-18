@@ -215,6 +215,28 @@ endmacro()
 # in the build tree rather than beside its .resx.  An explicit resource id is
 # added where the makefile relied on the default, which csc derives from the
 # file name -- moving the file must not rename the resource.
+# Quotes the lines of a response file that need it.
+#
+# csc splits a response file on whitespace wherever no quotes say otherwise, so
+# a flag naming a path with a space in it arrives as two arguments and the
+# second is read as a source file. An argument list does not go through that
+# splitting, which is why this is done when the file is written rather than
+# where the flags are built.
+#
+# The source response file is read back to build the depfile, so whoever reads
+# one of these takes the quotes off again -- a quote left in becomes part of a
+# file name, and ninja waits forever on an input that never appears.
+function(_mono_quote_response_lines out lines)
+  set(_result "")
+  foreach(_l IN LISTS lines)
+    if(_l MATCHES " " AND NOT _l MATCHES "\"")
+      set(_l "\"${_l}\"")
+    endif()
+    list(APPEND _result "${_l}")
+  endforeach()
+  set(${out} "${_result}" PARENT_SCOPE)
+endfunction()
+
 function(_mono_rewrite_resource_flags out flags resx resdir)
   set(_result "")
   foreach(_f IN LISTS flags)
@@ -317,7 +339,7 @@ function(_mono_tool_host out profile)
   elseif(MONO_TOOLS_RUNTIME_IS_SYSTEM)
     set(${out} "${MONO_TOOLS_RUNTIME_HOST}" PARENT_SCOPE)
   else()
-    set(${out} "${MONO_RUNTIME_WRAPPER}" PARENT_SCOPE)
+    set(${out} ${MONO_RUNTIME_COMMAND} PARENT_SCOPE)
   endif()
 endfunction()
 
@@ -342,10 +364,12 @@ function(_mono_tool_command out profile tool)
     return()
   endif()
 
+  # _host unquoted: on Windows it is the several words that launch the wrapper
+  # rather than one path, and it is empty where the host runs the tool itself.
   if(MONO_PROFILE_${profile}_BOOTSTRAP_COMPILER)
-    set(${out} "${_host}" "${_builddir}/tmp/${tool}" PARENT_SCOPE)
+    set(${out} ${_host} "${_builddir}/tmp/${tool}" PARENT_SCOPE)
   else()
-    set(${out} "${_host}" "${_builddir}/${tool}" PARENT_SCOPE)
+    set(${out} ${_host} "${_builddir}/${tool}" PARENT_SCOPE)
   endif()
 endfunction()
 
@@ -797,6 +821,7 @@ macro(_mono_materialize_profile _profile)
         file(STRINGS "${_rsp}" _rsplines)
         _mono_rewrite_resource_flags(_rsplines "${_rsplines}" "${A_RESX}" "${_resdir}")
         get_filename_component(_rspname "${_rsp}" NAME)
+        _mono_quote_response_lines(_rsplines "${_rsplines}")
         string(JOIN "\n" _rsptext ${_rsplines})
         # file(GENERATE) rather than file(WRITE): it leaves the file alone when
         # the content has not changed, so reconfiguring does not rebuild.
@@ -839,7 +864,10 @@ macro(_mono_materialize_profile _profile)
       endif()
       list(APPEND _abs "${_s}")
     endforeach()
-    string(JOIN "\n" _body ${_abs})
+    # Quoted for the file alone. _abs stays the plain paths, because it goes on
+    # to be the dependency list, where a quote is part of the name.
+    _mono_quote_response_lines(_quoted "${_abs}")
+    string(JOIN "\n" _body ${_quoted})
     file(CONFIGURE OUTPUT "${_response}" CONTENT "${_body}\n")
     set(_sources_inputs ${_abs})
   elseif(A_PROGRAM)
