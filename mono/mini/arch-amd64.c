@@ -443,6 +443,78 @@ collect_field_info_nested (MonoClass *klass, GArray *fields_array, int offset, g
 	}
 }
 
+/*
+ * Returns the width primitive_type_to_llvm_type () (signature.cpp) gives
+ * type, or 0 for a type it has none for.
+ */
+static int
+managed_primitive_size (int type)
+{
+	switch (type) {
+	case MONO_TYPE_BOOLEAN:
+	case MONO_TYPE_I1:
+	case MONO_TYPE_U1:
+		return 1;
+	case MONO_TYPE_CHAR:
+	case MONO_TYPE_I2:
+	case MONO_TYPE_U2:
+		return 2;
+	case MONO_TYPE_I4:
+	case MONO_TYPE_U4:
+	case MONO_TYPE_R4:
+		return 4;
+	case MONO_TYPE_I8:
+	case MONO_TYPE_U8:
+	case MONO_TYPE_R8:
+		return 8;
+	case MONO_TYPE_I:
+	case MONO_TYPE_U:
+		return TARGET_SIZEOF_VOID_P;
+	default:
+		return 0;
+	}
+}
+
+/*
+ * Whether klass converts to a vector rather than to a struct, and how wide
+ * that vector is. simd_class_to_llvm_type () (signature.cpp) is the rule. The
+ * width is the vector's rather than the class's, because the three
+ * System.Numerics types share one four-float register.
+ */
+static gboolean
+managed_simd_size (MonoClass *klass, int *size)
+{
+	const char *name;
+
+	if (!m_class_is_simd_type (klass))
+		return FALSE;
+
+	if (mono_class_is_ginst (klass)) {
+		MonoType *etype = mono_class_get_generic_class (klass)->context.class_inst->type_argv [0];
+		int esize = managed_primitive_size (etype->type);
+		int value_size = mono_class_value_size (klass, NULL);
+
+		if (esize == 0 || value_size == 0 || (value_size % esize) != 0)
+			return FALSE;
+		*size = value_size;
+		return TRUE;
+	}
+
+	name = m_class_get_name (klass);
+	if (!strcmp (name, "Vector2d") || !strcmp (name, "Vector2l")
+	    || !strcmp (name, "Vector2ul") || !strcmp (name, "Vector4i")
+	    || !strcmp (name, "Vector4ui") || !strcmp (name, "Vector8s")
+	    || !strcmp (name, "Vector8us") || !strcmp (name, "Vector16sb")
+	    || !strcmp (name, "Vector16b") || !strcmp (name, "Vector4f")
+	    || !strcmp (name, "Vector2") || !strcmp (name, "Vector3")
+	    || !strcmp (name, "Vector4")) {
+		*size = 16;
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
 #ifdef TARGET_WIN32
 
 /* Windows x64 ABI can pass/return value types in register of size 1,2,4,8 bytes. */
@@ -629,7 +701,7 @@ add_valuetype_win64 (MonoMethodSignature *signature, ArgInfo *arg_info, MonoType
 	guint32 arg_size = SIZEOF_REGISTER;
 	MonoClass *klass = NULL;
 	ArgumentClass arg_class;
-	
+
 	assert (signature != NULL && arg_info != NULL && type != NULL && current_int_reg != NULL && current_float_reg != NULL && stack_size != NULL);
 
 	klass = mono_class_from_mono_type_internal (type);
@@ -711,78 +783,6 @@ add_padding_leaves (GArray *leaves, int offset, int bytes)
 
 	for (i = 0; i < bytes; ++i)
 		add_managed_leaf (leaves, offset + i, 1, FALSE, FALSE);
-}
-
-/*
- * Returns the width primitive_type_to_llvm_type () (signature.cpp) gives
- * type, or 0 for a type it has none for.
- */
-static int
-managed_primitive_size (int type)
-{
-	switch (type) {
-	case MONO_TYPE_BOOLEAN:
-	case MONO_TYPE_I1:
-	case MONO_TYPE_U1:
-		return 1;
-	case MONO_TYPE_CHAR:
-	case MONO_TYPE_I2:
-	case MONO_TYPE_U2:
-		return 2;
-	case MONO_TYPE_I4:
-	case MONO_TYPE_U4:
-	case MONO_TYPE_R4:
-		return 4;
-	case MONO_TYPE_I8:
-	case MONO_TYPE_U8:
-	case MONO_TYPE_R8:
-		return 8;
-	case MONO_TYPE_I:
-	case MONO_TYPE_U:
-		return TARGET_SIZEOF_VOID_P;
-	default:
-		return 0;
-	}
-}
-
-/*
- * Whether klass converts to a vector rather than to a struct, and how wide
- * that vector is. simd_class_to_llvm_type () (signature.cpp) is the rule. The
- * width is the vector's rather than the class's, because the three
- * System.Numerics types share one four-float register.
- */
-static gboolean
-managed_simd_size (MonoClass *klass, int *size)
-{
-	const char *name;
-
-	if (!m_class_is_simd_type (klass))
-		return FALSE;
-
-	if (mono_class_is_ginst (klass)) {
-		MonoType *etype = mono_class_get_generic_class (klass)->context.class_inst->type_argv [0];
-		int esize = managed_primitive_size (etype->type);
-		int value_size = mono_class_value_size (klass, NULL);
-
-		if (esize == 0 || value_size == 0 || (value_size % esize) != 0)
-			return FALSE;
-		*size = value_size;
-		return TRUE;
-	}
-
-	name = m_class_get_name (klass);
-	if (!strcmp (name, "Vector2d") || !strcmp (name, "Vector2l")
-	    || !strcmp (name, "Vector2ul") || !strcmp (name, "Vector4i")
-	    || !strcmp (name, "Vector4ui") || !strcmp (name, "Vector8s")
-	    || !strcmp (name, "Vector8us") || !strcmp (name, "Vector16sb")
-	    || !strcmp (name, "Vector16b") || !strcmp (name, "Vector4f")
-	    || !strcmp (name, "Vector2") || !strcmp (name, "Vector3")
-	    || !strcmp (name, "Vector4")) {
-		*size = 16;
-		return TRUE;
-	}
-
-	return FALSE;
 }
 
 typedef struct {
@@ -1164,6 +1164,32 @@ add_valuetype (MonoMethodSignature *sig, ArgInfo *ainfo, MonoType *type,
 {
 #ifdef TARGET_WIN32
 	int size;
+	int simd_size;
+
+	/*
+	 * The Windows x64 ABI returns a 128-bit vector in XMM0, where the size
+	 * rule below sends every 16-byte value through a pointer instead. An
+	 * argument needs no case of its own, because that ABI passes a vector
+	 * through a pointer.
+	 */
+	if (is_return && !sig->pinvoke
+	    && managed_simd_size (mono_class_from_mono_type_internal (type), &simd_size)) {
+		ArgLeaf *leaf = (*pool)++;
+
+		ainfo->storage = ArgValuetypeInReg;
+		ainfo->pair_storage [0] = ainfo->pair_storage [1] = ArgNone;
+		ainfo->nregs = 0;
+		ainfo->leaves = leaf;
+		ainfo->nleaves = 1;
+		ainfo->arg_size = ALIGN_TO (simd_size, 8);
+
+		leaf->storage = ArgInDoubleSSEReg;
+		leaf->reg = float_return_regs [0];
+		leaf->at = 0;
+		leaf->offset = 0;
+		leaf->size = simd_size;
+		return;
+	}
 
 	add_valuetype_win64 (sig, ainfo, type, is_return, gr, fr, stack_size);
 	/* An empty struct takes a whole register here, so the register's width is
