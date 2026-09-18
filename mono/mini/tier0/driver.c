@@ -1082,6 +1082,21 @@ compare_by_interval_start_pos_func (gconstpointer a, gconstpointer b)
 #define LSCAN_DEBUG(a) do { } while (0) /* non-empty to avoid warning */
 #endif
 
+/*
+ * The alignment a local of type t needs, given the alignment the type itself
+ * reports. A vector this frame hands to the back end by address is read there
+ * with an aligned move, so it needs 16 whatever the optimization mask asked
+ * for.
+ */
+static guint32
+local_stack_align (MonoType *t, guint32 align)
+{
+	if (MONO_TYPE_ISSTRUCT (t)
+	    && m_class_is_simd_type (mono_class_from_mono_type_internal (t)))
+		return 16;
+	return align;
+}
+
 static gint32*
 mono_allocate_stack_slots2 (MonoCompile *cfg, gboolean backward, guint32 *stack_size, guint32 *stack_align)
 {
@@ -1153,10 +1168,7 @@ mono_allocate_stack_slots2 (MonoCompile *cfg, gboolean backward, guint32 *stack_
 			int ialign;
 
 			size = mini_type_stack_size (t, &ialign);
-			align = ialign;
-
-			if (MONO_CLASS_IS_SIMD (cfg, mono_class_from_mono_type_internal (t)))
-				align = 16;
+			align = local_stack_align (t, ialign);
 		}
 
 		reuse_slot = TRUE;
@@ -1457,13 +1469,10 @@ mono_allocate_stack_slots (MonoCompile *cfg, gboolean backward, guint32 *stack_s
 			int ialign;
 
 			size = mini_type_stack_size (t, &ialign);
-			align = ialign;
+			align = local_stack_align (t, ialign);
 
 			if (mono_class_has_failure (mono_class_from_mono_type_internal (t)))
 				mono_cfg_set_exception (cfg, MONO_EXCEPTION_TYPE_LOAD);
-
-			if (MONO_CLASS_IS_SIMD (cfg, mono_class_from_mono_type_internal (t)))
-				align = 16;
 		}
 
 		reuse_slot = TRUE;
