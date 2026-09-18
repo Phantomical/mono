@@ -10959,11 +10959,23 @@ field_access_end:
 
 					MONO_EMIT_NEW_PCONST (cfg, abort_exc->dreg, 0);
 
+					/*
+					 * mono_install_handler_block_guard () depends on a stack walk
+					 * finding this handler running. A call it makes into native
+					 * code the walk cannot see through leaves no clause for the
+					 * walk to find. A sampled abort then lands here instead of
+					 * waiting for the exvar check below, and this block defers
+					 * it either way.
+					 */
+					mono_emit_jit_icall (cfg, mono_threads_begin_abort_protected_block, NULL);
+
 					MONO_INST_NEW (cfg, ins, OP_CALL_HANDLER);
 					ins->inst_target_bb = tblock;
 					ins->inst_eh_blocks = tmp;
 					MONO_ADD_INS (cfg->cbb, ins);
 					cfg->cbb->has_call_handler = 1;
+
+					mono_emit_jit_icall (cfg, mono_threads_end_abort_protected_block_discard, NULL);
 
 					/* Throw exception if exvar is set */
 					/* FIXME Do we need this for calls from catch/filter ? */
