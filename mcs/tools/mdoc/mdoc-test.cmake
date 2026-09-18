@@ -71,8 +71,12 @@ function(mdoc)
 endfunction()
 
 # The trees have to match exactly, in both directions.
+#
+# --strip-trailing-cr because what mdoc writes takes the host's newline and the
+# checked-in expectations are stored with a bare newline, so on Windows every
+# line of every file differs by the carriage return in front of it.
 function(diff_tree expected actual)
-  execute_process(COMMAND diff -rup "${expected}" "${actual}"
+  execute_process(COMMAND diff -rup --strip-trailing-cr "${expected}" "${actual}"
                   WORKING_DIRECTORY "${WORKDIR}"
                   OUTPUT_VARIABLE _d RESULT_VARIABLE _rc)
   if(NOT _rc EQUAL 0)
