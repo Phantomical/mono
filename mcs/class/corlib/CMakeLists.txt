@@ -109,6 +109,7 @@ foreach(_p build net_4_x unityjit)
     DEPENDS     corlib-unsafe-${_p}
     STRING_REPLACER_FLAGS
                 --mscorlib-debug
+                --readonlyspan-getitem-compat
                 "--resourcestrings:${CMAKE_CURRENT_SOURCE_DIR}/../referencesource/mscorlib/mscorlib.txt"
                 "--ilreplace:${_dir}/corlib.unsafe.dll.tmp"
     INSTALL_DIR "lib/mono/4.5")

@@ -42,6 +42,7 @@ public class Program
 		public List<string> ResourcesStrings { get; }
 		public string ILFile { get; set; }
 		public bool MonoMscorlib { get; set; }
+		public bool ReadOnlySpanGetItemCompat { get; set; }
 
 		public CmdOptions ()
 		{
@@ -64,6 +65,9 @@ public class Program
 				v => options.ILFile = v },
 			{ "mscorlib-debug", "IL customizations for Mono's mscorlib",
 				v => options.MonoMscorlib = v != null },
+			{ "readonlyspan-getitem-compat", "Add the by-value System.ReadOnlySpan`1.get_Item(int32) " +
+				"overload used by older Unity assemblies",
+				v => options.ReadOnlySpanGetItemCompat = v != null },
 		};
 
 		List<string> extra;
@@ -183,6 +187,9 @@ public class Program
 						}
 					}
 				}
+
+				if (options.ReadOnlySpanGetItemCompat)
+					AddReadOnlySpanGetItemCompat (module);
 			}
 
 			var writerParameters = new WriterParameters () {
@@ -191,6 +198,51 @@ public class Program
 
 			assembly.Write (writerParameters);
 		}
+	}
+
+	// Unity's mscorlib returns ReadOnlySpan<T> elements by value. Preserve that
+	// signature so assemblies compiled against Unity can resolve the getter.
+	static void AddReadOnlySpanGetItemCompat (ModuleDefinition module)
+	{
+		var readOnlySpan = module.GetType ("System", "ReadOnlySpan`1");
+		if (readOnlySpan == null)
+			return;
+
+		MethodDefinition byref = null;
+		foreach (var m in readOnlySpan.Methods) {
+			if (m.Name == "get_Item" && m.Parameters.Count == 1 &&
+				m.Parameters [0].ParameterType.MetadataType == MetadataType.Int32) {
+				byref = m;
+				break;
+			}
+		}
+		if (byref == null)
+			throw new InvalidOperationException ("System.ReadOnlySpan`1.get_Item(int32) not found");
+
+		var t = readOnlySpan.GenericParameters [0];
+		var byval = new MethodDefinition ("get_Item", byref.Attributes, t) {
+			ImplAttributes = byref.ImplAttributes,
+		};
+		byval.Parameters.Add (new ParameterDefinition ("index", ParameterAttributes.None, module.TypeSystem.Int32));
+
+		// Bind the getter to ReadOnlySpan<T>. Leaving its declaring type open can
+		// select the wrong shared generic body for value-type arguments.
+		var self = new GenericInstanceType (readOnlySpan);
+		self.GenericArguments.Add (t);
+		var byrefOnSelf = new MethodReference (byref.Name, byref.ReturnType, self) {
+			HasThis = byref.HasThis,
+		};
+		foreach (var p in byref.Parameters)
+			byrefOnSelf.Parameters.Add (new ParameterDefinition (p.ParameterType));
+
+		var il = byval.Body.GetILProcessor ();
+		il.Emit (OpCodes.Ldarg_0);
+		il.Emit (OpCodes.Ldarg_1);
+		il.Emit (OpCodes.Call, byrefOnSelf);
+		il.Emit (OpCodes.Ldobj, t);
+		il.Emit (OpCodes.Ret);
+
+		readOnlySpan.Methods.Add (byval);
 	}
 
 	static bool LoadGetResourceStrings (Dictionary<string, string> resourcesStrings, CmdOptions options)
