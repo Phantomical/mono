@@ -32,7 +32,6 @@
 #include "util/lock.hpp"
 #include "builtins.hpp"
 #include "dispatcher.hpp"
-#include "interp.hpp"
 #include "publish-events.hpp"
 #include <vector>
 #include "mini-runtime.h"
@@ -425,12 +424,6 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 		return trampoline.takeError ();
 	}
 
-	/*
-	 * The record, not the method: the interp entry thunk needs the domain this
-	 * thunk was published in as well as the method. A caller reaches a method
-	 * through whichever domain's thunk its own code was compiled against, and
-	 * the method alone cannot name that domain.
-	 */
 	llvm::Expected<Thunk> thunk = Thunk::allocate (&domain.code, domain.thunks, &dm);
 
 	if (!thunk) {
@@ -478,9 +471,9 @@ MonoBackend::policy_entry (DomainState &domain, MonoDomainMethod &dm)
 	}
 
 	/*
-	 * The entry moves to the compile before the interpreter is offered the
-	 * method, and that order is what makes the offer safe to take here.
-	 * Transforming a method runs its class initializer, and a cctor that calls
+	 * The entry moves to the compile trampoline before tier 0 compiles the
+	 * method, and that order is what makes the move safe to take here.
+	 * Compiling a method runs its class initializer, and a cctor that calls
 	 * back into this very method would otherwise re-enter the trampoline being
 	 * resolved and take this decision again below itself, with nothing to stop
 	 * it. It reaches the compile instead.
@@ -491,12 +484,12 @@ MonoBackend::policy_entry (DomainState &domain, MonoDomainMethod &dm)
 	if (!dm.publish (MonoTier::none, dm.compile_trampoline))
 		return dm.thunk.code ();
 
-	llvm::Expected<Compiled> interpreted = tier0_entry (domain, dm);
+	llvm::Expected<Compiled> tier0 = tier0_entry (domain, dm);
 
-	if (interpreted)
-		return interpreted->body;
+	if (tier0)
+		return tier0->body;
 
-	llvm::consumeError (interpreted.takeError ());
+	llvm::consumeError (tier0.takeError ());
 	return dm.compile_trampoline;
 }
 
@@ -505,9 +498,9 @@ MonoBackend::compile_entry (DomainState &domain, MonoDomainMethod &dm)
 {
 	/*
 	 * The entry can have moved on since the policy step published this
-	 * trampoline: it publishes before it offers the method to the interpreter,
-	 * so a thread that read the thunk in between arrives here for a method the
-	 * interpreter now runs.
+	 * trampoline: it publishes before it offers the method to tier 0, so a
+	 * thread that read the thunk in between arrives here for a method tier 0
+	 * now runs.
 	 */
 	std::optional<MonoMethodBody> ready = dm.body ();
 
@@ -654,178 +647,113 @@ MonoBackend::tier0_entry (DomainState &domain, MonoDomainMethod &dm)
 
 	/*
 	 * A method whose entry went back to this trampoline after an inline was
-	 * replaced ran compiled before, so its tier-0 call counter is spent. Sent
-	 * to the interpreter now, it would stay there.
+	 * replaced ran compiled before, so its tier-0 call counter is spent.
 	 */
 	if (dm.past_tier0 ())
 		return llvm::createStringError (llvm::inconvertibleErrorCode (),
 		                                "the method has left tier 0 already");
 
-	// Transforming the method runs its class initializer, which has to run as
+	// Compiling the method runs its class initializer, which has to run as
 	// the domain the code is for rather than as whatever the calling thread
 	// happens to be running as.
 	DomainScope entered (domain.domain);
 
-	/*
-	 * Before the interpreter is offered the method, so it gets the same verdict
-	 * whichever tier ends up running it: a body the verifier rejects is one no
-	 * tier may run, and one it accepts is one every tier may. The compile asks
-	 * again, and a second answer costs nothing - the verifier records its
-	 * verdict on the method.
-	 */
 	if (llvm::Error invalid = verify_method (method))
 		return std::move (invalid);
 
-#ifdef MONO_ENABLE_TIER0_CLASSIC
-	if (runs_classic_at_tier0 (method)) {
-		gpointer code = nullptr;
-		MonoJitInfo *jinfo = nullptr;
-		gboolean needs_context = FALSE;
-		ERROR_DECL (classic_error);
+#ifndef MONO_ENABLE_TIER0_CLASSIC
+	return llvm::createStringError (llvm::inconvertibleErrorCode (),
+	                                "no engine is compiled in for tier 0");
+#else
+	gpointer code = nullptr;
+	MonoJitInfo *jinfo = nullptr;
+	gboolean needs_context = FALSE;
+	ERROR_DECL (classic_error);
 
-		/*
-		 * Classic's own class-init checks cover a field access, a newobj
-		 * and a shared generic callee, not a call to a static method, so
-		 * the class is initialized here. The interpreter, the other
-		 * tier-0 engine, runs the initializer as it transforms
-		 * (mono_interp_transform_method ()).
-		 *
-		 * An open class has no runtime vtable, and a caller reaches its
-		 * shared body through an instantiation whose own entry ran the
-		 * initializer.
-		 */
-		if (!mono_class_is_open_constructed_type (m_class_get_byval_arg (method->klass))) {
-			MonoVTable *vtable = mono_class_vtable_checked (domain.domain, method->klass,
-			                                                classic_error);
+	/*
+	 * Classic's own class-init checks cover a field access, a newobj and a
+	 * shared generic callee, not a call to a static method, so the class is
+	 * initialized here.
+	 *
+	 * An open class has no runtime vtable, and a caller reaches its shared
+	 * body through an instantiation whose own entry ran the initializer.
+	 */
+	if (!mono_class_is_open_constructed_type (m_class_get_byval_arg (method->klass))) {
+		MonoVTable *vtable = mono_class_vtable_checked (domain.domain, method->klass,
+		                                                classic_error);
 
-			if (vtable == nullptr
-			    || !mono_runtime_class_init_full (vtable, classic_error))
-				return runtime_error (classic_error);
-		}
-
-		/*
-		 * A reference instantiation enters the shared form's record, as it
-		 * does at the compiled tiers: the body is compiled once, the counter
-		 * it spends is the shared form's, and a promotion or a detour of the
-		 * shared form reaches every instantiation through that record's
-		 * thunk. Compiled against its own instantiation instead, the body
-		 * counts on a record nothing calls and never promotes.
-		 */
-		MonoMethod *shared = shared_form (method);
-
-		if (shared != nullptr) {
-			llvm::Expected<Compiled> body =
-				enter_shared_body (domain, dm, shared, MonoTier::tier0);
-
-			if (answered_by_sharing (body))
-				return body;
-
-			llvm::consumeError (body.takeError ());
-		}
-
-		if (!mono_tier0_compile (method, domain.domain, &code, &jinfo,
-		                         &needs_context, classic_error))
+		if (vtable == nullptr
+		    || !mono_runtime_class_init_full (vtable, classic_error))
 			return runtime_error (classic_error);
-
-		void *entry = code;
-
-		if (needs_context) {
-			// code, not dm.thunk.code (): the thunk is about to be
-			// redirected to this stub, and pointing the stub at the
-			// thunk instead would loop.
-			llvm::Expected<void *> keyed = context_stub (domain, dm, code);
-
-			if (!keyed)
-				return keyed.takeError ();
-
-			entry = *keyed;
-		}
-
-		if (!dm.publish (MonoTier::tier0, entry)) {
-			/*
-			 * The body is left where it is, with no record entry of its own:
-			 * attaching it would report a tier-0 body as the current one while
-			 * the entry names whatever outranked it.
-			 */
-			MONO_PROFILER_RAISE (jit_failed, (method));
-			return Compiled { dm.thunk.code () };
-		}
-
-		dm.attach_body (MonoTier::tier0, entry, jinfo);
-		perf::dump_method (jinfo_get_method (jinfo), jinfo);
-		raise_jit_done (method, jinfo);
-
-		if (mono_use_interpreter)
-			mini_get_interp_callbacks ()->method_compiled (domain.domain, method);
-
-		if (is_jit_trace_enabled ()) {
-			char *name = mono_method_full_name (method, TRUE);
-
-			MONO_LOCK (jit_trace_mutex ())
-			{
-				fprintf (stderr,
-				         "[llvm-jit] compiling %s at tier 0 with the classic "
-				         "compiler (for %s)\n",
-				         name, domain.domain->friendly_name);
-			}
-			g_free (name);
-		}
-
-		return Compiled { entry };
-	}
-#endif
-
-	/*
-	 * Only a method the policy sends to the interpreter reaches this arm, and
-	 * the interpreter is started only where the policy does so. A build with
-	 * no interpreter is the one way past that.
-	 */
-	if (!mono_use_interpreter)
-		return llvm::createStringError (llvm::inconvertibleErrorCode (),
-		                                "the interpreter is not running");
-
-	llvm::Expected<arch::InterpEntryPoint> ready = interp_entry (dm);
-
-	if (!ready)
-		return ready.takeError ();
-
-	ERROR_DECL (transform_error);
-
-	if (!mini_get_interp_callbacks ()->transform_method (method, transform_error)) {
-		llvm::Error refused = llvm::createStringError (
-			llvm::inconvertibleErrorCode (),
-			"the interpreter could not transform the method: %s",
-			mono_error_get_message (transform_error));
-
-		mono_error_cleanup (transform_error);
-		return std::move (refused);
 	}
 
-	void *body = arch::interp_entry_thunk ();
-
 	/*
-	 * A tier above this one can have taken the entry while the transform ran:
-	 * a cctor it ran can call back into this very method and reach the compile
-	 * entry, and a detour outranks every tier at any time. Whatever owns the
-	 * entry keeps it, and the caller goes through the thunk to reach it.
+	 * A reference instantiation enters the shared form's record, as it
+	 * does at the compiled tiers: the body is compiled once, the counter
+	 * it spends is the shared form's, and a promotion or a detour of the
+	 * shared form reaches every instantiation through that record's
+	 * thunk. Compiled against its own instantiation instead, the body
+	 * counts on a record nothing calls and never promotes.
 	 */
-	if (!dm.publish (MonoTier::interp, body))
+	MonoMethod *shared = shared_form (method);
+
+	if (shared != nullptr) {
+		llvm::Expected<Compiled> body =
+			enter_shared_body (domain, dm, shared, MonoTier::tier0);
+
+		if (answered_by_sharing (body))
+			return body;
+
+		llvm::consumeError (body.takeError ());
+	}
+
+	if (!mono_tier0_compile (method, domain.domain, &code, &jinfo,
+	                         &needs_context, classic_error))
+		return runtime_error (classic_error);
+
+	void *entry = code;
+
+	if (needs_context) {
+		// code, not dm.thunk.code (): the thunk is about to be
+		// redirected to this stub, and pointing the stub at the
+		// thunk instead would loop.
+		llvm::Expected<void *> keyed = context_stub (domain, dm, code);
+
+		if (!keyed)
+			return keyed.takeError ();
+
+		entry = *keyed;
+	}
+
+	if (!dm.publish (MonoTier::tier0, entry)) {
+		/*
+		 * The body is left where it is, with no record entry of its own:
+		 * attaching it would report a tier-0 body as the current one while
+		 * the entry names whatever outranked it.
+		 */
+		MONO_PROFILER_RAISE (jit_failed, (method));
 		return Compiled { dm.thunk.code () };
+	}
 
-	dm.attach_body (MonoTier::interp, body, nullptr);
+	dm.attach_body (MonoTier::tier0, entry, jinfo);
+	perf::dump_method (jinfo_get_method (jinfo), jinfo);
+	raise_jit_done (method, jinfo);
 
 	if (is_jit_trace_enabled ()) {
 		char *name = mono_method_full_name (method, TRUE);
 
 		MONO_LOCK (jit_trace_mutex ())
 		{
-			fprintf (stderr, "[llvm-jit] interpreting %s (for %s)\n", name,
-			         domain.domain->friendly_name);
+			fprintf (stderr,
+			         "[llvm-jit] compiling %s at tier 0 with the classic "
+			         "compiler (for %s)\n",
+			         name, domain.domain->friendly_name);
 		}
 		g_free (name);
 	}
 
-	return Compiled { body };
+	return Compiled { entry };
+#endif
 }
 
 llvm::Expected<void *>
@@ -887,16 +815,6 @@ MonoBackend::body_for_current_domain (MonoMethod *method)
 		                                  + llvm::toString (published.takeError ()),
 		                          false);
 
-	/*
-	 * The interpreter's entry reads its MonoMethod * out of the register the
-	 * method's own thunk writes. A dispatcher does not go through that thunk: it
-	 * gets here through a C call, which destroys the register, and it leaves
-	 * with a musttail jump. LLVM holds a value in %r10 across both, because the
-	 * nest attribute pins one there, but it has nothing that pins %r11 - the
-	 * register allocator takes %r11 for stack-argument copies and for the tail
-	 * jump itself. So a method a dispatcher answers for is compiled, whatever
-	 * tier it runs at elsewhere.
-	 */
 	llvm::Expected<void *> body =
 		instance->entry_point (**domain, **published, /*allow_tier0=*/false);
 
@@ -914,8 +832,7 @@ MonoBackend::entry_point (DomainState &domain, MonoDomainMethod &dm, bool allow_
 	for (;;) {
 		std::optional<MonoMethodBody> ready = dm.body ();
 
-		if (ready && !recompiling (dm.method)
-		    && (allow_tier0 || ready->code != arch::interp_entry_thunk ()))
+		if (ready && !recompiling (dm.method))
 			return ready->code;
 
 		llvm::Expected<Compiled> code =
@@ -1160,16 +1077,6 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 				      << (*owner)->name << "\n";
 		}
 
-	/*
-	 * The instantiation has an entry now, and this is the only place that says
-	 * so: the notification the compile path sends names the method a body was
-	 * built for, which here is the shared form. The interpreter keeps nothing
-	 * for that one - it runs the instantiation - so without this an interpreted
-	 * caller goes on interpreting a method it could call.
-	 */
-	if (mono_use_interpreter)
-		mini_get_interp_callbacks ()->method_compiled (domain.domain, dm.method);
-
 	return Compiled { entry, nullptr };
 }
 
@@ -1218,16 +1125,16 @@ MonoBackend::compile_body (DomainState &domain, MonoDomainMethod &dm, bool allow
                            MonoTier tier, bool for_sharing)
 {
 	if (allow_tier0) {
-		llvm::Expected<Compiled> interpreted = tier0_entry (domain, dm);
+		llvm::Expected<Compiled> tier0 = tier0_entry (domain, dm);
 
-		if (interpreted)
-			return *interpreted;
+		if (tier0)
+			return *tier0;
 
 		/*
-		 * The interpreter refusing the method is not a failure: the method
-		 * gets compiled like anything else.
+		 * Tier 0 refusing the method is not a failure: the method gets
+		 * compiled like anything else.
 		 */
-		llvm::consumeError (interpreted.takeError ());
+		llvm::consumeError (tier0.takeError ());
 	}
 
 	// Sharing is decided below, per member, so this route and promotion get the
@@ -1520,15 +1427,6 @@ MonoBackend::compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMetho
 		if (result.published != nullptr)
 			raise_jit_done (jinfo_get_method (result.published), result.published);
 
-		/*
-		 * A method the interpreter is already running calls its callees by
-		 * interpreting them, and has no other way of noticing that one of them
-		 * has since been given code to call instead.
-		 */
-		if (mono_use_interpreter)
-			mini_get_interp_callbacks ()->method_compiled (domain.domain,
-			                                               dms[i]->method);
-
 		compiled.push_back (*result.code);
 	}
 
@@ -1553,11 +1451,11 @@ allow_batched_compile (MonoMethod *method, MonoTier tier)
 }
 
 /*
- * Runs on a mutator thread that just used up a promotion counter - the
- * interpreter's for tier 0, a tier-1 body's own instrumentation for tier 2 -
- * so it hands everything it can to the compile queue. Nothing waits for the
- * result, and a compile that fails once it is running leaves the method at
- * the tier it is at.
+ * Runs on a mutator thread that just used up a promotion counter - classic
+ * tier 0's own to reach tier 1, a tier-1 body's own instrumentation to reach
+ * tier 2 - so it hands everything it can to the compile queue. Nothing waits
+ * for the result, and a compile that fails once it is running leaves the
+ * method at the tier it is at.
  */
 bool
 MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier tier)
@@ -1627,8 +1525,6 @@ MonoBackend::request_promotion (MonoMethod *method, MonoDomain *domain, MonoTier
 		std::vector<MonoDomainMethod *> records;
 
 		for (MonoMethod *method : methods) {
-			/* The interpreter reaches a callee without the backend being
-			 * asked for it, so there may be no state for this method yet. */
 			llvm::Expected<MonoDomainMethod *> published =
 				publish (*owner, method);
 
@@ -1867,15 +1763,7 @@ MonoBackend::body_of (MonoDomain *domain, MonoMethod *method)
 
 	std::optional<MonoMethodBody> body = dm->body ();
 
-	/*
-	 * An interpreted method gets null here, as if it had no body. What it has
-	 * is the entry thunk, which every interpreted method shares, so handing it
-	 * back names no method in particular. A caller takes it for a body: it
-	 * looks up the jit info by address. The interpreter reads that as "this
-	 * has native code now" and starts calling through the native boundary
-	 * instead of interpreting the method.
-	 */
-	if (!body || body->tier == MonoTier::interp)
+	if (!body)
 		return nullptr;
 	return body->code;
 }
@@ -2006,8 +1894,8 @@ MonoBackend::stub_for (MonoMethod *method, MonoDomain *domain)
 
 	/*
 	 * The same answer compile () gives. A method has one address, so the
-	 * engine that asks must not decide which one it gets: the interpreter
-	 * reaches here for its ldftn and the icall reaches compile ().
+	 * caller that asks must not decide which one it gets: ldftn reaches
+	 * here and the icall reaches compile ().
 	 */
 	return published_entry (**published);
 }

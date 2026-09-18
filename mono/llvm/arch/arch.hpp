@@ -57,36 +57,6 @@ void lazy_frame_enter (void *frame, uint64_t caller_fp, uint64_t caller_sp);
 /// linked, returning the exception to throw or null.
 void *lazy_frame_leave (void *frame);
 
-/// Links a frame onto the LMF chain for the length of a call into the
-/// interpreter, standing for the managed frame that made the call. \p frame
-/// is interp_frame_size bytes.
-void interp_frame_enter (void *frame, const InterpArgContext *args);
-
-void interp_frame_leave (void *frame);
-
-/// Plans how a call to a method is passed to its compiled body.
-///
-/// \p shape is a declaration of the method in this backend's own convention,
-/// and only its type and attributes are read. \p sig is the method's
-/// signature.
-///
-/// An error says this machine's dyn call cannot carry a call like that, and
-/// the caller has to reach the method another way.
-///
-/// The plan holds no metadata and never changes, so a caller that reaches
-/// several methods of one prototype can share one.
-llvm::Expected<std::unique_ptr<DynCallPlan>> plan_dyn_call (llvm::Function *shape,
-                                                            MonoMethodSignature *sig);
-
-/// Calls \p target under \p plan, with \p args pointing at each argument's
-/// value and \p ret at room for the return.
-///
-/// \p frame is DynCallPlan::frame_size bytes and need not be initialized.
-///
-/// The call runs on this thread, so the caller owes it an LMF. An exception
-/// that leaves \p target unwinds past this without reading its frame.
-void dyn_call (const DynCallPlan &plan, void *target, void **args, void *ret, void *frame);
-
 /// Returns the slot holding the runtime's rethrow-preserving throw
 /// trampoline. The slot's value is read at throw time, so this can be called
 /// before the runtime installs the trampoline.
@@ -156,22 +126,6 @@ llvm::Function *create_mono_entry_thunk (llvm::Module &m, llvm::StringRef name,
 /// reach every other, so a target out of range is a fatal error rather than a
 /// wrong jump.
 void write_context_stub (char *at, void *context, void *target);
-
-/// Plans how a call to a method is taken apart into the arguments the
-/// interpreter wants.
-///
-/// \p shape is a declaration of the method in this backend's own convention,
-/// and only its type is read. \p sig is the method's signature.
-///
-/// An error says this machine's entry cannot carry a call like that, and the
-/// method has to be compiled rather than interpreted.
-llvm::Expected<InterpEntryLayout> plan_interp_entry (llvm::Function *shape,
-                                                     MonoMethodSignature *sig);
-
-/// Returns the code an interpreted method's stub is pointed at, entered with
-/// the MonoMethod * in a register the stub set up. It registers with the
-/// runtime on first call, so a stack walk can cross it.
-void *interp_entry_thunk ();
 
 } // namespace mono::arch
 

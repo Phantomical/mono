@@ -120,11 +120,10 @@ is_gshared_vt_wrapper (MonoMethod *m)
 {
 	if (m->wrapper_type != MONO_WRAPPER_OTHER)
 		return FALSE;
-	return !strcmp (m->name, "interp_in") || !strcmp (m->name, "gsharedvt_out_sig");
+	return !strcmp (m->name, "gsharedvt_out_sig");
 }
 
-/* ENTER:i <- interp
- * ENTER:c <- compiled (JIT or AOT)
+/* ENTER:c <- compiled (JIT or AOT)
  * ENTER:u <- no JitInfo available
  */
 static char
@@ -132,9 +131,6 @@ frame_kind (MonoJitInfo *ji)
 {
 	if (!ji)
 		return 'u';
-
-	if (ji->is_interp)
-		return 'i';
 
 	return 'c';
 }

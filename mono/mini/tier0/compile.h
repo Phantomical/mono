@@ -778,8 +778,6 @@ typedef enum {
 	JIT_FLAG_DIRECT_PINVOKE = (1 << 7),
 	/* Whenever this is a compile-all run and the result should be discarded */
 	JIT_FLAG_DISCARD_RESULTS = (1 << 8),
-	/* Whenever to generate code which can work with the interpreter */
-	JIT_FLAG_INTERP = (1 << 9),
 	/* Allow AOT to use all current CPU instructions */
 	JIT_FLAG_USE_CURRENT_CPU = (1 << 10),
 	/* Generate code to self-init the method for AOT */
@@ -1012,12 +1010,10 @@ typedef struct MonoCompile {
 	 * an assumption parts of the front-end otherwise make.
 	 */
 	guint            llvm_ir_only : 1;
-	guint            interp : 1;
 	guint            use_current_cpu : 1;
 	guint            self_init : 1;
 	guint            domainvar_inited : 1;
 	guint            code_exec_only : 1;
-	guint            interp_entry_only : 1;
 	guint8           uses_simd_intrinsics;
 	int              r4_stack_type;
 	gpointer         debug_info;
@@ -1119,7 +1115,6 @@ typedef struct MonoCompile {
 	GSList *rgctx_loclist;
 	int *gsharedvt_vreg_to_idx;
 	GSList *signatures;
-	GSList *interp_in_signatures;
 	/* GC Maps */
    
 	/* The offsets of the locals area relative to the frame pointer */

@@ -484,13 +484,8 @@ TEST_F (SimdBodies, EachPrefetchNameTakesItsOwnLocality)
 	EXPECT_EQ (all_levels.count ("i32 0, i32 3, i32 1"), 1u) << all_levels.text ();
 }
 
-// AccelMode's managed body answers None whatever the target is, so a row could
-// only answer by computing something its own IL does not. il_agrees false is
-// not enough to make that safe: it reaches runs_at_tier0 (), which decides only
-// for methods the backend is asked about, and the interpreter never asks about
-// a callee it reached itself. Such a row measured 0x0 under an interpreted
-// caller against 0x3F under a compiled one on the same host. The interpreter is
-// tier 0 only under -mono-tier0-classic=0, so that is the arm the hole is in.
+// AccelMode's managed body answers None whatever the target is, so a row would
+// have to compute something its own IL does not.
 TEST_F (SimdBodies, AccelModeIsLeftOnItsOwnIl)
 {
 	MonoMethod *method = find_method ("Mono.Simd", acceleration_mode);

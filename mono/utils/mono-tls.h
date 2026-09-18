@@ -209,8 +209,8 @@ G_EXTERN_C MonoLMF       **mono_tls_get_lmf_addr_extern (void);
 
 // Tls variables for each MonoTlsKey.
 //
-// G_EXTERN_C_VAR because the interpreter, the backend and the collector read
-// these from C++, and mono/utils/mono-tls.c defines them.  A global variable
+// G_EXTERN_C_VAR because the backend and the collector read these from C++,
+// and mono/utils/mono-tls.c defines them.  A global variable
 // keeps its source name under the Itanium ABI whichever language declared it,
 // so the mismatch resolves by accident there; MSVC decorates the C++ spelling
 // and the reference then names nothing.

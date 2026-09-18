@@ -29,7 +29,6 @@ namespace mono {
  */
 enum class DumpPoint : uint32_t {
 	il = 1u << 0,        ///< `il`: the method's CIL.
-	mint = 1u << 1,      ///< `mint`: the bytecode the interpreter runs.
 	unopt_ir = 1u << 2,  ///< `unopt-ir`: the IR the translator wrote.
 	tier1_ir = 1u << 3,  ///< `tier1-ir`: that IR after the tier-1 pipeline.
 	/// `tier2-inlined-ir`: the IR the tier-2 inliners leave, in front of the

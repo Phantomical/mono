@@ -152,8 +152,6 @@ public:
 
 		// The tier bits test needs a classic tier-0 body, which carries a jit
 		// info. It also promotes through tier 1 and tier 2 for real.
-		if (mono_llvm_jit_interp_tier0_enabled ())
-			GTEST_SKIP () << "the interpreter is tier 0 here, so this checks nothing";
 		if (!mono_llvm_jit_tier0_enabled ())
 			GTEST_SKIP () << "tier 0 is off in this configuration";
 		if (!mono_llvm_jit_tier2_enabled ())

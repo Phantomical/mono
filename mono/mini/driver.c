@@ -67,7 +67,6 @@
 #include "jit.h"
 #include "aot-runtime.h"
 #include "mini-runtime.h"
-#include "mono/interp/interp.h"
 #include "../llvm/runtime.h"
 
 #include <string.h>
@@ -275,48 +274,6 @@ mono_opt_descr (guint32 flags) {
 	return g_string_free (str, FALSE);
 }
 
-static const guint32
-interp_opt_sets [] = {
-	INTERP_OPT_NONE,
-	INTERP_OPT_INLINE,
-	INTERP_OPT_CPROP,
-	INTERP_OPT_INLINE | INTERP_OPT_CPROP,
-	INTERP_OPT_INLINE | INTERP_OPT_CPROP | INTERP_OPT_BBLOCKS,
-};
-
-static const char* const
-interp_opflags_names [] = {
-	"inline",
-	"cprop",
-	"bblocks"
-};
-
-static const char*
-interp_optflag_get_name (guint32 i)
-{
-	g_assert (i < G_N_ELEMENTS (interp_opflags_names));
-	return interp_opflags_names [i];
-}
-
-static char*
-interp_opt_descr (guint32 flags)
-{
-	GString *str = g_string_new ("");
-	int i;
-	gboolean need_comma;
-
-	need_comma = FALSE;
-	for (i = 0; i < G_N_ELEMENTS (interp_opflags_names); ++i) {
-		if (flags & (1 << i) && interp_optflag_get_name (i)) {
-			if (need_comma)
-				g_string_append_c (str, ',');
-			g_string_append (str, interp_optflag_get_name (i));
-			need_comma = TRUE;
-		}
-	}
-	return g_string_free (str, FALSE);
-}
-
 typedef int (*TestMethod) (void);
 
 #if 0
@@ -332,7 +289,7 @@ static int regression_test_skip_index;
 
 
 static gboolean
-method_should_be_regression_tested (MonoMethod *method, gboolean interp)
+method_should_be_regression_tested (MonoMethod *method)
 {
 	ERROR_DECL (error);
 
@@ -392,11 +349,6 @@ method_should_be_regression_tested (MonoMethod *method, gboolean interp)
 		g_free (named_args);
 		g_free (arginfo);
 
-		if (interp && !strcmp (utf8_str, "!INTERPRETER")) {
-			g_print ("skip %s...\n", method->name);
-			return FALSE;
-		}
-
 #if HOST_WASM
 		if (!strcmp (utf8_str, "!WASM")) {
 			g_print ("skip %s...\n", method->name);
@@ -440,7 +392,7 @@ mini_regression_step (MonoImage *image, int verbose, int *total_run, int *total,
 			mono_error_cleanup (error); /* FIXME don't swallow the error */
 			continue;
 		}
-		if (method_should_be_regression_tested (method, FALSE)) {
+		if (method_should_be_regression_tested (method)) {
 			TestMethod func;
 
 			expected = atoi (method->name + 5);
@@ -595,149 +547,6 @@ mini_regression_list (int verbose, int count, char *images [])
 	
 	return total;
 }
-
-static void
-interp_regression_step (MonoImage *image, int verbose, int *total_run, int *total, const guint32 *opt_flags, GTimer *timer, MonoDomain *domain)
-{
-	int result, expected, failed, cfailed, run;
-	double elapsed, transform_time;
-	int i;
-	MonoObject *result_obj;
-	int local_skip_index = 0;
-
-	const char *n = NULL;
-	if (opt_flags) {
-		mini_get_interp_callbacks ()->set_optimizations (*opt_flags);
-		n = interp_opt_descr (*opt_flags);
-	} else {
-		n = mono_interp_opts_string;
-	}
-	g_print ("Test run: image=%s, opts=%s\n", mono_image_get_filename (image), n);
-
-	cfailed = failed = run = 0;
-	transform_time = elapsed = 0.0;
-
-	mini_get_interp_callbacks ()->invalidate_transformed (domain);
-
-	g_timer_start (timer);
-	for (i = 0; i < mono_image_get_table_rows (image, MONO_TABLE_METHOD); ++i) {
-		ERROR_DECL (error);
-		MonoMethod *method = mono_get_method_checked (image, MONO_TOKEN_METHOD_DEF | (i + 1), NULL, NULL, error);
-		if (!method) {
-			mono_error_cleanup (error); /* FIXME don't swallow the error */
-			continue;
-		}
-
-		if (method_should_be_regression_tested (method, TRUE)) {
-			ERROR_DECL (interp_error);
-			MonoObject *exc = NULL;
-
-			if (do_regression_retries) {
-				++local_skip_index;
-
-				if(local_skip_index <= regression_test_skip_index)
-					continue;
-				++regression_test_skip_index;
-			}
-
-			result_obj = mini_get_interp_callbacks ()->runtime_invoke (method, NULL, NULL, &exc, interp_error);
-			if (!is_ok (interp_error)) {
-				cfailed++;
-				g_print ("Test '%s' execution failed.\n", method->name);
-			} else if (exc != NULL) {
-				g_print ("Exception in Test '%s' occurred:\n", method->name);
-				mono_object_describe (exc);
-				run++;
-				failed++;
-			} else {
-				result = *(gint32 *) mono_object_unbox_internal (result_obj);
-				expected = atoi (method->name + 5);  // FIXME: oh no.
-				run++;
-
-				if (result != expected) {
-					failed++;
-					g_print ("Test '%s' failed result (got %d, expected %d).\n", method->name, result, expected);
-				}
-			}
-		}
-	}
-	g_timer_stop (timer);
-	elapsed = g_timer_elapsed (timer, NULL);
-	if (failed > 0 || cfailed > 0){
-		g_print ("Results: total tests: %d, failed: %d, cfailed: %d (pass: %.2f%%)\n",
-				run, failed, cfailed, 100.0*(run-failed-cfailed)/run);
-	} else {
-		g_print ("Results: total tests: %d, all pass \n",  run);
-	}
-
-	g_print ("Elapsed time: %f secs (%f, %f)\n\n", elapsed,
-			elapsed - transform_time, transform_time);
-	*total += failed + cfailed;
-	*total_run += run;
-}
-
-static int
-interp_regression (MonoImage *image, int verbose, int *total_run)
-{
-	MonoMethod *method;
-	GTimer *timer = g_timer_new ();
-	MonoDomain *domain = mono_domain_get ();
-	guint32 i;
-	int total;
-
-	/* load the metadata */
-	for (i = 0; i < mono_image_get_table_rows (image, MONO_TABLE_METHOD); ++i) {
-		ERROR_DECL (error);
-		method = mono_get_method_checked (image, MONO_TOKEN_METHOD_DEF | (i + 1), NULL, NULL, error);
-		if (!method) {
-			mono_error_cleanup (error);
-			continue;
-		}
-		mono_class_init_internal (method->klass);
-	}
-
-	total = 0;
-	*total_run = 0;
-
-	if (mono_interp_opts_string) {
-		/* explicit option requested*/
-		interp_regression_step (image, verbose, total_run, &total, NULL, timer, domain);
-	} else {
-		for (int opt = 0; opt < G_N_ELEMENTS (interp_opt_sets); ++opt)
-			interp_regression_step (image, verbose, total_run, &total, &interp_opt_sets [opt], timer, domain);
-	}
-
-	g_timer_destroy (timer);
-	return total;
-}
-
-/* TODO: merge this code with the regression harness of the JIT */
-static int
-mono_interp_regression_list (int verbose, int count, char *images [])
-{
-	int i, total, total_run, run;
-
-	total_run = total = 0;
-	for (i = 0; i < count; ++i) {
-		MonoAssemblyOpenRequest req;
-		mono_assembly_request_prepare_open (&req, MONO_ASMCTX_DEFAULT, mono_domain_default_alc (mono_get_root_domain ()));
-		MonoAssembly *ass = mono_assembly_request_open (images [i], &req, NULL);
-		if (!ass) {
-			g_warning ("failed to load assembly: %s", images [i]);
-			continue;
-		}
-		total += interp_regression (mono_assembly_get_image_internal (ass), verbose, &run);
-		total_run += run;
-	}
-	if (total > 0) {
-		g_print ("Overall results: tests: %d, failed: %d (pass: %.2f%%)\n", total_run, total, 100.0*(total_run-total)/total_run);
-	} else {
-		g_print ("Overall results: tests: %d, 100%% pass\n", total_run);
-	}
-
-	return total;
-}
-
 
 #ifdef MONO_JIT_INFO_TABLE_TEST
 typedef struct _JitInfoData
@@ -1442,12 +1251,6 @@ mono_get_version_info (void)
 #endif
 	g_string_append_printf (output, "\n");
 
-#ifndef DISABLE_INTERPRETER
-	g_string_append_printf (output, "\tInterpreter:   yes\n");
-#else
-	g_string_append_printf (output, "\tInterpreter:   no\n");
-#endif
-
 #ifdef MONO_ARCH_LLVM_SUPPORTED
 #ifdef ENABLE_LLVM
 	g_string_append_printf (output, "\tLLVM:          yes(%d)\n", LLVM_API_VERSION);
@@ -1705,35 +1508,10 @@ apply_root_domain_configuration_file_bindings (MonoDomain *domain, char *root_do
 #endif
 }
 
-static void
-mono_check_interp_supported (void)
-{
-#ifdef MONO_CROSS_COMPILE
-	g_error ("--interpreter on cross-compile runtimes not supported\n");
-#endif
-
-#ifndef MONO_ARCH_INTERPRETER_SUPPORTED
-	g_error ("--interpreter not supported on this architecture.\n");
-#endif
-}
-
 static int
 mono_exec_regression_internal (int verbose_level, int count, char *images [], gboolean single_method)
 {
 	mono_do_single_method_regression = single_method;
-	/*
-	 * Only when the interpreter is the whole engine. It can also be started
-	 * alongside the JIT, with each method routed to one or the other as it is
-	 * first entered, and that is the JIT's harness running tests that happen
-	 * to be interpreted - not the interpreter's.
-	 */
-	if (mono_ee_features.force_use_interpreter) {
-		if (mono_interp_regression_list (verbose_level, count, images)) {
-			g_print ("Regression ERRORS!\n");
-			return 1;
-		}
-		return 0;
-	}
 	if (mini_regression_list (verbose_level, count, images)) {
 		g_print ("Regression ERRORS!\n");
 		return 1;
@@ -2117,11 +1895,6 @@ mono_main (int argc, char* argv[])
 			mono_llvm_jit_add_option (argv [i] + 11);
 		} else if (strcmp (argv [i], "--ffast-math") == 0){
 			mono_use_fast_math = TRUE;
-		} else if ((strcmp (argv [i], "--interpreter") == 0) || !strcmp (argv [i], "--interp")) {
-			mono_runtime_set_execution_mode (MONO_EE_MODE_INTERP);
-		} else if (strncmp (argv [i], "--interp=", 9) == 0) {
-			mono_runtime_set_execution_mode_full (MONO_EE_MODE_INTERP, FALSE);
-			mono_interp_opts_string = argv [i] + 9;
 		} else if (strcmp (argv [i], "--print-icall-table") == 0) {
 #ifdef ENABLE_ICALL_SYMBOL_MAP
 			print_icall_table ();
@@ -2259,7 +2032,7 @@ mono_main (int argc, char* argv[])
 	}
 
 #ifdef DISABLE_JIT
-	if (!mono_aot_only && !mono_use_interpreter) {
+	if (!mono_aot_only) {
 		fprintf (stderr, "This runtime has been configured with --enable-minimal=jit, so the --full-aot command line option is required.\n");
 		exit (1);
 	}
@@ -2526,34 +2299,23 @@ mono_runtime_set_execution_mode_full (int mode, gboolean override)
 
 	case MONO_AOT_MODE_INTERP:
 		mono_aot_only = TRUE;
-		mono_use_interpreter = TRUE;
 
 		mono_ee_features.use_aot_trampolines = TRUE;
 		break;
 
 	case MONO_AOT_MODE_INTERP_LLVMONLY:
 		mono_aot_only = TRUE;
-		mono_use_interpreter = TRUE;
 		mono_llvm_only = TRUE;
-
-		mono_ee_features.force_use_interpreter = TRUE;
 		break;
 
 	case MONO_AOT_MODE_LLVMONLY_INTERP:
 		mono_aot_only = TRUE;
-		mono_use_interpreter = TRUE;
 		mono_llvm_only = TRUE;
-		break;
-
-	case MONO_AOT_MODE_INTERP_ONLY:
-		mono_check_interp_supported ();
-		mono_use_interpreter = TRUE;
-
-		mono_ee_features.force_use_interpreter = TRUE;
 		break;
 
 	case MONO_AOT_MODE_NORMAL:
 	case MONO_AOT_MODE_NONE:
+	case MONO_AOT_MODE_INTERP_ONLY:
 		break;
 
 	default:

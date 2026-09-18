@@ -1,10 +1,10 @@
 using System;
 using System.Runtime.CompilerServices;
 
-// --llvm-opt=-mono-tier0-classic=ClassInit puts the three entries below on the
-// classic compiler. Each is the first thing its class is reached through, and
-// each has to find the class initialized: tier 0 is where a class initializer
-// runs, and a call to a static method carries no check of its own.
+// The three entries below are each the first thing its class is reached
+// through. Each has to find the class initialized: tier 0 is where a class
+// initializer runs, and a call to a static method carries no check of its
+// own.
 //
 // ClassInitPlain covers a static method, ClassInitAggressive one the callee
 // itself is marked AggressiveInlining on, and ClassInitField a static field

@@ -5,17 +5,6 @@
  * Each row must reproduce the managed body lane for lane. Tier 0 runs that body,
  * and a method's answer must not change when it promotes. Write a row from the
  * body, never from the SSE instruction it is expected to select.
- *
- * il_agrees false does not buy a way out of that rule here. It reaches
- * runs_at_tier0 (), which decides only for methods the backend is asked about,
- * and the interpreter never asks about a callee it reached itself. So a row
- * computing something its own IL does not answers one way under an interpreted
- * caller and another under a compiled one. SimdRuntime.get_AccelMode is the
- * method that wants such a row, and it is left on its IL for this reason.
- *
- * That hole is the interpreter's alone, and -mono-tier0-classic=0 is what
- * reaches it. A classic tier-0 body calls through the callee's thunk, so the
- * backend is asked about every callee and the refusal holds.
  */
 
 #include "intrinsics.hpp"

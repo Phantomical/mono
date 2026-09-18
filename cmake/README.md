@@ -96,7 +96,6 @@ which is what the `@sgen` and `@boehm` suffixes on those test names mean.
 
 | variable | default | what it does |
 | --- | --- | --- |
-| `MONO_ENABLE_INTERPRETER` | ON | Build the IL interpreter. |
 | `MONO_ENABLE_JIT` | ON | Build the JIT. Off compiles the runtime with `DISABLE_JIT`. |
 | `MONO_ENABLE_DEBUGGER_AGENT` | ON | Build the soft debugger agent. |
 | `MONO_ENABLE_PROFILER` | ON | Build the profiler modules. |
@@ -107,10 +106,6 @@ which is what the `@sgen` and `@boehm` suffixes on those test names mean.
 | `MONO_STATIC_MONO` | ON | Link libmini into the `mono` binaries statically. |
 | `MONO_ENABLE_CRASH_REPORTING` | ON | Build the structured crash reporter. |
 | `MONO_CRASH_PRIVACY` | ON | Scrub private data from crash dumps. |
-
-The interpreter is tier 0, so turning it off changes how the runtime executes
-rather than what it ships: every method then compiles on its first call, and
-tier 1 becomes the entry tier. `mini_init ()` wires the two engines together.
 
 Turning off `MONO_ENABLE_EXECUTABLES` or `MONO_ENABLE_MCS_BUILD` takes the test
 corpora with it. `MonoCorpus.cmake` needs both.
@@ -210,7 +205,6 @@ part of `all`.
 | `MONO_ENABLE_DEV_RANDOM` | ON | Seed crypto from `/dev/random`. |
 | `MONO_ENABLE_BIG_ARRAYS` | OFF | Allow arrays larger than `Int32.MaxValue`. |
 | `MONO_ENABLE_JIT_DUMP` | ON | Emit perf jitdump files. |
-| `MONO_ENABLE_INTERP_TRACE` | OFF | Build the interpreter's execution tracer. |
 | `MONO_UNITY_DEFINE` | ON | Define `UNITY` in config.h. |
 
 Two standard variables do not behave as they do elsewhere.
@@ -325,10 +319,6 @@ machine's core count.
 | `runtime` | the `mono/tests` corpus (~700 programs) and its one-off suites | `check-all` |
 | `gshared` | generic sharing, over four optimization sets | `check-all` |
 | `sgen` | the SGen collector matrix, 42 configurations | `check-all` |
-| `interp` | the whole corpus again under the interpreter | `check-all` |
-| `interp-unit` | the interpreter's own tests, under `mono/unit-tests` | `check-all` |
-| `interp-jit` / `interp-tier2` | the same programs with the interpreter off, and again at tier 2 | `check-all` |
-| `interp-mixed` | the same programs promoting mid-run | no |
 | `bcl` | the class libraries' own NUnit suites, one per assembly | `check-all` |
 | `bcl-xunit` | the same for the corefx-derived xunit suites | `check-all` |
 | `compiler` | `mcs/tests` and `mcs/errors`, ~6000 programs each | `check-all` |
@@ -336,12 +326,6 @@ machine's core count.
 | `slow` | minutes-long single tests | no |
 | `stress` | long-running stress tests | no |
 | `acceptance` | the external corpora, under `MONO_ENABLE_ACCEPTANCE_TESTS` | no |
-
-Both targets select by regex over the labels, so `interp` in `check`'s exclusion
-list takes the four `interp-*` sets with it. The four have targets of their own:
-`check-interp`, `check-interp-jit`, `check-interp-tier2` and
-`check-interp-mixed`. A program that answers differently under two of them is
-the two engines, or the two compiled tiers, disagreeing about the same IL.
 
 The suites that drive `test-runner.exe` already use every core, so they carry a
 `PROCESSORS` property and CTest runs them one at a time while packing the

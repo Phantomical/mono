@@ -56,7 +56,6 @@ struct PointNames {
 /// describes.
 const PointNames points[] = {
 	{ DumpPoint::il, "il", "il" },
-	{ DumpPoint::mint, "mint", "mint" },
 	{ DumpPoint::unopt_ir, "unopt-ir", "ll" },
 	{ DumpPoint::tier1_ir, "tier1-ir", "ll" },
 	{ DumpPoint::tier2_inlined_ir, "tier2-inlined-ir", "ll" },

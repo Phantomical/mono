@@ -3,15 +3,12 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 
-// Managed value types crossing every call boundary between the engines in one
-// process: the interpreter, classic tier 0, LLVM tier 1, and the invoke
-// wrapper the runtime compiles for a delegate.
+// Managed value types crossing every call boundary between classic tier 0,
+// LLVM tier 1, and the invoke wrapper the runtime compiles for a delegate.
 //
 // Three role classes hold the same set of takers and makers, so one struct
-// kind can be driven in either direction. StructAbiClassic is what
-// --llvm-opt=-mono-tier0-classic names, StructAbiFast is promoted to tier 1
-// by hand, and StructAbiInterp is never asked for at all, which is what
-// leaves it interpreted.
+// kind can be driven in either direction: StructAbiClassic and StructAbiInterp
+// both stay at tier 0, and StructAbiFast is promoted to tier 1 by hand.
 //
 // Every taker reads a scalar in front of its struct and a scalar behind it
 // and answers with their sum. A convention that spends a different number of

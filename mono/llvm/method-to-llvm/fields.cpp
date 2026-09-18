@@ -655,10 +655,9 @@ MethodLLVMEmitter::thread_static_slot (MonoClassField *field)
 
 	/*
 	 * Creating the declaring class's vtable is what assigns the offset, and this
-	 * asks without creating one. A method reaches tier 1 by being interpreted
-	 * first, and the interpreter's own transform creates that vtable at the same
-	 * site, so what this misses is a site tier 0 never ran - a cold arm, where
-	 * the icall costs nothing.
+	 * asks without creating one. A method reaches tier 1 by tier 0 refusing it,
+	 * so what this misses is a site tier 0 never ran - a cold arm, where the
+	 * icall costs nothing.
 	 */
 	if (!mono_special_static_field_offset (cfg->domain, field, &packed))
 		return std::nullopt;

@@ -40,12 +40,13 @@ using System.Runtime.CompilerServices;
  * KeptStringStep is KeptArrayStep's arm for it: the length store and the
  * characters both have to survive whichever tier compiles the call.
  *
- * Each arm is one call of a small method, driven from a loop in Main. A method
- * holding its own loop is entered once, and both counters count entries, so the
- * arm would stay in the interpreter. The loop count gets the arms to tier 1.
- * Reaching tier 2 as well wants the tier-2 threshold lowered, because these
- * bodies are short enough that the program ends first. The
- * `runtime-alloc-zeroed` arm lowers it, which is what reaches GVN and DSE.
+ * Each arm is one call of a small method, driven from a loop in Main. Calling
+ * it this way, rather than looping inside the method itself, lets both
+ * thresholds count call entries rather than loop turns: entry weight promotes
+ * a body this small far sooner than an internal loop would. The loop count
+ * gets the arms to tier 1. Reaching tier 2 as well wants the tier-2 threshold
+ * lowered, because these bodies are short enough that the program ends first.
+ * The `runtime-alloc-zeroed` arm lowers it, which is what reaches GVN and DSE.
  */
 
 class Untouched {
@@ -251,7 +252,7 @@ class AllocElide {
 		Vec a = new Vec (3, 4, 5), b = new Vec (1, 2, 3);
 		Cell cell = new Cell ();
 
-		/* Enough entries to leave the interpreter and both compiled tiers. */
+		/* Enough entries to leave tier 0 and reach both compiled tiers. */
 		for (int i = 0; i < N; ++i) {
 			zero += ZeroStep ();
 			kept += KeptStep (i);

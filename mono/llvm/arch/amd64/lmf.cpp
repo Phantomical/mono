@@ -24,7 +24,6 @@
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Intrinsics.h>
 
-#include <cstring>
 #include <optional>
 
 namespace mono::arch {
@@ -48,22 +47,6 @@ struct TransitionFrame {
 
 static_assert (sizeof (TransitionFrame) <= managed_frame_size,
                "a caller does not reserve enough for a transition frame");
-
-/*
- * What interp_frame_enter () reserves stack for. The zeroing that TransitionFrame
- * lives with is not affordable here: an interpreted method can throw anything, so
- * an exception crossing this frame is ordinary rather than exceptional, and there
- * is no wrapper above it to put the registers back. A MonoLMFTramp instead, whose
- * context the unwinder copies out verbatim.
- */
-struct InterpTransitionFrame {
-	MonoLMFTramp lmf;
-	MonoContext ctx;
-	MonoLMF **addr;
-};
-
-static_assert (sizeof (InterpTransitionFrame) <= interp_frame_size,
-               "a caller does not reserve enough for an interpreter frame");
 
 namespace {
 
@@ -120,65 +103,6 @@ lazy_frame_leave (void *frame)
 	 * wrapper for a caller. The ordinary checkpoint declines while one is there.
 	 */
 	return mono_thread_force_interruption_checkpoint_noraise ();
-}
-
-void
-interp_frame_enter (void *frame, const InterpArgContext *args)
-{
-	InterpTransitionFrame *entry = static_cast<InterpTransitionFrame *> (frame);
-	uint64_t caller_sp = (uint64_t) args->stack;
-
-	entry->addr = mono_tls_get_lmf_addr ();
-
-	if (!entry->addr)
-		return;
-
-	/*
-	 * The caller as it stood at the call: its return address sits directly
-	 * below the arguments it pushed, and the callee-saved registers are the
-	 * ones the thunk spilled, untouched since.
-	 */
-	memset (&entry->ctx, 0, sizeof (entry->ctx));
-	entry->ctx.gregs[AMD64_RIP] = *(uint64_t *) (caller_sp - sizeof (uint64_t));
-	entry->ctx.gregs[AMD64_RSP] = caller_sp;
-	entry->ctx.gregs[AMD64_RBP] = args->caller_fp;
-#ifdef HOST_WIN32
-	/* rdi and rsi are callee-saved here as well, so the thunk spills seven. */
-	entry->ctx.gregs[AMD64_RBX] = args->saved[0];
-	entry->ctx.gregs[AMD64_RDI] = args->saved[1];
-	entry->ctx.gregs[AMD64_RSI] = args->saved[2];
-	entry->ctx.gregs[AMD64_R12] = args->saved[3];
-	entry->ctx.gregs[AMD64_R13] = args->saved[4];
-	entry->ctx.gregs[AMD64_R14] = args->saved[5];
-	entry->ctx.gregs[AMD64_R15] = args->saved[6];
-#else
-	entry->ctx.gregs[AMD64_RBX] = args->saved[0];
-	entry->ctx.gregs[AMD64_R12] = args->saved[1];
-	entry->ctx.gregs[AMD64_R13] = args->saved[2];
-	entry->ctx.gregs[AMD64_R14] = args->saved[3];
-	entry->ctx.gregs[AMD64_R15] = args->saved[4];
-#endif
-
-	entry->lmf.ctx = &entry->ctx;
-	entry->lmf.lmf_addr = entry->addr;
-	entry->lmf.lmf.rsp = caller_sp;
-	/* Bit 2 is what tells the unwinder to read the context rather than rbp. */
-	entry->lmf.lmf.previous_lmf = (gpointer) ((gsize) *entry->addr | 4);
-	*entry->addr = &entry->lmf.lmf;
-}
-
-void
-interp_frame_leave (void *frame)
-{
-	/*
-	 * No checkpoint on the way out, unlike the lazy entry: the interpreter
-	 * polls for interruption itself while it runs the method, so a thread
-	 * getting this far has already been given every chance to take one.
-	 */
-	InterpTransitionFrame *entry = static_cast<InterpTransitionFrame *> (frame);
-
-	if (entry->addr)
-		*entry->addr = (MonoLMF *) (((gsize) entry->lmf.lmf.previous_lmf) & ~7);
 }
 
 void **

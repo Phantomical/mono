@@ -225,10 +225,10 @@ static class Program {
 			BindingFlags.Static | BindingFlags.NonPublic);
 
 		/*
-		 * Tier 1 first, and asked for rather than waited for: an interpreted
-		 * caller reaches an interpreted callee without the runtime ever being
-		 * asked for it, so a loop alone leaves Root () where it started and the
-		 * tier-2 compile below would have no counts to read.
+		 * Tier 1 first, and asked for rather than waited for: waiting on tier
+		 * 0's own threshold would spend an uncontrolled number of calls before
+		 * a tier-1 body exists at all, and the tier-2 compile below needs that
+		 * body's counts to read.
 		 */
 		if (!Mono.Tiering.MonoTier.PromoteNow (root.MethodHandle.Value, 3)) {
 			Console.WriteLine ("FAIL: Root () would not compile at tier 1");

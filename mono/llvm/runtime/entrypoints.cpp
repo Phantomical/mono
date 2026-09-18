@@ -13,7 +13,6 @@
 
 #include "arch/arch.hpp"
 #include "backend.hpp"
-#include "dyn-call-plan.hpp"
 #include "jit.hpp"
 #include "options.hpp"
 #include "verification.hpp"
@@ -170,12 +169,6 @@ mono_llvm_jit_tier0_enabled (void)
 }
 
 mono_bool
-mono_llvm_jit_interp_tier0_enabled (void)
-{
-	return mono::interp_tier0_enabled ();
-}
-
-mono_bool
 mono_llvm_jit_tier2_enabled (void)
 {
 	return mono::tier2_enabled ();
@@ -224,49 +217,4 @@ mono_llvm_jit_verify_method (MonoMethod *method, MonoError *error)
 
 	report (std::move (invalid), error);
 	return FALSE;
-}
-
-const void *
-mono_llvm_jit_dyn_call_prepare (MonoMethod *method)
-{
-	if (!mono::dyn_calls ())
-		return nullptr;
-
-	llvm::Expected<const mono::arch::DynCallPlan *> plan = mono::dyn_call_plan_for (method);
-
-	if (!plan) {
-		llvm::Error refused = plan.takeError ();
-
-		if (mono::is_jit_trace_enabled ()) {
-			std::lock_guard<std::mutex> held (mono::jit_trace_mutex ());
-
-			fprintf (stderr, "[llvm-jit] no dyn-call plan: %s\n",
-			         llvm::toString (std::move (refused)).c_str ());
-		} else {
-			llvm::consumeError (std::move (refused));
-		}
-
-		return nullptr;
-	}
-
-	if (mono::is_jit_trace_enabled ()) {
-		std::lock_guard<std::mutex> held (mono::jit_trace_mutex ());
-
-		fprintf (stderr, "[llvm-jit] dyn-call plan: %d args, %u stack\n",
-		         (int) (*plan)->args.size (), (*plan)->stack_words);
-	}
-
-	return *plan;
-}
-
-int
-mono_llvm_jit_dyn_call_frame_size (const void *plan)
-{
-	return (int) ((const mono::arch::DynCallPlan *) plan)->frame_size;
-}
-
-void
-mono_llvm_jit_dyn_call (const void *plan, void *target, void **args, void *ret, void *frame)
-{
-	mono::arch::dyn_call (*(const mono::arch::DynCallPlan *) plan, target, args, ret, frame);
 }

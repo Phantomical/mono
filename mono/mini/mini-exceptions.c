@@ -80,7 +80,6 @@
 #include "aot-runtime.h"
 #include "mini-runtime.h"
 #include "mono/metadata/unity-utils.h"
-#include "mono/interp/interp.h"
 
 #ifndef MONO_ARCH_CONTEXT_DEF
 #define MONO_ARCH_CONTEXT_DEF
@@ -100,7 +99,6 @@ typedef struct
 {
 	gpointer ip;
 	gpointer generic_info;
-	/* Only for interpreter frames */
 	MonoJitInfo *ji;
 }  ExceptionTraceIp;
 
@@ -129,32 +127,18 @@ static void mono_crash_reporting_register_native_library (const char *module_pat
 static void mono_crash_reporting_allow_all_native_libraries (void);
 
 /*
- * Where a frame sits on the thread's stack, in terms that compare across the
- * two engines.
- *
- * A compiled frame is its own address on the native stack, and that address
- * falls as calls go deeper. A frame an interpreted call made lives on the
- * interpreter's own stack, which rises instead. Its address therefore says
- * nothing about depth beside a compiled frame. Two things place an interpreted
- * frame: the native frame the interpreter runs it under, and the order it was
- * entered in inside that frame. Frames alive at the same time are entered
- * outermost first, so the larger ordinal is the deeper frame.
- *
- * native_frame is NULL for a frame the walk could not place.
+ * Where a frame sits on the thread's stack: its own address, which falls as
+ * calls go deeper. NULL for a frame the walk could not place.
  */
 typedef struct {
 	gpointer native_frame;
-	gsize interp_ordinal;
 } FramePlace;
 
 /* Answers whether a is b or a frame outside it. */
 static gboolean
 frame_at_or_outside (FramePlace a, FramePlace b)
 {
-	if (a.native_frame != b.native_frame)
-		return (gsize) a.native_frame > (gsize) b.native_frame;
-
-	return a.interp_ordinal <= b.interp_ordinal;
+	return (gsize) a.native_frame >= (gsize) b.native_frame;
 }
 
 static FramePlace
@@ -162,13 +146,7 @@ frame_place (StackFrameInfo *frame)
 {
 	FramePlace place;
 
-	if (frame->type == FRAME_TYPE_INTERP) {
-		place.native_frame = mini_get_interp_callbacks ()->frame_native_anchor (frame->interp_frame);
-		place.interp_ordinal = mini_get_interp_callbacks ()->frame_ordinal (frame->interp_frame);
-	} else {
-		place.native_frame = frame->frame_addr;
-		place.interp_ordinal = 0;
-	}
+	place.native_frame = frame->frame_addr;
 
 	return place;
 }
@@ -195,7 +173,7 @@ first_managed (MonoStackFrameInfo *frame, MonoContext *ctx, gpointer addr)
 static FramePlace
 mono_thread_get_managed_place (void)
 {
-	FramePlace place = { NULL, 0 };
+	FramePlace place = { NULL };
 	mono_walk_stack (first_managed, MONO_UNWIND_SIGNAL_SAFE, &place);
 	return place;
 }
@@ -203,7 +181,7 @@ mono_thread_get_managed_place (void)
 static FramePlace
 abort_threshold (MonoJitTlsData *jit_tls)
 {
-	FramePlace place = { jit_tls->abort_exc_stack_threshold, jit_tls->abort_exc_interp_ordinal };
+	FramePlace place = { jit_tls->abort_exc_stack_threshold };
 
 	return place;
 }
@@ -212,13 +190,12 @@ static void
 set_abort_threshold (MonoJitTlsData *jit_tls, FramePlace place)
 {
 	jit_tls->abort_exc_stack_threshold = place.native_frame;
-	jit_tls->abort_exc_interp_ordinal = place.interp_ordinal;
 }
 
 static void
 mini_clear_abort_threshold (void)
 {
-	FramePlace nowhere = { NULL, 0 };
+	FramePlace nowhere = { NULL };
 
 	set_abort_threshold (mono_get_jit_tls (), nowhere);
 }
@@ -278,27 +255,12 @@ mono_get_seq_point_for_native_offset (MonoDomain *domain, MonoMethod *method, gi
 }
 
 /*
- * The debug tables are keyed by (method, domain), not by body. A method that has
- * run in both engines registers a table from each, and the last one replaces the
- * other. So a lookup that knows only a method and a native offset can answer from
- * a body that did not produce the offset: a tier-1 body measures machine code, an
- * interpreted one measures bytecode, and the two share no scale.
- *
- * The jit info is what says which engine owns the frame, so every native-offset
- * lookup starts at the two functions below. An IL offset is body-independent,
- * which is what makes the lookup by IL safe once one of these has produced it.
- */
-
-/*
  * Places a frame's native offset in the IL. Returns -1 when nothing this body
  * carries places it.
  */
 int
 mono_jinfo_get_il_offset (MonoDomain *domain, MonoJitInfo *ji, guint32 native_offset)
 {
-	if (ji->is_interp)
-		return mini_get_interp_callbacks ()->il_offset_from_native_offset (domain, jinfo_get_method (ji), native_offset);
-
 	if (ji->n_il_offsets > 0)
 		return mono_jit_info_lookup_il_offset (ji, native_offset);
 
@@ -316,22 +278,9 @@ mono_jinfo_get_il_offset (MonoDomain *domain, MonoJitInfo *ji, guint32 native_of
 	return -1;
 }
 
-/*
- * Places a live frame's native offset in the IL.
- *
- * An interpreted frame holds its own method, so it returns without the domain's
- * jit code hash lock that mono_jinfo_get_il_offset () reaches through. A thread
- * dump, a crash context and a domain teardown all run where that lock cannot be
- * taken and where the domain's jit info may already be gone, so any of them must
- * come through here. Pass NULL for interp_frame only when the frame is gone, as
- * for a captured trace.
- */
 static int
-jinfo_il_offset_for_frame (MonoDomain *domain, MonoJitInfo *ji, gpointer interp_frame, guint32 native_offset)
+jinfo_il_offset_for_frame (MonoDomain *domain, MonoJitInfo *ji, guint32 native_offset)
 {
-	if (ji->is_interp && interp_frame)
-		return mini_get_interp_callbacks ()->frame_il_offset (interp_frame, native_offset);
-
 	return mono_jinfo_get_il_offset (domain, ji, native_offset);
 }
 
@@ -583,13 +532,6 @@ arch_unwind_frame (MonoDomain *domain, MonoJitTlsData *jit_tls,
 				 */
 				frame->type = FRAME_TYPE_DEBUGGER_INVOKE;
 				memcpy (new_ctx, &ext->ctx, sizeof (MonoContext));
-			} else if (ext->kind == MONO_LMFEXT_INTERP_EXIT || ext->kind == MONO_LMFEXT_INTERP_EXIT_WITH_CTX) {
-				frame->type = FRAME_TYPE_INTERP_TO_MANAGED;
-				frame->interp_exit_data = ext->interp_exit_data;
-				if (ext->kind == MONO_LMFEXT_INTERP_EXIT_WITH_CTX) {
-					frame->type = FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX;
-					memcpy (new_ctx, &ext->ctx, sizeof (MonoContext));
-				}
 			} else {
 				g_assert_not_reached ();
 			}
@@ -827,12 +769,9 @@ mono_find_jit_info_ext (MonoDomain *domain, MonoJitTlsData *jit_tls,
 	 * removal below reads a chain entry as spent once it sits at or below the
 	 * new stack pointer. After such a frame that test catches live entries as
 	 * well. A debugger invoke hands back the context the invoke started from,
-	 * and the interp exit the debugger trampoline pushed there sits at exactly
-	 * that stack pointer.
+	 * which sits at exactly that stack pointer.
 	 */
-	gboolean lmf_marker = frame->type == FRAME_TYPE_INTERP_TO_MANAGED
-	                      || frame->type == FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX
-	                      || frame->type == FRAME_TYPE_DEBUGGER_INVOKE;
+	gboolean lmf_marker = frame->type == FRAME_TYPE_DEBUGGER_INVOKE;
 
 	if (!lmf_marker && *lmf && ((*lmf) != jit_tls->first_lmf) && ((gpointer)MONO_CONTEXT_GET_SP (new_ctx) >= (gpointer)(*lmf))) {
 		/*
@@ -897,11 +836,7 @@ mono_find_jit_info_ext (MonoDomain *domain, MonoJitTlsData *jit_tls,
 }
 
 typedef struct {
-	gboolean in_interp;
-	MonoInterpStackIter interp_iter;
 	gpointer last_frame_addr;
-	/* The outermost interpreted frame the walk has reported. */
-	gpointer outermost_interp_frame;
 } Unwinder;
 
 static void
@@ -923,57 +858,12 @@ unwinder_unwind_frame (Unwinder *unwinder,
 					   host_mgreg_t **save_locations,
 					   StackFrameInfo *frame)
 {
-	if (unwinder->in_interp) {
-		memcpy (new_ctx, ctx, sizeof (MonoContext));
-
-		/* Process debugger invokes */
-		/* The DEBUGGER_INVOKE should be returned before the first interpreter frame for the invoke */
-		if (unwinder->last_frame_addr < (gpointer)(*lmf)) {
-			if (((gsize)(*lmf)->previous_lmf) & 2) {
-				MonoLMFExt *ext = (MonoLMFExt*)(*lmf);
-				if (ext->kind == MONO_LMFEXT_DEBUGGER_INVOKE) {
-					*lmf = (MonoLMF *)(((gsize)(*lmf)->previous_lmf) & ~7);
-					frame->type = FRAME_TYPE_DEBUGGER_INVOKE;
-					return TRUE;
-				}
-			}
-		}
-
-		unwinder->in_interp = mini_get_interp_callbacks ()->frame_iter_next (&unwinder->interp_iter, frame);
-		if (unwinder->in_interp)
-			unwinder->outermost_interp_frame = frame->interp_frame;
-		if (frame->type == FRAME_TYPE_INTERP) {
-			const gpointer parent = mini_get_interp_callbacks ()->frame_get_parent (frame->interp_frame);
-			unwinder->last_frame_addr = parent;
-		}
-
-		if (!unwinder->in_interp)
-			return unwinder_unwind_frame (unwinder, domain, jit_tls, prev_ji, ctx, new_ctx, trace, lmf, save_locations, frame);
-		return TRUE;
-	} else {
-		gboolean res = mono_find_jit_info_ext (domain, jit_tls, prev_ji, ctx, new_ctx, trace, lmf,
-											   save_locations, frame);
-		if (!res)
-			return FALSE;
-		if (frame->type == FRAME_TYPE_INTERP_TO_MANAGED || frame->type == FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX) {
-			/*
-			 * A walk only goes outward, so an exit whose frames were entered after
-			 * one already reported describes frames this walk has been through. A
-			 * filter is what produces that: it runs in a copy of the frame that
-			 * owns the clause, the walk reaches the original through the copy's
-			 * parent, and the throw's own exit then offers the frames between
-			 * the throw site and the clause a second time.
-			 */
-			if (!unwinder->outermost_interp_frame ||
-			    mini_get_interp_callbacks ()->frame_ordinal (frame->interp_exit_data)
-			        < mini_get_interp_callbacks ()->frame_ordinal (unwinder->outermost_interp_frame)) {
-				unwinder->in_interp = TRUE;
-				mini_get_interp_callbacks ()->frame_iter_init (&unwinder->interp_iter, frame->interp_exit_data);
-			}
-		}
-		unwinder->last_frame_addr = frame->frame_addr;
-		return TRUE;
-	}
+	gboolean res = mono_find_jit_info_ext (domain, jit_tls, prev_ji, ctx, new_ctx, trace, lmf,
+										   save_locations, frame);
+	if (!res)
+		return FALSE;
+	unwinder->last_frame_addr = frame->frame_addr;
+	return TRUE;
 }
 
 /*
@@ -1712,22 +1602,6 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 
 	unwinder_init (&unwinder);
 
-	/*
-	 * A thread stopped inside the interpreter has interpreted frames that nothing on
-	 * the LMF chain describes - the chain only records where the interpreter last
-	 * called out, which is below them, and may be gone entirely. Start the iterator
-	 * from the frame the interpreter published rather than beginning the walk in
-	 * whatever native code the runtime happens to be running on its behalf.
-	 */
-	if (jit_tls->interp_context) {
-		gpointer stopped_frame = mini_get_interp_callbacks ()->get_stopped_frame (jit_tls, lmf, MONO_CONTEXT_GET_SP (&ctx));
-
-		if (stopped_frame) {
-			unwinder.in_interp = TRUE;
-			mini_get_interp_callbacks ()->frame_iter_init (&unwinder.interp_iter, stopped_frame);
-		}
-	}
-
 	while (MONO_CONTEXT_GET_SP (&ctx) < jit_tls->end_of_stack) {
 		MonoLMF *frame_lmf = lmf;
 
@@ -1754,14 +1628,6 @@ mono_walk_stack_full (MonoJitStackWalk func, MonoContext *start_ctx, MonoDomain 
 				 * for - see MonoILOffsetEntry.
 				 */
 				il_offset = mono_jit_info_lookup_il_offset (frame.ji, frame.native_offset);
-			} else if (frame.type == FRAME_TYPE_INTERP) {
-				/*
-				 * An offset into the interpreter IR, which only the interpreter's own
-				 * map describes. Asked of the frame rather than of the domain, so that
-				 * a crash context reaches the map without the jit code hash lock the
-				 * crashing thread may be holding.
-				 */
-				il_offset = mini_get_interp_callbacks ()->frame_il_offset (frame.interp_frame, frame.native_offset);
 			} else {
 				// Don't do this when we can be in a signal handler
 				if (!crash_context)
@@ -2126,7 +1992,7 @@ summarize_frame (StackFrameInfo *frame, MonoContext *ctx, gpointer data)
 	mono_get_portable_ip ((intptr_t) MONO_CONTEXT_GET_IP (ctx), &ip, &offset, NULL, NULL);
 	// Don't need to handle return status "success" because this ip is stored below only, NULL is okay
 
-	gboolean is_managed = (frame->type == FRAME_TYPE_MANAGED || frame->type == FRAME_TYPE_INTERP);
+	gboolean is_managed = (frame->type == FRAME_TYPE_MANAGED);
 	MonoMethod *method = NULL;
 	if (frame && frame->ji && frame->type != FRAME_TYPE_TRAMPOLINE)
 		method = jinfo_get_method (frame->ji);
@@ -2334,10 +2200,7 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 			case FRAME_TYPE_MANAGED_TO_NATIVE:
 			case FRAME_TYPE_DEBUGGER_INVOKE:
 			case FRAME_TYPE_TRAMPOLINE:
-			case FRAME_TYPE_INTERP_TO_MANAGED:
-			case FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX:
 				continue;
-			case FRAME_TYPE_INTERP:
 			case FRAME_TYPE_MANAGED:
 				ji = frame.ji;
 				*native_offset = frame.native_offset;
@@ -2365,10 +2228,7 @@ ves_icall_get_frame_info (gint32 skip, MonoBoolean need_file_info,
 		 */
 		inline_index = skip + 1 + n_inlined;
 
-		if (frame.type == FRAME_TYPE_INTERP) {
-			jmethod = frame.method;
-			actual_method = frame.actual_method;
-		} else if (mono_jinfo_inline_frame (ji, frame.native_offset, inline_index, &jmethod, &il_offset)) {
+		if (mono_jinfo_inline_frame (ji, frame.native_offset, inline_index, &jmethod, &il_offset)) {
 			actual_method = jmethod;
 		} else {
 			actual_method = get_method_from_stack_frame (ji, get_generic_info_from_stack_frame (ji, &ctx));
@@ -2900,16 +2760,9 @@ unwind_memo_init (UnwindMemo *memo)
  * Records this frame's jit info for the second pass. Only the types below are
  * recorded, and each of them reaches this function from the table alone.
  *
- * The interpreter's frame iterator is what the list keeps out. It reports a
- * frame of its own as FRAME_TYPE_INTERP, and an interpreted pinvoke or internal
- * call as FRAME_TYPE_MANAGED_TO_NATIVE, and it gives both the jit info of the
- * InterpMethod. That record describes bytecode. The address test that guards a
- * memo entry reads a native code range, so a bytecode record can pass it and
- * take a frame the wrong body's record does not describe.
- *
- * FRAME_TYPE_MANAGED_TO_NATIVE therefore stays out, although the table's own
- * path reaches it. That path carries no record to memo: it nulls the jit info
- * of such a frame, because the frame is a marker the caller unwinds past.
+ * FRAME_TYPE_MANAGED_TO_NATIVE stays out, although the table's own path
+ * reaches it: that path carries no record to memo, because it nulls the jit
+ * info of such a frame, the frame being a marker the caller unwinds past.
  *
  * A frame with no record still takes an ordinal, so the two passes stay in
  * step. So does a frame past the end of the memo: the second pass looks that
@@ -2930,8 +2783,6 @@ unwind_memo_record (UnwindMemo *memo, StackFrameInfo *frame)
 	switch (frame->type) {
 	case FRAME_TYPE_MANAGED:
 	case FRAME_TYPE_TRAMPOLINE:
-	case FRAME_TYPE_INTERP_TO_MANAGED:
-	case FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX:
 		entry->ji = frame->ji;
 		entry->domain = frame->domain;
 		break;
@@ -2994,7 +2845,6 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 	int i;
 	MonoObject *ex_obj;
 	Unwinder unwinder;
-	gboolean in_interp;
 
 	MonoFirstPassResult result = MONO_FIRST_PASS_UNHANDLED;
 
@@ -3070,11 +2920,8 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 		case FRAME_TYPE_DEBUGGER_INVOKE:
 		case FRAME_TYPE_MANAGED_TO_NATIVE:
 		case FRAME_TYPE_TRAMPOLINE:
-		case FRAME_TYPE_INTERP_TO_MANAGED:
-		case FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX:
 			*ctx = new_ctx;
 			continue;
-		case FRAME_TYPE_INTERP:
 		case FRAME_TYPE_MANAGED:
 			break;
 		default:
@@ -3082,14 +2929,9 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 			break;
 		}
 
-		in_interp = frame.type == FRAME_TYPE_INTERP;
 		ji = frame.ji;
 
-		gpointer ip;
-		if (in_interp)
-			ip = (guint8*)ji->code_start + frame.native_offset;
-		else
-			ip = MONO_CONTEXT_GET_IP (ctx);
+		gpointer ip = MONO_CONTEXT_GET_IP (ctx);
 
 		frame_count ++;
 		method = jinfo_get_method (ji);
@@ -3153,32 +2995,30 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 					mono_atomic_inc_i32 (&mono_perfcounters->exceptions_filters);
 #endif
 
-					if (!ji->is_interp) {
 #ifndef MONO_CROSS_COMPILE
 #ifdef MONO_CONTEXT_SET_LLVM_EXC_REG
-						if (ji->from_llvm)
-							MONO_CONTEXT_SET_LLVM_EXC_REG (ctx, ex_obj);
-						else
-							/* Can't pass the ex object in a register yet to filter clauses, because call_filter () might not support it */
-							*((gpointer *)(gpointer)((char *)MONO_CONTEXT_GET_BP (ctx) + ei->exvar_offset)) = ex_obj;
-#else
-						g_assert (!ji->from_llvm);
-						/* store the exception object in bp + ei->exvar_offset */
+					if (ji->from_llvm)
+						MONO_CONTEXT_SET_LLVM_EXC_REG (ctx, ex_obj);
+					else
+						/* Can't pass the ex object in a register yet to filter clauses, because call_filter () might not support it */
 						*((gpointer *)(gpointer)((char *)MONO_CONTEXT_GET_BP (ctx) + ei->exvar_offset)) = ex_obj;
+#else
+					g_assert (!ji->from_llvm);
+					/* store the exception object in bp + ei->exvar_offset */
+					*((gpointer *)(gpointer)((char *)MONO_CONTEXT_GET_BP (ctx) + ei->exvar_offset)) = ex_obj;
 #endif
 #endif
 
 #ifdef MONO_CONTEXT_SET_LLVM_EH_SELECTOR_REG
-						/*
-						 * Pass the original il clause index to the landing pad so it can
-						 * branch to the landing pad associated with the il clause.
-						 * This is needed because llvm compiled code assumes that the EH
-						 * code always branches to the innermost landing pad.
-						 */
-						if (ji->from_llvm)
-							MONO_CONTEXT_SET_LLVM_EH_SELECTOR_REG (ctx, ei->clause_index);
+					/*
+					 * Pass the original il clause index to the landing pad so it can
+					 * branch to the landing pad associated with the il clause.
+					 * This is needed because llvm compiled code assumes that the EH
+					 * code always branches to the innermost landing pad.
+					 */
+					if (ji->from_llvm)
+						MONO_CONTEXT_SET_LLVM_EH_SELECTOR_REG (ctx, ei->clause_index);
 #endif
-					}
 
 					mini_get_dbg_callbacks ()->begin_exception_filter (mono_ex, ctx, &initial_ctx);
 
@@ -3188,12 +3028,7 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 						jit_tls->orig_ex_ctx_set = FALSE;
 					}
 
-					if (ji->is_interp) {
-						/* The filter ends where the exception handler starts */
-						filtered = mini_get_interp_callbacks ()->run_filter (&frame, (MonoException*)ex_obj, i, ei->data.filter, ei->handler_start);
-					} else {
-						filtered = call_filter (ctx, ei->data.filter);
-					}
+					filtered = call_filter (ctx, ei->data.filter);
 					mini_get_dbg_callbacks ()->end_exception_filter (mono_ex, ctx, &initial_ctx);
 					if (filtered && out_filter_idx)
 						*out_filter_idx = filter_idx;
@@ -3224,8 +3059,7 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 						*out_ji = ji;
 
 					/* mono_debugger_agent_handle_exception () needs this */
-					if (!in_interp)
-						MONO_CONTEXT_SET_IP (ctx, ei->handler_start);
+					MONO_CONTEXT_SET_IP (ctx, ei->handler_start);
 					frame.native_offset = (char*)ei->handler_start - (char*)ji->code_start;
 					frame.il_offset = handler_il_offset (ji, ei, i);
 					*catch_frame = frame;
@@ -3251,32 +3085,6 @@ handle_exception_first_pass (MonoContext *ctx, MonoObject *obj, gint32 *out_filt
 	}
 
 	g_assert_not_reached ();
-}
-
-/*
- * We implement delaying of aborts when in finally blocks by reusing the
- * abort protected block mechanism. The problem is that when throwing an
- * exception in a finally block we don't get to exit the protected block.
- * We exit it here when unwinding. Given that the order of the clauses
- * in the jit info is from inner clauses to the outer clauses, when we
- * want to exit the finally blocks inner to the clause that handles the
- * exception, we need to search up to its index.
- *
- * FIXME We should do this inside interp, but with mixed mode we can
- * resume directly, without giving control back to the interp.
- */
-static void
-interp_exit_finally_abort_blocks (MonoJitInfo *ji, int start_clause, int end_clause, gpointer ip)
-{
-	int i;
-	for (i = start_clause; i < end_clause; i++) {
-		MonoJitExceptionInfo *ei = &ji->clauses [i];
-		if (ei->flags == MONO_EXCEPTION_CLAUSE_FINALLY &&
-				ip >= ei->handler_start &&
-				ip < ei->data.handler_end) {
-			mono_threads_end_abort_protected_block ();
-		}
-	}
 }
 
 static MonoException *
@@ -3436,7 +3244,6 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 	MonoObject *ex_obj = NULL;
 	MonoObject *non_exception = NULL;
 	Unwinder unwinder;
-	gboolean in_interp;
 	gboolean is_caught_unmanaged = FALSE;
 	gboolean last_mono_wrapper_runtime_invoke = TRUE;
 	UnwindMemo memo;
@@ -3658,7 +3465,6 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 			lmf = resume_state->lmf;
 			first_filter_idx = resume_state->first_filter_idx;
 			filter_idx = resume_state->filter_idx;
-			in_interp = FALSE;
 			resume_state = NULL;
 		} else {
 			unwind_res = unwinder_unwind_frame (&unwinder, domain, jit_tls, unwind_memo_replay (&memo, domain), ctx, &new_ctx, NULL, &lmf, NULL, &frame);
@@ -3672,26 +3478,18 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 			case FRAME_TYPE_DEBUGGER_INVOKE:
 			case FRAME_TYPE_MANAGED_TO_NATIVE:
 			case FRAME_TYPE_TRAMPOLINE:
-			case FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX:
 				*ctx = new_ctx;
 				continue;
-			case FRAME_TYPE_INTERP_TO_MANAGED:
-				continue;
-			case FRAME_TYPE_INTERP:
 			case FRAME_TYPE_MANAGED:
 				break;
 			default:
 				g_assert_not_reached ();
 				break;
 			}
-			in_interp = frame.type == FRAME_TYPE_INTERP;
 			ji = frame.ji;
 		}
 
-		if (in_interp)
-			ip = (guint8*)ji->code_start + frame.native_offset;
-		else
-			ip = MONO_CONTEXT_GET_IP (ctx);
+		ip = MONO_CONTEXT_GET_IP (ctx);
 
 		method = jinfo_get_method (ji);
 		frame_count ++;
@@ -3821,34 +3619,7 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 
 					resume_states_drop_abandoned (jit_tls, ji, ei, ctx);
 
-					if (in_interp) {
-						interp_exit_finally_abort_blocks (ji, clause_index_start, i, ip);
-						/*
-						 * ctx->pc points into the interpreter, after the call which transitioned to
-						 * JITted code. Store the unwind state into the
-						 * interpeter state, then resume, the interpreter will unwind itself until
-						 * it reaches the target frame and will continue execution from there.
-						 * The resuming is kinda hackish, from the native code standpoint, it looks
-						 * like the call which transitioned to JITted code has succeeded, but the
-						 * return value register etc. is not set, so we have to be careful.
-						 */
-						mini_get_interp_callbacks ()->set_resume_state (jit_tls, ex_obj, ei, frame.interp_frame, ei->handler_start);
-						/* Undo the IP adjustment done by mono_arch_unwind_frame () */
-						/* ip == 0 means an interpreter frame */
-						if (MONO_CONTEXT_GET_IP (ctx) != 0)
-							mono_arch_undo_ip_adjustment (ctx);
-					} else {
-						MONO_CONTEXT_SET_IP (ctx, ei->handler_start);
-					}
-					/*
-					 * Resuming into a native frame skips every frame below it,
-					 * so the interpreter frames among them have to give their
-					 * handles back here - they will not reach their own exit.
-					 * ip == 0 means the resume stays inside the interpreter
-					 * frame that is already running, which skips nothing.
-					 */
-					if (MONO_CONTEXT_GET_IP (ctx) != 0)
-						mini_get_interp_callbacks ()->release_abandoned_handles (jit_tls, MONO_CONTEXT_GET_SP (ctx));
+					MONO_CONTEXT_SET_IP (ctx, ei->handler_start);
 					mono_set_lmf (lmf);
 #ifndef DISABLE_PERFCOUNTERS
 					mono_atomic_fetch_add_i32 (&mono_perfcounters->exceptions_depth, frame_count);
@@ -3910,28 +3681,11 @@ mono_handle_exception_internal (MonoContext *ctx, MonoObject *obj, ResumeState *
 						return 0;
 					} else {
 						mini_set_abort_threshold (&frame);
-						if (in_interp) {
-							gboolean has_ex = mini_get_interp_callbacks ()->run_finally (&frame, i, ei->handler_start, ei->data.handler_end);
-							if (has_ex) {
-								/*
-								 * If run_finally didn't resume to a context, it means that the handler frame
-								 * is linked to the frame calling finally through interpreter frames. This
-								 * means that we will reach the handler frame by resuming the current context.
-								 */
-								if (MONO_CONTEXT_GET_IP (ctx) != 0)
-									mono_arch_undo_ip_adjustment (ctx);
-								return 0;
-							}
-						} else {
-							call_filter (ctx, ei->handler_start);
-						}
+						call_filter (ctx, ei->handler_start);
 					}
 				}
 			}
 		}
-
-		if (in_interp)
-			interp_exit_finally_abort_blocks (ji, clause_index_start, ji->num_clauses, ip);
 
 		if (MONO_PROFILER_ENABLED (method_exception_leave) &&
 		    mono_profiler_get_call_instrumentation_flags (method) & MONO_PROFILER_CALL_INSTRUMENTATION_EXCEPTION_LEAVE) {
@@ -4212,7 +3966,7 @@ print_overflow_stack_frame (StackFrameInfo *frame, MonoContext *ctx, gpointer da
 			return FALSE;
 
 		location = mono_debug_print_stack_frame_at_il (method,
-			jinfo_il_offset_for_frame (mono_domain_get (), frame->ji, frame->interp_frame, frame->native_offset),
+			jinfo_il_offset_for_frame (mono_domain_get (), frame->ji, frame->native_offset),
 			frame->native_offset, mono_domain_get ());
 		mono_runtime_printf_err ("  %s", location);
 		g_free (location);

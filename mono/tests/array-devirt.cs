@@ -71,10 +71,10 @@ public class ArrayDevirt {
 		int[] uints = (int[]) (object) new uint[] { 1, 2, 3 };
 		int[] enums = (int[]) (object) new E32[] { E32.A, E32.B };
 
-		// The first rounds run interpreted, and the later ones run whatever the
+		// The first rounds run at tier 0, and the later ones run whatever the
 		// thresholds promoted. Both answer through this same code. The count is
 		// what gives a promotion time to land: a tier-1 compile is asynchronous,
-		// and a few hundred interpreted rounds are over before one arrives.
+		// and a few hundred tier-0 rounds are over before one arrives.
 		for (int i = 0; i < 20000; ++i)
 			Round (ints, uints, enums);
 

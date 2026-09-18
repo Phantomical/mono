@@ -22,12 +22,6 @@ typedef enum {
 	/* Frame for transitioning to native code */
 	FRAME_TYPE_MANAGED_TO_NATIVE = 2,
 	FRAME_TYPE_TRAMPOLINE = 3,
-	/* Interpreter frame */
-	FRAME_TYPE_INTERP = 4,
-	/* Frame for transitioning from interpreter to managed code */
-	FRAME_TYPE_INTERP_TO_MANAGED = 5,
-	/* same, but with MonoContext */
-	FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX = 6,
 	/*
 	 * A body an inliner inlined into the managed frame that follows this one.
 	 * It owns no code, so ji, native_offset and frame_addr all describe that
@@ -35,8 +29,8 @@ typedef enum {
 	 * NULL. Only a walk that asked for MONO_UNWIND_INLINED_FRAMES is given
 	 * these, so a callback that does not know them never sees one.
 	 */
-	FRAME_TYPE_INLINED = 7,
-	FRAME_TYPE_NUM = 8
+	FRAME_TYPE_INLINED = 4,
+	FRAME_TYPE_NUM = 5
 } MonoStackFrameType;
 
 typedef enum {
@@ -93,18 +87,9 @@ typedef struct {
 	 */
 	int il_offset;
 
-	/* For FRAME_TYPE_INTERP_EXIT */
-	gpointer interp_exit_data;
-
-	/* For FRAME_TYPE_INTERP */
-	gpointer interp_frame;
-
 	/*
 	 * A stack address associated with the frame which can be used
 	 * to compare frames.
-	 * This is needed because ctx is not changed when unwinding through
-	 * interpreter frames, it still refers to the last native interpreter
-	 * frame.
 	 */
 	gpointer frame_addr;
 

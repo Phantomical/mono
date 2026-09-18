@@ -9,7 +9,6 @@
 #include <mono/metadata/seq-points-data.h>
 #include <mono/mini/debugger-state-machine.h>
 #include <mono/metadata/mono-debug.h>
-#include <mono/mini/ee.h>
 
 /*
 FIXME:
@@ -226,7 +225,6 @@ typedef struct
 	MonoMethod *api_method;
 	MonoContext ctx;
 	MonoDebugMethodJitInfo *jit;
-	MonoInterpFrameHandle interp_frame;
 	gpointer frame_addr;
 	int flags;
 	host_mgreg_t *reg_locations [MONO_MAX_IREGS];

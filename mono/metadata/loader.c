@@ -11,7 +11,7 @@
  * Copyright 2004-2009 Novell, Inc (http://www.novell.com)
  * Copyright 2011 Xamarin, Inc (http://www.xamarin.com)
  *
- * This file is used by the interpreter and the JIT engine to locate
+ * This file is used by the JIT engine to locate
  * assemblies.  Used to load AssemblyRef and later to resolve various
  * kinds of `Refs'.
  *
@@ -1702,11 +1702,8 @@ stack_walk_adapter (MonoStackFrameInfo *frame, MonoContext *ctx, gpointer data)
 	case FRAME_TYPE_DEBUGGER_INVOKE:
 	case FRAME_TYPE_MANAGED_TO_NATIVE:
 	case FRAME_TYPE_TRAMPOLINE:
-	case FRAME_TYPE_INTERP_TO_MANAGED:
-	case FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX:
 		return FALSE;
 	case FRAME_TYPE_MANAGED:
-	case FRAME_TYPE_INTERP:
 	case FRAME_TYPE_INLINED:
 		g_assert (frame->ji);
 		return d->func (frame->actual_method, frame->native_offset, frame->il_offset, frame->managed, d->user_data);
@@ -1757,11 +1754,8 @@ async_stack_walk_adapter (MonoStackFrameInfo *frame, MonoContext *ctx, gpointer 
 	case FRAME_TYPE_DEBUGGER_INVOKE:
 	case FRAME_TYPE_MANAGED_TO_NATIVE:
 	case FRAME_TYPE_TRAMPOLINE:
-	case FRAME_TYPE_INTERP_TO_MANAGED:
-	case FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX:
 		return FALSE;
 	case FRAME_TYPE_MANAGED:
-	case FRAME_TYPE_INTERP:
 		if (!frame->ji)
 			return FALSE;
 

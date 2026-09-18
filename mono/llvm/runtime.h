@@ -20,14 +20,14 @@ typedef struct _MonoMethodSignature MonoMethodSignature;
 
 /// Call this from runtime startup, before any method can be entered. The
 /// engine is otherwise built by whichever thread asks for the first compile or
-/// promotion, which can be a mutator inside the interpreter.
+/// promotion.
 ///
 /// The domains and their linkers are still built on demand, so this does not
 /// consume the options queued by mono_llvm_jit_add_option ().
 void mono_llvm_jit_init (void);
 
-/// Fills in the jit icall table entries for the helpers this backend and its
-/// interpreter entry provide. Call it from register_icalls ().
+/// Fills in the jit icall table entries for the helpers this backend
+/// provides. Call it from register_icalls ().
 void mono_llvm_jit_register_icalls (void);
 
 /// The code goes into the given domain's linker. The address is a stub, and
@@ -120,11 +120,6 @@ void mono_llvm_jit_add_option (const char *opt);
 /// Whether any method runs at tier 0.
 mono_bool mono_llvm_jit_tier0_enabled (void);
 
-/// Whether the interpreter is one of the tier-0 engines, which is what decides
-/// whether it starts at all. False under the default, where the classic
-/// compiler takes every tier-0 method.
-mono_bool mono_llvm_jit_interp_tier0_enabled (void);
-
 /// Whether tier 2 exists at all, which is what decides whether a tier-1 body
 /// carries profiling instrumentation. On by default.
 mono_bool mono_llvm_jit_tier2_enabled (void);
@@ -173,44 +168,15 @@ void mono_llvm_jit_rearm_trampoline (MonoDomain *domain, void *trampoline);
 /// stays at the tier already running it.
 mono_bool mono_llvm_jit_promote_now (MonoMethod *method, MonoDomain *domain, uint8_t tier);
 
-/// Whichever engine enters a method first is the one that has to call this. A
-/// method the interpreter reaches on its own is never asked for through
-/// mono_llvm_jit_compile_method (), so only an explicit call to this decides
-/// whether its body can run. A passing verdict is cached, so a method both
-/// engines enter is verified once.
+/// The first call to enter a method is the one that has to call this, since a
+/// method is never asked for through mono_llvm_jit_compile_method () except by
+/// its first caller. A passing verdict is cached, so a second caller verifies
+/// it for free.
 ///
 /// Returns FALSE and sets the error to the exception the verdict names, such
 /// as VerificationException or MethodAccessException. Returns TRUE when no
 /// verifier mode was asked for, which is the default.
 mono_bool mono_llvm_jit_verify_method (MonoMethod *method, MonoError *error);
-
-/*
- * Calling a compiled body from a caller with no compiled code of its own.
- *
- * The interpreter reaches compiled code this way. The plan states where this
- * backend's convention puts each argument of one signature, and the call reads
- * it, so a signature costs a plan rather than a compiled wrapper.
- */
-
-/// Plans how a call to \p method is passed. Returns NULL for a prototype this
-/// cannot state a plan for, such as a shared body's, and such a call has to be
-/// made another way.
-///
-/// The plan is shared with every other method of the same prototype and
-/// outlives the call - the caller must not free it.
-const void *mono_llvm_jit_dyn_call_prepare (MonoMethod *method);
-
-/// Returns the bytes of scratch a call under \p plan needs. The scratch holds
-/// no pointer the collector has to see, so a stack buffer is the right place
-/// for it.
-int mono_llvm_jit_dyn_call_frame_size (const void *plan);
-
-/// Calls \p target under \p plan, with each entry of \p args pointing at one
-/// argument's value, the receiver first, and \p ret at room for the return.
-///
-/// The call runs on the calling thread, so the caller owes it an LMF: an
-/// exception leaving \p target unwinds past this without reading its frame.
-void mono_llvm_jit_dyn_call (const void *plan, void *target, void **args, void *ret, void *frame);
 
 MONO_END_DECLS
 

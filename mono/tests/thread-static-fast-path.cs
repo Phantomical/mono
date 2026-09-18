@@ -11,7 +11,7 @@ using System.Threading;
  * add. The two loads carry !invariant.load, so LLVM shares one address between
  * the sites a body holds and lifts it out of a loop.
  *
- * Every case below runs first interpreted and then at tier 2, and compares the
+ * Every case below runs first at tier 0 and then at tier 2, and compares the
  * two. --llvm-opt=-mono-thread-static-fast-path=0 puts the compiled arm back
  * on the icall and every case has to answer the same.
  *

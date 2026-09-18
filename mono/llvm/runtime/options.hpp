@@ -167,15 +167,6 @@ bool inline_clause_bearing_callees ();
 /// that answers differently between them has a defect in the fast path.
 bool thread_static_fast_path ();
 
-/// Whether the interpreter's dyn calls are on.
-///
-/// A false value takes every jit call back to a gsharedvt_out_sig wrapper
-/// compiled for its signature, which is what separates a defect in the plan
-/// from one in the body it calls. The interpreter marshals the same values
-/// either way, so the two arms differ in how the call is made and in nothing
-/// else.
-bool dyn_calls ();
-
 /// Whether a non-pointer array-header read — `max_length`, or a dimension's
 /// length or lower bound — is tagged `!invariant.group`.
 ///
@@ -189,8 +180,8 @@ bool tag_non_pointer_invariant_group ();
 /// set is, so a NaN or an infinity a computation produces is still the value
 /// the program reads.
 ///
-/// A method under these flags answers differently before and after it promotes,
-/// because the interpreter relaxes nothing.
+/// A method under these flags answers differently before and after it
+/// promotes, because tier 0 relaxes nothing.
 llvm::FastMathFlags relaxed_float_flags ();
 
 /// How much a tier-1 body spends before it asks to be compiled again.
@@ -327,11 +318,6 @@ int32_t tier0_budget (MonoMethod *method);
 /// Answers before there is a method to ask about.
 bool tier0_enabled ();
 
-/// Whether the interpreter is one of the tier-0 engines, which is what the
-/// decision to start it needs. False under the default, where the classic
-/// compiler takes every tier-0 method.
-bool interp_tier0_enabled ();
-
 /// Whether a method starts at tier 0 rather than being compiled by the
 /// backend on its first call.
 ///
@@ -339,15 +325,6 @@ bool interp_tier0_enabled ();
 /// a false value keeps every method out of tier 0, and anything else is
 /// matched as a substring of the printed name.
 bool runs_at_tier0 (MonoMethod *method);
-
-/// Whether a method that runs at tier 0 is compiled by the classic compiler
-/// there instead of being interpreted.
-///
-/// 1 or true, the default, selects every method. 0, false or empty selects
-/// none. Anything else is matched as a substring of the printed name, the same
-/// as runs_at_tier0 () matches its own filter. Always false in a build without
-/// MONO_ENABLE_TIER0_CLASSIC.
-bool runs_classic_at_tier0 (MonoMethod *method);
 
 } // namespace mono
 

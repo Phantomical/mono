@@ -82,14 +82,11 @@ clr_tier (MonoJitInfo *jinfo)
 		return mono_llvm_jit_tier2_enabled () ? 6 : 3;
 	case MonoTier::tier2:
 		return 4;
-	case MonoTier::interp:
 	case MonoTier::detoured:
 		break;
 	}
 
-	// An interpreted body's jit info is always null (attach_body ()), and
-	// MonoJitInfo::tier's own comment rules out detoured. Neither value
-	// reaches a live jinfo.
+	// MonoJitInfo::tier's own comment rules out detoured reaching a live jinfo.
 	g_assert_not_reached ();
 	return 0;
 }

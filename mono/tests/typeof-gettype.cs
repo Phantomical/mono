@@ -11,10 +11,10 @@ using System.Runtime.Remoting.Proxies;
  * code either answers itself or leaves to the runtime.
  *
  * The compiled tiers eliminate typeof (T) into the address of the System.Type
- * the domain holds, and read GetType () out of the receiver's vtable. The
- * interpreter answers both without a call as well. So what these cases pin is
- * that the three engines agree, and that one type has one object however a
- * site reaches it.
+ * the domain holds, and read GetType () out of the receiver's vtable. Tier 0
+ * answers both without a call as well. So what these cases pin is that all
+ * three tiers agree, and that one type has one object however a site reaches
+ * it.
  *
  * A shared generic body cannot hold the address, because each instantiation
  * has a type of its own. It reads the runtime generic context instead, which
@@ -194,7 +194,7 @@ static class Program {
 	{
 		Shapes ();
 
-		/* Enough entries to leave the interpreter and both compiled tiers. */
+		/* Enough entries to leave tier 0 and reach both compiled tiers. */
 		for (int i = 0; i < 30000; ++i) {
 			if (Run (i) != 0) {
 				Console.WriteLine ("stopped at iteration {0}", i);

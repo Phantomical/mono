@@ -18,8 +18,8 @@ using System.Runtime.CompilerServices;
  * --llvm-opt=-mono-inline-il-limit=0 turns the pre-pass off, and this test
  * then fails on those checks alone.
  *
- * The first call claims nothing about frames. Which engine it runs in is the
- * arm's choice: interpreted where tier 0 is on, compiled where it is off.
+ * The first call claims nothing about frames. It runs at tier 0, the classic
+ * compiler, which does not run this pre-pass at all.
  *
  * Tier 2 has a second inliner behind this one, which weighs what the shape test
  * declines - tier2-inline-cost.cs is that one's test. Here it only matters for

@@ -67,11 +67,10 @@ typedef enum {
  * [6]   25-bit offset into the array.
  * [31]  Bit indicating thread or context static.
  *
- * Both engines decode this packing instead of always asking the runtime for the
- * address: the interpreter on each thread-static access, and the compiled back
- * end on the fast path thread_static_slot () gates
- * (mono/llvm/method-to-llvm/fields.cpp). Take an offset apart with
- * ACCESS_SPECIAL_STATIC_OFFSET rather than with a shift and a mask.
+ * The compiled back end decodes this packing on the fast path thread_static_slot ()
+ * gates (mono/llvm/method-to-llvm/fields.cpp) instead of always asking the runtime
+ * for the address. Take an offset apart with ACCESS_SPECIAL_STATIC_OFFSET rather
+ * than with a shift and a mask.
  */
 
 typedef union {
@@ -448,7 +447,7 @@ MonoException* mono_thread_force_interruption_checkpoint_noraise (void);
  * mono_thread_interruption_checkpoint () is always needed if the flag is not
  * zero.
  *
- * G_EXTERN_C_VAR because the interpreter and the backend read it from C++ and
+ * G_EXTERN_C_VAR because the backend reads it from C++ and
  * mono/metadata/threads.c defines it.  See the note on ICALL_SIG in
  * mono/metadata/icall-signatures.h for why the mismatch is invisible under the
  * Itanium ABI and not under MSVC's.

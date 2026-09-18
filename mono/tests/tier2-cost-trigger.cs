@@ -324,10 +324,10 @@ static class Program {
 			BindingFlags.Static | BindingFlags.NonPublic);
 
 		/*
-		 * Tier 1 first, and asked for rather than waited for: an interpreted
-		 * caller reaches an interpreted callee without the runtime being asked
-		 * for it, so the calls below leave the kernel where it started. The
-		 * counter is in the tier-1 body and counts nothing until there is one.
+		 * Tier 1 first, and asked for rather than waited for: waiting on tier
+		 * 0's own threshold would spend an uncontrolled number of calls before
+		 * a tier-1 body exists at all, and the counter this test reads is in
+		 * that body and counts nothing until there is one.
 		 */
 		if (!Mono.Tiering.MonoTier.PromoteNow (kernel.MethodHandle.Value, tier1)) {
 			Console.WriteLine ("FAIL: {0} () would not compile at tier 1", name);

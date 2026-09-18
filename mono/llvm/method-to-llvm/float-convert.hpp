@@ -26,9 +26,8 @@ namespace mono {
  * The constrained intrinsics carry no poison clause, and LLVM constant folds none of
  * them, so each one reaches the target's own conversion instruction. On amd64 that is
  * cvttsd2si for a scalar and a packed conversion for a vector. Both answer an
- * out-of-range operand with the integer indefinite value. The interpreter's C cast
- * reaches the scalar one, so the two engines agree with no range test in front of
- * either.
+ * out-of-range operand with the integer indefinite value, with no range test needed
+ * in front of either.
  *
  * fpexcept.ignore asks for the value and no more than the value. The strictfp attribute
  * is what a constrained intrinsic requires of the function that holds it.
@@ -48,8 +47,8 @@ llvm::Value *constrained_float_to_int (llvm::IRBuilder<> &builder, llvm::Value *
  * The direction of the test decides what a NaN gives, and the two directions disagree.
  * The test here is "below 2^63", which a NaN fails. A NaN therefore takes the
  * subtraction and comes out as zero. mono_fconv_u8 () (mono/mini/icalls/fconv.c) tests the
- * same way, and the interpreter reaches that helper for MINT_CONV_U8_R8. So this shape is
- * what the two engines agree on, not the one LLVM picks for itself.
+ * same way, so this shape matches what that helper gives, not the one LLVM picks for
+ * itself.
  */
 llvm::Value *float_to_uint64 (llvm::IRBuilder<> &builder, llvm::Value *value, llvm::Type *to);
 
@@ -59,8 +58,8 @@ llvm::Value *float_to_uint64 (llvm::IRBuilder<> &builder, llvm::Value *value, ll
  * Every such target's range fits inside a signed int64, so the conversion goes through
  * that width and never asks for an unsigned one. cvttsd2si's indefinite value,
  * 0x8000000000000000, truncates to the zero that mono_fconv_u4 ()
- * (mono/mini/icalls/fconv.c) and the interpreter both give for a NaN or an out-of-range
- * operand. AVX512F's vcvttsd2usi answers the same inputs with its own indefinite value
+ * (mono/mini/icalls/fconv.c) also gives for a NaN or an out-of-range operand.
+ * AVX512F's vcvttsd2usi answers the same inputs with its own indefinite value
  * instead, all-ones, which does not.
  */
 llvm::Value *float_to_uint32_or_narrower (llvm::IRBuilder<> &builder, llvm::Value *value,

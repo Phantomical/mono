@@ -302,8 +302,8 @@ class DelegateEliminate {
 	{
 		bool eliminating = Environment.GetEnvironmentVariable ("MONO_ELIMINATE_DELEGATES") != "off";
 
-		// Warm every shape while it is interpreted, so the caches the compilers
-		// wrote hold a delegate before anything is compiled against them.
+		// Warm every shape at tier 0, so the caches the compilers wrote hold a
+		// delegate before anything is compiled against them.
 		for (int i = 0; i < 200; i++)
 			Values ();
 

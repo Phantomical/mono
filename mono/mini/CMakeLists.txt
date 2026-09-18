@@ -40,7 +40,6 @@ set(mini_sources
   lldb.c
   mixed_callstack_plugin.c
   mini-profiler.c
-  interp-stubs.c
   llvmonly-runtime.c
   monovm.c
   mini-unity.c
@@ -48,7 +47,6 @@ set(mini_sources
   jit-dump.cpp
   # amd64
   arch-amd64.c
-  interp-amd64.c
   exceptions-amd64.c
   tramp-amd64.c
   mini-amd64-gsharedvt.c
@@ -108,7 +106,6 @@ add_subdirectory(tier0)
 
 # The debugger agent: its own object library because it can be built as a
 # loadable module in configurations that disable it from the runtime proper.
-# The interpreter is the same shape and lives in mono/interp.
 if(MONO_ENABLE_DEBUGGER_AGENT)
   mono_add_object_library(mono_dbg
     SOURCES
@@ -126,9 +123,6 @@ endif()
 
 # The object sets that make up a complete runtime, per collector.
 set(_mini_extra "")
-if(MONO_ENABLE_INTERPRETER)
-  list(APPEND _mini_extra mono_ee_interp)
-endif()
 if(MONO_ENABLE_DEBUGGER_AGENT)
   list(APPEND _mini_extra mono_dbg)
 endif()

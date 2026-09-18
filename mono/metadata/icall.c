@@ -1151,8 +1151,8 @@ ves_icall_System_Array_SetGenericValue_icall (MonoArray **arr, guint32 pos, gpoi
  * code, which the runtime cannot raise a NullReferenceException from.
  *
  * The compiled tiers write llvm.memcpy or llvm.memmove in place of a call to
- * either (mono/llvm/method-to-llvm/buffer.cpp), so only the interpreter
- * arrives here.
+ * either (mono/llvm/method-to-llvm/buffer.cpp) wherever they see the call site
+ * directly.
  */
 void
 ves_icall_System_Runtime_RuntimeImports_Memcpy (guint8 *destination, guint8 *source, size_t byte_count)

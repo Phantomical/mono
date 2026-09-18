@@ -44,7 +44,5 @@ mini_gc_init (void)
 
 	memset (&cb, 0, sizeof (cb));
 	cb.get_provenance_func = get_provenance_func;
-	if (mono_use_interpreter)
-		cb.interp_mark_func = mini_get_interp_callbacks ()->mark_stack;
 	mono_gc_set_gc_callbacks (&cb);
 }

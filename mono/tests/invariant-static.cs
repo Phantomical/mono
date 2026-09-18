@@ -16,8 +16,8 @@ using System.Runtime.CompilerServices;
  * one. A mutable static beside each initonly one is the control: the two are
  * read through the same code, and only one of them is safe to share.
  *
- * Every case runs interpreted and compiled in one process, because the interpreter
- * marks nothing and answers each read from memory. The guarded cases additionally
+ * Every case runs at tier 0 and compiled in one process, because tier 0 marks
+ * nothing and answers each read from memory. The guarded cases additionally
  * force a compile, with Mono.Tiering.MonoTier::PromoteNow, before anything
  * touches the class they read. ClassInitCompleteElisionPass then has nothing
  * to collapse, so the branch these two cases run at runtime is the one this
@@ -240,7 +240,7 @@ public class InvariantStatic {
 		Check ("guarded scalar across a call", GuardedScalarAcrossCall (), 84);
 		Check ("guarded value type across a call", GuardedVectorAcrossCall (), 7);
 
-		// The first rounds run interpreted, and the later ones run whatever the
+		// The first rounds run at tier 0, and the later ones run whatever the
 		// thresholds promoted. Both answer through this same code.
 		for (int i = 0; i < 200; ++i)
 			Round ();

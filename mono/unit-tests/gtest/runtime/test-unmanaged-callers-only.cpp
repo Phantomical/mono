@@ -94,8 +94,7 @@ protected:
 	///
 	/// A refusal of the whole method arrives on the error rather than as a
 	/// thrown object: a compiled tier refuses at compile time, and the invoke
-	/// reports that compile's failure. The interpreter raises the same
-	/// exception on entry instead. Both count as raised here.
+	/// reports that compile's failure. That counts as raised here too.
 	static std::string raised_by (MonoMethod *method, void **args)
 	{
 		ERROR_DECL (error);
@@ -148,11 +147,10 @@ TEST_F (UnmanagedCallersOnly, PublishesACEntry)
 }
 
 /*
- * One method, one address, however it was asked for. The two entry points
- * below are the ones the two engines reach: the icall behind
- * GetFunctionPointer () compiles, and the interpreter's ldftn asks for the
- * stub. A method whose answer depended on which of them ran would hand a
- * delegate built in one engine an address the other cannot call.
+ * One method, one address, however it was asked for. The two routes below
+ * are compiling the method directly and asking for its published stub. A
+ * method whose answer depended on which of them ran would hand out two
+ * different addresses for the same entry.
  */
 TEST_F (UnmanagedCallersOnly, HasOneAddress)
 {
@@ -212,7 +210,7 @@ TEST_F (UnmanagedCallersOnly, RefusesAManagedCallInBothEngines)
 
 	if (mono_llvm_jit_tier0_enabled ())
 		EXPECT_EQ ("NotSupportedException", raised_by (caller, args))
-			<< "the interpreter's transform let the call through";
+			<< "the classic tier-0 compiler let the call through";
 
 	ASSERT_TRUE (mono_promote_method (caller, domain));
 	ASSERT_NE (nullptr, await_body (domain, caller))

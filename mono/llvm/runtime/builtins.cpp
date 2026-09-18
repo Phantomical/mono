@@ -63,8 +63,6 @@ mono_llvm_load_error_exception (MonoErrorBoxed *failure)
 
 /* Defined beside the code that emits the call to it. */
 void mono_llvm_seq_point_nop (void);
-void mono_llvm_interp_entry_from_context (mono::MonoDomainMethod *published,
-                                          mono::arch::InterpArgContext *ctx);
 
 } // extern "C"
 
@@ -259,7 +257,6 @@ mono_llvm_jit_register_icalls (void)
 	register_icall (mono_llvm_load_error_exception, mono_icall_sig_object_ptr);
 	register_icall (mono_llvm_seq_point_nop, mono_icall_sig_void);
 	register_icall (mono_personality, mono_icall_sig_int_int_int_ptr_ptr_ptr);
-	register_icall (mono_llvm_interp_entry_from_context, mono_icall_sig_void_ptr_ptr);
 
 	/*
 	 * The dispatcher's target is a static member, so it carries a mangled

@@ -8,10 +8,10 @@
  * that nothing has to reference it for its overrides to be read.
  *
  * What lives here are compatibility shims for code that patches methods by
- * writing machine code over their entry.  That works for a compiled caller and
- * is invisible to the interpreter, which keeps running the method's own
- * bytecode - so a patch applied that way is applied to half the process.  The
- * shims ask the runtime instead.
+ * writing machine code over their entry.  That works for an ordinary caller,
+ * and is invisible to a caller that has already inlined the callee, which
+ * keeps running the copy it inlined - so a patch applied that way misses
+ * whichever callers got there first.  The shims ask the runtime instead.
  */
 
 using System;
@@ -24,7 +24,8 @@ using System.Runtime.CompilerServices;
 namespace Mono.Overrides {
 
 public static class MonoOverride {
-	/// Makes replacement run wherever target was called, in both engines.
+	/// Makes replacement run wherever target was called, including a caller
+	/// that already inlined it.
 	///
 	/// Each argument is a MonoMethod pointer, which is what HandleOf returns.
 	/// A later call on the same target replaces this one. Nothing undoes it.
@@ -64,10 +65,10 @@ public static class MonoOverride {
 /*
  * Harmony patches a method by writing a jump over the bytes at the address
  * RuntimeMethodHandle.GetFunctionPointer () hands back. That address is the
- * method's entry here, so a compiled caller does follow it - but nothing tells
- * the runtime the method was patched, and an interpreted caller goes on
- * running the method's own bytecode. Both shims below hand the same pair of
- * methods to the runtime instead.
+ * method's entry here, so an ordinary caller does follow it - but nothing
+ * tells the runtime the method was patched, and a caller that already
+ * inlined the callee goes on running the copy it inlined. Both shims below
+ * hand the same pair of methods to the runtime instead.
  *
  * Neither can be undone, and neither needs to be: HarmonyLib copies the
  * original's IL into each wrapper it builds rather than calling back through a

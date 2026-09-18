@@ -599,7 +599,7 @@ section_names [][12] = {
 	"System",
 	"", // MONO_COUNTER_PERFCOUNTERS - not used.
 	"Profiler",
-	"Interp",
+	"", // MONO_COUNTER_INTERP - not used.
 	"Tiered",
 };
 

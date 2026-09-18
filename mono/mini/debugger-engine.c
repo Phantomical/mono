@@ -209,18 +209,14 @@ insert_breakpoint (MonoSeqPointInfo *seq_points, MonoDomain *domain, MonoJitInfo
 	if (it.seq_point.native_offset == SEQ_POINT_NATIVE_OFFSET_DEAD_CODE) {
 		PRINT_DEBUG_MSG (1, "[dbg] Attempting to insert seq point at dead IL offset %d, ignoring.\n", (int)bp->il_offset);
 	} else if (count == 0) {
-		if (ji->is_interp) {
-			mini_get_interp_callbacks ()->set_breakpoint (ji, inst->ip);
-		} else {
 #ifdef MONO_ARCH_SOFT_DEBUG_SUPPORTED
-			if (ji->dbg_ignore)
-				return;
-			
-			mono_arch_set_breakpoint (ji, inst->ip);
+		if (ji->dbg_ignore)
+			return;
+
+		mono_arch_set_breakpoint (ji, inst->ip);
 #else
-			NOT_IMPLEMENTED;
+		NOT_IMPLEMENTED;
 #endif
-		}
 	}
 
 	PRINT_DEBUG_MSG (1, "[dbg] Inserted breakpoint at %s:[il=0x%x,native=0x%x] [%p](%d).\n", mono_method_full_name (jinfo_get_method (ji), TRUE), (int)it.seq_point.il_offset, (int)it.seq_point.native_offset, inst->ip, count);
@@ -241,15 +237,11 @@ remove_breakpoint (BreakpointInstance *inst)
 	g_assert (count > 0);
 
 	if (count == 1 && inst->native_offset != SEQ_POINT_NATIVE_OFFSET_DEAD_CODE) {
-		if (ji->is_interp) {
-			mini_get_interp_callbacks ()->clear_breakpoint (ji, ip);
-		} else {
 #ifdef MONO_ARCH_SOFT_DEBUG_SUPPORTED
-			mono_arch_clear_breakpoint (ji, ip);
+		mono_arch_clear_breakpoint (ji, ip);
 #else
-			NOT_IMPLEMENTED;
+		NOT_IMPLEMENTED;
 #endif
-		}
 		if (log_level > 0)
 			PRINT_DEBUG_MSG (1, "[dbg] Clear breakpoint at %s [%p].\n", mono_method_full_name (jinfo_get_method (ji), TRUE), ip);
 	}
@@ -637,7 +629,6 @@ mono_de_start_single_stepping (void)
 #ifdef MONO_ARCH_SOFT_DEBUG_SUPPORTED
 		mono_arch_start_single_stepping ();
 #endif
-		mini_get_interp_callbacks ()->start_single_stepping ();
 	}
 }
 
@@ -650,7 +641,6 @@ mono_de_stop_single_stepping (void)
 #ifdef MONO_ARCH_SOFT_DEBUG_SUPPORTED
 		mono_arch_stop_single_stepping ();
 #endif
-		mini_get_interp_callbacks ()->stop_single_stepping ();
 	}
 }
 
@@ -663,23 +653,6 @@ get_top_method_ji (gpointer ip, MonoDomain **domain, gpointer *out_ip)
 		*out_ip = ip;
 
 	ji = mini_jit_info_table_find (mono_domain_get (), (char*)ip, domain);
-	if (!ji) {
-		/* Could be an interpreter method */
-
-		MonoLMF *lmf = mono_get_lmf ();
-		MonoInterpFrameHandle *frame;
-
-		g_assert (((gsize)lmf->previous_lmf) & 2);
-		MonoLMFExt *ext = (MonoLMFExt*)lmf;
-
-		g_assert (ext->kind == MONO_LMFEXT_INTERP_EXIT || ext->kind == MONO_LMFEXT_INTERP_EXIT_WITH_CTX);
-		frame = (MonoInterpFrameHandle*)ext->interp_exit_data;
-		ji = mini_get_interp_callbacks ()->frame_get_jit_info (frame);
-		if (domain)
-			*domain = mono_domain_get ();
-		if (out_ip)
-			*out_ip = mini_get_interp_callbacks ()->frame_get_ip (frame);
-	}
 	return ji;
 }
 
@@ -1727,8 +1700,6 @@ gpointer
 get_this_addr (DbgEngineStackFrame *the_frame)
 {
 	StackFrame *frame = (StackFrame *)the_frame;
-	if (frame->de.ji->is_interp)
-		return mini_get_interp_callbacks ()->frame_get_this (frame->interp_frame);
 
 	/* Null whenever the method was compiled without variable location info. */
 	MonoDebugVarInfo *var = frame->jit->this_var;

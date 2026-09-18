@@ -237,11 +237,9 @@ MethodLLVMEmitter::emit_ldstr (MonoIrBuilder &builder, uint32_t token)
 	// The interned string is a runtime object. Like a vtable, it travels as a
 	// symbol the engine resolves.
 	//
-	// The compiler interns it here, rather than at run time, to match what the
-	// interpreter does for the same instruction. mono/interp/transform/transform.cpp
-	// also calls mono_ldstr_checked () at this point, when it transforms a
-	// non-wrapper method. Both rest on the same guarantee. An interned string is
-	// rooted and never moves, so its address can outlive the compile.
+	// The compiler interns it here, rather than at run time, so the address can
+	// be baked into the IR as a constant. An interned string is rooted and never
+	// moves, so its address can outlive the compile.
 	//
 	// The runtime interns the string into the domain the code compiles for, not
 	// into the thread's current domain. The root holds only while that domain

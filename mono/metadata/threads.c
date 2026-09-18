@@ -4239,11 +4239,7 @@ void mono_thread_suspend_all_other_threads (void)
 typedef struct {
 	MonoInternalThread *thread;
 	MonoStackFrameInfo *frames;
-	/*
-	 * The IL offset of each frame, taken while the thread is still suspended.
-	 * An interpreted frame is the only thing that describes its own body, and it
-	 * lives on a stack that resumes as soon as the walk ends.
-	 */
+	/* The IL offset of each frame, taken while the thread is still suspended. */
 	int *il_offsets;
 	int nframes, max_frames;
 	int nthreads, max_threads;
@@ -4261,7 +4257,7 @@ collect_frame (MonoStackFrameInfo *frame, MonoContext *ctx, gpointer data)
 	if (ud->nframes < ud->max_frames) {
 		memcpy (&ud->frames [ud->nframes], frame, sizeof (MonoStackFrameInfo));
 		ud->il_offsets [ud->nframes] = frame->ji
-			? mono_debug_il_offset_from_jinfo (frame->ji, frame->interp_frame, frame->domain, frame->native_offset)
+			? mono_debug_il_offset_from_jinfo (frame->ji, frame->domain, frame->native_offset)
 			: -1;
 		ud->nframes ++;
 	}
@@ -4464,7 +4460,7 @@ dump_thread (MonoInternalThread *thread, ThreadDumpUserData *ud, FILE* output_fi
 		MonoStackFrameInfo *frame = &ud->frames [i];
 		MonoMethod *method = NULL;
 
-		if (frame->type == FRAME_TYPE_MANAGED || frame->type == FRAME_TYPE_INTERP)
+		if (frame->type == FRAME_TYPE_MANAGED)
 			method = mono_jit_info_get_method (frame->ji);
 
 		if (method) {
@@ -4643,7 +4639,7 @@ ves_icall_System_Threading_Thread_GetStackTraces (MonoArrayHandleOut out_threads
 
 			sf->native_offset = frame->native_offset;
 
-			if (frame->type == FRAME_TYPE_MANAGED || frame->type == FRAME_TYPE_INTERP)
+			if (frame->type == FRAME_TYPE_MANAGED)
 				method = mono_jit_info_get_method (frame->ji);
 
 			if (method) {

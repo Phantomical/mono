@@ -1,14 +1,10 @@
-// An unverifiable body small enough for the interpreter to inline, wrapped in
-// one that reports what happened.
+// A body unverifiable under ECMA-335 III.4.10, rather than
+// verification-invalid-il.exe's III.1.7.5 violation, wrapped in one that
+// reports what happened.
 //
 // Probe::Small takes the address of an init-only field outside a constructor,
-// which ECMA-335 III.4.10 forbids. It runs anyway - the address is read and
+// which III.4.10 forbids. It runs anyway - the address is read and
 // discarded - so the method returns 42.
-//
-// The body is deliberately kept under INLINE_LENGTH_LIMIT and free of exception
-// clauses, which is what makes the interpreter fold it into its caller. An
-// inlined body never gets a transform of its own, so it is the one shape that
-// can slip past a check placed where a method is transformed.
 //
 // So the program prints "ran 42" when nothing verifies it, and "rejected
 // <exception>" when something does.

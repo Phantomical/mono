@@ -275,7 +275,8 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
 
 /**
  * Whether this method's after-call sequence points take part in the
- * nested-call tagging below. The interpreter answers the same question with:
+ * nested-call tagging below. The classic compiler
+ * (mono/mini/tier0/method-to-ir.c) answers the same question with:
  *
  *	if (!(method->flags & METHOD_IMPL_ATTRIBUTE_NATIVE))
  *
@@ -285,9 +286,9 @@ MethodLLVMEmitter::emit_seq_point (MonoIrBuilder &builder, uint32_t encoded_il,
  * else. Whether a method is native plays no part in it.
  *
  * This backend matches that test. It does not correct it. A
- * compiler-generated state machine is private, so the interpreter tags
- * nothing inside one. A step over that exits an async MoveNext gets whatever
- * stops this test happens to produce.
+ * compiler-generated state machine is private, so classic tags nothing
+ * inside one. A step over that exits an async MoveNext gets whatever stops
+ * this test happens to produce.
  */
 static bool
 tags_nested_calls (MonoMethod *method)
@@ -308,8 +309,7 @@ tags_nested_calls (MonoMethod *method)
  * mono_de_ss_update () reads both flags.
  *
  * nests says whether this call takes part in that run. A newobj gets a point
- * of its own but does not open or extend a run. The interpreter treats
- * newobj the same way.
+ * of its own but does not open or extend a run.
  */
 void
 MethodLLVMEmitter::emit_after_call_seq_point (MonoIrBuilder &builder, bool nests)

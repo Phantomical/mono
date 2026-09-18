@@ -292,9 +292,10 @@ static class Program {
 		RunAll ("tier 0");
 
 		/*
-		 * Asked for rather than waited for. An interpreted caller reaches an
-		 * interpreted callee without the runtime being asked for it, so a loop
-		 * alone leaves the methods where they started.
+		 * Asked for rather than waited for: waiting on tier 0's own threshold
+		 * would spend an uncontrolled number of calls before a tier-1 body
+		 * exists at all, and the counter this test reads is in that body and
+		 * counts nothing until there is one.
 		 */
 		if (!Promote (3))
 			return 1;

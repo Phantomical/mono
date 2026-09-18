@@ -1,14 +1,14 @@
 using System;
 
 /*
- * Cross-domain calls, which the interpreter reaches through an xdomain-invoke
+ * Cross-domain calls, which reach the callee through an xdomain-invoke
  * wrapper rather than through the callee's own body.
  *
  * The wrapper serializes the arguments and makes the call itself with a calli
- * to a native helper, and that is the one call the interpreter makes with no
- * InterpMethod behind it -- a pinvoke outside a managed-to-native wrapper,
- * where the transform has nothing to resolve the callee to. A frame set up for
- * that call has no method, so anything reading one off it has to cope.
+ * to a native helper. That call has no managed method behind it -- a pinvoke
+ * outside a managed-to-native wrapper, where the transform has nothing to
+ * resolve the callee to. A frame set up for that call has no method, so
+ * anything reading one off it has to cope.
  *
  * A call whose arguments are all primitives takes a shorter path and does not
  * build that frame, so the shapes below return strings and pass reference types

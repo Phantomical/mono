@@ -146,7 +146,7 @@ public class Tests {
 		Invoke ("Unboxed", new Holder (), new object [] { 3 });
 
 		// How many frames a filter body gets is the execution engine's business
-		// - the interpreter's model is not the JIT's - but it is a frame, and a
+		// - tier 0's model is not the backend's - but it is a frame, and a
 		// walk that reaches it has to get past it to the frames underneath.
 		typeof (Tests).GetMethod ("Filtered").Invoke (null, new object [] { 3 });
 		CheckPresent ("Filtered filter", filter_frames);

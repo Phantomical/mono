@@ -34,8 +34,8 @@ class Driver
 					// Unload bounds its wait for ad's queued work with a timeout
 					// (MONO_DOMAIN_UNLOAD_TIMEOUT, default 1s) and throws once it
 					// expires instead of hanging. The queued busy loop above can
-					// still hit that timeout while interpreted, so this is an
-					// accepted outcome here, not a failure.
+					// still hit that timeout under load, so this is an accepted
+					// outcome here, not a failure.
 					try {
 						AppDomain.Unload (ad);
 					} catch (CannotUnloadAppDomainException) {

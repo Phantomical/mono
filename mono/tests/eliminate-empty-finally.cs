@@ -110,7 +110,7 @@ static class Program {
 
 	public static int Main ()
 	{
-		RunAll ("interpreted");
+		RunAll ("tier 0");
 
 		foreach (string name in new [] { "PlainLeave", "ExceptionUnwind", "Nested", "DeadStore" })
 			Promote (name, tier1);

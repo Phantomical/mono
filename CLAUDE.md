@@ -156,10 +156,10 @@ ctest --test-dir build -N                           # list without running
 ```
 
 Labels: `regression`, `llvm`, `runtime`, `tier0`, `tier0-unit`, `gshared`, `sgen`,
-`interp`, `bcl`, `bcl-xunit`, `compiler`, `tools`, `benchmark`, `slow`, `stress`,
+`bcl`, `bcl-xunit`, `compiler`, `tools`, `benchmark`, `slow`, `stress`,
 `acceptance`. `runtime` is the corpus with tier 0 off, so every method goes through the
 backend; `tier0` is the same corpus at the default tier, where every method starts in the
-classic compiler; `interp` is the interpreter, whole-engine and as tier 0.
+classic compiler.
 `ctest --print-labels` is authoritative for the configuration you built. `check` is a
 few hundred tests and seconds. Corpora are built by the regular build, not by ctest, so
 build before you run `ctest` directly.
@@ -265,14 +265,13 @@ Tracing:
   sections, so there is no source-level stepping. Off by default, because it keeps a
   copy of every object alive for as long as the method.
 
-Dumping. Both compiled tiers and the interpreter print through
-`mono/mini/jit-dump.hpp`, so one variable selects the stages and one filter selects the
-methods. The classic tier-0 compiler is C, so it crosses into that C++ code through the
-small boundary `mono/mini/jit-dump-tier0.h` declares, the same shape `runtime.h` gives
-the backend:
+Dumping. Both compiled tiers print through `mono/mini/jit-dump.hpp`, so one variable
+selects the stages and one filter selects the methods. The classic tier-0 compiler is C,
+so it crosses into that C++ code through the small boundary `mono/mini/jit-dump-tier0.h`
+declares, the same shape `runtime.h` gives the backend:
 - `MONO_JIT_DUMP=<points>` — the stages to print, separated by `;` or `,`. `all` names
   every one. A name nothing matches is reported on stderr with the list of names. The
-  points are `il`, `mint`, `unopt-ir`, `tier1-ir`, `tier2-inlined-ir`, `tier2-ir`,
+  points are `il`, `unopt-ir`, `tier1-ir`, `tier2-inlined-ir`, `tier2-ir`,
   `tier1-asm`, `tier2-asm` and `tier0-asm`.
 - `MONO_JIT_DUMP_FILTER=<substr>` — dump only the methods whose name contains this. Every
   point matches it against the same string, `Class:Method (argtypes)@0xADDR`, so a filter
@@ -284,11 +283,7 @@ the backend:
 
 What each point prints:
 - `il` — the method's CIL, inside the class and signature it is declared with. It prints
-  once for each method, from whichever engine reached it first.
-- `mint` — the bytecode the interpreter runs, after the transform has compacted it, so
-  it prints only for a method the interpreter is tier 0 for (`-mono-tier0-classic=0` or
-  a filter). `MONO_VERBOSE_METHOD` still prints the same dump and the transform's tracing
-  with it, and it is also what prints a classic tier-0 body's IR and code.
+  once for each method, at translation.
 - `unopt-ir` — the IR the translator wrote, before any pipeline. A body the pre-pass
   inlined is still a function of its own here, so it prints after the caller.
 - `tier1-ir` / `tier2-ir` — that IR after its tier's pipeline.
@@ -367,13 +362,6 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
 `--llvm-opt=` tokens into the same registration by hand, and
 `mono/unit-tests/gtest/runtime/harness.cpp` hands the whole variable to
 `mono_jit_parse_options ()`:
-- `--llvm-opt=-mono-tier0-classic=<1|0|substr>` (`runtime/options.cpp`) — which engine
-  is tier 0. `1`, the default, compiles every tier-0 method with the classic compiler
-  and never starts the interpreter. `0`, `false` or empty interprets every one, which
-  separates a classic defect from a tiering one. A substring compiles the methods whose
-  full name contains it and interprets the rest, which gets a classic caller and an
-  interpreted callee into one process. The interpreter starts only when this setting
-  sends it something, so `mono_use_interpreter` reads false under the default.
 - `--llvm-opt=-mono-tier0-filter=<substr|0>` (`runtime/options.cpp`) — narrow tier 0,
   which is otherwise every method with IL of its own. A false value compiles everything
   through the backend, which separates a tier-0 bug from a backend one. A substring gets
@@ -383,16 +371,12 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   spends before it asks for tier 1, default 5000000. A call costs
   `-mono-tier1-entry-weight` and one turn of a loop costs the IL bytes of the loop it
   closes, so one counter reaches a method that is called often and a method entered once
-  that loops. The default is a thousand calls at the default weight, which is where the
-  classic compiler being much faster than the interpreter puts it. Zero never promotes,
+  that loops. The default is a thousand calls at the default weight. Zero never promotes,
   which separates a tier-0 entry bug from a promotion bug. A value equal to the weight
   promotes on the first call, which puts the switch inside a loop.
 - `--llvm-opt=-mono-tier1-entry-weight=<n>` (`runtime/options.cpp`) — what one call adds
   to that count, default 5000, the same as tier 2 charges a call. Zero counts loop turns
   alone, which separates a promotion the work asked for from one the calls asked for.
-  The interpreter charges this per call as well, and has no counterpart to the loop
-  turns, so a method that loops rather than being called promotes out of classic tier 0
-  and not out of the interpreter.
 - `--llvm-opt=-mono-tier2-threshold=<n>` (`runtime/options.cpp`) — what a tier-1 body
   spends before it asks for tier 2, default 100000000. One unit is one instruction that
   emits code, and a call costs `-mono-tier2-entry-weight` on top, so one counter reaches
@@ -442,7 +426,7 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   cap does not come off that measurement: it describes throughput, and what a promoted
   method waits for is latency, which keeps falling after throughput stops scaling. The
   process pays for the shorter wait in compile CPU and wins anyway, because a method
-  waiting for a body runs interpreted.
+  waiting for a body runs at tier 0 in the meantime.
   `.claude/plans/tier1-promotion-latency.md` has the sweeps and what is still open.
 - `--llvm-opt=-mono-worker-idle-ms=<n>` (`runtime/options.cpp`) — how long a worker
   waits for work before the queue retires it, default 1000. A retired thread detaches
@@ -486,9 +470,9 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   by default. The type stays a `FixedVectorType` either way: a `Vector4f` is a
   `<4 x float>` on both arms, so a caller and a callee never disagree about a
   value's register. `mono/tests/simd-semantics.cs` is the differential gate,
-  three arms: `runtime-simd-semantics` reaches it with the classic compiler as
-  tier 0, `-interp` swaps the interpreter in, and `-off` is the negative control
-  the switch names directly. `-off` is also the negative control for what the
+  two arms: `runtime-simd-semantics` reaches it with the classic compiler as
+  tier 0, and `-off` is the negative control the switch names directly. `-off`
+  is also the negative control for what the
   lowering is worth, and only at tier 1, which is where nearly all code stays. A
   written row is small enough for the pre-pass to inline into its caller, where
   the fallback body is not, and the matmul and n-body kernels landed as
@@ -526,10 +510,6 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   turn the thread-static fast path off, so every thread static reads back through
   `mono_domain_get ()` and the `mono_class_static_field_address` icall. On by default.
   `mono/tests/thread-static-fast-path.cs` compares the two arms at tier 2.
-- `--llvm-opt=-mono-dyn-calls=<0|false|empty>` (`runtime/options.cpp`) — turn off the
-  interpreter's dyn-call plan, so every jit call back into compiled code goes through a
-  `gsharedvt_out_sig` wrapper instead. On by default. `mono/tests/dyn-call.cs` gates both
-  arms.
 - `--llvm-opt=-mono-invariant-group-nonptr=<1|true>` (`runtime/options.cpp`) — tag a
   non-pointer array-header read (`max_length`, a dimension's length or lower bound) with
   `!invariant.group`, the same as the bounds pointer always carries. Off by default,
@@ -674,14 +654,13 @@ Everything here is **C++**, and a header only C++ includes is a `.hpp`. A `.h` i
 reachable from something that is not C++, so it holds only what that other language
 reads. `runtime.h` is the interface the C runtime compiles methods through: its
 declarations sit inside `MONO_BEGIN_DECLS` and name only types C sees. Keep that
-surface small. `arch/amd64/interp-entry-offsets.h` is read by `interp-entry-thunk.S`
-as well as by `amd64.hpp`, so it holds nothing but `#define`s.
-`debugging/perf/perf.h` declares what the C runtime owes the perf jit dump.
+surface small. `debugging/perf/perf.h` declares what the C runtime owes the perf jit
+dump.
 
 - **`runtime.h` + `runtime/`** — the engine. `runtime/entrypoints.cpp` is the boundary.
   `runtime/backend.cpp` holds the state, one `MethodState` per method with its thunk,
   trampoline and jit infos together. The rest of the directory is what a compile is made
-  of: `naming`, `translate`, `externals`, `thrower`, `dispatcher`, `interp`, `options`.
+  of: `naming`, `translate`, `externals`, `thrower`, `dispatcher`, `options`.
   `runtime/builtins.cpp` registers the runtime helpers and libcalls generated code names.
 - **`method-to-llvm.cpp` + `method-to-llvm/`** — the CIL→IR front end. One class,
   `MethodLLVMEmitter`, split by opcode family: `call.cpp`, `casts.cpp`, `exceptions.cpp`,
@@ -801,8 +780,7 @@ this backend writes itself (`builtin_body_replaces_il ()`, which is `ByReference
 whose IL only throws). A `MONO_WRAPPER_DYNAMIC_METHOD` is the one wrapper it accepts,
 because it carries IL of its own from Reflection.Emit and `create_delegate_method_ptr ()`
 otherwise compiles it on the thread that makes the delegate over it. A method tier 0
-refuses, or fails to compile, goes to the backend at tier 1. Nothing falls back to the
-interpreter.
+refuses, or fails to compile, goes to the backend at tier 1.
 
 A reference instantiation of a generic enters the shared form's record, the way the
 compiled tiers do (`enter_shared_body ()`): the shared body is compiled once, the
@@ -844,50 +822,6 @@ freeing, and nothing about it is keyed by `MonoMethod` — which is what lets a 
 several bodies each describe their own code. `mono_save_seq_point_info ()`'s compact
 table stays for the debugger, which needs the step-target links the map does not carry,
 and a breakpoint goes through `mono_arch_set_breakpoint ()`'s patchable-site arm.
-
-**The interpreter is the other tier-0 engine, and it runs nothing unless asked.**
-`-mono-tier0-classic=0` makes it tier 0 for every method, and a substring for the
-methods the substring does not name; `mini_init ()` starts it only then
-(`mono_llvm_jit_interp_tier0_enabled ()`). It is not a fallback: nothing classic tier 0
-refuses reaches it. `--interpreter` is a different thing and still means the interpreter
-as the whole engine, with no tier to leave for. The rest of this section describes the
-interpreter as tier 0.
-
-Under the interpreter the counter is a word on `InterpMethod`, set from the method's
-record when the `InterpMethod` is built, then charged one entry weight at the three
-places a call arrives: the interpreter's `call:` and `tailcall:` labels and
-`interp_entry ()`. A counter that runs out calls `mono_promote_method ()`, the same
-decision as above. Nothing charges a loop turn here, so an interpreted method that
-loops rather than being called never reaches the threshold.
-
-The counter has to sit where the interpreter reaches it rather than in a wrapper in
-front of the method. Such a wrapper sees only calls arriving through the method's
-redirect thunk, and a call from one interpreted method to another arrives through none.
-
-One limit is worth knowing before extending this. `runs_at_tier0 ()` decides only for
-methods the backend is *asked* about. A callee the interpreter reached for itself never
-passes through it, so a refusal cannot keep a subgraph under an interpreted frame out of
-the interpreter. Anything the interpreter cannot do is therefore lost for the whole call
-graph below the first interpreted frame, which is why tail calls had to be taught to it
-rather than refused.
-
-**The interpreter makes real tail calls.** A `tail.` site becomes `MINT_TAILCALL` or
-`MINT_TAILCALLVIRT_FAST`, which hand the frame to the callee instead of making a new
-one. The arguments move down over the caller's locals, `frame->imethod` is swapped, and
-`ip` goes to the callee's first instruction. `interp_tail_call_refusal ()`
-(`mono/interp/transform/transform.cpp`) decides which sites qualify and names the reason
-it declines, which `MONO_VERBOSE_METHOD` prints. A declined site is an ordinary call, so
-no other output distinguishes the two. Every shape `should_tail_call ()` honours in the
-compiled engine has to be honoured here as well, because a method runs in either engine
-and under tier 0 in both. Going further is fine, and dispatched calls are where the
-interpreter does, having resolved the target before the frame changes hands.
-
-The one thing a tail site does that an ordinary call does not is refuse `do_jit_call ()`
-and interpret a callee that already has code. If it let one through, the native stack
-would grow once per hop in a cycle alternating between the engines. A jit call in and an
-entry thunk back are neither of them a jump, and no limit stops that growth. The cost is
-that a cycle calling only in tail position stays interpreted even once its methods are
-promoted. No OSR exists to move it.
 
 ### Tier 1 and tier 2
 
@@ -1198,12 +1132,9 @@ running for it does not take the entry when it lands. It always succeeds, becaus
 patcher told no has nothing to fall back on.
 
 A patcher that instead writes a jump over the address `GetFunctionPointer` handed it
-still reaches every compiled caller, because that address is the thunk. It tells the
-interpreter nothing, so interpreted callers keep interpreting the method. An interpreted
-caller does see a detour that went through the API, because `resolve_code_type ()` reads
-the tier and makes a jit call to the entry instead. The exception is a callee whose body
-the interpreter has already copied in. `mono/unit-tests/gtest/runtime/detour.cs` and
-`test-detour.cpp` hold both arms.
+still reaches every compiled caller, because that address is the thunk. The exception is
+a callee whose body a caller already inlined. `mono/unit-tests/gtest/runtime/detour.cs`
+and `test-detour.cpp` gate it.
 
 ### Cost, and building against unmodified LLVM
 

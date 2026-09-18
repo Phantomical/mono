@@ -140,7 +140,6 @@ mono_gc_alloc_pinned_obj (MonoVTable *vtable, size_t size);
 MonoObjectHandle
 mono_gc_alloc_handle_pinned_obj (MonoVTable *vtable, gsize size);
 
-/* G_EXTERN_C: the interpreter boxes from C++. */
 G_EXTERN_C
 MonoObject*
 mono_gc_alloc_obj (MonoVTable *vtable, size_t size);
@@ -319,10 +318,6 @@ typedef struct {
 	 * tracking the provenances of objects.
 	 */
 	gpointer (*get_provenance_func) (void);
-	/*
-	 * Same as thread_mark_func, mark the intepreter frames.
-	 */
-	void (*interp_mark_func) (gpointer thread_info, GcScanFunc func, gpointer gc_data, gboolean precise);
 } MonoGCCallbacks;
 
 /* Set the callback functions callable by the GC */

@@ -20,7 +20,7 @@
 #include "mono/metadata/icalls.h"
 
 /* JIT specific interface */
-/* G_EXTERN_C_VAR: the interpreter and the backend read this from C++, and
+/* G_EXTERN_C_VAR: the backend reads this from C++, and
  * mono/utils/mono-threads-coop.c defines it.  See the note on the TLS
  * variables in mono/utils/mono-tls.h for why the mismatch is invisible under
  * the Itanium ABI and not under MSVC's. */
@@ -28,7 +28,7 @@ G_EXTERN_C_VAR volatile size_t mono_polling_required;
 
 /* Internal API */
 
-/* G_EXTERN_C: the interpreter polls from C++, and the definition is in C
+/* G_EXTERN_C: the backend polls from C++, and the definition is in C
  * whether or not the icalls are exported. */
 G_EXTERN_C void
 mono_threads_state_poll (void);

@@ -13,27 +13,16 @@ static gpointer mini_llvmonly_get_delegate_arg (MonoMethod *method, gpointer met
 /*
  * mini_llvmonly_load_method:
  *
- *   Return the AOT-ed code METHOD, or an interpreter entry for it.
+ *   Return the AOT-ed code for METHOD.
  *
  */
 static gpointer
 mini_llvmonly_load_method (MonoMethod *method, gboolean caller_gsharedvt, gboolean need_unbox, gpointer *out_arg, MonoError *error)
 {
 	gpointer addr = mono_compile_method_checked (method, error);
+	return_val_if_nok (error, NULL);
 
-	if (!is_ok (error)) {
-		mono_error_cleanup (error);
-		error_init_reuse (error);
-	}
-
-	if (addr) {
-		return mini_llvmonly_add_method_wrappers (method, (gpointer)addr, caller_gsharedvt, need_unbox, out_arg);
-	} else {
-		MonoFtnDesc *desc = mini_get_interp_callbacks ()->create_method_pointer_llvmonly (method, need_unbox, error);
-		return_val_if_nok (error, NULL);
-		*out_arg = desc->arg;
-		return desc->addr;
-	}
+	return mini_llvmonly_add_method_wrappers (method, (gpointer)addr, caller_gsharedvt, need_unbox, out_arg);
 }
 
 /*
@@ -45,16 +34,10 @@ mini_llvmonly_load_method_ftndesc (MonoMethod *method, gboolean caller_gsharedvt
 	gpointer addr = mono_compile_method_checked (method, error);
 	return_val_if_nok (error, NULL);
 
-	if (addr) {
-		gpointer arg = NULL;
-		addr = mini_llvmonly_add_method_wrappers (method, (gpointer)addr, caller_gsharedvt, need_unbox, &arg);
-		// FIXME: Cache this
-		return mini_llvmonly_create_ftndesc (mono_domain_get (), addr, arg);
-	} else {
-		MonoFtnDesc *ftndesc = mini_get_interp_callbacks ()->create_method_pointer_llvmonly (method, need_unbox, error);
-		return_val_if_nok (error, NULL);
-		return ftndesc;
-	}
+	gpointer arg = NULL;
+	addr = mini_llvmonly_add_method_wrappers (method, (gpointer)addr, caller_gsharedvt, need_unbox, &arg);
+	// FIXME: Cache this
+	return mini_llvmonly_create_ftndesc (mono_domain_get (), addr, arg);
 }
 
 /*
@@ -67,19 +50,10 @@ mini_llvmonly_load_method_delegate (MonoMethod *method, gboolean caller_gsharedv
 	gpointer addr = mono_compile_method_checked (method, error);
 	return_val_if_nok (error, NULL);
 
-	if (addr) {
-		if (need_unbox)
-			addr = mono_aot_get_unbox_trampoline (method, NULL);
-		*out_arg = mini_llvmonly_get_delegate_arg (method, addr);
-		return addr;
-	} else {
-		MonoFtnDesc *desc = mini_get_interp_callbacks ()->create_method_pointer_llvmonly (method, need_unbox, error);
-		return_val_if_nok (error, NULL);
-
-		g_assert (!caller_gsharedvt);
-		*out_arg = desc->arg;
-		return desc->addr;
-	}
+	if (need_unbox)
+		addr = mono_aot_get_unbox_trampoline (method, NULL);
+	*out_arg = mini_llvmonly_get_delegate_arg (method, addr);
+	return addr;
 }
 
 static gpointer
@@ -827,14 +801,4 @@ mini_llvmonly_pop_lmf (MonoLMF *lmf)
 {
 	if (lmf->previous_lmf)
 		mono_set_lmf ((MonoLMF*)lmf->previous_lmf);
-}
-
-gpointer
-mini_llvmonly_get_interp_entry (MonoMethod *method)
-{
-	ERROR_DECL (error);
-
-	MonoFtnDesc *desc = mini_get_interp_callbacks ()->create_method_pointer_llvmonly (method, FALSE, error);
-	mono_error_assert_ok (error);
-	return desc;
 }

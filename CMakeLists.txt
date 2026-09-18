@@ -262,21 +262,11 @@ endif()
 #
 #   check        the fast set -- unit tests, mini regression, the LLVM tier, and
 #                the runtime one-offs. Seconds, not minutes.
-#   check-all    everything except the stress suites, the minutes-long ones, the
-#                acceptance suite and check-interp-mixed.
-#   check-interp the interpreter's own tests under mono/unit-tests, on three
-#                configurations of the interpreter. Twenty seconds.
-#   check-interp-jit the same managed programs with the interpreter turned off,
-#                and check-interp-mixed with promotion in the middle of the run.
-#                Either one disagreeing with check-interp is a tier seam
-#                divergence. The mixed arm is nine minutes and is red on a
-#                backend defect it exists to report.
-#   check-interp-tier2 the same programs again through the optimizing pipeline.
-#                A disagreement with check-interp-jit is what tier 2 did to that
-#                test.
+#   check-all    everything except the stress suites, the minutes-long ones and
+#                the acceptance suite.
 #
-# The heavy labels (runtime, gshared, sgen, interp, slow, stress, acceptance)
-# are opt-in:
+# The heavy labels (runtime, gshared, sgen, slow, stress, acceptance) are
+# opt-in:
 #   ctest --test-dir build -L runtime -j <n>
 #
 # `acceptance` additionally needs -D MONO_ENABLE_ACCEPTANCE_TESTS=ON and the
@@ -293,56 +283,14 @@ if(BUILD_TESTING)
   # `runtime` and goes with it, while `tier0-unit` is seconds and stays in.
   add_custom_target(check
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-            -LE "runtime|tier0$|gshared|sgen|interp|bcl|bcl-xunit|compiler|tools|eglib|slow|stress|acceptance"
+            -LE "runtime|tier0$|gshared|sgen|bcl|bcl-xunit|compiler|tools|eglib|slow|stress|acceptance"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)
 
-  # interp-mixed is out for the same reason the slow suites are: it takes nine
-  # minutes, and it is red on a backend defect it exists to report, not on a
-  # change here.
   add_custom_target(check-all
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-            -LE "slow|stress|acceptance|interp-mixed"
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    USES_TERMINAL
-    VERBATIM)
-
-  # The interpreter's own tests, under mono/unit-tests. Seconds. The `interp`
-  # label is a different question -- thousands of managed programs from
-  # mono/tests run interpreted -- and `ctest -L interp` is how to ask it.
-  add_custom_target(check-interp
-    COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-            -L interp-unit
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    USES_TERMINAL
-    VERBATIM)
-
-  # A test that answers differently here than under `check-interp` is the two
-  # engines disagreeing about the same IL.
-  add_custom_target(check-interp-jit
-    COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-            -L interp-jit
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    USES_TERMINAL
-    VERBATIM)
-
-  # The same programs again at tier 2, which is the optimizing pipeline against
-  # the counts the tier-1 body gathered. A test that answers differently here
-  # than under `check-interp-jit` is what tier 2 did to it. Every promotion here
-  # goes through the compile worker, so this arm is also what covers that path.
-  add_custom_target(check-interp-tier2
-    COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-            -L interp-tier2
-    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
-    USES_TERMINAL
-    VERBATIM)
-
-  # Promotion on the first call, so the two engines run in one process and every
-  # test crosses the tier seam.
-  add_custom_target(check-interp-mixed
-    COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-            -L interp-mixed
+            -LE "slow|stress|acceptance"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)
@@ -362,20 +310,6 @@ if(BUILD_TESTING)
     if(MONO_ENABLE_LLVM AND MONO_ENABLE_SGEN AND MONO_ENABLE_LIBRARIES)
       add_dependencies(check     test-llvm-data)
       add_dependencies(check-all test-llvm-data)
-    endif()
-    if(MONO_ENABLE_INTERPRETER AND MONO_ENABLE_SGEN AND MONO_ENABLE_LIBRARIES)
-      add_dependencies(check-interp test-interp-data)
-    endif()
-  endif()
-
-  # check-interp names the binary as well as its inputs, which the two above
-  # leave to ALL. It is the target to reach for after editing the interpreter,
-  # so it has to rebuild what it is about to test.
-  if(MONO_ENABLE_INTERPRETER AND MONO_ENABLE_SGEN AND MONO_ENABLE_LIBRARIES)
-    add_dependencies(check-interp test-interp)
-    if(MONO_CORPUS_ENABLED)
-      # interp-test-suites carries the runner as well as the assemblies.
-      add_dependencies(check-interp interp-test-suites)
     endif()
   endif()
 
@@ -438,7 +372,6 @@ message(STATUS "    GC:            ${DEFAULT_GC_NAME}")
 message(STATUS "    suspend:       ${MONO_THREAD_SUSPEND}")
 message(STATUS "    TLS:           ${MONO_WITH_TLS}")
 message(STATUS "    LLVM back end: ${MONO_ENABLE_LLVM} ${MONO_LLVM_PREFIX}")
-message(STATUS "    interpreter:   ${MONO_ENABLE_INTERPRETER}")
 message(STATUS "    Mono.Native:   ${MONO_ENABLE_MONO_NATIVE}")
 message(STATUS "    BTLS:          ${MONO_ENABLE_BTLS}")
 message(STATUS "    class libs:    ${MONO_ENABLE_MCS_BUILD}")

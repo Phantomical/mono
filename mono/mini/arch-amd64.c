@@ -668,8 +668,8 @@ add_valuetype_win64 (MonoMethodSignature *signature, ArgInfo *arg_info, MonoType
  * gives each of those bytes a register of its own.
  *
  * The walk below is that flattening over the metadata rather than over the
- * IR. The two have to agree, because the interpreter's entry and dyn-call
- * thunks read the same one (mono/llvm/arch/amd64/leaf-layout.cpp).
+ * IR, and mono/llvm/method-to-llvm/call.cpp reads its output directly to
+ * build a call site's LLVM struct type, so the two have to agree.
  *
  * Only a managed signature travels this way. A pinvoke signature is the real
  * System V classification, which add_valuetype () below still implements.

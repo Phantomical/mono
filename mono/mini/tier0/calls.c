@@ -412,28 +412,6 @@ callvirt_to_call (int opcode)
 	return -1;
 }
 
-static gboolean
-can_enter_interp (MonoCompile *cfg, MonoMethod *method, gboolean virtual_)
-{
-	if (method->wrapper_type)
-		return FALSE;
-
-	if (m_class_get_image (method->klass) == m_class_get_image (cfg->method->klass)) {
-		/* Virtual calls from corlib can go outside corlib */
-		if (!virtual_)
-			return FALSE;
-	}
-
-	/* See needs_extra_arg () in mini-llvm.c */
-	if (method->string_ctor)
-		return FALSE;
-	if (method->klass == mono_get_string_class () && (strstr (method->name, "memcpy") || strstr (method->name, "bzero")))
-		return FALSE;
-
-	/* Assume all calls outside the assembly can enter the interpreter */
-	return TRUE;
-}
-
 /**
  * Returns target, or the wrapper that takes and releases its lock when target
  * carries [MethodImpl(Synchronized)].
@@ -511,16 +489,6 @@ mini_emit_method_call_full (MonoCompile *cfg, MonoMethod *method, MonoMethodSign
 
 	if (cfg->llvm_only && virtual_ && (method->flags & METHOD_ATTRIBUTE_VIRTUAL))
 		return mini_emit_llvmonly_virtual_call (cfg, method, sig, 0, args);
-
-	if (cfg->llvm_only && cfg->interp && !virtual_ && !tailcall && can_enter_interp (cfg, method, FALSE)) {
-		MonoInst *ftndesc = mini_emit_get_rgctx_method (cfg, -1, method, MONO_RGCTX_INFO_METHOD_FTNDESC);
-
-		/* Need wrappers for this signature to be able to enter interpreter */
-		cfg->interp_in_signatures = g_slist_prepend_mempool (cfg->mempool, cfg->interp_in_signatures, sig);
-
-		/* This call might need to enter the interpreter so make it indirect */
-		return mini_emit_llvmonly_calli (cfg, sig, args, ftndesc);
-	}
 
 	need_unbox_trampoline = method->klass == mono_defaults.object_class || mono_class_is_interface (method->klass);
 
@@ -609,15 +577,7 @@ mini_emit_method_call_full (MonoCompile *cfg, MonoMethod *method, MonoMethodSign
 				MONO_EMIT_NEW_CHECK_THIS (cfg, this_reg);
 		}
 
-		if (!virtual_ && cfg->llvm_only && cfg->interp && !tailcall && can_enter_interp (cfg, method, FALSE)) {
-			MonoInst *ftndesc = mini_emit_get_rgctx_method (cfg, -1, method, MONO_RGCTX_INFO_METHOD_FTNDESC);
-
-			/* Need wrappers for this signature to be able to enter interpreter */
-			cfg->interp_in_signatures = g_slist_prepend_mempool (cfg->mempool, cfg->interp_in_signatures, sig);
-
-			/* This call might need to enter the interpreter so make it indirect */
-			return mini_emit_llvmonly_calli (cfg, sig, args, ftndesc);
-		} else if (!virtual_) {
+		if (!virtual_) {
 			call->inst.opcode = callvirt_to_call (call->inst.opcode);
 		} else {
 			vtable_reg = alloc_preg (cfg);
@@ -729,10 +689,6 @@ mini_emit_llvmonly_virtual_call (MonoCompile *cfg, MonoMethod *cmethod, MonoMeth
 	guint32 slot;
 	int offset;
 	gboolean special_array_interface = m_class_is_array_special_interface (cmethod->klass);
-
-	if (cfg->interp && can_enter_interp (cfg, cmethod, TRUE))
-		/* Need wrappers for this signature to be able to enter interpreter */
-		cfg->interp_in_signatures = g_slist_prepend_mempool (cfg->mempool, cfg->interp_in_signatures, fsig);
 
 	/*
 	 * In llvm-only mode, vtables contain function descriptors instead of

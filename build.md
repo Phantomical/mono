@@ -283,7 +283,6 @@ Individual groups, if you want one:
 ctest --test-dir build -j16 -L runtime   # the mono/tests corpus, ~700 programs
 ctest --test-dir build -j16 -L gshared   # generic sharing
 ctest --test-dir build -j16 -L sgen      # the SGen collector matrix
-ctest --test-dir build -j16 -L interp    # the corpus under the interpreter
 ctest --test-dir build -j16 -L stress    # long-running
 ```
 
@@ -292,29 +291,24 @@ build`), so run that first; `ctest` itself never builds anything.
 
 ### One test per suite
 
-The gtest suites and the managed method suites hold many cases in one binary,
-and each case gets a CTest test of its own -- about 6,200 of them, each a
-process. `MONO_MERGED_TESTS` gives each suite one test that runs its cases in a
-single process:
+The gtest suites hold many cases in one binary, and each case gets a CTest
+test of its own, each a process. `MONO_MERGED_TESTS` gives each suite one test
+that runs its cases in a single process:
 
 ```bash
 cmake -S . -B build -D MONO_MERGED_TESTS=ON
 ```
 
-That takes the whole listing from 11,706 tests to 5,518. `check-interp` shows
-the saving at its sharpest: 2,375 tests summing to 359s of test time become 11
-tests summing to 1.9s, and the target goes from 23.0s to 0.9s. `check` goes from
-444 tests and 12.3s to 43 tests and 9.2s -- the mini regression corpora dominate
-what is left of it, and they are one process per corpus either way.
+`check` goes from 444 tests and 12.3s to 43 tests and 9.2s -- the mini
+regression corpora dominate what is left of it, and they are one process per
+corpus either way.
 
 What it costs is what the split was buying. A failure names the suite, and the
 output is the only place that names the case.
 
-The cases also share a process. A test that ends the process instead of
-answering therefore takes every test behind it, and the run reports one failure
-over a suite it only partly covered. `MONO_INTERP_TESTS_JIT_UNMERGEABLE` in
-`mono/unit-tests/managed/CMakeLists.txt` names those tests. A merged run drops
-each one and prints its name, and a split run treats it as an ordinary test.
+The cases also share a process under `MONO_MERGED_TESTS`. A test that ends the
+process instead of answering therefore takes every test behind it, and the run
+reports one failure over a suite it only partly covered.
 
 Re-run a merged failure on its own before you believe it. A shared process can
 still change a result, and a case that only passes beside its neighbours is a

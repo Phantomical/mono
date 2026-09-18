@@ -845,10 +845,8 @@ typedef struct {
 	void     (*free_method) (MonoDomain *domain, MonoMethod *method);
 	gpointer (*create_remoting_trampoline) (MonoDomain *domain, MonoMethod *method, MonoRemotingTarget target, MonoError *error);
 	gpointer (*create_delegate_trampoline) (MonoDomain *domain, MonoClass *klass);
-	gpointer (*interp_get_remoting_invoke) (MonoMethod *method, gpointer imethod, MonoError *error);
 	GHashTable *(*get_weak_field_indexes) (MonoImage *image);
 	void     (*install_state_summarizer) (void);
-	gboolean (*is_interpreter_enabled) (void);
 #ifdef ENABLE_METADATA_UPDATE
 	void     (*metadata_update_init) (MonoError *error);
 	void     (*metadata_update_published) (MonoDomain *domain, MonoAssemblyLoadContext *alc, uint32_t generation);
@@ -1024,9 +1022,6 @@ struct _MonoDelegate {
 	 * the compiled code of the method, or NULL if it is not yet compiled.
 	 */
 	guint8 **method_code;
-	gpointer interp_method;
-	/* Interp method that is executed when invoking the delegate */
-	gpointer interp_invoke_impl;
 	MonoReflectionMethod *method_info;
 	MonoReflectionMethod *original_method_info;
 	MonoObject *data;

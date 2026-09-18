@@ -94,9 +94,9 @@ MethodLLVMEmitter::wrapper_data (uint32_t index) const
 }
 
 /// Refuse the method with an InvalidProgramException that names the method and
-/// the offending instruction. The interpreter raises the same exception for
-/// invalid IL, so managed code sees one behavior regardless of the engine that
-/// finds the problem.
+/// the offending instruction. The classic compiler (mono/mini/tier0/driver.c)
+/// raises the same exception for invalid IL, so managed code sees one
+/// behavior regardless of which tier finds the problem.
 llvm::Error
 MethodLLVMEmitter::invalid_il (const llvm::Twine &reason)
 {

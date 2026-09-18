@@ -99,7 +99,6 @@
 #include "debugger-engine.h"
 #include "lldb.h"
 #include "mini-runtime.h"
-#include "mono/interp/interp.h"
 #include "mixed_callstack_plugin.h"
 
 #include "../llvm/runtime.h"
@@ -160,9 +159,6 @@ MonoCPUFeatures mono_cpu_features_disabled = MONO_CPU_X86_FULL_SSEAVX_COMBINED;
 MonoCPUFeatures mono_cpu_features_disabled = (MonoCPUFeatures)0;
 #endif
 
-gboolean mono_use_interpreter = FALSE;
-const char *mono_interp_opts_string = NULL;
-
 #define mono_jit_lock() mono_os_mutex_lock (&jit_mutex)
 #define mono_jit_unlock() mono_os_mutex_unlock (&jit_mutex)
 static mono_mutex_t jit_mutex;
@@ -179,15 +175,9 @@ int valgrind_register;
 static GPtrArray *profile_options;
 
 static GSList *tramp_infos;
-GSList *mono_interp_only_classes;
 
 static void register_icalls (void);
 static void runtime_cleanup (MonoDomain *domain, gpointer user_data);
-#ifdef ENABLE_METADATA_UPDATE
-static void mini_metadata_update_init (MonoError *error);
-static void mini_invalidate_transformed_interp_methods (MonoDomain *domain, MonoAssemblyLoadContext *alc, uint32_t generation);
-#endif
-
 
 gboolean
 mono_running_on_valgrind (void)
@@ -284,9 +274,7 @@ mono_get_method_from_ip (void *ip)
 	if (location)
 		file_loc = g_strdup_printf ("[%s :: %du]", location->source_file, location->row);
 
-	const char *in_interp = ji->is_interp ? " interp" : "";
-
-	res = g_strdup_printf (" %s [{%p} + 0x%x%s] %s (%p %p) [%p - %s]", method_name, method, (int)((char*)ip - (char*)ji->code_start), in_interp, file_loc ? file_loc : "", ji->code_start, (char*)ji->code_start + ji->code_size, domain, domain->friendly_name);
+	res = g_strdup_printf (" %s [{%p} + 0x%x] %s (%p %p) [%p - %s]", method_name, method, (int)((char*)ip - (char*)ji->code_start), file_loc ? file_loc : "", ji->code_start, (char*)ji->code_start + ji->code_size, domain, domain->friendly_name);
 
 	mono_debug_free_source_location (location);
 	g_free (method_name);
@@ -1062,9 +1050,6 @@ free_jit_tls_data (MonoJitTlsData *jit_tls)
 	if (!jit_tls)
 		return;
 	mono_free_altstack (jit_tls);
-
-	if (jit_tls->interp_context)
-		mini_get_interp_callbacks ()->free_context (jit_tls->interp_context);
 
 	mono_free_resume_states (jit_tls);
 
@@ -2197,25 +2182,6 @@ compile_special (MonoMethod *method, MonoDomain *target_domain, MonoError *error
 					return mono_get_addr_from_ftnptr (compiled_ptr);
 				}
 
-				/*
-				 * Standing in for the gsharedvt_out wrappers that would have to sit
-				 * between a shared frame and the delegate trampoline, which
-				 * interpreter-only mode does not have.
-				 *
-				 * Nothing reaches it. With the interpreter as the whole engine every
-				 * request for a method is answered by it before compile_special runs,
-				 * and the one caller that insists on the JIT - the interpreter's own
-				 * MINT_JIT_CALL - never carries a delegate's Invoke, because
-				 * interp_transform_call emits MINT_CALL_DELEGATE for one instead. It
-				 * goes live as soon as something routes a runtime-implemented method
-				 * to the JIT in a mostly-interpreted process, and the answer there is
-				 * the trampoline below rather than a NULL: a caller reads a NULL as
-				 * "ask the JIT", and the JIT hands a method implemented outside IL
-				 * straight back to this function.
-				 */
-				if (mono_ee_features.force_use_interpreter)
-					return NULL;
-
 				return mono_create_delegate_trampoline (target_domain, method->klass);
 			} else if (*name == 'B' && (strcmp (name, "BeginInvoke") == 0)) {
 				nm = mono_marshal_get_delegate_begin_invoke (method);
@@ -2279,23 +2245,8 @@ mono_jit_compile_method_with_opt (MonoMethod *method, guint32 opt, gboolean jit_
 	gpointer code = NULL, p;
 	MonoJitICallInfo *callinfo = NULL;
 	WrapperInfo *winfo = NULL;
-	gboolean use_interp = FALSE;
 
 	error_init (error);
-
-	if (mono_ee_features.force_use_interpreter && !jit_only)
-		use_interp = TRUE;
-	if (!use_interp && mono_interp_only_classes) {
-		for (GSList *l = mono_interp_only_classes; l; l = l->next) {
-			if (!strcmp (m_class_get_name (method->klass), (char*)l->data))
-				use_interp = TRUE;
-		}
-	}
-	if (use_interp) {
-		code = mini_get_interp_callbacks ()->create_method_pointer (method, TRUE, error);
-		if (code)
-			return code;
-	}
 
 	if (mono_llvm_only)
 		/* Should be handled by the caller */
@@ -2343,18 +2294,7 @@ lookup_start:
 
 #ifdef MONO_USE_AOT_COMPILER
 	if (opt & MONO_OPT_AOT) {
-		MonoDomain *domain = NULL;
-
-		if (mono_aot_mode == MONO_AOT_MODE_INTERP && method->wrapper_type == MONO_WRAPPER_OTHER) {
-			WrapperInfo *info = mono_marshal_get_wrapper_info (method);
-			g_assert (info);
-			if (info->subtype == WRAPPER_SUBTYPE_INTERP_IN || info->subtype == WRAPPER_SUBTYPE_INTERP_LMF)
-				/* AOT'd wrappers for interp must be owned by root domain */
-				domain = mono_get_root_domain ();
-		}
-
-		if (!domain)
-			domain = mono_domain_get ();
+		MonoDomain *domain = mono_domain_get ();
 
 		mono_class_init_internal (method->klass);
 
@@ -2390,17 +2330,6 @@ lookup_start:
 
 	if (!code) {
 		code = compile_special (method, target_domain, error);
-
-		if (!is_ok (error))
-			return NULL;
-	}
-
-	if (!jit_only && !code && mono_aot_only && mono_use_interpreter && method->wrapper_type != MONO_WRAPPER_OTHER) {
-		if (mono_llvm_only) {
-			/* Signal to the caller that AOTed code is not found */
-			return NULL;
-		}
-		code = mini_get_interp_callbacks ()->create_method_pointer (method, TRUE, error);
 
 		if (!is_ok (error))
 			return NULL;
@@ -2481,7 +2410,7 @@ mono_jit_compile_method (MonoMethod *method, MonoError *error)
 /*
  * mono_jit_compile_method_jit_only:
  *
- *   Compile METHOD using the JIT/AOT, even in interpreted mode.
+ *   Compile METHOD using the JIT/AOT.
  */
 gpointer
 mono_jit_compile_method_jit_only (MonoMethod *method, MonoError *error)
@@ -2508,8 +2437,7 @@ mono_jit_free_method (MonoDomain *domain, MonoMethod *method)
 	 * mono_free_method () hands METHOD straight back to the allocator, so
 	 * everything keyed by it has to go now whether or not the classic back end
 	 * ever compiled it: an entry left behind is one the next method to land on
-	 * this address finds and takes for its own. This drops the record, and with
-	 * it whatever the interpreter kept for the method.
+	 * this address finds and takes for its own.
 	 */
 	mono_llvm_jit_free_method (method);
 
@@ -2543,12 +2471,8 @@ mono_jit_search_all_backends_for_jit_info (MonoDomain *domain, MonoMethod *metho
 		if (code) {
 			mono_error_assert_ok (oerror);
 			ji = mono_jit_info_table_find (domain, code);
-		} else {
-			if (!is_ok (oerror))
-				mono_error_cleanup (oerror);
-
-			/* Might be interpreted */
-			ji = mini_get_interp_callbacks ()->find_jit_info (domain, method);
+		} else if (!is_ok (oerror)) {
+			mono_error_cleanup (oerror);
 		}
 	}
 
@@ -2578,8 +2502,7 @@ add_body (MonoJitInfo *ji, void *user_data)
  *
  * A method has more than one when it has been compiled more than once: the
  * stubs name the newest, but a thread that entered an older body is still in
- * it. The two engines can also both hold a body, since a method the
- * interpreter has transformed can be JITted afterwards.
+ * it.
  */
 void
 mono_jit_search_all_backends_for_all_jit_infos (MonoDomain *domain, MonoMethod *method, GPtrArray *bodies)
@@ -2604,8 +2527,6 @@ mono_jit_search_all_backends_for_all_jit_infos (MonoDomain *domain, MonoMethod *
 			mono_error_cleanup (oerror);
 		}
 	}
-
-	add_body (mini_get_interp_callbacks ()->find_jit_info (domain, method), bodies);
 }
 
 /*
@@ -2709,12 +2630,11 @@ typedef struct {
 	MonoClass *ret_box_class;
 	MonoMethodSignature *sig;
 	gboolean gsharedvt_invoke;
-	gboolean use_interp;
 	gpointer *wrapper_arg;
 } RuntimeInvokeInfo;
 
 static RuntimeInvokeInfo*
-create_runtime_invoke_info (MonoDomain *domain, MonoMethod *method, gpointer compiled_method, gboolean callee_gsharedvt, gboolean use_interp, MonoError *error)
+create_runtime_invoke_info (MonoDomain *domain, MonoMethod *method, gpointer compiled_method, gboolean callee_gsharedvt, MonoError *error)
 {
 	MonoMethod *invoke;
 	RuntimeInvokeInfo *info = NULL;
@@ -2722,7 +2642,6 @@ create_runtime_invoke_info (MonoDomain *domain, MonoMethod *method, gpointer com
 
 	info = g_new0 (RuntimeInvokeInfo, 1);
 	info->compiled_method = compiled_method;
-	info->use_interp = use_interp;
 	if (mono_llvm_only && method->string_ctor)
 		info->sig = mono_marshal_get_string_ctor_signature (method);
 	else
@@ -2809,12 +2728,6 @@ create_runtime_invoke_info (MonoDomain *domain, MonoMethod *method, gpointer com
 	default:
 		g_assert_not_reached ();
 		break;
-	}
-
-	if (info->use_interp) {
-		ret = info;
-		info = NULL;
-		goto exit;
 	}
 
 	if (!info->dyn_call_info) {
@@ -2962,9 +2875,6 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 	MonoJitInfo *ji = NULL;
 	gboolean callee_gsharedvt = FALSE;
 
-	if (mono_ee_features.force_use_interpreter)
-		return mini_get_interp_callbacks ()->runtime_invoke (method, obj, params, exc, error);
-
 	error_init (error);
 	if (exc)
 		*exc = NULL;
@@ -3016,17 +2926,11 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 			}
 		}
 
-		gboolean use_interp = FALSE;
-
 		if (callee) {
 			compiled_method = mono_jit_compile_method_jit_only (callee, error);
 			if (!compiled_method) {
 				g_assert (!is_ok (error));
-
-				if (mono_use_interpreter)
-					use_interp = TRUE;
-				else
-					return NULL;
+				return NULL;
 			} else {
 				if (mono_llvm_only) {
 					ji = mini_jit_info_table_find (mono_domain_get (), (char *)mono_get_addr_from_ftnptr (compiled_method), NULL);
@@ -3042,7 +2946,7 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 			compiled_method = NULL;
 		}
 
-		info = create_runtime_invoke_info (domain, method, compiled_method, callee_gsharedvt, use_interp, error);
+		info = create_runtime_invoke_info (domain, method, compiled_method, callee_gsharedvt, error);
 		if (!is_ok (error))
 			return NULL;
 
@@ -3085,10 +2989,7 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 
 			invoke = mono_marshal_get_runtime_invoke_dynamic ();
 			dyn_runtime_invoke = (RuntimeInvokeDynamicFunction)mono_jit_compile_method_jit_only (invoke, error);
-			if (!dyn_runtime_invoke && mono_use_interpreter) {
-				info->use_interp = TRUE;
-				info->dyn_call_info = NULL;
-			} else if (!is_ok (error)) {
+			if (!is_ok (error)) {
 				mono_domain_unlock (domain);
 				return NULL;
 			}
@@ -3145,10 +3046,7 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 
 	MonoObject *result;
 
-	if (info->use_interp) {
-		result = mini_get_interp_callbacks ()->runtime_invoke (method, obj, params, exc, error);
-		return_val_if_nok (error, NULL);
-	} else if (mono_llvm_only) {
+	if (mono_llvm_only) {
 		result = mono_llvmonly_runtime_invoke (method, info, obj, params, exc, error);
 		if (!is_ok (error))
 			return NULL;
@@ -3564,22 +3462,14 @@ mini_init_delegate (MonoDelegateHandle delegate, MonoObjectHandle target, gpoint
 				g_assert (!mono_class_is_gtd (method->klass));
 			}
 		}
-
-		/*
-		 * An entry point the interpreter published is not code the jit-info table
-		 * knows about, so the engine that made it is the one that can name it.
-		 */
-		if (!method && mono_use_interpreter)
-			method = mini_get_interp_callbacks ()->method_from_entry (domain, lookup_addr);
 	}
 
 	/*
 	 * Binding an instance method needs a receiver to bind it to, and a delegate
 	 * built over a null one would not fail until it was invoked. Classic mini
 	 * emits the check into the code it generates for the ldftn + newobj pair
-	 * (method-to-ir.c) and the interpreter makes it in interp_delegate_ctor; a
-	 * back end that calls the real constructor rather than open-coding it
-	 * reaches neither, so the rule has to hold here too.
+	 * (method-to-ir.c); a back end that calls the real constructor rather than
+	 * open-coding it reaches neither, so the rule has to hold here too.
 	 *
 	 * An open delegate is the exception. Its Invoke passes the receiver as its
 	 * own first argument, which leaves it one parameter longer than the method
@@ -3605,23 +3495,15 @@ mini_init_delegate (MonoDelegateHandle delegate, MonoObjectHandle target, gpoint
 
 #ifndef DISABLE_REMOTING
 	/*
-	 * Either engine can invoke the delegate, and each reads a field of its own:
-	 * the interpreter runs interp_method and compiled code calls method_ptr. So
-	 * both have to name the remoting wrapper rather than the method behind it.
+	 * Compiled code invokes the delegate through method_ptr, so that has to
+	 * name the remoting wrapper rather than the method behind it.
 	 */
 	if (!MONO_HANDLE_IS_NULL (target) && mono_class_is_transparent_proxy (mono_handle_class (target))) {
 		g_assert (method);
-		if (mono_use_interpreter) {
-			MONO_HANDLE_SETVAL (delegate, interp_method, gpointer,
-					    mini_get_interp_callbacks ()->get_remoting_invoke (method, NULL, error));
-			return_if_nok (error);
-		}
-		if (!mono_ee_features.force_use_interpreter) {
-			MonoMethod *invoke = mono_marshal_get_remoting_invoke (method, error);
-			return_if_nok (error);
-			MONO_HANDLE_SETVAL (delegate, method_ptr, gpointer, mono_compile_method_checked (invoke, error));
-			return_if_nok (error);
-		}
+		MonoMethod *invoke = mono_marshal_get_remoting_invoke (method, error);
+		return_if_nok (error);
+		MONO_HANDLE_SETVAL (delegate, method_ptr, gpointer, mono_compile_method_checked (invoke, error));
+		return_if_nok (error);
 	}
 #endif
 
@@ -3643,14 +3525,8 @@ mini_init_delegate (MonoDelegateHandle delegate, MonoObjectHandle target, gpoint
 
 	MONO_HANDLE_SETVAL (delegate, invoke_impl, gpointer, mono_create_delegate_trampoline (domain, mono_handle_class (delegate)));
 
-	if (mono_use_interpreter) {
-		mini_get_interp_callbacks ()->init_delegate (del, error);
-		return_if_nok (error);
-	}
-
 	if (mono_llvm_only) {
 		g_assert (del->method);
-		/* del->method_ptr might already be set to no_llvmonly_interp_method_pointer if the delegate was created from the interpreter */
 		del->method_ptr = mini_llvmonly_load_method_delegate (del->method, FALSE, FALSE, &del->extra_arg, error);
 	} else if (!del->method_ptr) {
 		del->method_ptr = create_delegate_method_ptr (del->method, error);
@@ -3842,7 +3718,6 @@ register_counters (void)
 	mono_counters_register ("Methods from AOT+LLVM", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.methods_aot_llvm);
 	mono_counters_register ("Methods JITted using mono JIT", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.methods_without_llvm);
 	mono_counters_register ("Methods JITted using LLVM", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.methods_with_llvm);
-	mono_counters_register ("Methods using the interpreter", MONO_COUNTER_JIT | MONO_COUNTER_INT, &mono_jit_stats.methods_with_interp);
 }
 
 static void runtime_invoke_info_free (gpointer value);
@@ -3939,7 +3814,6 @@ mini_free_jit_domain_info (MonoDomain *domain)
 	g_hash_table_destroy (info->delegate_trampoline_hash);
 	g_hash_table_destroy (info->mrgctx_hash);
 	g_hash_table_destroy (info->method_rgctx_hash);
-	g_hash_table_destroy (info->interp_method_pointer_hash);
 	mono_conc_hashtable_destroy (info->runtime_invoke_hash);
 	g_hash_table_destroy (info->seq_points);
 	g_hash_table_destroy (info->arch_seq_points);
@@ -3970,14 +3844,6 @@ mini_add_profiler_argument (const char *desc)
 }
 
 
-const MonoEECallbacks *mono_interp_callbacks_pointer;
-
-void
-mini_install_interp_callbacks (const MonoEECallbacks *cbs)
-{
-	mono_interp_callbacks_pointer = cbs;
-}
-
 static MonoDebuggerCallbacks dbg_cbs;
 
 void
@@ -3991,18 +3857,6 @@ MonoDebuggerCallbacks*
 mini_get_dbg_callbacks (void)
 {
 	return &dbg_cbs;
-}
-
-int
-mono_ee_api_version (void)
-{
-	return MONO_EE_API_VERSION;
-}
-
-static gboolean
-mini_is_interpreter_enabled (void)
-{
-	return mono_use_interpreter;
 }
 
 static const char*
@@ -4032,19 +3886,6 @@ mini_init (const char *filename, const char *runtime_version)
 #endif
 
 	mono_llvm_jit_init ();
-
-	mono_interp_stub_init ();
-#if !defined (DISABLE_INTERPRETER) && defined (MONO_ARCH_INTERPRETER_SUPPORTED) && !defined (MONO_CROSS_COMPILE)
-	/* Only while the tier-0 policy sends methods to it. Started otherwise, it
-	 * would refuse tasklets and take the delegate and GC callbacks for frames
-	 * it never runs. */
-	if (mono_llvm_jit_interp_tier0_enabled ())
-		mono_use_interpreter = TRUE;
-#endif
-#ifndef DISABLE_INTERPRETER
-	if (mono_use_interpreter)
-		mono_ee_interp_init (mono_interp_opts_string);
-#endif
 
 	mono_debugger_agent_stub_init ();
 #ifndef DISABLE_SDB
@@ -4107,19 +3948,10 @@ mini_init (const char *filename, const char *runtime_version)
 	callbacks.create_remoting_trampoline = mono_jit_create_remoting_trampoline;
 #endif
 #endif
-#ifndef DISABLE_REMOTING
-	if (mono_use_interpreter)
-		callbacks.interp_get_remoting_invoke = mini_get_interp_callbacks ()->get_remoting_invoke;
-#endif
-	callbacks.is_interpreter_enabled = mini_is_interpreter_enabled;
 	callbacks.get_weak_field_indexes = mono_aot_get_weak_field_indexes;
 
 #ifndef DISABLE_CRASH_REPORTING
 	callbacks.install_state_summarizer = mini_register_sigterm_handler;
-#endif
-#ifdef ENABLE_METADATA_UPDATE
-	callbacks.metadata_update_init = mini_metadata_update_init;
-	callbacks.metadata_update_published = mini_invalidate_transformed_interp_methods;
 #endif
 
 	mono_install_callbacks (&callbacks);
@@ -4472,7 +4304,6 @@ register_icalls (void)
 	register_icall (mini_llvmonly_throw_nullref_exception, mono_icall_sig_void, TRUE);
 	register_icall (mini_llvmonly_throw_aot_failed_exception, mono_icall_sig_void_ptr, TRUE);
 	register_icall (mini_llvmonly_pop_lmf, mono_icall_sig_void_ptr, TRUE);
-	register_icall (mini_llvmonly_get_interp_entry, mono_icall_sig_ptr_ptr, TRUE);
 
 	register_icall (mono_get_assembly_object, mono_icall_sig_object_ptr, TRUE);
 	register_icall (mono_get_method_object, mono_icall_sig_object_ptr, TRUE);
@@ -4498,9 +4329,6 @@ register_icalls (void)
 	register_icall_no_wrapper (mono_tls_get_domain_extern, mono_icall_sig_ptr);
 	register_icall_no_wrapper (mono_tls_get_sgen_thread_info_extern, mono_icall_sig_ptr);
 	register_icall_no_wrapper (mono_tls_get_lmf_addr_extern, mono_icall_sig_ptr);
-
-	register_icall_no_wrapper (mono_interp_entry_from_trampoline, mono_icall_sig_void_ptr_ptr);
-	register_icall_no_wrapper (mono_interp_to_native_trampoline, mono_icall_sig_void_ptr_ptr);
 
 #ifdef MONO_ARCH_HAS_REGISTER_ICALL
 	mono_arch_register_icall ();
@@ -4585,7 +4413,6 @@ mini_cleanup (MonoDomain *domain)
 	mono_runtime_print_stats ();
 	jit_stats_cleanup ();
 	mono_jit_dump_cleanup ();
-	mini_get_interp_callbacks ()->cleanup ();
 #if defined(ENABLE_PERFTRACING) && !defined(DISABLE_EVENTPIPE)
 	ep_shutdown ();
 	ds_server_shutdown ();
@@ -4660,8 +4487,6 @@ mini_cleanup (MonoDomain *domain)
 
 	mono_code_manager_destroy (global_codeman);
 	g_free (vtable_trampolines);
-
-	mini_get_interp_callbacks ()->cleanup ();
 
 	mono_tramp_info_cleanup ();
 
@@ -4912,17 +4737,3 @@ mono_runtime_install_custom_handlers_usage (void)
 		 "No handlers supported on current platform.\n");
 }
 #endif /* HOST_WIN32 */
-
-#ifdef ENABLE_METADATA_UPDATE
-void
-mini_metadata_update_init (MonoError *error)
-{
-	mini_get_interp_callbacks ()->metadata_update_init (error);
-}
-
-void
-mini_invalidate_transformed_interp_methods (MonoDomain *domain, MonoAssemblyLoadContext *alc G_GNUC_UNUSED, uint32_t generation G_GNUC_UNUSED)
-{
-	mini_get_interp_callbacks ()->invalidate_transformed (domain);
-}
-#endif

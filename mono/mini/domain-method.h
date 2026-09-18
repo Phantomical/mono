@@ -57,16 +57,15 @@ void mono_install_method_detour (MonoMethod *method, MonoDomain *domain, void *t
 
 /// Makes \p replacement run wherever \p method was called.
 ///
-/// Both engines are covered, which is what tells this apart from a detour. A
-/// compiled caller reaches \p replacement through the entry, and an interpreted
-/// one runs \p replacement's bytecode instead of \p method's. A detour only
-/// covers the second where the signature can be marshalled into a call, which
-/// rules out a callee taking more than six parameters, a vararg or p/invoke
-/// signature, an internal call, a string constructor and a wrapper.
+/// The entry is redirected at \p replacement's own thunk rather than at raw
+/// native code, which is what tells this apart from a detour: any signature
+/// works, where a detour rules out a callee taking more than six parameters,
+/// a vararg or p/invoke signature, an internal call, a string constructor and
+/// a wrapper.
 ///
-/// A caller the interpreter transformed before this call keeps whatever it
-/// copied of \p method's body. One transformed after it names \p replacement,
-/// inlined or not.
+/// A caller a compile already inlined \p method into keeps whatever it copied
+/// of its body. One compiled after this call names \p replacement, inlined or
+/// not.
 ///
 /// A later override replaces this one. There is no failure to report.
 void mono_install_method_override (MonoMethod *method, MonoDomain *domain,

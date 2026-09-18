@@ -1139,10 +1139,8 @@ append_frame_and_continue (MonoMethod *method, MonoJitInfo *ji, gpointer ip, siz
 	if (data->prefix)
 		g_string_append (data->text, data->prefix);
 	if (method) {
-		/* A captured trace has no live frame left. Only the jit info of the
-		 * body that produced the offset can place it. */
 		char *msg = mono_debug_print_stack_frame_at_il (method,
-			mono_debug_il_offset_from_jinfo (ji, NULL, domain, native_offset), native_offset, domain);
+			mono_debug_il_offset_from_jinfo (ji, domain, native_offset), native_offset, domain);
 		g_string_append_printf (data->text, "%s\n", msg);
 		g_free (msg);
 	} else {
