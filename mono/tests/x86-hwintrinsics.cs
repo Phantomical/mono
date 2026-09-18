@@ -1,4 +1,4 @@
-/* Tests LLVM lowering for System.Runtime.Intrinsics.X86.Sse, Sse2, Sse3 and Ssse3. */
+/* Tests LLVM lowering for System.Runtime.Intrinsics.X86.Sse, Sse2, Sse3, Ssse3 and Sse41. */
 using System;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
@@ -157,6 +157,74 @@ class Tests
 		for (int i = 0; ok && i < got.Length; i++)
 			ok &= got [i] == expected [i];
 		Check (what, ok);
+	}
+
+	static unsafe Vector128<byte> LoadU8 (params byte[] e)
+	{
+		fixed (byte* p = e)
+			return Sse2.LoadVector128 (p);
+	}
+
+	static unsafe Vector128<ushort> LoadU16 (params ushort[] e)
+	{
+		fixed (ushort* p = e)
+			return Sse2.LoadVector128 (p);
+	}
+
+	static unsafe ushort[] ToArrayU16 (Vector128<ushort> v)
+	{
+		ushort[] r = new ushort[8];
+		fixed (ushort* p = r)
+			Sse2.Store (p, v);
+		return r;
+	}
+
+	static void CheckArrayU16 (string what, ushort[] got, params ushort[] expected)
+	{
+		bool ok = got.Length == expected.Length;
+		for (int i = 0; ok && i < got.Length; i++)
+			ok &= got [i] == expected [i];
+		Check (what, ok);
+	}
+
+	static unsafe Vector128<uint> LoadU32 (uint e0, uint e1, uint e2, uint e3)
+	{
+		uint* e = stackalloc uint[4] { e0, e1, e2, e3 };
+		return Sse2.LoadVector128 (e);
+	}
+
+	static unsafe uint[] ToArrayU32 (Vector128<uint> v)
+	{
+		uint[] r = new uint[4];
+		fixed (uint* p = r)
+			Sse2.Store (p, v);
+		return r;
+	}
+
+	static void CheckLanesU32 (string what, Vector128<uint> v, uint e0, uint e1, uint e2, uint e3)
+	{
+		uint[] r = ToArrayU32 (v);
+		Check (what, r [0] == e0 && r [1] == e1 && r [2] == e2 && r [3] == e3);
+	}
+
+	static unsafe Vector128<long> LoadI64 (long e0, long e1)
+	{
+		long* e = stackalloc long[2] { e0, e1 };
+		return Sse2.LoadVector128 (e);
+	}
+
+	static unsafe long[] ToArrayI64 (Vector128<long> v)
+	{
+		long[] r = new long[2];
+		fixed (long* p = r)
+			Sse2.Store (p, v);
+		return r;
+	}
+
+	static void CheckLanesI64 (string what, Vector128<long> v, long e0, long e1)
+	{
+		long[] r = ToArrayI64 (v);
+		Check (what, r [0] == e0 && r [1] == e1);
 	}
 
 	static unsafe int Main ()
@@ -409,6 +477,186 @@ class Tests
 			              5, -5, -3, 3, 0, 0, 9, 9);
 			CheckLanesI32 ("Ssse3.Sign(int)",
 			              Ssse3.Sign (LoadI32 (5, -5, 3, -3), LoadI32 (1, -1, 0, 2)), 5, 5, 0, -3);
+		}
+
+		Check ("Sse41.IsSupported", Sse41.IsSupported);
+
+		if (Sse41.IsSupported) {
+			CheckArrayI16 ("Sse41.Blend(short)",
+			              ToArrayI16 (Sse41.Blend (LoadI16 (1, 2, 3, 4, 5, 6, 7, 8),
+			                                       LoadI16 (10, 20, 30, 40, 50, 60, 70, 80),
+			                                       0xAA)),
+			              1, 20, 3, 40, 5, 60, 7, 80);
+
+			Vector128<float> fa = Load (1f, 2f, 3f, 4f);
+			Vector128<float> fb = Load (100f, 200f, 300f, 400f);
+
+			CheckLanes ("Sse41.Blend(float)", Sse41.Blend (fa, fb, 6), 1f, 200f, 300f, 4f);
+			CheckLanes ("Sse41.BlendVariable(float)",
+			           Sse41.BlendVariable (fa, fb, Load (-1f, 1f, -1f, 1f)), 100f, 2f, 300f, 4f);
+
+			CheckArrayI8 ("Sse41.BlendVariable(sbyte)",
+			             ToArrayI8 (Sse41.BlendVariable (
+				             LoadI8 (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+				             LoadI8 (-1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12, -13,
+				                    -14, -15, -16),
+				             LoadI8 (0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1, 0, -1))),
+			             1, -2, 3, -4, 5, -6, 7, -8, 9, -10, 11, -12, 13, -14, 15, -16);
+
+			CheckLanes ("Sse41.Ceiling(float)", Sse41.Ceiling (Load (1.2f, -1.2f, 2.7f, -2.7f)),
+			           2f, -1f, 3f, -2f);
+			CheckLanes ("Sse41.Floor(float)", Sse41.Floor (Load (1.2f, -1.2f, 2.7f, -2.7f)),
+			           1f, -2f, 2f, -3f);
+			CheckLanesF64 ("Sse41.Ceiling(double)", Sse41.Ceiling (LoadF64 (1.2, -1.2)), 2.0, -1.0);
+			CheckLanesF64 ("Sse41.Floor(double)", Sse41.Floor (LoadF64 (2.7, -2.7)), 2.0, -3.0);
+
+			CheckLanes ("Sse41.CeilingScalar(value)",
+			           Sse41.CeilingScalar (Load (1.2f, 7f, 8f, 9f)), 2f, 7f, 8f, 9f);
+			CheckLanes ("Sse41.FloorScalar(upper, value)",
+			           Sse41.FloorScalar (Load (100f, 101f, 102f, 103f), Load (2.7f, 0f, 0f, 0f)),
+			           2f, 101f, 102f, 103f);
+
+			Vector128<float> ties = Load (2.5f, -2.5f, 1.5f, -1.5f);
+
+			CheckLanes ("Sse41.RoundToNearestInteger", Sse41.RoundToNearestInteger (ties),
+			           2f, -2f, 2f, -2f);
+			CheckLanes ("Sse41.RoundToZero", Sse41.RoundToZero (ties), 2f, -2f, 1f, -1f);
+
+			CheckLanesI64 ("Sse41.CompareEqual(long)",
+			              Sse41.CompareEqual (LoadI64 (5, -5), LoadI64 (5, 7)), -1, 0);
+
+			CheckArrayI16 ("Sse41.ConvertToVector128Int16(sbyte)",
+			              ToArrayI16 (Sse41.ConvertToVector128Int16 (
+				              LoadI8 (-1, 2, -3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 0))),
+			              -1, 2, -3, 4, 5, 6, 7, 8);
+			CheckArrayI16 ("Sse41.ConvertToVector128Int16(byte)",
+			              ToArrayI16 (Sse41.ConvertToVector128Int16 (
+				              LoadU8 (200, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 0, 0, 0, 0, 0))),
+			              200, 2, 3, 4, 5, 6, 7, 8);
+			CheckLanesI32 ("Sse41.ConvertToVector128Int32(short)",
+			              Sse41.ConvertToVector128Int32 (LoadI16 (-1, 2, -3, 4, 5, 6, 7, 8)),
+			              -1, 2, -3, 4);
+			CheckLanesI64 ("Sse41.ConvertToVector128Int64(int)",
+			              Sse41.ConvertToVector128Int64 (LoadI32 (-1, 2, 3, 4)), -1, 2);
+
+			CheckLanes ("Sse41.DotProduct(float, all lanes)",
+			           Sse41.DotProduct (Load (1f, 2f, 3f, 4f), Load (5f, 6f, 7f, 8f), 0xFF),
+			           70f, 70f, 70f, 70f);
+			CheckLanes ("Sse41.DotProduct(float, partial)",
+			           Sse41.DotProduct (Load (1f, 2f, 3f, 4f), Load (5f, 6f, 7f, 8f), 0x31),
+			           17f, 0f, 0f, 0f);
+			CheckLanesF64 ("Sse41.DotProduct(double)",
+			              Sse41.DotProduct (LoadF64 (2.0, 3.0), LoadF64 (4.0, 5.0), 0x33),
+			              23.0, 23.0);
+
+			Vector128<int> extractSrc = LoadI32 (11, 22, 33, 44);
+
+			Check ("Sse41.Extract(int)", Sse41.Extract (extractSrc, 2) == 33);
+			Check ("Sse41.Extract(int) wraps the index",
+			      Sse41.Extract (extractSrc, 6) == 33);
+			Check ("Sse41.Extract(float)", Sse41.Extract (a, 1) == -2f);
+			Check ("Sse41.Extract(long)", Sse41.Extract (LoadI64 (100, 200), 1) == 200);
+
+			CheckLanesI32 ("Sse41.Insert(int)", Sse41.Insert (LoadI32 (1, 2, 3, 4), 99, 2),
+			              1, 2, 99, 4);
+			CheckLanesI32 ("Sse41.Insert(int) wraps the index",
+			              Sse41.Insert (LoadI32 (1, 2, 3, 4), 55, 6), 1, 2, 55, 4);
+			CheckLanes ("Sse41.Insert(float)",
+			           Sse41.Insert (Load (1f, 2f, 3f, 4f), Load (10f, 20f, 30f, 40f), 0x98),
+			           1f, 30f, 3f, 0f);
+
+			CheckArrayI8 ("Sse41.Max(sbyte)",
+			             ToArrayI8 (Sse41.Max (
+				             LoadI8 (-5, 120, -1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+				             LoadI8 (10, -120, -1, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))),
+			             10, 120, -1, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+			CheckArrayI8 ("Sse41.Min(sbyte)",
+			             ToArrayI8 (Sse41.Min (
+				             LoadI8 (-5, 120, -1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+				             LoadI8 (10, -120, -1, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))),
+			             -5, -120, -1, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+			CheckArrayU16 ("Sse41.Max(ushort)",
+			              ToArrayU16 (Sse41.Max (LoadU16 (60000, 100, 0, 0, 0, 0, 0, 0),
+			                                     LoadU16 (50000, 200, 0, 0, 0, 0, 0, 0))),
+			              60000, 200, 0, 0, 0, 0, 0, 0);
+			CheckArrayU16 ("Sse41.Min(ushort)",
+			              ToArrayU16 (Sse41.Min (LoadU16 (60000, 100, 0, 0, 0, 0, 0, 0),
+			                                     LoadU16 (50000, 200, 0, 0, 0, 0, 0, 0))),
+			              50000, 100, 0, 0, 0, 0, 0, 0);
+
+			CheckLanesU32 ("Sse41.Max(uint)",
+			              Sse41.Max (LoadU32 (4000000000, 5, 6, 7), LoadU32 (1000000000, 10, 6, 3)),
+			              4000000000, 10, 6, 7);
+			CheckLanesU32 ("Sse41.Min(uint)",
+			              Sse41.Min (LoadU32 (4000000000, 5, 6, 7), LoadU32 (1000000000, 10, 6, 3)),
+			              1000000000, 5, 6, 3);
+
+			CheckLanesI32 ("Sse41.Max(int)",
+			              Sse41.Max (LoadI32 (-5, 10, 3, -100), LoadI32 (2, -10, 3, 50)),
+			              2, 10, 3, 50);
+			CheckLanesI32 ("Sse41.Min(int)",
+			              Sse41.Min (LoadI32 (-5, 10, 3, -100), LoadI32 (2, -10, 3, 50)),
+			              -5, -10, 3, -100);
+
+			CheckArrayU16 ("Sse41.MinHorizontal",
+			              ToArrayU16 (Sse41.MinHorizontal (
+				              LoadU16 (50, 10, 30, 10, 5, 60, 5, 5))),
+			              5, 4, 0, 0, 0, 0, 0, 0);
+
+			{
+				Vector128<byte> msadLeft = LoadU8 (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+				                                   15, 16);
+				Vector128<byte> msadRight = LoadU8 (0, 0, 0, 0, 50, 50, 50, 50, 0, 0, 0, 0, 0, 0,
+				                                    0, 0);
+
+				CheckArrayU16 ("Sse41.MultipleSumAbsoluteDifferences(mask=0)",
+				              ToArrayU16 (Sse41.MultipleSumAbsoluteDifferences (
+					              msadLeft, msadRight, 0)),
+				              10, 14, 18, 22, 26, 30, 34, 38);
+				CheckArrayU16 ("Sse41.MultipleSumAbsoluteDifferences(mask=5)",
+				              ToArrayU16 (Sse41.MultipleSumAbsoluteDifferences (
+					              msadLeft, msadRight, 5)),
+				              174, 170, 166, 162, 158, 154, 150, 146);
+			}
+
+			CheckLanesI64 ("Sse41.Multiply(int)",
+			              Sse41.Multiply (LoadI32 (3, 100, -4, 200), LoadI32 (7, 100, 5, 100)),
+			              21, -20);
+			CheckLanesI32 ("Sse41.MultiplyLow(int)",
+			              Sse41.MultiplyLow (LoadI32 (7, -3, 1000, -1000), LoadI32 (6, 5, 3, 7)),
+			              42, -15, 3000, -7000);
+
+			CheckArrayU16 ("Sse41.PackUnsignedSaturate",
+			              ToArrayU16 (Sse41.PackUnsignedSaturate (
+				              LoadI32 (-1, 100, 70000, 5), LoadI32 (65536, 3, 0, 40000))),
+			              0, 100, 65535, 5, 65535, 3, 0, 40000);
+
+			unsafe {
+				int* np = stackalloc int[4] { 9, 8, 7, 6 };
+				CheckLanesI32 ("Sse41.LoadAlignedVector128NonTemporal",
+				              Sse41.LoadAlignedVector128NonTemporal (np), 9, 8, 7, 6);
+			}
+
+			Vector128<int> allOnes = LoadI32 (-1, -1, -1, -1);
+			Vector128<int> notAllOnes = LoadI32 (-1, -1, -1, 0);
+			Vector128<int> va = LoadI32 (0x0F, 0, 0, 0);
+			Vector128<int> vb = LoadI32 (0xF0, 0, 0, 0);
+			Vector128<int> vc = LoadI32 (0x33, 0, 0, 0);
+			Vector128<int> vd = LoadI32 (0x03, 0, 0, 0);
+
+			Check ("Sse41.TestAllOnes(all ones)", Sse41.TestAllOnes (allOnes));
+			Check ("Sse41.TestAllOnes(not all ones)", !Sse41.TestAllOnes (notAllOnes));
+			Check ("Sse41.TestAllZeros(disjoint)", Sse41.TestAllZeros (va, vb));
+			Check ("Sse41.TestZ(disjoint)", Sse41.TestZ (va, vb));
+			Check ("Sse41.TestAllZeros(overlapping)", !Sse41.TestAllZeros (va, vc));
+			Check ("Sse41.TestC(subset of all ones)", Sse41.TestC (allOnes, va));
+			Check ("Sse41.TestC(subset)", Sse41.TestC (va, vd));
+			Check ("Sse41.TestC(not a subset)", !Sse41.TestC (va, vb));
+			Check ("Sse41.TestMixOnesZeros(mixed)", Sse41.TestMixOnesZeros (va, vc));
+			Check ("Sse41.TestNotZAndNotC(mixed)", Sse41.TestNotZAndNotC (va, vc));
+			Check ("Sse41.TestMixOnesZeros(disjoint)", !Sse41.TestMixOnesZeros (va, vb));
+			Check ("Sse41.TestMixOnesZeros(subset)", !Sse41.TestMixOnesZeros (va, vd));
 		}
 
 		if (failures == 0)
