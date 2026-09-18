@@ -57,9 +57,9 @@ gather_inlined_bodies (Function &entry, SmallPtrSetImpl<Function *> &keep)
 /// Sends each alias of a body this dump dropped to that body's symbol, and
 /// erases the alias.
 ///
-/// An alias must point to a definition. The tier-1 profiling instrumentation
-/// gives each body it counts a private alias, so a module with a dropped body
-/// still holds one, and it is what an alias of a declaration is.
+/// Tier-1 profiling creates private aliases for instrumented functions. An
+/// alias cannot point to a declaration, so remove these aliases when their
+/// function bodies are dropped.
 void
 drop_aliases_of_dropped_bodies (Module &module)
 {
@@ -104,16 +104,12 @@ drop_unused_globals (Module &module)
 
 } // namespace
 
-Error
-dump_body_module (DumpPoint point, const Module &module, StringRef entry,
-                  StringRef name)
+std::unique_ptr<Module>
+clone_body_module (const Module &module, StringRef entry)
 {
 	if (module.getFunction (entry) == nullptr)
-		return Error::success ();
+		return nullptr;
 
-	// A batch shares one module between its members, so the dump costs a copy
-	// of the whole module for each method that asks for one. The assembly
-	// points already pay a codegen each.
 	std::unique_ptr<Module> copy = CloneModule (module);
 	Function *body = copy->getFunction (entry);
 	SmallPtrSet<Function *, 8> keep;
@@ -135,6 +131,18 @@ dump_body_module (DumpPoint point, const Module &module, StringRef entry,
 
 	drop_aliases_of_dropped_bodies (*copy);
 	drop_unused_globals (*copy);
+
+	return copy;
+}
+
+Error
+dump_body_module (DumpPoint point, const Module &module, StringRef entry,
+                  StringRef name)
+{
+	std::unique_ptr<Module> copy = clone_body_module (module, entry);
+
+	if (copy == nullptr)
+		return Error::success ();
 
 	return with_dump_stream (point, name, [&] (raw_pwrite_stream &out) {
 		out << "; *** " << name << " ***\n";
