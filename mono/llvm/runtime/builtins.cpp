@@ -155,6 +155,57 @@ get_runtime_builtins (std::vector<MonoBuiltin> &builtins)
 	append (builtins, array);
 }
 
+/*
+ * The C math functions, at the address this runtime's own link resolved them
+ * to. Searching for one by name instead answers out of whichever loaded module
+ * carries it, and on Windows that is not the same function: msvcrt.dll exports
+ * the whole set beside the UCRT's, and its copy predates C99 Annex F. Its powf
+ * hands back the NaN for powf (NaN, 0) where the answer is 1, and several of
+ * the others differ in the last place.
+ *
+ * Registering an address here is what keeps the name from being searched for.
+ *
+ * The cast picks the C function out of the overload set that <cmath> adds
+ * around it.
+ */
+void
+get_libm_builtins (std::vector<MonoBuiltin> &builtins)
+{
+#define MONO_LIBM_1(name) \
+	{#name, (void *) static_cast<double (*) (double)> (&name)}, \
+	{#name "f", (void *) static_cast<float (*) (float)> (&name##f)}
+#define MONO_LIBM_2(name) \
+	{#name, (void *) static_cast<double (*) (double, double)> (&name)}, \
+	{#name "f", (void *) static_cast<float (*) (float, float)> (&name##f)}
+
+	std::initializer_list<MonoBuiltin> array = {
+		MONO_LIBM_1 (sin),   MONO_LIBM_1 (cos),   MONO_LIBM_1 (tan),
+		MONO_LIBM_1 (asin),  MONO_LIBM_1 (acos),  MONO_LIBM_1 (atan),
+		MONO_LIBM_1 (sinh),  MONO_LIBM_1 (cosh),  MONO_LIBM_1 (tanh),
+		MONO_LIBM_1 (exp),   MONO_LIBM_1 (exp2),
+		MONO_LIBM_1 (log),   MONO_LIBM_1 (log2),  MONO_LIBM_1 (log10),
+		MONO_LIBM_1 (sqrt),  MONO_LIBM_1 (cbrt),  MONO_LIBM_1 (fabs),
+		MONO_LIBM_1 (floor), MONO_LIBM_1 (ceil),  MONO_LIBM_1 (trunc),
+		MONO_LIBM_1 (round), MONO_LIBM_1 (rint),  MONO_LIBM_1 (nearbyint),
+
+		MONO_LIBM_2 (pow),   MONO_LIBM_2 (atan2), MONO_LIBM_2 (fmod),
+		MONO_LIBM_2 (hypot), MONO_LIBM_2 (remainder), MONO_LIBM_2 (copysign),
+		MONO_LIBM_2 (fmin),  MONO_LIBM_2 (fmax),
+
+		{"fma", (void *) static_cast<double (*) (double, double, double)> (&fma)},
+		{"fmaf", (void *) static_cast<float (*) (float, float, float)> (&fmaf)},
+		{"modf", (void *) static_cast<double (*) (double, double *)> (&modf)},
+		{"modff", (void *) static_cast<float (*) (float, float *)> (&modff)},
+		{"ldexp", (void *) static_cast<double (*) (double, int)> (&ldexp)},
+		{"ldexpf", (void *) static_cast<float (*) (float, int)> (&ldexpf)},
+	};
+
+#undef MONO_LIBM_1
+#undef MONO_LIBM_2
+
+	append (builtins, array);
+}
+
 void
 get_libcall_builtins (std::vector<MonoBuiltin> &builtins, const llvm::Triple &triple)
 {
@@ -186,6 +237,7 @@ MonoBuiltin::get_platform_builtins (const llvm::Triple &triple)
 {
 	std::vector<MonoBuiltin> builtins;
 	get_runtime_builtins (builtins);
+	get_libm_builtins (builtins);
 	get_libcall_builtins (builtins, triple);
 	return builtins;
 }
