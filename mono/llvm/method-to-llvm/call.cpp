@@ -159,13 +159,31 @@ MethodLLVMEmitter::build_sig_cookie (MonoIrBuilder &builder, MonoMethodSignature
 	const llvm::DataLayout &layout = module->getDataLayout ();
 	int fixed = vararg_fixed_params (sig);
 	std::vector<uint64_t> offsets;
+	// On Windows a value type arrives as a pointer to a private copy. The
+	// iterator reads each variable argument out of the buffer itself, so what
+	// goes in is the copy and not its address.
+	std::vector<bool> by_copy;
 	uint64_t cursor = TARGET_SIZEOF_VOID_P;
 	uint64_t size = cursor;
 
 	for (int i = fixed; i < sig->param_count; ++i) {
-		llvm::Type *stored = args[i + sig->hasthis]->getType ();
+		// These were popped as managed arguments, so the managed conversion is
+		// what says how each one arrived.
+		llvm::Expected<llvm::Type *> declared = convert_type (sig->params[i], false);
+
+		if (!declared)
+			return declared.takeError ();
+
+		bool copied = false;
+
+#ifdef HOST_WIN32
+		copied = win64_indirect (*declared);
+#endif
+
+		llvm::Type *stored = copied ? *declared : args[i + sig->hasthis]->getType ();
 
 		offsets.push_back (cursor);
+		by_copy.push_back (copied);
 		// The stride is the stack size the iterator advances by, but the
 		// buffer must still be big enough for what gets written into the
 		// last slot.
@@ -191,10 +209,17 @@ MethodLLVMEmitter::build_sig_cookie (MonoIrBuilder &builder, MonoMethodSignature
 		llvm::Value *slot =
 			builder.CreateGEP (builder.getInt8Ty (), buffer,
 		                           builder.getInt64 (offset));
+		llvm::Align at = llvm::commonAlignment (buffer->getAlign (), offset);
 
-		builder.CreateAlignedStore (
-			args[i + sig->hasthis], slot,
-			llvm::commonAlignment (buffer->getAlign (), offset));
+		if (by_copy[i - fixed]) {
+			builder.CreateMemCpyInline (
+				slot, at, args[i + sig->hasthis],
+				type_alignment (sig->params[i]),
+				builder.getInt64 (vtype_size (sig->params[i], false)));
+			continue;
+		}
+
+		builder.CreateAlignedStore (args[i + sig->hasthis], slot, at);
 	}
 
 	return buffer;
