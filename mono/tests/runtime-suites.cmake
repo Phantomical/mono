@@ -78,12 +78,17 @@ set(_mono_parallel_hungry
 
 # mono_runtime_suite(<name> TESTS ... [LABEL x] [RUNTIME_ARGS s] [ENV ...]
 #                    [OPT_SETS s] [TIMEOUT n] [EXPECT n] [WORKDIR d]
-#                    [PROCESSORS n] [GC ...] [SKIP_BOEHM ...]
+#                    [PROCESSORS n] [GC ...] [SKIP_BOEHM ...] [XFAIL ...]
 #                    [LONG ... [LONG_TIMEOUT n]])
 #
 # One CTest test per program, named `<suite>/<program>` -- and per optimization
 # set on top of that, `<suite>/<program>:<opt-set>`, since those are separate
 # runs that fail separately.
+#
+# XFAIL names the programs known to fail. The test still runs and CTest inverts
+# its result, so one that starts passing is reported as a failure and the entry
+# cannot outlive the bug. That is what it buys over dropping the program from
+# TESTS, which reports nothing either way.
 #
 # This is deliberately not test-runner.exe driving a whole list. CTest's own
 # scheduler then owns the parallelism, `ctest -R` addresses one program, and
@@ -94,7 +99,7 @@ set(_mono_parallel_hungry
 # carries the per-test timeout, as it did on each child test-runner spawned.
 function(mono_runtime_suite name)
   cmake_parse_arguments(ARG "" "LABEL;RUNTIME_ARGS;OPT_SETS;TIMEOUT;EXPECT;WORKDIR;PROCESSORS;LONG_TIMEOUT"
-                            "TESTS;ENV;GC;SKIP_BOEHM;LONG" ${ARGN})
+                            "TESTS;ENV;GC;SKIP_BOEHM;LONG;XFAIL" ${ARGN})
   if(NOT ARG_TESTS)
     return()
   endif()
@@ -215,6 +220,9 @@ function(mono_runtime_suite name)
         set_tests_properties("${_gname}" PROPERTIES
           LABELS "${ARG_LABEL}"
           TIMEOUT ${_ctest_timeout})
+        if(_test IN_LIST ARG_XFAIL)
+          set_tests_properties("${_gname}" PROPERTIES WILL_FAIL TRUE)
+        endif()
         if(ARG_PROCESSORS)
           set_tests_properties("${_gname}" PROPERTIES PROCESSORS ${ARG_PROCESSORS})
         elseif(_test IN_LIST _mono_parallel_hungry)
@@ -254,6 +262,30 @@ set(_tailcall ${_tailcall_all})
 list(REMOVE_ITEM _tailcall
      ${MONO_TESTS_TAILCALL_DISABLED_COMPILE} ${MONO_TESTS_TAILCALL_DISABLED_RUN})
 
+# Win64 makes no sibling call once an argument is stack-passed, so a tail site
+# carrying more than four becomes an ordinary call and these programs recurse
+# until the stack runs out. Cases 1-15 end in a generic-cast helper, reach no
+# tail site at all, and pass, which is where the range starts.
+#
+# The two compiled arms overflow for reasons that are not the same, so closing
+# one leaves the other red. With tier 0 off the dropped jump is the backend's.
+# At the default tier the recursing methods are still classic tier-0 bodies
+# that never promote, so that arm is the classic compiler's own, and case 22 is
+# the one it gets through.
+#
+# The interpreter arms pass all 53 and are left alone: a tail site there hands
+# the frame to the callee instead of calling it.
+set(_conservestack_xfail "")
+set(_conservestack_xfail_tier0 "")
+if(WIN32)
+  foreach(_n RANGE 16 52)
+    list(APPEND _conservestack_xfail "tailcall/interface-conservestack/${_n}.exe")
+    if(NOT _n EQUAL 22)
+      list(APPEND _conservestack_xfail_tier0 "tailcall/interface-conservestack/${_n}.exe")
+    endif()
+  endforeach()
+endif()
+
 # The suites
 #
 # The corpus default is 300s, which the three below have been measured getting
@@ -282,6 +314,7 @@ list(REMOVE_ITEM _tailcall
 mono_runtime_suite(runtime TESTS ${_regular}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0"
                    SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
+                   XFAIL ${_conservestack_xfail}
                    LONG dynamic-method-churn.exe
                         appdomain-unload.exe
                         appdomain-threadpool-unload.exe
@@ -356,6 +389,7 @@ list(REMOVE_ITEM _tier0 ${MONO_TESTS_CLASSIC_TIER0_DISABLED})
 mono_runtime_suite(runtime-tier0 LABEL tier0 TESTS ${_tier0}
                    ENV "MONO_GC_DEBUG=check-remset-consistency"
                    SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
+                   XFAIL ${_conservestack_xfail_tier0}
                    LONG appdomain-threadpool-unload.exe
                         dynamic-method-churn.exe
                         appdomain-unload.exe
