@@ -44,10 +44,19 @@
 int mkstemp (char *tmp_template);
 #endif
 
+/*
+ * Windows opens in text mode by default, which drops a carriage return before
+ * a newline and stops the read at the first 0x1A. The caller asked for the
+ * file's bytes, and any of them may be either.
+ */
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+
 #ifndef O_LARGEFILE
-#define OPEN_FLAGS (O_RDONLY)
+#define OPEN_FLAGS (O_RDONLY | O_BINARY)
 #else
-#define OPEN_FLAGS (O_RDONLY | O_LARGEFILE)
+#define OPEN_FLAGS (O_RDONLY | O_LARGEFILE | O_BINARY)
 #endif
 gboolean
 g_file_get_contents (const gchar *filename, gchar **contents, gsize *length, GError **gerror)
