@@ -12,6 +12,8 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/utils/mono-hwcap.h"
 
+#include <llvm/ADT/STLFunctionalExtras.h>
+#include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constant.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -53,6 +55,11 @@ bool sse41_lowering ()
 	return mono_hwcap_x86_has_sse41;
 }
 
+bool sse42_lowering ()
+{
+	return mono_hwcap_x86_has_sse42;
+}
+
 /// Return whether the Vector128<T> parameter at index has an unsigned element type.
 /// LLVM vector types do not encode signedness, so some lowerings must recover it
 /// from the managed signature.
@@ -87,6 +94,82 @@ std::vector<int> low_lanes_mask (unsigned n)
 	for (unsigned i = 0; i < n; i++)
 		mask[i] = (int) i;
 	return mask;
+}
+
+/// Dispatch a runtime selector to blocks that call emit_case with a constant value.
+/// This permits use of LLVM intrinsics whose control operands must be immediate.
+llvm::Value *dispatch_control (llvm::IRBuilder<> &builder, llvm::Value *selector,
+                               unsigned case_count, llvm::Type *result_type,
+                               llvm::function_ref<llvm::Value *(unsigned)> emit_case)
+{
+	llvm::LLVMContext &ctx = builder.getContext ();
+	llvm::Function *function = builder.GetInsertBlock ()->getParent ();
+	std::vector<llvm::BasicBlock *> blocks (case_count);
+
+	for (unsigned i = 0; i < case_count; i++)
+		blocks[i] = llvm::BasicBlock::Create (ctx, "", function);
+
+	llvm::BasicBlock *merge = llvm::BasicBlock::Create (ctx, "", function);
+	llvm::SwitchInst *sw = builder.CreateSwitch (selector, blocks[0], case_count);
+
+	for (unsigned i = 0; i < case_count; i++)
+		sw->addCase (llvm::ConstantInt::get (llvm::Type::getInt8Ty (ctx), i), blocks[i]);
+
+	builder.SetInsertPoint (merge);
+	llvm::PHINode *phi = builder.CreatePHI (result_type, case_count);
+
+	for (unsigned i = 0; i < case_count; i++) {
+		builder.SetInsertPoint (blocks[i]);
+
+		llvm::Value *result = emit_case (i);
+		llvm::BasicBlock *end_block = builder.GetInsertBlock ();
+
+		builder.CreateBr (merge);
+		phi->addIncoming (result, end_block);
+	}
+
+	builder.SetInsertPoint (merge);
+	return phi;
+}
+
+/// Encode element width and signedness in bits 1:0 of a PCMPxSTR control byte.
+/// Recover both properties from the managed signature after vector normalization.
+uint8_t string_format_bits (MonoMethod *method, llvm::Value *left)
+{
+	bool byte_format =
+		llvm::cast<llvm::FixedVectorType> (left->getType ())->getNumElements () == 16;
+	bool is_unsigned = param_is_unsigned (method, 0);
+
+	if (byte_format)
+		return is_unsigned ? 0b00 : 0b10;
+	return is_unsigned ? 0b01 : 0b11;
+}
+
+/// Cast an operand to the <16 x i8> type required by LLVM's PCMPxSTR intrinsics.
+llvm::Value *as_v16i8 (llvm::IRBuilder<> &builder, llvm::Value *value)
+{
+	return builder.CreateBitCast (
+		value, llvm::FixedVectorType::get (builder.getInt8Ty (), 16));
+}
+
+/// Return the PCMPxSTR flag intrinsic for a ResultsFlag value.
+std::optional<llvm::Intrinsic::ID> string_flag_intrinsic (bool explicit_length, uint8_t flag)
+{
+	// Indexed by ResultsFlag: CFlag, NotCFlagAndNotZFlag, OFlag, SFlag, ZFlag.
+	static const llvm::Intrinsic::ID implicit_ids[] = {
+		llvm::Intrinsic::x86_sse42_pcmpistric128, llvm::Intrinsic::x86_sse42_pcmpistria128,
+		llvm::Intrinsic::x86_sse42_pcmpistrio128, llvm::Intrinsic::x86_sse42_pcmpistris128,
+		llvm::Intrinsic::x86_sse42_pcmpistriz128,
+	};
+	static const llvm::Intrinsic::ID explicit_ids[] = {
+		llvm::Intrinsic::x86_sse42_pcmpestric128, llvm::Intrinsic::x86_sse42_pcmpestria128,
+		llvm::Intrinsic::x86_sse42_pcmpestrio128, llvm::Intrinsic::x86_sse42_pcmpestris128,
+		llvm::Intrinsic::x86_sse42_pcmpestriz128,
+	};
+
+	if (flag >= 5)
+		return std::nullopt;
+	return explicit_length ? explicit_ids[flag] : implicit_ids[flag];
 }
 
 struct SseEmitters : SimdEmit {
@@ -129,6 +212,12 @@ struct SseEmitters : SimdEmit {
 	                                         MonoMethod *)
 	{
 		return is_supported (mono_hwcap_x86_has_sse41, builder);
+	}
+
+	static BuiltinResult sse42_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_sse42, builder);
 	}
 
 	static bool is_double_vector (llvm::Value *value)
@@ -776,6 +865,176 @@ struct SseEmitters : SimdEmit {
 		return store (emitter, builder, llvm::Align (16));
 	}
 
+	static BuiltinResult crc32 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *crc = argument (emitter, 0);
+		llvm::Value *data = argument (emitter, 1);
+		unsigned data_width = data->getType ()->getIntegerBitWidth ();
+		llvm::Intrinsic::ID id = data_width == 64  ? llvm::Intrinsic::x86_sse42_crc32_64_64
+		                         : data_width == 32 ? llvm::Intrinsic::x86_sse42_crc32_32_32
+		                         : data_width == 16 ? llvm::Intrinsic::x86_sse42_crc32_32_16
+		                                            : llvm::Intrinsic::x86_sse42_crc32_32_8;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { crc, data }));
+		return llvm::Error::success ();
+	}
+
+	/// Extract the selected comparison-mode bits and normalize them for dispatch.
+	static llvm::Value *aggregation_selector (llvm::IRBuilder<> &builder, llvm::Value *mode,
+	                                          uint8_t mask)
+	{
+		return builder.CreateLShr (builder.CreateAnd (mode, builder.getInt8 (mask)),
+		                           builder.getInt8 (2));
+	}
+
+	/// Dispatch runtime flag and comparison-mode values to PCMPxSTR calls with a
+	/// constant control byte.
+	static llvm::Value *dispatch_flag_and_mode (llvm::IRBuilder<> &builder, bool explicit_length,
+	                                            llvm::Value *flag, llvm::Value *mode, uint8_t format,
+	                                            llvm::ArrayRef<llvm::Value *> fixed_args)
+	{
+		llvm::Value *selector = aggregation_selector (builder, mode, 0x7C);
+		llvm::Type *i32 = builder.getInt32Ty ();
+		std::vector<llvm::Value *> call_args (fixed_args.begin (), fixed_args.end ());
+
+		call_args.push_back (nullptr);
+		return dispatch_control (
+			builder, flag, 5, i32, [&] (unsigned flag_case) {
+				llvm::Intrinsic::ID id = *string_flag_intrinsic (explicit_length, flag_case);
+
+				return dispatch_control (builder, selector, 32, i32, [&] (unsigned mode_case) {
+					uint8_t control = (uint8_t) ((mode_case << 2) | format);
+
+					call_args.back () = builder.getInt8 (control);
+					return builder.CreateIntrinsic (id, {}, call_args);
+				});
+			});
+	}
+
+	static BuiltinResult compare_implicit_length (MethodLLVMEmitter &emitter,
+	                                              llvm::IRBuilder<> &builder, MonoMethod *method)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *left8 = as_v16i8 (builder, left);
+		llvm::Value *right8 = as_v16i8 (builder, argument (emitter, 1));
+		llvm::Value *result = dispatch_flag_and_mode (
+			builder, false, argument (emitter, 2), argument (emitter, 3),
+			string_format_bits (method, left), { left8, right8 });
+
+		builder.CreateRet (builder.CreateTrunc (result, return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult compare_explicit_length (MethodLLVMEmitter &emitter,
+	                                              llvm::IRBuilder<> &builder, MonoMethod *method)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *left8 = as_v16i8 (builder, left);
+		llvm::Value *left_length = builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ());
+		llvm::Value *right8 = as_v16i8 (builder, argument (emitter, 2));
+		llvm::Value *right_length = builder.CreateZExt (argument (emitter, 3), builder.getInt32Ty ());
+		llvm::Value *result = dispatch_flag_and_mode (
+			builder, true, argument (emitter, 4), argument (emitter, 5),
+			string_format_bits (method, left), { left8, left_length, right8, right_length });
+
+		builder.CreateRet (builder.CreateTrunc (result, return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult compare_implicit_length_index (MethodLLVMEmitter &emitter,
+	                                                     llvm::IRBuilder<> &builder,
+	                                                     MonoMethod *method)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *left8 = as_v16i8 (builder, left);
+		llvm::Value *right8 = as_v16i8 (builder, argument (emitter, 1));
+		uint8_t format = string_format_bits (method, left);
+		llvm::Value *selector = aggregation_selector (builder, argument (emitter, 2), 0x7C);
+
+		builder.CreateRet (dispatch_control (
+			builder, selector, 32, builder.getInt32Ty (), [&] (unsigned mode_case) {
+				uint8_t control = (uint8_t) ((mode_case << 2) | format);
+
+				return builder.CreateIntrinsic (llvm::Intrinsic::x86_sse42_pcmpistri128, {},
+				                                { left8, right8, builder.getInt8 (control) });
+			}));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult compare_explicit_length_index (MethodLLVMEmitter &emitter,
+	                                                     llvm::IRBuilder<> &builder,
+	                                                     MonoMethod *method)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *left8 = as_v16i8 (builder, left);
+		llvm::Value *left_length = builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ());
+		llvm::Value *right8 = as_v16i8 (builder, argument (emitter, 2));
+		llvm::Value *right_length = builder.CreateZExt (argument (emitter, 3), builder.getInt32Ty ());
+		uint8_t format = string_format_bits (method, left);
+		llvm::Value *selector = aggregation_selector (builder, argument (emitter, 4), 0x7C);
+
+		builder.CreateRet (dispatch_control (
+			builder, selector, 32, builder.getInt32Ty (), [&] (unsigned mode_case) {
+				uint8_t control = (uint8_t) ((mode_case << 2) | format);
+
+				return builder.CreateIntrinsic (
+					llvm::Intrinsic::x86_sse42_pcmpestri128, {},
+					{ left8, left_length, right8, right_length, builder.getInt8 (control) });
+			}));
+		return llvm::Error::success ();
+	}
+
+	/// PCMPxSTRM uses control bit 6 to select bit or unit masks. Derive that bit
+	/// from the managed method rather than the runtime comparison mode.
+	template <bool unit>
+	static BuiltinResult compare_implicit_length_mask (MethodLLVMEmitter &emitter,
+	                                                    llvm::IRBuilder<> &builder,
+	                                                    MonoMethod *method)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *left8 = as_v16i8 (builder, left);
+		llvm::Value *right8 = as_v16i8 (builder, argument (emitter, 1));
+		uint8_t format = string_format_bits (method, left) | (unit ? 0x40 : 0x00);
+		llvm::Value *selector = aggregation_selector (builder, argument (emitter, 2), 0x3C);
+		llvm::Type *v16i8 = left8->getType ();
+		llvm::Value *result = dispatch_control (
+			builder, selector, 16, v16i8, [&] (unsigned mode_case) {
+				uint8_t control = (uint8_t) ((mode_case << 2) | format);
+
+				return builder.CreateIntrinsic (llvm::Intrinsic::x86_sse42_pcmpistrm128, {},
+				                                { left8, right8, builder.getInt8 (control) });
+			});
+
+		builder.CreateRet (builder.CreateBitCast (result, return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
+	template <bool unit>
+	static BuiltinResult compare_explicit_length_mask (MethodLLVMEmitter &emitter,
+	                                                    llvm::IRBuilder<> &builder,
+	                                                    MonoMethod *method)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *left8 = as_v16i8 (builder, left);
+		llvm::Value *left_length = builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ());
+		llvm::Value *right8 = as_v16i8 (builder, argument (emitter, 2));
+		llvm::Value *right_length = builder.CreateZExt (argument (emitter, 3), builder.getInt32Ty ());
+		uint8_t format = string_format_bits (method, left) | (unit ? 0x40 : 0x00);
+		llvm::Value *selector = aggregation_selector (builder, argument (emitter, 4), 0x3C);
+		llvm::Type *v16i8 = left8->getType ();
+		llvm::Value *result = dispatch_control (
+			builder, selector, 16, v16i8, [&] (unsigned mode_case) {
+				uint8_t control = (uint8_t) ((mode_case << 2) | format);
+
+				return builder.CreateIntrinsic (
+					llvm::Intrinsic::x86_sse42_pcmpestrm128, {},
+					{ left8, left_length, right8, right_length, builder.getInt8 (control) });
+			});
+
+		builder.CreateRet (builder.CreateBitCast (result, return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
 	/// Leaves methods with managed implementations alone and rejects unmatched intrinsics.
 	static BuiltinResult unimplemented (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &,
 	                                    MonoMethod *method)
@@ -795,6 +1054,7 @@ const ClassKey sse2 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse2" };
 const ClassKey sse3 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse3" };
 const ClassKey ssse3 = { nullptr, "System.Runtime.Intrinsics.X86", "Ssse3" };
 const ClassKey sse41 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse41" };
+const ClassKey sse42 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse42" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -1035,6 +1295,34 @@ const BuiltinBody sse41_table[] = {
 	{ sse41, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
 };
 
+const BuiltinBody sse42_table[] = {
+	{ sse42, "get_IsSupported", "", false, nullptr, SseEmitters::sse42_is_supported },
+
+	{ sse42, "CompareImplicitLength", "VVSS", false, sse42_lowering,
+	  SseEmitters::compare_implicit_length },
+	{ sse42, "CompareExplicitLength", "VSVSSS", false, sse42_lowering,
+	  SseEmitters::compare_explicit_length },
+	{ sse42, "CompareImplicitLengthIndex", "VVS", false, sse42_lowering,
+	  SseEmitters::compare_implicit_length_index },
+	{ sse42, "CompareExplicitLengthIndex", "VSVSS", false, sse42_lowering,
+	  SseEmitters::compare_explicit_length_index },
+	{ sse42, "CompareImplicitLengthBitMask", "VVS", false, sse42_lowering,
+	  SseEmitters::compare_implicit_length_mask<false> },
+	{ sse42, "CompareImplicitLengthUnitMask", "VVS", false, sse42_lowering,
+	  SseEmitters::compare_implicit_length_mask<true> },
+	{ sse42, "CompareExplicitLengthBitMask", "VSVSS", false, sse42_lowering,
+	  SseEmitters::compare_explicit_length_mask<false> },
+	{ sse42, "CompareExplicitLengthUnitMask", "VSVSS", false, sse42_lowering,
+	  SseEmitters::compare_explicit_length_mask<true> },
+
+	{ sse42, "CompareGreaterThan", "VV", false, sse42_lowering,
+	  SseEmitters::compare2<6, llvm::CmpInst::ICMP_SGT> },
+
+	{ sse42, "Crc32", "SS", false, sse42_lowering, SseEmitters::crc32 },
+
+	{ sse42, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
@@ -1046,6 +1334,7 @@ simd_x86_bodies ()
 		made.insert (made.end (), std::begin (sse3_table), std::end (sse3_table));
 		made.insert (made.end (), std::begin (ssse3_table), std::end (ssse3_table));
 		made.insert (made.end (), std::begin (sse41_table), std::end (sse41_table));
+		made.insert (made.end (), std::begin (sse42_table), std::end (sse42_table));
 		return made;
 	} ();
 
