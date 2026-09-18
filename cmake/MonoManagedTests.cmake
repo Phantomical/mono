@@ -825,7 +825,7 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
     string(JOIN "," _excludes ${MONO_TEST_NUNIT_EXCLUDES} ${T_EXCLUDES})
     set(_command ${MONO_RUNTIME_TEST_COMMAND} --debug "${_runner}"
                  "${_out}" "-exclude=${_excludes}" -format:nunit2)
-    set(_mono_path "${_pdir}:${_testdir}:${dir}")
+    mono_path_join_escaped(_mono_path "${_pdir}" "${_testdir}" "${dir}")
     # -explore builds the whole tree and prints it instead of running it.
     set(_lister ${MONO_RUNTIME_TEST_COMMAND} --debug "${_runner}"
                 "${_out}" -noheader "-explore:${_listing}")
@@ -851,7 +851,8 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
     endforeach()
     _mono_xunit_runtime(_xrt ${profile})
     list(APPEND _deps ${_xrt})
-    set(_mono_path "${_pdir}:${_testdir}:${dir}:${MONO_TEST_XUNIT_DIR}")
+    mono_path_join_escaped(_mono_path "${_pdir}" "${_testdir}" "${dir}"
+                           "${MONO_TEST_XUNIT_DIR}")
     if(T_REMOTE_EXECUTOR)
       _mono_remote_executor(_remote ${profile})
       set(_env_extra "REMOTE_EXECUTOR=${_remote}")
@@ -901,10 +902,9 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
   # LD_LIBRARY_PATH is for the profiler suite, which re-execs the runtime with
   # --profile=log and needs it to find the module this build produced.
   #
-  # PATH leads with the wrapper shims, because a suite that compiles code at run
-  # time -- System.CodeDom, and the Csc and Vbc tasks the xbuild suites drive --
-  # spawns `csc` or `mcs` by bare name and has to reach this tree's rather than
-  # whatever the distribution installed.
+  # No PATH: on Windows the host PATH holds `;`, which a CTest ENVIRONMENT
+  # splits on, so an entry carrying it is cut short.  The wrapper puts the shim
+  # directory in front instead.
   #
   # The suites read fixture files by paths relative to their own directory,
   # hence the working directory.
@@ -912,7 +912,7 @@ set(MCS_BUILT_SOURCES [==[@_extra_sources@]==])
   # fx_<suite> has no setup half -- the assemblies come from the regular build.
   # It exists so a directory can register a FIXTURES_CLEANUP against it (the
   # Mono.Debugger.Soft sweep) and have it ordered after the suite.
-  set(_env "MONO_PATH=${_mono_path};MONO_REGISTRY_PATH=$ENV{HOME}/.mono/registry;MONO_TESTS_IN_PROGRESS=yes;PATH=${CMAKE_BINARY_DIR}/runtime/_tmpinst/bin:$ENV{PATH};LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/mono/profiler:$ENV{LD_LIBRARY_PATH};${_env_extra}${_env_dir}")
+  set(_env "MONO_PATH=${_mono_path};MONO_REGISTRY_PATH=$ENV{HOME}/.mono/registry;MONO_TESTS_IN_PROGRESS=yes;LD_LIBRARY_PATH=${CMAKE_BINARY_DIR}/mono/profiler:$ENV{LD_LIBRARY_PATH};${_env_extra}${_env_dir}")
 
   _mono_bcl_register()
 endfunction()

@@ -230,6 +230,19 @@ function(mono_path_join out)
   set(${out} "${_joined}" PARENT_SCOPE)
 endfunction()
 
+# Joins a MONO_PATH for a value that goes into a file `configure_file` writes,
+# where a generator expression is never evaluated.  An escaped separator
+# survives one list expansion and no more.
+function(mono_path_join_escaped out)
+  if(WIN32)
+    string(JOIN "\\;" _joined ${ARGN})
+  else()
+    string(JOIN ":" _joined ${ARGN})
+  endif()
+
+  set(${out} "${_joined}" PARENT_SCOPE)
+endfunction()
+
 set(MONO_ASSEMBLIES_DIR "${CMAKE_INSTALL_FULL_LIBDIR}")
 set(MONO_CFG_DIR        "${CMAKE_INSTALL_FULL_SYSCONFDIR}")
 set(MONO_INCLUDE_SUBDIR "${CMAKE_INSTALL_INCLUDEDIR}/mono-${MONO_API_VERSION}")
