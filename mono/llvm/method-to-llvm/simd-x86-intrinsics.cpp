@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief LLVM lowering for System.Runtime.Intrinsics.X86.Sse.
+ * \brief LLVM lowering for System.Runtime.Intrinsics.X86.Sse and Sse2.
  */
 
 #include "intrinsics.hpp"
@@ -15,10 +15,13 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/IntrinsicsX86.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
+
+#include <vector>
 
 namespace mono {
 
@@ -29,28 +32,45 @@ bool sse_lowering ()
 	return mono_hwcap_x86_has_sse1;
 }
 
+bool sse2_lowering ()
+{
+	return mono_hwcap_x86_has_sse2;
+}
+
 struct SseEmitters : SimdEmit {
-	static llvm::FixedVectorType *v4f32 (MethodLLVMEmitter &emitter)
+	static bool is_float (llvm::Value *value)
 	{
-		return llvm::FixedVectorType::get (llvm::Type::getFloatTy (context (emitter)), 4);
+		return llvm::cast<llvm::FixedVectorType> (value->getType ())
+			->getElementType ()->isFloatingPointTy ();
 	}
 
-	static BuiltinResult is_supported (MethodLLVMEmitter &emitter,
-	                                   llvm::IRBuilder<> &builder, MonoMethod *)
+	static BuiltinResult is_supported (bool supported, llvm::IRBuilder<> &builder)
 	{
-		builder.CreateRet (builder.getInt8 (mono_hwcap_x86_has_sse1 ? 1 : 0));
+		builder.CreateRet (builder.getInt8 (supported ? 1 : 0));
 		return llvm::Error::success ();
 	}
 
-	// Do not apply the relaxed floating-point flags used by SimdEmit operations.
+	static BuiltinResult sse_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                       MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_sse1, builder);
+	}
+
+	static BuiltinResult sse2_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                        MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_sse2, builder);
+	}
+
+	// Preserve exact floating-point semantics; integer overloads use matching integer operations.
 	static llvm::Value *add (llvm::IRBuilder<> &builder, llvm::Value *lhs, llvm::Value *rhs)
 	{
-		return builder.CreateFAdd (lhs, rhs);
+		return is_float (lhs) ? builder.CreateFAdd (lhs, rhs) : builder.CreateAdd (lhs, rhs);
 	}
 
 	static llvm::Value *sub (llvm::IRBuilder<> &builder, llvm::Value *lhs, llvm::Value *rhs)
 	{
-		return builder.CreateFSub (lhs, rhs);
+		return is_float (lhs) ? builder.CreateFSub (lhs, rhs) : builder.CreateSub (lhs, rhs);
 	}
 
 	static llvm::Value *mul (llvm::IRBuilder<> &builder, llvm::Value *lhs, llvm::Value *rhs)
@@ -113,6 +133,7 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
+	/// Passes predicate as the CMPPS immediate operand.
 	template <int predicate>
 	static BuiltinResult compare (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                              MonoMethod *)
@@ -123,17 +144,37 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
+	/// Uses CMPPD for double and sign-extends integer comparisons to all-one or zero lanes.
+	template <int predicate, llvm::CmpInst::Predicate int_predicate>
+	static BuiltinResult compare2 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                               MonoMethod *)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+
+		if (is_float (lhs))
+			builder.CreateRet (builder.CreateIntrinsic (
+				llvm::Intrinsic::x86_sse2_cmp_pd, {}, { lhs, rhs, builder.getInt8 (predicate) }));
+		else
+			builder.CreateRet (
+				builder.CreateSExt (builder.CreateICmp (int_predicate, lhs, rhs), lhs->getType ()));
+		return llvm::Error::success ();
+	}
+
 	template <llvm::BinaryOperator::BinaryOps op>
 	static BuiltinResult bitwise (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                              MonoMethod *)
 	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Type *original = left->getType ();
 		llvm::Type *i32x4 = llvm::FixedVectorType::get (
 			llvm::Type::getInt32Ty (context (emitter)), 4);
-		llvm::Value *left = builder.CreateBitCast (argument (emitter, 0), i32x4);
-		llvm::Value *right = builder.CreateBitCast (argument (emitter, 1), i32x4);
 
-		builder.CreateRet (
-			builder.CreateBitCast (builder.CreateBinOp (op, left, right), v4f32 (emitter)));
+		builder.CreateRet (builder.CreateBitCast (
+			builder.CreateBinOp (op, builder.CreateBitCast (left, i32x4),
+			                     builder.CreateBitCast (right, i32x4)),
+			original));
 		return llvm::Error::success ();
 	}
 
@@ -141,20 +182,59 @@ struct SseEmitters : SimdEmit {
 	static BuiltinResult and_not (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                              MonoMethod *)
 	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Type *original = left->getType ();
 		llvm::Type *i32x4 = llvm::FixedVectorType::get (
 			llvm::Type::getInt32Ty (context (emitter)), 4);
-		llvm::Value *left = builder.CreateBitCast (argument (emitter, 0), i32x4);
-		llvm::Value *right = builder.CreateBitCast (argument (emitter, 1), i32x4);
 
 		builder.CreateRet (builder.CreateBitCast (
-			builder.CreateAnd (builder.CreateNot (left), right), v4f32 (emitter)));
+			builder.CreateAnd (builder.CreateNot (builder.CreateBitCast (left, i32x4)),
+			                   builder.CreateBitCast (right, i32x4)),
+			original));
+		return llvm::Error::success ();
+	}
+
+	/// Rejects Sse2.Multiply's unsupported PMULUDQ overload.
+	static BuiltinResult multiply_double (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                      MonoMethod *method)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+
+		if (!is_float (lhs))
+			return unsupported_il (
+				emitter, llvm::Twine (method->name) + ", which this backend does not lower yet");
+
+		builder.CreateRet (builder.CreateFMul (lhs, argument (emitter, 1)));
+		return llvm::Error::success ();
+	}
+
+	/// Selects the double, unsigned-byte, or signed-short operation from the element type.
+	template <llvm::Intrinsic::ID float_id, llvm::Intrinsic::ID narrow_id,
+	         llvm::Intrinsic::ID wide_id>
+	static BuiltinResult minmax (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                             MonoMethod *)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		llvm::Type *elem =
+			llvm::cast<llvm::FixedVectorType> (lhs->getType ())->getElementType ();
+
+		if (elem->isFloatingPointTy ())
+			builder.CreateRet (builder.CreateIntrinsic (float_id, {}, { lhs, rhs }));
+		else if (elem->getIntegerBitWidth () == 8)
+			builder.CreateRet (
+				builder.CreateIntrinsic (narrow_id, { lhs->getType () }, { lhs, rhs }));
+		else
+			builder.CreateRet (
+				builder.CreateIntrinsic (wide_id, { lhs->getType () }, { lhs, rhs }));
 		return llvm::Error::success ();
 	}
 
 	static BuiltinResult set_zero (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                               MonoMethod *)
 	{
-		builder.CreateRet (llvm::Constant::getNullValue (v4f32 (emitter)));
+		builder.CreateRet (llvm::Constant::getNullValue (return_type (emitter)));
 		return llvm::Error::success ();
 	}
 
@@ -162,7 +242,7 @@ struct SseEmitters : SimdEmit {
 	                           llvm::Align align)
 	{
 		builder.CreateRet (
-			builder.CreateAlignedLoad (v4f32 (emitter), argument (emitter, 0), align));
+			builder.CreateAlignedLoad (return_type (emitter), argument (emitter, 0), align));
 		return llvm::Error::success ();
 	}
 
@@ -207,17 +287,19 @@ struct SseEmitters : SimdEmit {
 		if (name == "SetAllVector128" || name == "SetVector128")
 			return std::nullopt;
 
-		return unsupported_il (
-			emitter, llvm::Twine ("Sse.") + name + ", which this backend does not lower yet");
+		return unsupported_il (emitter, llvm::Twine (m_class_get_name (method->klass)) + "." + name
+			+ ", which this backend does not lower yet");
 	}
 };
 
 const ClassKey sse = { nullptr, "System.Runtime.Intrinsics.X86", "Sse" };
+const ClassKey sse2 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse2" };
 
 using Ops = llvm::BinaryOperator;
+namespace Intr = llvm::Intrinsic;
 
 const BuiltinBody sse_table[] = {
-	{ sse, "get_IsSupported", "", false, nullptr, SseEmitters::is_supported },
+	{ sse, "get_IsSupported", "", false, nullptr, SseEmitters::sse_is_supported },
 
 	{ sse, "Add", "VV", false, sse_lowering, SseEmitters::binary<SseEmitters::add> },
 	{ sse, "Subtract", "VV", false, sse_lowering, SseEmitters::binary<SseEmitters::sub> },
@@ -275,12 +357,63 @@ const BuiltinBody sse_table[] = {
 	{ sse, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
 };
 
+const BuiltinBody sse2_table[] = {
+	{ sse2, "get_IsSupported", "", false, nullptr, SseEmitters::sse2_is_supported },
+
+	{ sse2, "Add", "VV", false, sse2_lowering, SseEmitters::binary<SseEmitters::add> },
+	{ sse2, "Subtract", "VV", false, sse2_lowering, SseEmitters::binary<SseEmitters::sub> },
+	{ sse2, "Multiply", "VV", false, sse2_lowering, SseEmitters::multiply_double },
+	{ sse2, "Divide", "VV", false, sse2_lowering, SseEmitters::binary<SseEmitters::div> },
+
+	{ sse2, "AddScalar", "VV", false, sse2_lowering,
+	  SseEmitters::binary_scalar<SseEmitters::add> },
+	{ sse2, "SubtractScalar", "VV", false, sse2_lowering,
+	  SseEmitters::binary_scalar<SseEmitters::sub> },
+	{ sse2, "DivideScalar", "VV", false, sse2_lowering,
+	  SseEmitters::binary_scalar<SseEmitters::div> },
+
+	{ sse2, "And", "VV", false, sse2_lowering, SseEmitters::bitwise<Ops::And> },
+	{ sse2, "Or", "VV", false, sse2_lowering, SseEmitters::bitwise<Ops::Or> },
+	{ sse2, "Xor", "VV", false, sse2_lowering, SseEmitters::bitwise<Ops::Xor> },
+	{ sse2, "AndNot", "VV", false, sse2_lowering, SseEmitters::and_not },
+
+	{ sse2, "Min", "VV", false, sse2_lowering,
+	  SseEmitters::minmax<Intr::x86_sse2_min_pd, Intr::umin, Intr::smin> },
+	{ sse2, "Max", "VV", false, sse2_lowering,
+	  SseEmitters::minmax<Intr::x86_sse2_max_pd, Intr::umax, Intr::smax> },
+
+	{ sse2, "Sqrt", "V", false, sse2_lowering, SseEmitters::sqrt },
+
+	// Ordered integer comparisons have only signed overloads.
+	{ sse2, "CompareEqual", "VV", false, sse2_lowering,
+	  SseEmitters::compare2<0, llvm::CmpInst::ICMP_EQ> },
+	{ sse2, "CompareGreaterThan", "VV", false, sse2_lowering,
+	  SseEmitters::compare2<6, llvm::CmpInst::ICMP_SGT> },
+	{ sse2, "CompareLessThan", "VV", false, sse2_lowering,
+	  SseEmitters::compare2<1, llvm::CmpInst::ICMP_SLT> },
+
+	{ sse2, "LoadVector128", "S", false, sse2_lowering, SseEmitters::load_unaligned },
+	{ sse2, "LoadAlignedVector128", "S", false, sse2_lowering, SseEmitters::load_aligned },
+	{ sse2, "Store", "SV", false, sse2_lowering, SseEmitters::store_unaligned },
+	{ sse2, "StoreAligned", "SV", false, sse2_lowering, SseEmitters::store_aligned },
+
+	{ sse2, "SetZeroVector128", "", false, sse2_lowering, SseEmitters::set_zero },
+
+	{ sse2, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
 simd_x86_bodies ()
 {
-	return sse_table;
+	static const std::vector<BuiltinBody> both = [] {
+		std::vector<BuiltinBody> made (std::begin (sse_table), std::end (sse_table));
+		made.insert (made.end (), std::begin (sse2_table), std::end (sse2_table));
+		return made;
+	} ();
+
+	return both;
 }
 
 } // namespace mono

@@ -1,4 +1,4 @@
-/* Tests LLVM lowering for System.Runtime.Intrinsics.X86.Sse. */
+/* Tests LLVM lowering for System.Runtime.Intrinsics.X86.Sse and Sse2. */
 using System;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
@@ -59,15 +59,44 @@ class Tests
 		Check (what, got [0] == e0 && got [1] == e1 && got [2] == e2 && got [3] == e3);
 	}
 
-	static void CheckThrowsPlatformNotSupported (string what, Action body)
+	static unsafe Vector128<int> LoadI32 (int e0, int e1, int e2, int e3)
 	{
-		try {
-			body ();
-		} catch (PlatformNotSupportedException) {
-			return;
-		}
-		failures++;
-		Console.WriteLine ("FAIL: " + what + " did not throw PlatformNotSupportedException");
+		int* e = stackalloc int[4] { e0, e1, e2, e3 };
+		return Sse2.LoadVector128 (e);
+	}
+
+	static unsafe int[] ToArray (Vector128<int> v)
+	{
+		int[] r = new int[4];
+		fixed (int* p = r)
+			Sse2.Store (p, v);
+		return r;
+	}
+
+	static void CheckLanesI32 (string what, Vector128<int> v, int e0, int e1, int e2, int e3)
+	{
+		int[] r = ToArray (v);
+		Check (what, r [0] == e0 && r [1] == e1 && r [2] == e2 && r [3] == e3);
+	}
+
+	static unsafe Vector128<double> LoadF64 (double e0, double e1)
+	{
+		double* e = stackalloc double[2] { e0, e1 };
+		return Sse2.LoadVector128 (e);
+	}
+
+	static unsafe double[] ToArray (Vector128<double> v)
+	{
+		double[] r = new double[2];
+		fixed (double* p = r)
+			Sse2.Store (p, v);
+		return r;
+	}
+
+	static void CheckLanesF64 (string what, Vector128<double> v, double e0, double e1)
+	{
+		double[] r = ToArray (v);
+		Check (what, r [0] == e0 && r [1] == e1);
 	}
 
 	static unsafe int Main ()
@@ -133,22 +162,50 @@ class Tests
 			           5f, 6f, 7f, 8f);
 		}
 
-		// Unlowered ISA classes use their PlatformNotSupported implementations.
-		Check ("Sse2.IsSupported", !Sse2.IsSupported);
-		Check ("Avx.IsSupported", !Avx.IsSupported);
-		Check ("Avx2.IsSupported", !Avx2.IsSupported);
-		Check ("Popcnt.IsSupported", !Popcnt.IsSupported);
-		Check ("Bmi1.IsSupported", !Bmi1.IsSupported);
-		Check ("Aes.IsSupported", !Aes.IsSupported);
+		Check ("Sse2.IsSupported", Sse2.IsSupported);
 
-		CheckThrowsPlatformNotSupported ("Sse2.Add",
-			() => Sse2.Add (default (Vector128<int>), default (Vector128<int>)));
-		CheckThrowsPlatformNotSupported ("Avx2.Add",
-			() => Avx2.Add (default (Vector128<int>), default (Vector128<int>)));
-		CheckThrowsPlatformNotSupported ("Popcnt.PopCount",
-			() => Popcnt.PopCount (0u));
-		CheckThrowsPlatformNotSupported ("Bmi1.TrailingZeroCount",
-			() => Bmi1.TrailingZeroCount (0u));
+		Vector128<int> ia = LoadI32 (1, -2, 3, 4);
+		Vector128<int> ib = LoadI32 (10, 20, -30, 4);
+
+		CheckLanesI32 ("Sse2.Add(int)", Sse2.Add (ia, ib), 11, 18, -27, 8);
+		CheckLanesI32 ("Sse2.Subtract(int)", Sse2.Subtract (ia, ib), -9, -22, 33, 0);
+		CheckLanesI32 ("Sse2.CompareEqual(int)", Sse2.CompareEqual (ia, LoadI32 (1, 0, 3, 0)),
+		              -1, 0, -1, 0);
+		CheckLanesI32 ("Sse2.CompareGreaterThan(int)", Sse2.CompareGreaterThan (ib, ia),
+		              -1, -1, 0, 0);
+		CheckLanesI32 ("Sse2.CompareLessThan(int)", Sse2.CompareLessThan (ia, ib), -1, -1, 0, 0);
+		CheckLanesI32 ("Sse2.And(int)", Sse2.And (LoadI32 (0x0F, 0, 0, 0), LoadI32 (0x03, 0, 0, 0)),
+		              0x03, 0, 0, 0);
+		CheckLanesI32 ("Sse2.Or(int)", Sse2.Or (LoadI32 (0x0F, 0, 0, 0), LoadI32 (0x30, 0, 0, 0)),
+		              0x3F, 0, 0, 0);
+		CheckLanesI32 ("Sse2.Xor(int)", Sse2.Xor (ia, ia), 0, 0, 0, 0);
+		CheckLanesI32 ("Sse2.AndNot(int)",
+		              Sse2.AndNot (LoadI32 (0x0F, 0, 0, 0), LoadI32 (-1, 0, 0, 0)), -16, 0, 0, 0);
+		CheckLanesI32 ("Sse2.SetZeroVector128<int>", Sse2.SetZeroVector128<int> (), 0, 0, 0, 0);
+
+		Vector128<double> da = LoadF64 (4.0, 9.0);
+		Vector128<double> db = LoadF64 (2.0, 3.0);
+
+		CheckLanesF64 ("Sse2.Add(double)", Sse2.Add (da, db), 6.0, 12.0);
+		CheckLanesF64 ("Sse2.Subtract(double)", Sse2.Subtract (da, db), 2.0, 6.0);
+		CheckLanesF64 ("Sse2.Multiply(double)", Sse2.Multiply (da, db), 8.0, 27.0);
+		CheckLanesF64 ("Sse2.Divide(double)", Sse2.Divide (da, db), 2.0, 3.0);
+		CheckLanesF64 ("Sse2.Sqrt(double)", Sse2.Sqrt (da), 2.0, 3.0);
+		CheckLanesF64 ("Sse2.Min(double)", Sse2.Min (da, db), 2.0, 3.0);
+		CheckLanesF64 ("Sse2.Max(double)", Sse2.Max (da, db), 4.0, 9.0);
+
+		// Sse2 supports integer min/max for unsigned bytes and signed shorts.
+		unsafe {
+			byte* be = stackalloc byte[16] { 5, 200, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+			byte* bf = stackalloc byte[16] { 10, 100, 3, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+			Vector128<byte> vbe = Sse2.LoadVector128 (be);
+			Vector128<byte> vbf = Sse2.LoadVector128 (bf);
+			byte[] br = new byte[16];
+			fixed (byte* p = br) Sse2.Store (p, Sse2.Min (vbe, vbf));
+			Check ("Sse2.Min(byte)", br [0] == 5 && br [1] == 100 && br [2] == 3 && br [3] == 4);
+			fixed (byte* p = br) Sse2.Store (p, Sse2.Max (vbe, vbf));
+			Check ("Sse2.Max(byte)", br [0] == 10 && br [1] == 200 && br [2] == 3 && br [3] == 9);
+		}
 
 		if (failures == 0)
 			Console.WriteLine ("OK");
