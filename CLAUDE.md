@@ -155,11 +155,14 @@ ctest --test-dir build -R test-llvm  -j"$(nproc)"   # the LLVM backend unit test
 ctest --test-dir build -N                           # list without running
 ```
 
-Labels: `regression`, `llvm`, `runtime`, `tier0`, `tier0-unit`, `gshared`, `sgen`,
-`bcl`, `bcl-xunit`, `compiler`, `tools`, `benchmark`, `slow`, `stress`,
+Labels: `regression`, `llvm`, `runtime`, `tier0`, `tier0-unit`, `tier1-unit`, `tier2-unit`,
+`gshared`, `sgen`, `bcl`, `bcl-xunit`, `compiler`, `tools`, `benchmark`, `slow`, `stress`,
 `acceptance`. `runtime` is the corpus with tier 0 off, so every method goes through the
 backend; `tier0` is the same corpus at the default tier, where every method starts in the
-classic compiler.
+classic compiler. `tier0-unit`, `tier1-unit` and `tier2-unit` are
+`mono/unit-tests/managed`'s own corpus, one process per test method, pinned to one engine
+each. A test that answers differently between `tier0-unit` and `tier1-unit` on the same
+IL is the classic compiler and the backend disagreeing.
 `ctest --print-labels` is authoritative for the configuration you built. `check` is a
 few hundred tests and seconds. Corpora are built by the regular build, not by ctest, so
 build before you run `ctest` directly.

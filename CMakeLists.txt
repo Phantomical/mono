@@ -281,9 +281,12 @@ endif()
 if(BUILD_TESTING)
   # `tier0$` and not `tier0`: the corpus at the default tier is as large as
   # `runtime` and goes with it, while `tier0-unit` is seconds and stays in.
+  # `tier1-unit` and `tier2-unit` run the same suite through the LLVM backend
+  # instead of classic mini, which costs far more compile time, so they wait
+  # for `check-all`.
   add_custom_target(check
     COMMAND "${CMAKE_CTEST_COMMAND}" -j ${MONO_NPROC} --output-on-failure
-            -LE "runtime|tier0$|gshared|sgen|bcl|bcl-xunit|compiler|tools|eglib|slow|stress|acceptance"
+            -LE "runtime|tier0$|tier1-unit|tier2-unit|gshared|sgen|bcl|bcl-xunit|compiler|tools|eglib|slow|stress|acceptance"
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}"
     USES_TERMINAL
     VERBATIM)
@@ -310,6 +313,12 @@ if(BUILD_TESTING)
     if(MONO_ENABLE_LLVM AND MONO_ENABLE_SGEN AND MONO_ENABLE_LIBRARIES)
       add_dependencies(check     test-llvm-data)
       add_dependencies(check-all test-llvm-data)
+    endif()
+    if(MONO_ENABLE_SGEN AND MONO_ENABLE_LIBRARIES)
+      # interp-test-suites carries the tier0-unit/tier1-unit/tier2-unit runner
+      # as well as the assemblies.
+      add_dependencies(check     interp-test-suites)
+      add_dependencies(check-all interp-test-suites)
     endif()
   endif()
 

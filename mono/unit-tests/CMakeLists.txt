@@ -11,6 +11,7 @@ foreach(_runtime monosgen-2.0 monoboehm-2.0)
 endforeach()
 
 add_subdirectory(gtest)
+add_subdirectory(managed)
 
 if(MONO_CORPUS_ENABLED)
   add_subdirectory(il-offsets)
