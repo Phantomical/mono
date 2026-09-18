@@ -1191,7 +1191,11 @@ endforeach()
 # that already has glib does not collide with it. Anything still exported as a
 # bare g_* is a missed entry in eglib-remap.h.
 # It is a property of each binary that was linked, so check each of them.
-if(MONO_NM)
+#
+# Not on Windows: nm reads no symbol table out of a PE binary, because the names
+# are in the PDB beside it. What a host there could collide with is the DLL's
+# export table, which is a different question and a different tool.
+if(MONO_NM AND NOT WIN32)
   foreach(_gc IN LISTS _mono_gcs)
     add_test(NAME "runtime-eglib-remap@${_gc}"
              COMMAND "${CMAKE_COMMAND}"
