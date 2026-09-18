@@ -46,7 +46,7 @@ add_dependencies(runtime-corpora gc-descriptor-tests)
 # the test on the `slow` label. Pass a pass count as argv[1] for a longer soak.
 add_test(NAME gc-descriptors
          COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class}"
-                 "${_wrapper}" descriptor-tests.exe
+                 ${_wrapper} descriptor-tests.exe
          WORKING_DIRECTORY "${_gcd_bin}")
 set_tests_properties(gc-descriptors PROPERTIES
   LABELS slow TIMEOUT 1800)

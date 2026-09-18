@@ -210,7 +210,7 @@ function(mono_runtime_suite name)
                          "-DMONO_TIMEOUT_BINARY=${MONO_TIMEOUT_BINARY}"
                          "-DMONO_TEST_TMPDIR=${_tmpdir}"
                          -P "${_run_test}" --
-                         "${_wrapper}" ${_oarg} ${_rt_args} "${_test}"
+                         ${_wrapper} ${_oarg} ${_rt_args} "${_test}"
                  WORKING_DIRECTORY "${ARG_WORKDIR}")
         set_tests_properties("${_gname}" PROPERTIES
           LABELS "${ARG_LABEL}"
@@ -629,15 +629,15 @@ function(mono_runtime_check name)
 endfunction()
 
 mono_runtime_check(runtime-type-load
-  COMMAND "${_wrapper}" load-exceptions.exe)
+  COMMAND ${_wrapper} load-exceptions.exe)
 mono_runtime_check(runtime-multi-netmodule
-  COMMAND "${_wrapper}" test-multi-netmodule-4-exe.exe)
+  COMMAND ${_wrapper} test-multi-netmodule-4-exe.exe)
 mono_runtime_check(runtime-cattr-type-load
-  COMMAND "${_wrapper}" custom-attr-errors.exe)
+  COMMAND ${_wrapper} custom-attr-errors.exe)
 mono_runtime_check(runtime-reflection-load-with-context
-  COMMAND "${_wrapper}" reflection-load-with-context.exe)
+  COMMAND ${_wrapper} reflection-load-with-context.exe)
 mono_runtime_check(runtime-iomap-regression
-  COMMAND "${_wrapper}" exists.exe ENV "MONO_IOMAP=all")
+  COMMAND ${_wrapper} exists.exe ENV "MONO_IOMAP=all")
 # The four unhandled-exception suites `check-local` ran: the exit code the
 # runtime produces for an unhandled exception, with and without a managed
 # AppDomain.UnhandledException handler installed.
@@ -1180,7 +1180,7 @@ foreach(_gc IN LISTS _mono_gcs)
   add_test(NAME "runtime-env-options@${_gc}"
            COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
                    "${_gc_env}"
-                   "MONO_ENV_OPTIONS=--version" "${_wrapper}" array-init.exe
+                   "MONO_ENV_OPTIONS=--version" ${_wrapper} array-init.exe
            WORKING_DIRECTORY "${_bin}")
   set_tests_properties("runtime-env-options@${_gc}" PROPERTIES
     LABELS runtime
@@ -1252,7 +1252,7 @@ function(_mono_verification_check name expect)
     add_test(NAME "${name}@${_gc}"
              COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
                      "${_gc_env}" "MONO_LLVM_JIT_TRACE=1" ${ARG_ENV}
-                     "${_wrapper}" ${ARG_ARGS} "${ARG_PROGRAM}"
+                     ${_wrapper} ${ARG_ARGS} "${ARG_PROGRAM}"
              WORKING_DIRECTORY "${_bin}")
     set_tests_properties("${name}@${_gc}" PROPERTIES
       LABELS runtime TIMEOUT 300

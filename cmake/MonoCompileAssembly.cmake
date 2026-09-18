@@ -80,6 +80,11 @@ file(STRINGS "${MCS_RESPONSE}" _srcs ENCODING UTF-8)
 set(_deps "")
 foreach(_s IN LISTS _srcs)
   string(STRIP "${_s}" _s)
+  # A path with a space in it is quoted, because csc splits this file on
+  # whitespace. A depfile is read a line at a time and wants the name itself.
+  if(_s MATCHES "^\"(.*)\"$")
+    set(_s "${CMAKE_MATCH_1}")
+  endif()
   if(_s STREQUAL "")
     continue()
   endif()

@@ -15,6 +15,26 @@ endif()
 set(MONO_RUNTIME_WRAPPER
     "${CMAKE_BINARY_DIR}/runtime/mono-wrapper${MONO_WRAPPER_SUFFIX}")
 
+# The same wrapper, as the head of a COMMAND rather than as a path to hand
+# something else.
+#
+# Launching a .cmd means launching the command processor, and it decides what
+# the quotes on its line mean before the script runs: a line that begins with
+# one has its first and last stripped. The first is the one around the script's
+# own path, so a build tree whose path holds a space loses everything after
+# that space and the launch fails on a name that is half a directory. `call`
+# in front costs nothing and puts an unquoted word first, which is the whole of
+# the condition, so every quote on the line survives.
+#
+# Use this wherever the wrapper is the program being run. MONO_RUNTIME_WRAPPER
+# stays the spelling for a path handed on to something else -- a test's
+# MONO_RUNTIME, a script's -D RUNTIME= -- which is a value rather than a launch.
+if(WIN32)
+  set(MONO_RUNTIME_COMMAND cmd /c call "${MONO_RUNTIME_WRAPPER}")
+else()
+  set(MONO_RUNTIME_COMMAND "${MONO_RUNTIME_WRAPPER}")
+endif()
+
 # The runtime is assembled out of OBJECT libraries rather than static archives.
 # automake's noinst_LTLIBRARIES were "convenience libraries": every object in
 # them ends up in the shared library whether or not anything references it.

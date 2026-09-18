@@ -24,7 +24,7 @@ function(_gac_library out source)
       COMMAND "${CMAKE_COMMAND}" -E make_directory "${_d}"
       COMMAND ${_csc} -target:library -delaysign "-keyfile:${_gac_key}"
               "-out:${_gac_bin}/${out}" "${_gac_src}/${source}"
-      COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_buildcls}" "${_wrapper}"
+      COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_buildcls}" ${_wrapper}
               "${_sn}" -R "${_gac_bin}/${out}" "${_gac_key}"
       DEPENDS "${_gac_src}/${source}" "${_gac_key}" mono-test-toolchain
               ${MONO_INBUILD_RUNTIME_DEPENDS}
@@ -76,7 +76,7 @@ list(APPEND _gac_outputs "${_gac_bin}/app-both.exe")
 # MONO_GAC_PREFIX test.
 add_custom_command(
   OUTPUT "${_gac_bin}/lib/mono/gac/.stamp"
-  COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_buildcls}" "${_wrapper}"
+  COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_buildcls}" ${_wrapper}
           "${_gacutil}" -i "${_gac_bin}/signed_v1/gactestlib.dll" -gacdir "${_gac_bin}"
   COMMAND "${CMAKE_COMMAND}" -E touch "${_gac_bin}/lib/mono/gac/.stamp"
   DEPENDS "${_gac_bin}/signed_v1/gactestlib.dll" mono-test-toolchain
