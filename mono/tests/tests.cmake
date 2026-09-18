@@ -1479,3 +1479,11 @@ set(MONO_TESTS_BOEHM_DISABLED
 )
 
 # The interpreter runs on Boehm too, and the same three come off that half.
+
+# Mono.Runtime.DumpStateTotal () is the structured crash reporter, which this
+# build leaves out on Windows because summarizing a thread there means
+# signalling it and waiting on a semaphore in the handler, and no Windows arm
+# of that exists. The icall then answers with an empty payload.
+if(NOT MONO_ENABLE_CRASH_REPORTING)
+  list(REMOVE_ITEM MONO_TESTS_CS_SRC dump-state-json-valid.cs)
+endif()
