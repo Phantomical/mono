@@ -131,7 +131,7 @@ foreach(_i RANGE ${_last})
            COMMAND "${CMAKE_COMMAND}" -E env
                    "MONO_PATH=${_shard_path}"
                    "MONO_RUNTIME=${MONO_RUNTIME_WRAPPER}"
-                   "${MONO_RUNTIME_WRAPPER}" --debug
+                   ${MONO_RUNTIME_TEST_COMMAND} --debug
                    "${_pdir}/compiler-tester.exe"
                    -mode:pos -files:v4
                    "-compiler:${_pdir}/mcs.exe"

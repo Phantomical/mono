@@ -128,7 +128,7 @@ add_custom_target(mcs-corlib-vts-tests ALL DEPENDS "${_vts_test}")
 add_dependencies(mcs-corlib-vts-tests mcs-net_4_x-nunit-lite-console)
 
 add_test(NAME bcl-corlib-vts
-         COMMAND "${MONO_RUNTIME_WRAPPER}" --debug
+         COMMAND ${MONO_RUNTIME_TEST_COMMAND} --debug
                  "${_pdir}/nunit-lite-console.exe" "${_vts_test}"
                  -format:nunit2
                  "-result:${_tests}/TestResult-net_4_x-corlib-vts.xml"
