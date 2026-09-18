@@ -89,6 +89,28 @@ g_mkdtemp (char *tmp_template)
 	return NULL;
 }
 
+/*
+ * Whether a file of this name is one the shell will run. Windows has no
+ * executable permission to ask about: the extension decides it, and these four
+ * are the ones the loader and the command interpreter take.
+ */
+static gboolean
+runnable_extension (const gchar *filename)
+{
+	static const char * const runnable [] = { ".exe", ".com", ".bat", ".cmd" };
+	size_t namelen = strlen (filename);
+	size_t i;
+
+	for (i = 0; i < G_N_ELEMENTS (runnable); ++i) {
+		size_t len = strlen (runnable [i]);
+
+		if (namelen >= len && _stricmp (filename + namelen - len, runnable [i]) == 0)
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
 gboolean
 g_file_test (const gchar *filename, GFileTest test)
 {
@@ -110,8 +132,9 @@ g_file_test (const gchar *filename, GFileTest test)
 	}
 
 	if ((test & G_FILE_TEST_IS_EXECUTABLE) != 0) {
-		/* Testing executable permission on Windows is hard, and this is unused, treat as EXISTS for now. */
-		return TRUE;
+		if (attr & FILE_ATTRIBUTE_DIRECTORY)
+			return TRUE;
+		return runnable_extension (filename);
 	}
 
 	if ((test & G_FILE_TEST_IS_REGULAR) != 0) {
