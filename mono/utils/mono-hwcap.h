@@ -12,6 +12,8 @@
 
 #include "mono/utils/mono-compiler.h"
 
+G_BEGIN_DECLS
+
 #define MONO_HWCAP_VAR(NAME) extern gboolean mono_hwcap_ ## NAME;
 #include "mono/utils/mono-hwcap-vars.h"
 #undef MONO_HWCAP_VAR
@@ -33,6 +35,8 @@ void mono_hwcap_arch_init (void);
 
 /* Print detected features to stdout. */
 void mono_hwcap_print (void);
+
+G_END_DECLS
 
 /* Please note: If you're going to use the Linux auxiliary vector
  * to detect CPU features, don't use any of the constant names in
