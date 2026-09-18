@@ -1,9 +1,10 @@
 /**
  * \file
- * \brief The bodies the backend writes for System.Numerics.Vector4.
+ * \brief The bodies the backend writes for System.Numerics.Vector4 and Vector2.
  *
  * Every row reproduces the managed body lane for lane, for the reason
- * method-to-llvm/simd.cpp gives.
+ * method-to-llvm/simd.cpp gives. Vector2's operators are Vector4's with two
+ * lanes instead of four, so the two share one set of emitters.
  */
 
 #include "intrinsics.hpp"
@@ -52,7 +53,7 @@ struct SimdNumericsEmitters : SimdEmit {
 	}
 
 	/// Applies op with argument scalar spread over the other argument's lanes,
-	/// which is the `new Vector4 (s)` these bodies build before the operator.
+	/// the shape a Vector4 or Vector2 body builds before calling the operator.
 	template <BinaryOp op, unsigned scalar>
 	static BuiltinResult binary_splat (MethodLLVMEmitter &emitter,
 	                                   llvm::IRBuilder<> &builder, MonoMethod *)
@@ -187,6 +188,7 @@ struct SimdNumericsEmitters : SimdEmit {
 namespace {
 
 const ClassKey vector4 = { "System.Numerics", "System.Numerics", "Vector4" };
+const ClassKey vector2 = { "System.Numerics", "System.Numerics", "Vector2" };
 
 // The named twin beside each operator forwards to that operator, so its row
 // names the operator's own emitter rather than one of its own.
@@ -257,6 +259,65 @@ const BuiltinBody simd_numerics_table[] = {
 	  SimdNumericsEmitters::equality<false> },
 	// `!(left == right)`.
 	{ vector4, "op_Inequality", "VV", true, simd_lowering,
+	  SimdNumericsEmitters::equality<true> },
+
+	{ vector2, "op_Addition", "VV", true, simd_lowering,
+	  SimdNumericsEmitters::binary<SimdNumericsEmitters::fadd> },
+	{ vector2, "Add", "VV", true, simd_lowering,
+	  SimdNumericsEmitters::binary<SimdNumericsEmitters::fadd> },
+
+	{ vector2, "op_Subtraction", "VV", true, simd_lowering,
+	  SimdNumericsEmitters::binary<SimdNumericsEmitters::fsub> },
+	{ vector2, "Subtract", "VV", true, simd_lowering,
+	  SimdNumericsEmitters::binary<SimdNumericsEmitters::fsub> },
+
+	{ vector2, "op_Multiply", "VV", true, simd_lowering,
+	  SimdNumericsEmitters::binary<SimdNumericsEmitters::fmul> },
+	{ vector2, "Multiply", "VV", true, simd_lowering,
+	  SimdNumericsEmitters::binary<SimdNumericsEmitters::fmul> },
+
+	// `left * new Vector2 (right)`.
+	{ vector2, "op_Multiply", "VS", true, simd_lowering,
+	  SimdNumericsEmitters::binary_splat<SimdNumericsEmitters::fmul, 1> },
+	{ vector2, "Multiply", "VS", true, simd_lowering,
+	  SimdNumericsEmitters::binary_splat<SimdNumericsEmitters::fmul, 1> },
+
+	// `new Vector2 (left) * right`.
+	{ vector2, "op_Multiply", "SV", true, simd_lowering,
+	  SimdNumericsEmitters::binary_splat<SimdNumericsEmitters::fmul, 0> },
+	{ vector2, "Multiply", "SV", true, simd_lowering,
+	  SimdNumericsEmitters::binary_splat<SimdNumericsEmitters::fmul, 0> },
+
+	{ vector2, "op_Division", "VV", true, simd_lowering,
+	  SimdNumericsEmitters::binary<SimdNumericsEmitters::fdiv> },
+	{ vector2, "Divide", "VV", true, simd_lowering,
+	  SimdNumericsEmitters::binary<SimdNumericsEmitters::fdiv> },
+
+	// `value1 / new Vector2 (value2)`.
+	{ vector2, "op_Division", "VS", true, simd_lowering,
+	  SimdNumericsEmitters::binary_splat<SimdNumericsEmitters::fdiv, 1> },
+	{ vector2, "Divide", "VS", true, simd_lowering,
+	  SimdNumericsEmitters::binary_splat<SimdNumericsEmitters::fdiv, 1> },
+
+	{ vector2, "op_UnaryNegation", "V", true, simd_lowering,
+	  SimdNumericsEmitters::negate },
+	{ vector2, "Negate", "V", true, simd_lowering, SimdNumericsEmitters::negate },
+
+	{ vector2, "Min", "VV", true, simd_lowering,
+	  SimdNumericsEmitters::pick<llvm::CmpInst::FCMP_OLT> },
+	{ vector2, "Max", "VV", true, simd_lowering,
+	  SimdNumericsEmitters::pick<llvm::CmpInst::FCMP_OGT> },
+
+	{ vector2, "Abs", "V", true, simd_lowering,
+	  SimdNumericsEmitters::lanewise<llvm::Intrinsic::fabs> },
+	{ vector2, "SquareRoot", "V", true, simd_lowering,
+	  SimdNumericsEmitters::lanewise<llvm::Intrinsic::sqrt> },
+
+	{ vector2, "Dot", "VV", true, simd_lowering, SimdNumericsEmitters::dot },
+
+	{ vector2, "op_Equality", "VV", true, simd_lowering,
+	  SimdNumericsEmitters::equality<false> },
+	{ vector2, "op_Inequality", "VV", true, simd_lowering,
 	  SimdNumericsEmitters::equality<true> },
 };
 

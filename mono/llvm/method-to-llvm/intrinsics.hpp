@@ -97,7 +97,8 @@ const BuiltinBody *builtin_body_for (MonoMethod *method);
 /// can live in a file of its own.
 llvm::ArrayRef<BuiltinBody> simd_bodies ();
 
-/// System.Numerics.Vector4's rows, kept in method-to-llvm/simd-numerics.cpp.
+/// System.Numerics.Vector4 and Vector2's rows, kept in
+/// method-to-llvm/simd-numerics.cpp.
 llvm::ArrayRef<BuiltinBody> simd_numerics_bodies ();
 
 /// System.Numerics.Vector<T>'s rows, kept in method-to-llvm/simd-vector-t.cpp.

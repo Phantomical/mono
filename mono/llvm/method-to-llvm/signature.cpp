@@ -131,6 +131,8 @@ simd_class_to_llvm_type (llvm::LLVMContext &ctx, MonoClass *klass)
 	 */
 	if (name == "Vector4f" || name == "Vector4")
 		return llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx), 4);
+	if (name == "Vector2")
+		return llvm::FixedVectorType::get (llvm::Type::getFloatTy (ctx), 2);
 
 	return nullptr;
 }
