@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief LLVM lowering for System.Runtime.Intrinsics.X86.Sse and Sse2.
+ * \brief LLVM lowering for System.Runtime.Intrinsics.X86.*.
  */
 
 #include "intrinsics.hpp"
@@ -37,6 +37,11 @@ bool sse2_lowering ()
 	return mono_hwcap_x86_has_sse2;
 }
 
+bool sse3_lowering ()
+{
+	return mono_hwcap_x86_has_sse3;
+}
+
 struct SseEmitters : SimdEmit {
 	static bool is_float (llvm::Value *value)
 	{
@@ -59,6 +64,12 @@ struct SseEmitters : SimdEmit {
 	                                        MonoMethod *)
 	{
 		return is_supported (mono_hwcap_x86_has_sse2, builder);
+	}
+
+	static BuiltinResult sse3_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                        MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_sse3, builder);
 	}
 
 	// Preserve exact floating-point semantics; integer overloads use matching integer operations.
@@ -230,6 +241,65 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
+	/// Select the packed single- or double-precision intrinsic from the element type.
+	template <llvm::Intrinsic::ID ps_id, llvm::Intrinsic::ID pd_id>
+	static BuiltinResult horizontal (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                 MonoMethod *)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		llvm::Type *elem =
+			llvm::cast<llvm::FixedVectorType> (lhs->getType ())->getElementType ();
+
+		builder.CreateRet (
+			builder.CreateIntrinsic (elem->isDoubleTy () ? pd_id : ps_id, {}, { lhs, rhs }));
+		return llvm::Error::success ();
+	}
+
+	/// Lower LoadDquVector128 with LDDQU rather than a generic unaligned load.
+	static BuiltinResult load_dqu (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                               MonoMethod *)
+	{
+		llvm::Value *loaded = builder.CreateIntrinsic (
+			llvm::Intrinsic::x86_sse3_ldu_dq, {}, { argument (emitter, 0) });
+
+		builder.CreateRet (builder.CreateBitCast (loaded, return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult load_and_duplicate (MethodLLVMEmitter &emitter,
+	                                         llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *scalar = builder.CreateLoad (
+			llvm::Type::getDoubleTy (context (emitter)), argument (emitter, 0));
+
+		builder.CreateRet (builder.CreateVectorSplat (2, scalar));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult move_and_duplicate (MethodLLVMEmitter &emitter,
+	                                         llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		builder.CreateRet (builder.CreateShuffleVector (argument (emitter, 0), { 0, 0 }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult move_high_and_duplicate (MethodLLVMEmitter &emitter,
+	                                              llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		builder.CreateRet (
+			builder.CreateShuffleVector (argument (emitter, 0), { 1, 1, 3, 3 }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult move_low_and_duplicate (MethodLLVMEmitter &emitter,
+	                                             llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		builder.CreateRet (
+			builder.CreateShuffleVector (argument (emitter, 0), { 0, 0, 2, 2 }));
+		return llvm::Error::success ();
+	}
+
 	static BuiltinResult set_zero (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                               MonoMethod *)
 	{
@@ -293,6 +363,7 @@ struct SseEmitters : SimdEmit {
 
 const ClassKey sse = { nullptr, "System.Runtime.Intrinsics.X86", "Sse" };
 const ClassKey sse2 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse2" };
+const ClassKey sse3 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse3" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -401,18 +472,42 @@ const BuiltinBody sse2_table[] = {
 	{ sse2, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
 };
 
+const BuiltinBody sse3_table[] = {
+	{ sse3, "get_IsSupported", "", false, nullptr, SseEmitters::sse3_is_supported },
+
+	{ sse3, "AddSubtract", "VV", false, sse3_lowering,
+	  SseEmitters::horizontal<Intr::x86_sse3_addsub_ps, Intr::x86_sse3_addsub_pd> },
+	{ sse3, "HorizontalAdd", "VV", false, sse3_lowering,
+	  SseEmitters::horizontal<Intr::x86_sse3_hadd_ps, Intr::x86_sse3_hadd_pd> },
+	{ sse3, "HorizontalSubtract", "VV", false, sse3_lowering,
+	  SseEmitters::horizontal<Intr::x86_sse3_hsub_ps, Intr::x86_sse3_hsub_pd> },
+
+	{ sse3, "LoadAndDuplicateToVector128", "S", false, sse3_lowering,
+	  SseEmitters::load_and_duplicate },
+	{ sse3, "LoadDquVector128", "S", false, sse3_lowering, SseEmitters::load_dqu },
+
+	{ sse3, "MoveAndDuplicate", "V", false, sse3_lowering, SseEmitters::move_and_duplicate },
+	{ sse3, "MoveHighAndDuplicate", "V", false, sse3_lowering,
+	  SseEmitters::move_high_and_duplicate },
+	{ sse3, "MoveLowAndDuplicate", "V", false, sse3_lowering,
+	  SseEmitters::move_low_and_duplicate },
+
+	{ sse3, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
 simd_x86_bodies ()
 {
-	static const std::vector<BuiltinBody> both = [] {
+	static const std::vector<BuiltinBody> all = [] {
 		std::vector<BuiltinBody> made (std::begin (sse_table), std::end (sse_table));
 		made.insert (made.end (), std::begin (sse2_table), std::end (sse2_table));
+		made.insert (made.end (), std::begin (sse3_table), std::end (sse3_table));
 		return made;
 	} ();
 
-	return both;
+	return all;
 }
 
 } // namespace mono
