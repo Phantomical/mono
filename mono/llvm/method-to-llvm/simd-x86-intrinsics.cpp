@@ -9,6 +9,7 @@
 #include "method-to-llvm.hpp"
 #include "simd-emit.hpp"
 
+#include "mono/metadata/class-internals.h"
 #include "mono/utils/mono-hwcap.h"
 
 #include <llvm/IR/Constant.h>
@@ -47,6 +48,47 @@ bool ssse3_lowering ()
 	return mono_hwcap_x86_has_ssse3;
 }
 
+bool sse41_lowering ()
+{
+	return mono_hwcap_x86_has_sse41;
+}
+
+/// Return whether the Vector128<T> parameter at index has an unsigned element type.
+/// LLVM vector types do not encode signedness, so some lowerings must recover it
+/// from the managed signature.
+bool param_is_unsigned (MonoMethod *method, int index)
+{
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+	MonoClass *klass = mono_class_from_mono_type_internal (sig->params[index]);
+
+	if (klass == nullptr || !mono_class_is_ginst (klass))
+		return false;
+
+	MonoGenericInst *inst = mono_class_get_generic_class (klass)->context.class_inst;
+
+	if (inst == nullptr || inst->type_argc < 1)
+		return false;
+
+	switch (inst->type_argv[0]->type) {
+	case MONO_TYPE_U1:
+	case MONO_TYPE_U2:
+	case MONO_TYPE_U4:
+	case MONO_TYPE_U8:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/// Build a shuffle mask that selects the first n lanes.
+std::vector<int> low_lanes_mask (unsigned n)
+{
+	std::vector<int> mask (n);
+	for (unsigned i = 0; i < n; i++)
+		mask[i] = (int) i;
+	return mask;
+}
+
 struct SseEmitters : SimdEmit {
 	static bool is_float (llvm::Value *value)
 	{
@@ -81,6 +123,18 @@ struct SseEmitters : SimdEmit {
 	                                         MonoMethod *)
 	{
 		return is_supported (mono_hwcap_x86_has_ssse3, builder);
+	}
+
+	static BuiltinResult sse41_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_sse41, builder);
+	}
+
+	static bool is_double_vector (llvm::Value *value)
+	{
+		return llvm::cast<llvm::FixedVectorType> (value->getType ())
+			->getElementType ()->isDoubleTy ();
 	}
 
 	// Preserve exact floating-point semantics; integer overloads use matching integer operations.
@@ -340,6 +394,297 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
+	/// Implement immediate-controlled blends explicitly because the control byte is
+	/// a runtime value in the managed intrinsic body.
+	static BuiltinResult blend (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *control = argument (emitter, 2);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (left->getType ())->getNumElements ();
+		llvm::Value *result = left;
+
+		for (unsigned i = 0; i < lanes; i++) {
+			llvm::Value *bit = builder.CreateICmpNE (
+				builder.CreateAnd (control, builder.getInt8 (1u << i)), builder.getInt8 (0));
+			result = builder.CreateInsertElement (
+				result,
+				builder.CreateSelect (bit, builder.CreateExtractElement (right, i),
+				                      builder.CreateExtractElement (left, i)),
+				i);
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	/// Select PBLENDVB, BLENDVPS, or BLENDVPD from the element type.
+	static BuiltinResult blend_variable (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                     MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *mask = argument (emitter, 2);
+		llvm::Type *elem =
+			llvm::cast<llvm::FixedVectorType> (left->getType ())->getElementType ();
+		llvm::Intrinsic::ID id = elem->isDoubleTy ()  ? llvm::Intrinsic::x86_sse41_blendvpd
+		                         : elem->isFloatTy () ? llvm::Intrinsic::x86_sse41_blendvps
+		                                              : llvm::Intrinsic::x86_sse41_pblendvb;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { left, right, mask }));
+		return llvm::Error::success ();
+	}
+
+	/// Values 8 through 11 select a rounding mode and suppress precision exceptions;
+	/// value 4 uses the current MXCSR rounding mode.
+	template <int imm8>
+	static BuiltinResult round (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+
+		builder.CreateRet (builder.CreateIntrinsic (
+			is_double_vector (value) ? llvm::Intrinsic::x86_sse41_round_pd : llvm::Intrinsic::x86_sse41_round_ps, {},
+			{ value, builder.getInt32 (imm8) }));
+		return llvm::Error::success ();
+	}
+
+	/// Pass the value as both scalar-round operands to preserve its upper lanes.
+	template <int imm8>
+	static BuiltinResult round_scalar1 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                    MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+
+		builder.CreateRet (builder.CreateIntrinsic (
+			is_double_vector (value) ? llvm::Intrinsic::x86_sse41_round_sd : llvm::Intrinsic::x86_sse41_round_ss, {},
+			{ value, value, builder.getInt32 (imm8) }));
+		return llvm::Error::success ();
+	}
+
+	/// Preserve the upper lanes from the first scalar-round operand.
+	template <int imm8>
+	static BuiltinResult round_scalar2 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                    MonoMethod *)
+	{
+		llvm::Value *upper = argument (emitter, 0);
+		llvm::Value *value = argument (emitter, 1);
+
+		builder.CreateRet (builder.CreateIntrinsic (
+			is_double_vector (upper) ? llvm::Intrinsic::x86_sse41_round_sd : llvm::Intrinsic::x86_sse41_round_ss, {},
+			{ upper, value, builder.getInt32 (imm8) }));
+		return llvm::Error::success ();
+	}
+
+	/// Extend the required low lanes to the return type. Signedness comes from the
+	/// managed signature because LLVM vector types do not encode it.
+	static BuiltinResult convert_widen (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                    MonoMethod *method)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Type *dest = return_type (emitter);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (dest)->getNumElements ();
+		llvm::Value *narrow = builder.CreateShuffleVector (value, low_lanes_mask (lanes));
+
+		builder.CreateRet (param_is_unsigned (method, 0) ? builder.CreateZExt (narrow, dest)
+		                                                 : builder.CreateSExt (narrow, dest));
+		return llvm::Error::success ();
+	}
+
+	/// Build the dot product explicitly because its control byte is a runtime value
+	/// in the managed intrinsic body.
+	static BuiltinResult dot_product (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                  MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *control = builder.CreateZExt (argument (emitter, 2), builder.getInt32Ty ());
+		llvm::Type *vector_type = left->getType ();
+		llvm::Type *elem = llvm::cast<llvm::FixedVectorType> (vector_type)->getElementType ();
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (vector_type)->getNumElements ();
+		llvm::Value *zero = llvm::ConstantFP::get (elem, 0.0);
+		llvm::Value *product = builder.CreateFMul (left, right);
+		llvm::Value *sum = zero;
+
+		for (unsigned i = 0; i < lanes; i++) {
+			llvm::Value *bit = builder.CreateICmpNE (
+				builder.CreateAnd (control, builder.getInt32 (0x10u << i)), builder.getInt32 (0));
+			sum = builder.CreateFAdd (
+				sum, builder.CreateSelect (bit, builder.CreateExtractElement (product, i), zero));
+		}
+
+		llvm::Value *result = llvm::Constant::getNullValue (vector_type);
+
+		for (unsigned i = 0; i < lanes; i++) {
+			llvm::Value *bit = builder.CreateICmpNE (
+				builder.CreateAnd (control, builder.getInt32 (1u << i)), builder.getInt32 (0));
+			result = builder.CreateInsertElement (result, builder.CreateSelect (bit, sum, zero), i);
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	/// Mask the index to reproduce the hardware instruction's lane wraparound.
+	static BuiltinResult extract (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (value->getType ())->getNumElements ();
+		llvm::Value *index = builder.CreateAnd (
+			builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ()), lanes - 1);
+
+		builder.CreateRet (builder.CreateExtractElement (value, index));
+		return llvm::Error::success ();
+	}
+
+	/// Mask the index to reproduce the hardware instruction's lane wraparound.
+	static BuiltinResult insert (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *data = argument (emitter, 1);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (value->getType ())->getNumElements ();
+		llvm::Value *index = builder.CreateAnd (
+			builder.CreateZExt (argument (emitter, 2), builder.getInt32Ty ()), lanes - 1);
+
+		builder.CreateRet (builder.CreateInsertElement (value, data, index));
+		return llvm::Error::success ();
+	}
+
+	/// Decode INSERTPS explicitly because its source lane, destination lane, and
+	/// zero mask come from a runtime control byte.
+	static BuiltinResult insert_ps (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *data = argument (emitter, 1);
+		llvm::Value *control = builder.CreateZExt (argument (emitter, 2), builder.getInt32Ty ());
+		llvm::Value *src_lane = builder.CreateAnd (builder.CreateLShr (control, 6), 3);
+		llvm::Value *dst_lane = builder.CreateAnd (builder.CreateLShr (control, 4), 3);
+		llvm::Value *scalar = builder.CreateExtractElement (data, src_lane);
+		llvm::Value *inserted = builder.CreateInsertElement (value, scalar, dst_lane);
+		llvm::Value *zero = llvm::Constant::getNullValue (inserted->getType ());
+		llvm::Value *result = inserted;
+
+		for (unsigned i = 0; i < 4; i++) {
+			llvm::Value *bit = builder.CreateICmpNE (
+				builder.CreateAnd (control, builder.getInt32 (1u << i)), builder.getInt32 (0));
+			result = builder.CreateInsertElement (
+				result,
+				builder.CreateSelect (bit, builder.CreateExtractElement (zero, i),
+				                      builder.CreateExtractElement (result, i)),
+				i);
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	/// Select signed or unsigned min/max from the managed parameter type because
+	/// LLVM vector types do not encode signedness.
+	template <bool want_max>
+	static BuiltinResult extremum (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                               MonoMethod *method)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		llvm::Intrinsic::ID id = param_is_unsigned (method, 0)
+			? (want_max ? llvm::Intrinsic::umax : llvm::Intrinsic::umin)
+			: (want_max ? llvm::Intrinsic::smax : llvm::Intrinsic::smin);
+
+		builder.CreateRet (builder.CreateIntrinsic (id, { lhs->getType () }, { lhs, rhs }));
+		return llvm::Error::success ();
+	}
+
+	/// Decode MPSADBW's runtime control byte explicitly. Bit 2 selects the left
+	/// sliding-window base, while bits 1:0 select the right four-byte block.
+	static BuiltinResult multiple_sum_abs_diff (MethodLLVMEmitter &emitter,
+	                                            llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *control = builder.CreateZExt (argument (emitter, 2), builder.getInt32Ty ());
+		llvm::Value *left_block =
+			builder.CreateShl (builder.CreateAnd (builder.CreateLShr (control, 2), 1), 2);
+		llvm::Value *right_block = builder.CreateShl (builder.CreateAnd (control, 3), 2);
+		llvm::Type *i16 = builder.getInt16Ty ();
+		llvm::Value *result = llvm::Constant::getNullValue (return_type (emitter));
+
+		for (unsigned i = 0; i < 8; i++) {
+			llvm::Value *sum = builder.getInt16 (0);
+
+			for (unsigned j = 0; j < 4; j++) {
+				llvm::Value *left_index =
+					builder.CreateAdd (left_block, builder.getInt32 (i + j));
+				llvm::Value *right_index = builder.CreateAdd (right_block, builder.getInt32 (j));
+				llvm::Value *a =
+					builder.CreateZExt (builder.CreateExtractElement (left, left_index), i16);
+				llvm::Value *b =
+					builder.CreateZExt (builder.CreateExtractElement (right, right_index), i16);
+				llvm::Value *diff = builder.CreateSub (a, b);
+
+				sum = builder.CreateAdd (
+					sum,
+					builder.CreateIntrinsic (llvm::Intrinsic::abs, { i16 }, { diff, builder.getFalse () }));
+			}
+
+			result = builder.CreateInsertElement (result, sum, i);
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult multiply_low (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                   MonoMethod *)
+	{
+		builder.CreateRet (builder.CreateMul (argument (emitter, 0), argument (emitter, 1)));
+		return llvm::Error::success ();
+	}
+
+	/// LLVM has no PMULDQ intrinsic, so extend and multiply the even-numbered lanes.
+	static BuiltinResult multiply_widen (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                     MonoMethod *)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		llvm::Type *wide = return_type (emitter);
+		llvm::Value *lhs_even =
+			builder.CreateSExt (builder.CreateShuffleVector (lhs, { 0, 2 }), wide);
+		llvm::Value *rhs_even =
+			builder.CreateSExt (builder.CreateShuffleVector (rhs, { 0, 2 }), wide);
+
+		builder.CreateRet (builder.CreateMul (lhs_even, rhs_even));
+		return llvm::Error::success ();
+	}
+
+	/// Cast operands to the <2 x i64> type required by LLVM's PTEST intrinsics.
+	template <llvm::Intrinsic::ID id>
+	static BuiltinResult test (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Type *i64x2 =
+			llvm::FixedVectorType::get (llvm::Type::getInt64Ty (context (emitter)), 2);
+		llvm::Value *left = builder.CreateBitCast (argument (emitter, 0), i64x2);
+		llvm::Value *right = builder.CreateBitCast (argument (emitter, 1), i64x2);
+
+		builder.CreateRet (builder.CreateTrunc (
+			builder.CreateIntrinsic (id, {}, { left, right }), return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
+	/// Implement TestAllOnes as PTESTC against an all-ones mask.
+	static BuiltinResult test_all_ones (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                    MonoMethod *)
+	{
+		llvm::Type *i64x2 =
+			llvm::FixedVectorType::get (llvm::Type::getInt64Ty (context (emitter)), 2);
+		llvm::Value *value = builder.CreateBitCast (argument (emitter, 0), i64x2);
+		llvm::Value *all_ones = llvm::Constant::getAllOnesValue (i64x2);
+
+		builder.CreateRet (builder.CreateTrunc (
+			builder.CreateIntrinsic (llvm::Intrinsic::x86_sse41_ptestc, {}, { value, all_ones }),
+			return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
 	/// Lower LoadDquVector128 with LDDQU rather than a generic unaligned load.
 	static BuiltinResult load_dqu (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                               MonoMethod *)
@@ -449,6 +794,7 @@ const ClassKey sse = { nullptr, "System.Runtime.Intrinsics.X86", "Sse" };
 const ClassKey sse2 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse2" };
 const ClassKey sse3 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse3" };
 const ClassKey ssse3 = { nullptr, "System.Runtime.Intrinsics.X86", "Ssse3" };
+const ClassKey sse41 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse41" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -610,6 +956,85 @@ const BuiltinBody ssse3_table[] = {
 	{ ssse3, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
 };
 
+const BuiltinBody sse41_table[] = {
+	{ sse41, "get_IsSupported", "", false, nullptr, SseEmitters::sse41_is_supported },
+
+	{ sse41, "Blend", "VVS", false, sse41_lowering, SseEmitters::blend },
+	{ sse41, "BlendVariable", "VVV", false, sse41_lowering, SseEmitters::blend_variable },
+
+	{ sse41, "Ceiling", "V", false, sse41_lowering, SseEmitters::round<10> },
+	{ sse41, "CeilingScalar", "V", false, sse41_lowering, SseEmitters::round_scalar1<10> },
+	{ sse41, "CeilingScalar", "VV", false, sse41_lowering, SseEmitters::round_scalar2<10> },
+	{ sse41, "Floor", "V", false, sse41_lowering, SseEmitters::round<9> },
+	{ sse41, "FloorScalar", "V", false, sse41_lowering, SseEmitters::round_scalar1<9> },
+	{ sse41, "FloorScalar", "VV", false, sse41_lowering, SseEmitters::round_scalar2<9> },
+	{ sse41, "RoundToNearestInteger", "V", false, sse41_lowering, SseEmitters::round<8> },
+	{ sse41, "RoundToNegativeInfinity", "V", false, sse41_lowering, SseEmitters::round<9> },
+	{ sse41, "RoundToPositiveInfinity", "V", false, sse41_lowering, SseEmitters::round<10> },
+	{ sse41, "RoundToZero", "V", false, sse41_lowering, SseEmitters::round<11> },
+	{ sse41, "RoundCurrentDirection", "V", false, sse41_lowering, SseEmitters::round<4> },
+	{ sse41, "RoundCurrentDirectionScalar", "V", false, sse41_lowering,
+	  SseEmitters::round_scalar1<4> },
+	{ sse41, "RoundToNearestIntegerScalar", "V", false, sse41_lowering,
+	  SseEmitters::round_scalar1<8> },
+	{ sse41, "RoundToNegativeInfinityScalar", "V", false, sse41_lowering,
+	  SseEmitters::round_scalar1<9> },
+	{ sse41, "RoundToPositiveInfinityScalar", "V", false, sse41_lowering,
+	  SseEmitters::round_scalar1<10> },
+	{ sse41, "RoundToZeroScalar", "V", false, sse41_lowering, SseEmitters::round_scalar1<11> },
+	{ sse41, "RoundCurrentDirectionScalar", "VV", false, sse41_lowering,
+	  SseEmitters::round_scalar2<4> },
+	{ sse41, "RoundToNearestIntegerScalar", "VV", false, sse41_lowering,
+	  SseEmitters::round_scalar2<8> },
+	{ sse41, "RoundToNegativeInfinityScalar", "VV", false, sse41_lowering,
+	  SseEmitters::round_scalar2<9> },
+	{ sse41, "RoundToPositiveInfinityScalar", "VV", false, sse41_lowering,
+	  SseEmitters::round_scalar2<10> },
+	{ sse41, "RoundToZeroScalar", "VV", false, sse41_lowering, SseEmitters::round_scalar2<11> },
+
+	{ sse41, "CompareEqual", "VV", false, sse41_lowering,
+	  SseEmitters::compare2<0, llvm::CmpInst::ICMP_EQ> },
+
+	{ sse41, "ConvertToVector128Int16", "V", false, sse41_lowering, SseEmitters::convert_widen },
+	{ sse41, "ConvertToVector128Int32", "V", false, sse41_lowering, SseEmitters::convert_widen },
+	{ sse41, "ConvertToVector128Int64", "V", false, sse41_lowering, SseEmitters::convert_widen },
+
+	{ sse41, "DotProduct", "VVS", false, sse41_lowering, SseEmitters::dot_product },
+
+	{ sse41, "Extract", "VS", false, sse41_lowering, SseEmitters::extract },
+	{ sse41, "Insert", "VSS", false, sse41_lowering, SseEmitters::insert },
+	{ sse41, "Insert", "VVS", false, sse41_lowering, SseEmitters::insert_ps },
+
+	{ sse41, "Max", "VV", false, sse41_lowering, SseEmitters::extremum<true> },
+	{ sse41, "Min", "VV", false, sse41_lowering, SseEmitters::extremum<false> },
+	{ sse41, "MinHorizontal", "V", false, sse41_lowering,
+	  SseEmitters::unary_intrinsic<Intr::x86_sse41_phminposuw> },
+
+	{ sse41, "MultipleSumAbsoluteDifferences", "VVS", false, sse41_lowering,
+	  SseEmitters::multiple_sum_abs_diff },
+
+	{ sse41, "Multiply", "VV", false, sse41_lowering, SseEmitters::multiply_widen },
+	{ sse41, "MultiplyLow", "VV", false, sse41_lowering, SseEmitters::multiply_low },
+
+	{ sse41, "PackUnsignedSaturate", "VV", false, sse41_lowering,
+	  SseEmitters::binary_intrinsic<Intr::x86_sse41_packusdw> },
+
+	{ sse41, "LoadAlignedVector128NonTemporal", "S", false, sse41_lowering,
+	  SseEmitters::load_aligned },
+
+	{ sse41, "TestAllOnes", "V", false, sse41_lowering, SseEmitters::test_all_ones },
+	{ sse41, "TestAllZeros", "VV", false, sse41_lowering,
+	  SseEmitters::test<Intr::x86_sse41_ptestz> },
+	{ sse41, "TestC", "VV", false, sse41_lowering, SseEmitters::test<Intr::x86_sse41_ptestc> },
+	{ sse41, "TestMixOnesZeros", "VV", false, sse41_lowering,
+	  SseEmitters::test<Intr::x86_sse41_ptestnzc> },
+	{ sse41, "TestNotZAndNotC", "VV", false, sse41_lowering,
+	  SseEmitters::test<Intr::x86_sse41_ptestnzc> },
+	{ sse41, "TestZ", "VV", false, sse41_lowering, SseEmitters::test<Intr::x86_sse41_ptestz> },
+
+	{ sse41, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
@@ -620,6 +1045,7 @@ simd_x86_bodies ()
 		made.insert (made.end (), std::begin (sse2_table), std::end (sse2_table));
 		made.insert (made.end (), std::begin (sse3_table), std::end (sse3_table));
 		made.insert (made.end (), std::begin (ssse3_table), std::end (ssse3_table));
+		made.insert (made.end (), std::begin (sse41_table), std::end (sse41_table));
 		return made;
 	} ();
 
