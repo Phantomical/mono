@@ -1337,21 +1337,15 @@ emit_assembly_text (TargetMachine &tm, Module &m, raw_pwrite_stream &out)
  * separate run also means it cannot change the code that gets published: a
  * bug in the printout stays a bug in the printout. The side channel it fills
  * is discarded for the same reason.
- *
- * A batch shares one module between its members, so the clone keeps the wanted
- * method's body and drops the others. A body dropped that way becomes a
- * declaration, which is what a call leaving the module compiles to in any case,
- * and the dump then holds one method's code and one method's side tables.
  */
 Error
 dump_method_assembly (TargetMachine &tm, const Module &m, DumpPoint point,
                       StringRef entry, StringRef name)
 {
-	std::unique_ptr<Module> copy = CloneModule (m);
+	std::unique_ptr<Module> copy = clone_body_module (m, entry);
 
-	for (Function &f : *copy)
-		if (!f.isDeclaration () && f.getName () != entry)
-			f.deleteBody ();
+	if (copy == nullptr)
+		return Error::success ();
 
 	return with_dump_stream (point, name, [&] (raw_pwrite_stream &out) -> Error {
 		out << "*** assembly for " << name << " ***\n";

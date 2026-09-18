@@ -14,6 +14,7 @@
 #include "jit.hpp"
 #include "mini.h"
 
+#include <llvm/IR/GlobalAlias.h>
 #include <llvm/IR/Module.h>
 
 
@@ -44,15 +45,22 @@ public:
 	}
 
 protected:
+	/// The symbol of the other method body that the dump should remove.
+	std::string other_method_symbol;
+
 	/// Translate and compile IMAGE's METHOD at the given tier, having given the
 	/// body a dump name the filter does or does not name. Hands back the
 	/// compiled function's symbol, which is what the assembly labels it.
 	///
 	/// inlined names a second method of the same image to translate in beside it
 	/// and mark always-inline, the way the engine's pre-pass inlines a callee.
+	///
+	/// other_method names a separately compiled body. The test adds the
+	/// private `.local` alias that tier-1 profiling normally creates for it.
 	std::string compile (const std::string &image, const std::string &method,
 	                     bool dumped, JitTier tier = JitTier::tier1,
-	                     const std::string &inlined = std::string ())
+	                     const std::string &inlined = std::string (),
+	                     const std::string &other_method = std::string ())
 	{
 		std::unique_ptr<Translation> t = translate_method (image, method);
 
@@ -62,6 +70,18 @@ protected:
 
 		if (!inlined.empty ())
 			EXPECT_NE (inline_method_into (*t, image, inlined), nullptr);
+
+		if (!other_method.empty ()) {
+			Function *other = inline_method_into (*t, image, other_method);
+
+			EXPECT_NE (other, nullptr);
+			if (other == nullptr)
+				return std::string ();
+
+			other->removeFnAttr (Attribute::AlwaysInline);
+			other->setLinkage (GlobalValue::ExternalLinkage);
+			other_method_symbol = other->getName ().str ();
+		}
 
 		/* As the engine does, so the dump is filed and filtered by method. */
 		set_dump_name (*t->function, dumped ? dump_filter : image);
@@ -98,6 +118,21 @@ protected:
 		// As the runtime compiles: translator output still names the symbolic
 		// calls the mono passes rewrite, so it cannot be linked as it stands.
 		MonoJit::optimize (*t->module, tier);
+
+		// Add the alias after optimization, matching the output of the tier-1
+		// instrumentation pipeline.
+		if (!other_method_symbol.empty ()) {
+			Function *other = t->module->getFunction (other_method_symbol);
+
+			EXPECT_NE (other, nullptr);
+			if (other == nullptr)
+				return std::string ();
+
+			GlobalAlias::create (other->getValueType (), other->getAddressSpace (),
+			                     GlobalValue::PrivateLinkage,
+			                     other->getName () + ".local", other,
+			                     t->module.get ());
+		}
 
 		auto addr = (*jit)->compile (
 			ThreadSafeModule (std::move (t->module),
@@ -204,6 +239,28 @@ TEST_F (AsmDump, LeavesAMethodOfAnotherTierAlone)
 
 	ASSERT_FALSE (entry.empty ());
 	EXPECT_EQ (dump.find ("*** assembly for"), std::string::npos) << dump;
+}
+
+/*
+ * Tier-1 batches compile multiple methods in a shared module, and profiling
+ * creates a private alias for each instrumented method. Removing a non-target
+ * body without removing its alias leaves invalid IR and fails verification.
+ */
+TEST_F (AsmDump, DropsTheAliasOfAnotherMethodInTheModule)
+{
+	CapturedStdout captured;
+	std::string entry
+		= compile ("calls", "Calls:CallStatic", /*dumped=*/true, JitTier::tier1,
+		           /*inlined=*/std::string (), "Calls:Helper");
+	std::string dump = captured.text ();
+
+	ASSERT_FALSE (entry.empty ());
+	ASSERT_FALSE (other_method_symbol.empty ());
+
+	/* The label a body starts at. A dropped body has none. */
+	EXPECT_NE (dump.find ("\"" + entry + "\":"), std::string::npos) << dump;
+	EXPECT_EQ (dump.find ("\"" + other_method_symbol + "\":"), std::string::npos) << dump;
+	EXPECT_EQ (dump.find (other_method_symbol + ".local"), std::string::npos) << dump;
 }
 
 /*
