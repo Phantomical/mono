@@ -1,4 +1,4 @@
-/* Tests LLVM lowering for System.Runtime.Intrinsics.X86.Sse, Sse2, Sse3, Ssse3 and Sse41. */
+/* Tests LLVM lowering for System.Runtime.Intrinsics.X86.Sse, Sse2, Sse3, Ssse3, Sse41 and Sse42. */
 using System;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
@@ -657,6 +657,102 @@ class Tests
 			Check ("Sse41.TestNotZAndNotC(mixed)", Sse41.TestNotZAndNotC (va, vc));
 			Check ("Sse41.TestMixOnesZeros(disjoint)", !Sse41.TestMixOnesZeros (va, vb));
 			Check ("Sse41.TestMixOnesZeros(subset)", !Sse41.TestMixOnesZeros (va, vd));
+		}
+
+		Check ("Sse42.IsSupported", Sse42.IsSupported);
+
+		if (Sse42.IsSupported) {
+			CheckLanesI64 ("Sse42.CompareGreaterThan(long)",
+			              Sse42.CompareGreaterThan (LoadI64 (5, -5), LoadI64 (3, -3)), -1, 0);
+
+			// Feeding the same bytes through narrower CRC32C forms must produce the
+			// same result on this little-endian target.
+			uint crcInit = 0xFFFFFFFFu;
+			byte[] check = System.Text.Encoding.ASCII.GetBytes ("123456789");
+			uint crc8 = crcInit;
+
+			foreach (byte checkByte in check)
+				crc8 = Sse42.Crc32 (crc8, checkByte);
+			Check ("Sse42.Crc32(uint, byte) check value", (crc8 ^ 0xFFFFFFFFu) == 0xE3069283u);
+
+			ushort word = 0x1234;
+			uint viaBytes = Sse42.Crc32 (Sse42.Crc32 (crcInit, (byte) (word & 0xFF)),
+			                             (byte) (word >> 8));
+			Check ("Sse42.Crc32(uint, ushort) matches byte-at-a-time",
+			      Sse42.Crc32 (crcInit, word) == viaBytes);
+
+			uint dword = 0x12345678u;
+			uint viaWords = Sse42.Crc32 (Sse42.Crc32 (crcInit, (ushort) (dword & 0xFFFF)),
+			                             (ushort) (dword >> 16));
+			Check ("Sse42.Crc32(uint, uint) matches word-at-a-time",
+			      Sse42.Crc32 (crcInit, dword) == viaWords);
+
+			ulong qword = 0x0123456789ABCDEFUL;
+			uint viaDwords = Sse42.Crc32 (Sse42.Crc32 (crcInit, (uint) (qword & 0xFFFFFFFFu)),
+			                              (uint) (qword >> 32));
+			Check ("Sse42.Crc32(ulong, ulong) matches dword-at-a-time",
+			      Sse42.Crc32 ((ulong) crcInit, qword) == (ulong) viaDwords);
+
+			// EqualAny reports matching positions in the right operand. Verify that
+			// indices, masks, and flags all use that orientation.
+			Vector128<sbyte> strLeft = LoadI8 (97, 98, 99, 97, 98, 99, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+			Vector128<sbyte> strRight = LoadI8 (120, 99, 98, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+			Check ("Sse42.CompareImplicitLength(CFlag)",
+			      Sse42.CompareImplicitLength (strLeft, strRight, ResultsFlag.CFlag,
+			                                   StringComparisonMode.EqualAny));
+			Check ("Sse42.CompareImplicitLength(OFlag)",
+			      !Sse42.CompareImplicitLength (strLeft, strRight, ResultsFlag.OFlag,
+			                                    StringComparisonMode.EqualAny));
+
+			Check ("Sse42.CompareImplicitLengthIndex(least significant)",
+			      Sse42.CompareImplicitLengthIndex (strLeft, strRight,
+			                                        StringComparisonMode.EqualAny) == 1);
+			Check ("Sse42.CompareImplicitLengthIndex(most significant)",
+			      Sse42.CompareImplicitLengthIndex (
+				      strLeft, strRight,
+				      StringComparisonMode.EqualAny | StringComparisonMode.MostSignificant) == 2);
+
+			CheckArrayU16 ("Sse42.CompareImplicitLengthBitMask",
+			              ToArrayU16 (Sse42.CompareImplicitLengthBitMask (
+				              strLeft, strRight, StringComparisonMode.EqualAny)),
+			              0x6, 0, 0, 0, 0, 0, 0, 0);
+			CheckArrayU8 ("Sse42.CompareImplicitLengthUnitMask",
+			             ToArrayU8 (Sse42.CompareImplicitLengthUnitMask (
+				             strLeft, strRight, StringComparisonMode.EqualAny)),
+			             0, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+			Vector128<byte> estrLeft = LoadU8 (10, 20, 30, 40, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+			                                   99, 99, 99);
+			Vector128<byte> estrRight = LoadU8 (99, 20, 10, 99, 99, 99, 99, 99, 99, 99, 99, 99, 99,
+			                                    99, 99, 99);
+
+			Check ("Sse42.CompareExplicitLength(CFlag)",
+			      Sse42.CompareExplicitLength (estrLeft, 4, estrRight, 3, ResultsFlag.CFlag,
+			                                   StringComparisonMode.EqualAny));
+			Check ("Sse42.CompareExplicitLength(OFlag)",
+			      !Sse42.CompareExplicitLength (estrLeft, 4, estrRight, 3, ResultsFlag.OFlag,
+			                                    StringComparisonMode.EqualAny));
+
+			Check ("Sse42.CompareExplicitLengthIndex",
+			      Sse42.CompareExplicitLengthIndex (estrLeft, 4, estrRight, 3,
+			                                        StringComparisonMode.EqualAny) == 1);
+
+			CheckArrayU16 ("Sse42.CompareExplicitLengthBitMask",
+			              ToArrayU16 (Sse42.CompareExplicitLengthBitMask (
+				              estrLeft, 4, estrRight, 3, StringComparisonMode.EqualAny)),
+			              0x6, 0, 0, 0, 0, 0, 0, 0);
+			CheckArrayU8 ("Sse42.CompareExplicitLengthUnitMask",
+			             ToArrayU8 (Sse42.CompareExplicitLengthUnitMask (
+				             estrLeft, 4, estrRight, 3, StringComparisonMode.EqualAny)),
+			             0, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+			Vector128<short> wordLeft = LoadI16 (100, 200, 300, 400, 0, 0, 0, 0);
+			Vector128<short> wordRight = LoadI16 (300, 0, 0, 0, 0, 0, 0, 0);
+
+			Check ("Sse42.CompareImplicitLengthIndex(short)",
+			      Sse42.CompareImplicitLengthIndex (wordLeft, wordRight,
+			                                        StringComparisonMode.EqualAny) == 0);
 		}
 
 		if (failures == 0)
