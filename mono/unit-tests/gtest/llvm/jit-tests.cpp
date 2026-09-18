@@ -486,6 +486,13 @@ public:
 	{
 		MONO_SKIP_WITHOUT_CORPUS ();
 
+		// Parse the options queued from MONO_ENV_OPTIONS before reading the
+		// tier-2 threshold they configure.
+		if (Error err = apply_options ()) {
+			GTEST_SKIP () << toString (std::move (err));
+			return;
+		}
+
 		if (mono::tier2_threshold () <= 100000000)
 			GTEST_SKIP () << "the tier-2 threshold is not pinned past its "
 			                 "default, so a body under test can promote out "
