@@ -276,37 +276,58 @@ TEST (strutil, strstrip)
 	g_free (str);
 }
 
+/*
+ * What an absolute path starts with, and what that start becomes in a URI.
+ * Windows has no rooted path without a drive, and the conversion keeps the
+ * drive where Unix has nothing before the first separator. The rest of a path
+ * is encoded the same way on both, so the cases below carry one spelling.
+ */
+#ifdef G_OS_WIN32
+#define ROOT     "C:/"
+#define ROOT_URI "file:///C:/"
+#else
+#define ROOT     "/"
+#define ROOT_URI "file:///"
+#endif
+
 TEST (strutil, filename_to_uri)
 {
-	expect_uri ("/a", "file:///a");
-	expect_uri ("/home/miguel", "file:///home/miguel");
-	expect_uri ("/home/mig uel", "file:///home/mig%20uel");
-	expect_uri ("/\303\241", "file:///%C3%A1");
-	expect_uri ("/\303\241/octal", "file:///%C3%A1/octal");
-	expect_uri ("/%", "file:///%25");
-	expect_uri ("/\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\040",
-		    "file:///%01%02%03%04%05%06%07%08%09%0A%0B%0C%0D%0E%0F%10%11%12%13%14%15%16%17%18%19%1A%1B%1C%1D%1E%1F%20");
-	expect_uri ("/!$&'()*+,-./", "file:///!$&'()*+,-./");
-	expect_uri ("/\042\043\045", "file:///%22%23%25");
-	expect_uri ("/0123456789:=", "file:///0123456789:=");
-	expect_uri ("/\073\074\076\077", "file:///%3B%3C%3E%3F");
+	expect_uri (ROOT "a", ROOT_URI "a");
+	expect_uri (ROOT "home/miguel", ROOT_URI "home/miguel");
+	expect_uri (ROOT "home/mig uel", ROOT_URI "home/mig%20uel");
+	expect_uri (ROOT "\303\241", ROOT_URI "%C3%A1");
+	expect_uri (ROOT "\303\241/octal", ROOT_URI "%C3%A1/octal");
+	expect_uri (ROOT "%", ROOT_URI "%25");
+	expect_uri (ROOT "\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\040",
+		    ROOT_URI "%01%02%03%04%05%06%07%08%09%0A%0B%0C%0D%0E%0F%10%11%12%13%14%15%16%17%18%19%1A%1B%1C%1D%1E%1F%20");
+	expect_uri (ROOT "!$&'()*+,-./", ROOT_URI "!$&'()*+,-./");
+	expect_uri (ROOT "\042\043\045", ROOT_URI "%22%23%25");
+	expect_uri (ROOT "0123456789:=", ROOT_URI "0123456789:=");
+	expect_uri (ROOT "\073\074\076\077", ROOT_URI "%3B%3C%3E%3F");
+	expect_uri (ROOT "\173\174\175\176\177\200", ROOT_URI "%7B%7C%7D~%7F%80");
+	expect_uri (ROOT "@ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+		    ROOT_URI "@ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+
+#ifdef G_OS_WIN32
+	/* A backslash is a separator here and comes out as one. */
+	expect_uri ("C:\\home\\miguel", "file:///C:/home/miguel");
+#else
+	/* Where it is an ordinary byte instead, it is encoded like any other. */
 	expect_uri ("/\133\134\135\136_\140\173\174\175", "file:///%5B%5C%5D%5E_%60%7B%7C%7D");
-	expect_uri ("/\173\174\175\176\177\200", "file:///%7B%7C%7D~%7F%80");
-	expect_uri ("/@ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
-		    "file:///@ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+#endif
 
 	expect_no_uri ("a");
-	expect_no_uri ("./hola");
+	expect_no_uri ("." G_DIR_SEPARATOR_S "hola");
 }
 
 TEST (strutil, filename_from_uri)
 {
-	expect_filename ("file:///a", "/a");
-	expect_filename ("file:///%41", "/A");
-	expect_filename ("file:///home/miguel", "/home/miguel");
-	expect_filename ("file:///home/mig%20uel", "/home/mig uel");
-	expect_filename ("file:///home/c%2B%2B", "/home/c++");
-	expect_filename ("file:///home/c%2b%2b", "/home/c++");
+	expect_filename (ROOT_URI "a", ROOT "a");
+	expect_filename (ROOT_URI "%41", ROOT "A");
+	expect_filename (ROOT_URI "home/miguel", ROOT "home/miguel");
+	expect_filename (ROOT_URI "home/mig%20uel", ROOT "home/mig uel");
+	expect_filename (ROOT_URI "home/c%2B%2B", ROOT "home/c++");
+	expect_filename (ROOT_URI "home/c%2b%2b", ROOT "home/c++");
 
 	expect_no_filename ("/a");
 	expect_no_filename ("a");
