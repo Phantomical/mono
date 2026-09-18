@@ -54,6 +54,17 @@ g_dir_open (const gchar *path, guint flags, GError **gerror)
 	g_return_val_if_fail (path != NULL, NULL);
 	g_return_val_if_fail (gerror == NULL || *gerror == NULL, NULL);
 
+	/* An empty name makes the search below name the current drive's root, so
+	 * it opens a directory the caller never asked for instead of failing.
+	 * Everything reading this API is written against the POSIX answer. */
+	if (*path == '\0') {
+		if (gerror)
+			*gerror = g_error_new (G_LOG_DOMAIN,
+			                       g_file_error_from_errno (ENOENT),
+			                       strerror (ENOENT));
+		return NULL;
+	}
+
 	dir = g_new0 (GDir, 1);
 	path_utf16 = u8to16 (path);
 	path_utf16_search = g_malloc ((wcslen(path_utf16) + 3)*sizeof(gunichar2));
