@@ -43,6 +43,12 @@ struct SimdEmit {
 		return emitter.context ();
 	}
 
+	/// Reports an intrinsic that has no lowering for the matched signature.
+	static llvm::Error unsupported_il (MethodLLVMEmitter &emitter, const llvm::Twine &what)
+	{
+		return emitter.unsupported_il (what);
+	}
+
 	static llvm::Value *relax (llvm::Value *value)
 	{
 		return MethodLLVMEmitter::relax_float (value);

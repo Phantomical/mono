@@ -360,6 +360,7 @@ body_table ()
 		             simd_numerics_bodies ().end ());
 		made.insert (made.end (), simd_vector_t_bodies ().begin (),
 		             simd_vector_t_bodies ().end ());
+		made.insert (made.end (), simd_x86_bodies ().begin (), simd_x86_bodies ().end ());
 		return made;
 	} ();
 

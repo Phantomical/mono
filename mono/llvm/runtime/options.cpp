@@ -660,8 +660,8 @@ wrapper_runs_at_tier0 (MonoMethod *method)
  *
  *  - a method not implemented in IL has no bytecode of its own, and reaching
  *    one goes back through mono_jit_compile_method;
- *  - a method this backend writes the body of has IL that only throws, so
- *    any tier that runs the IL runs the throw.
+ *  - a method with a backend-generated body can have throwing or recursive
+ *    fallback IL that must not run.
  */
 bool
 runs_at_tier0 (MonoMethod *method)
