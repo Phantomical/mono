@@ -548,6 +548,19 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      # Package after archiving the build tree to keep the large ZIP and its
+      # staging files out of build.tzst, which every test shard downloads.
+      - name: Package the KSP zip
+        shell: pwsh
+        run: cmake --build build --target package-ksp -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Upload the KSP package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ksp-package-windows-x64
+          path: build/mono-llvm-jit-ksp-windows.zip
+          if-no-files-found: error
+
   test-windows:
     name: Test Windows ${{ matrix.shard }}/${{ strategy.job-total }}
     needs: build-windows
