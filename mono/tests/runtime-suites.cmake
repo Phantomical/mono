@@ -774,10 +774,10 @@ mono_runtime_suite(runtime-tier2-inline-policy-off TESTS ${_tier2_inline_policy}
 # its own.
 _mono_exe_list(_tier2_inline_arg_shapes ${MONO_TESTS_TIER2_INLINE_ARG_SHAPES_SRC})
 mono_runtime_suite(runtime-tier2-inline-arg-shapes TESTS ${_tier2_inline_arg_shapes}
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=133")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=145")
 mono_runtime_suite(runtime-tier2-inline-arg-shapes-off TESTS ${_tier2_inline_arg_shapes}
                    ENV "MONO_INLINE_POLICY=off"
-                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=133 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-noreturn-free=false")
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cold-callsite-threshold=145 --llvm-opt=-mono-inline-devirt-arg-bonus=0 --llvm-opt=-mono-inline-noreturn-free=false")
 
 # The return bonus on a callee that forwards a sealed-return call's answer
 # rather than allocating its own. Two arms the same way, and the file says

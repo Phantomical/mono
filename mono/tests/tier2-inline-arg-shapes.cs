@@ -24,9 +24,17 @@ using System.Runtime.CompilerServices;
  * read), which inlines `MeasureField` on its own and leaves nothing for this
  * suite to tell apart from the devirt-arg bonus under test.
  *
- * Each of the four declines at 165, 175, 145 and 140 with every mono bonus
- * off, and the argument bonus is 50, which puts the threshold between 125 and
- * 140 for every one of them to land on the right side. 133 takes the middle.
+ * With all bonuses disabled, the field, cast, static and phi cases cost 165,
+ * 175, 170 and 165 respectively. A shared threshold must be below 165 for
+ * every case to decline without the 50-point argument bonus, and at least 125
+ * for every case to inline with it. A threshold of 145 leaves a 20-point
+ * margin on both sides.
+ *
+ * MeasureStatic and MeasurePhi make a third `s.Area ()` call to keep their
+ * costs close to the other cases. With two calls, the valid threshold range
+ * was only 15 points wide, making the test sensitive to instruction traversal
+ * order when cost calculation stopped at the threshold.
+ *
  * Re-measure all of it when this starts failing on one arm:
  *
  *   MONO_LLVM_JIT_TRACE=1 MONO_INLINE_POLICY=off mono-sgen \
@@ -99,7 +107,7 @@ static class Shapes {
 	 * static's own read rather than with a fresh allocation. */
 	public static int MeasureStatic (IShape s, bool yes)
 	{
-		int total = s.Area () + s.Area () * 3;
+		int total = s.Area () + s.Area () * 3 + s.Area () * 5;
 
 		if (yes)
 			throw new InvalidOperationException ("static");
@@ -111,7 +119,7 @@ static class Shapes {
 	 * allocations under the same class. */
 	public static int MeasurePhi (IShape s, bool yes)
 	{
-		int total = s.Area () + s.Area () * 3;
+		int total = s.Area () + s.Area () * 3 + s.Area () * 5;
 
 		if (yes)
 			throw new InvalidOperationException ("phi");
