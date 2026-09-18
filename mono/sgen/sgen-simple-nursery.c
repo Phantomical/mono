@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "mono/sgen/sgen-gc.h"
+#include "mono/sgen/sgen-cardtable.h"
 #include "mono/sgen/sgen-protocol.h"
 #include "mono/sgen/sgen-layout-stats.h"
 #include "mono/sgen/sgen-client.h"

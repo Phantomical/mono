@@ -148,6 +148,15 @@ SERIAL_COPY_OBJECT_FROM_OBJ (GCObject **obj_slot, SgenGrayQueue *queue)
 
 	if (!sgen_ptr_in_nursery (obj)) {
 		HEAVY_STAT (++stat_nursery_copy_object_failed_from_space);
+#ifdef SGEN_CONCURRENT_MAJOR
+		/*
+		 * If the object containing obj_slot was just promoted, this
+		 * old-to-old reference bypassed the mutator write barrier and might
+		 * not have been seen by the concurrent major collector. Mark the card
+		 * so the mod-union scan visits this slot.
+		 */
+		sgen_card_table_mark_address ((mword) obj_slot);
+#endif
 		return;
 	}
 
@@ -168,6 +177,11 @@ SERIAL_COPY_OBJECT_FROM_OBJ (GCObject **obj_slot, SgenGrayQueue *queue)
 		STORE_STORE_FENCE;
 #endif
 		SGEN_UPDATE_REFERENCE (obj_slot, forwarded);
+#ifdef SGEN_CONCURRENT_MAJOR
+		/* Record a reference to an object promoted earlier in this collection. */
+		if (!sgen_ptr_in_nursery (forwarded))
+			sgen_card_table_mark_address ((mword) obj_slot);
+#endif
 #ifndef SGEN_SIMPLE_NURSERY
 		if (G_UNLIKELY (sgen_ptr_in_nursery (forwarded) && !sgen_ptr_in_nursery (obj_slot) && !SGEN_OBJECT_IS_CEMENTED (forwarded)))
 			sgen_add_to_global_remset (obj_slot, forwarded);
@@ -246,6 +260,9 @@ SERIAL_COPY_OBJECT_FROM_OBJ (GCObject **obj_slot, SgenGrayQueue *queue)
 	 * the object.
 	 */
 	STORE_STORE_FENCE;
+	/* Record the reference if the copy was promoted to the major heap. */
+	if (!sgen_ptr_in_nursery (copy))
+		sgen_card_table_mark_address ((mword) obj_slot);
 #endif
 	SGEN_UPDATE_REFERENCE (obj_slot, copy);
 #ifndef SGEN_SIMPLE_NURSERY
