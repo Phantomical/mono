@@ -26,14 +26,22 @@ set(MONO_RUNTIME_WRAPPER
 # in front costs nothing and puts an unquoted word first, which is the whole of
 # the condition, so every quote on the line survives.
 #
-# Use this wherever the wrapper is the program being run. MONO_RUNTIME_WRAPPER
-# stays the spelling for a path handed on to something else -- a test's
-# MONO_RUNTIME, a script's -D RUNTIME= -- which is a value rather than a launch.
+# Use this wherever a CMake script runs the wrapper. MONO_RUNTIME_WRAPPER stays
+# the spelling for a path handed on to something else -- a test's MONO_RUNTIME,
+# a script's -D RUNTIME= -- which is a value rather than a launch.
 if(WIN32)
   set(MONO_RUNTIME_COMMAND cmd /c call "${MONO_RUNTIME_WRAPPER}")
 else()
   set(MONO_RUNTIME_COMMAND "${MONO_RUNTIME_WRAPPER}")
 endif()
+
+# CTest quotes each command element, so cmd.exe does not parse
+# MONO_RUNTIME_COMMAND's `/c call` prefix correctly. Route it through a CMake
+# script so execute_process () preserves quoting for wrapper paths and arguments
+# containing spaces.
+set(MONO_RUNTIME_TEST_COMMAND
+    "${CMAKE_COMMAND}" -P "${CMAKE_SOURCE_DIR}/cmake/MonoRunTest.cmake" --
+    ${MONO_RUNTIME_COMMAND})
 
 # The runtime is assembled out of OBJECT libraries rather than static archives.
 # automake's noinst_LTLIBRARIES were "convenience libraries": every object in

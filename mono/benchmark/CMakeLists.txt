@@ -17,7 +17,6 @@ set(_src      "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_bin      "${CMAKE_CURRENT_BINARY_DIR}")
 set(_buildcls "${MONO_MCS_LIBDIR}/build")
 set(_class    "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
-set(_wrapper  "${MONO_RUNTIME_WRAPPER}")
 
 mono_tools_runtime(_host MONO_PATH "${_buildcls}" AOT_PATH "${_buildcls}")
 set(_csc   ${_host} "${MONO_CSC}" -debug:portable -noconfig -nologo
@@ -90,7 +89,7 @@ add_dependencies(benchmarks mono-${MONO_DEFAULT_GC_SUFFIX})
 # to stress.
 foreach(_b IN LISTS _cs_benchmarks _il_benchmarks)
   add_test(NAME "benchmark-${_b}"
-           COMMAND "${_wrapper}" -O=all "${_bin}/${_b}.exe")
+           COMMAND ${MONO_RUNTIME_TEST_COMMAND} -O=all "${_bin}/${_b}.exe")
   set_tests_properties("benchmark-${_b}" PROPERTIES
     LABELS "benchmark;slow"
     TIMEOUT 600
@@ -104,7 +103,7 @@ endforeach()
 # there.
 foreach(_b IN LISTS _simd_benchmarks)
   add_test(NAME "benchmark-${_b}"
-           COMMAND "${_wrapper}" -O=all "${_bin}/${_b}.exe")
+           COMMAND ${MONO_RUNTIME_TEST_COMMAND} -O=all "${_bin}/${_b}.exe")
   set_tests_properties("benchmark-${_b}" PROPERTIES
     LABELS "benchmark;slow"
     TIMEOUT 600
