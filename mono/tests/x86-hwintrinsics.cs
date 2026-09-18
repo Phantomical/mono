@@ -1,4 +1,4 @@
-/* Tests LLVM lowering for System.Runtime.Intrinsics.X86.Sse and Sse2. */
+/* Tests LLVM lowering for System.Runtime.Intrinsics.X86.Sse, Sse2 and Sse3. */
 using System;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
@@ -205,6 +205,37 @@ class Tests
 			Check ("Sse2.Min(byte)", br [0] == 5 && br [1] == 100 && br [2] == 3 && br [3] == 4);
 			fixed (byte* p = br) Sse2.Store (p, Sse2.Max (vbe, vbf));
 			Check ("Sse2.Max(byte)", br [0] == 10 && br [1] == 200 && br [2] == 3 && br [3] == 9);
+		}
+
+		Check ("Sse3.IsSupported", Sse3.IsSupported);
+
+		if (Sse3.IsSupported) {
+			CheckLanes ("Sse3.AddSubtract(float)", Sse3.AddSubtract (a, b), -9f, 18f, 33f, 8f);
+			CheckLanes ("Sse3.HorizontalAdd(float)", Sse3.HorizontalAdd (a, b), -1f, 7f, 30f,
+			           -26f);
+			CheckLanes ("Sse3.HorizontalSubtract(float)", Sse3.HorizontalSubtract (a, b),
+			           3f, -1f, -10f, -34f);
+			CheckLanes ("Sse3.MoveHighAndDuplicate", Sse3.MoveHighAndDuplicate (a),
+			           -2f, -2f, 4f, 4f);
+			CheckLanes ("Sse3.MoveLowAndDuplicate", Sse3.MoveLowAndDuplicate (a), 1f, 1f, 3f, 3f);
+
+			CheckLanesF64 ("Sse3.AddSubtract(double)", Sse3.AddSubtract (da, db), 2.0, 12.0);
+			CheckLanesF64 ("Sse3.HorizontalAdd(double)", Sse3.HorizontalAdd (da, db), 13.0, 5.0);
+			CheckLanesF64 ("Sse3.HorizontalSubtract(double)", Sse3.HorizontalSubtract (da, db),
+			              -5.0, -1.0);
+			CheckLanesF64 ("Sse3.MoveAndDuplicate", Sse3.MoveAndDuplicate (da), 4.0, 4.0);
+
+			unsafe {
+				double dup = 7.0;
+				CheckLanesF64 ("Sse3.LoadAndDuplicateToVector128",
+				              Sse3.LoadAndDuplicateToVector128 (&dup), 7.0, 7.0);
+			}
+
+			unsafe {
+				int* e = stackalloc int[4] { 11, -22, 33, -44 };
+				CheckLanesI32 ("Sse3.LoadDquVector128", Sse3.LoadDquVector128 (e), 11, -22, 33,
+				              -44);
+			}
 		}
 
 		if (failures == 0)
