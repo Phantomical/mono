@@ -362,12 +362,13 @@ sgen_card_table_preclean_mod_union (guint8 *cards, guint8 *cards_preclean, size_
 {
 	size_t i;
 
-	memcpy (cards_preclean, cards, num_cards);
-	for (i = 0; i < num_cards; i++) {
-		if (cards_preclean [i]) {
-			cards [i] = 0;
-		}
-	}
+	/*
+	 * update_mod_union () can mark these cards while worker threads preclean
+	 * them. Atomically replace each byte with zero so a racing mark is either
+	 * returned for this scan or remains set for the next preclean.
+	 */
+	for (i = 0; i < num_cards; i++)
+		cards_preclean [i] = (guint8) mono_atomic_xchg_i8 ((volatile gint8 *) &cards [i], 0);
 	/*
 	 * When precleaning we need to make sure the card cleaning
 	 * takes place before the object is scanned. If we don't
