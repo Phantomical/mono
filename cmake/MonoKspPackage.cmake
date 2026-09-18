@@ -168,11 +168,16 @@ endif()
 set(_ksp_config "${CMAKE_BINARY_DIR}/ksp-package-config.xml")
 file(WRITE "${_ksp_config}" "${_ksp_config_base}")
 
+# Without a .pdb beside the assembly, a managed frame in a stack trace has no
+# file or line. Nothing writes a .pdb for an assembly declared NO_DEBUG, so
+# adding one to the list above fails this copy.
 set(_ksp_copy_commands "")
 foreach(_asm IN LISTS _ksp_assemblies)
   list(APPEND _ksp_copy_commands
        COMMAND "${CMAKE_COMMAND}" -E copy
-               "${_ksp_managed_dir}/${_asm}.dll" "${_ksp_stage}/${_ksp_managed_subdir}/${_asm}.dll")
+               "${_ksp_managed_dir}/${_asm}.dll" "${_ksp_stage}/${_ksp_managed_subdir}/${_asm}.dll"
+       COMMAND "${CMAKE_COMMAND}" -E copy
+               "${_ksp_managed_dir}/${_asm}.pdb" "${_ksp_stage}/${_ksp_managed_subdir}/${_asm}.pdb")
 endforeach()
 if(_ksp_native_pal)
   list(APPEND _ksp_copy_commands
