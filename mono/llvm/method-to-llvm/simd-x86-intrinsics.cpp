@@ -42,6 +42,11 @@ bool sse3_lowering ()
 	return mono_hwcap_x86_has_sse3;
 }
 
+bool ssse3_lowering ()
+{
+	return mono_hwcap_x86_has_ssse3;
+}
+
 struct SseEmitters : SimdEmit {
 	static bool is_float (llvm::Value *value)
 	{
@@ -70,6 +75,12 @@ struct SseEmitters : SimdEmit {
 	                                        MonoMethod *)
 	{
 		return is_supported (mono_hwcap_x86_has_sse3, builder);
+	}
+
+	static BuiltinResult ssse3_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_ssse3, builder);
 	}
 
 	// Preserve exact floating-point semantics; integer overloads use matching integer operations.
@@ -256,6 +267,79 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
+	/// Select the 16- or 32-bit intrinsic from the element width.
+	template <llvm::Intrinsic::ID w_id, llvm::Intrinsic::ID d_id>
+	static BuiltinResult horizontal_int (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                     MonoMethod *)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		llvm::Type *elem =
+			llvm::cast<llvm::FixedVectorType> (lhs->getType ())->getElementType ();
+
+		builder.CreateRet (builder.CreateIntrinsic (
+			elem->getIntegerBitWidth () == 16 ? w_id : d_id, {}, { lhs, rhs }));
+		return llvm::Error::success ();
+	}
+
+	/// Select the 8-, 16-, or 32-bit intrinsic from the element width.
+	template <llvm::Intrinsic::ID b_id, llvm::Intrinsic::ID w_id, llvm::Intrinsic::ID d_id>
+	static BuiltinResult sign (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                           MonoMethod *)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		llvm::Type *elem =
+			llvm::cast<llvm::FixedVectorType> (lhs->getType ())->getElementType ();
+		llvm::Intrinsic::ID id = elem->getIntegerBitWidth () == 8
+			? b_id
+			: (elem->getIntegerBitWidth () == 16 ? w_id : d_id);
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { lhs, rhs }));
+		return llvm::Error::success ();
+	}
+
+	/// LLVM has no 128-bit x86 PABS intrinsic, so use the generic vector operation.
+	static BuiltinResult abs (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *result = builder.CreateIntrinsic (
+			llvm::Intrinsic::abs, { value->getType () }, { value, builder.getFalse () });
+
+		builder.CreateRet (builder.CreateBitCast (result, return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
+	/// Implement PALIGNR with integer shifts so the byte count may be a runtime value.
+	/// Counts of 32 or more produce zero, matching the instruction.
+	static BuiltinResult align_right (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                  MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *mask = argument (emitter, 2);
+		llvm::LLVMContext &ctx = context (emitter);
+		llvm::Type *i128 = llvm::Type::getIntNTy (ctx, 128);
+		llvm::Type *i256 = llvm::Type::getIntNTy (ctx, 256);
+
+		llvm::Value *hi = builder.CreateShl (
+			builder.CreateZExt (builder.CreateBitCast (left, i128), i256),
+			llvm::ConstantInt::get (i256, 128));
+		llvm::Value *lo = builder.CreateZExt (builder.CreateBitCast (right, i128), i256);
+		llvm::Value *concat = builder.CreateOr (hi, lo);
+
+		llvm::Value *shift =
+			builder.CreateShl (builder.CreateZExt (mask, i256), llvm::ConstantInt::get (i256, 3));
+		llvm::Value *shifted =
+			builder.CreateBitCast (builder.CreateTrunc (builder.CreateLShr (concat, shift), i128),
+			                       return_type (emitter));
+
+		builder.CreateRet (builder.CreateSelect (
+			builder.CreateICmpUGE (mask, builder.getInt8 (32)),
+			llvm::Constant::getNullValue (return_type (emitter)), shifted));
+		return llvm::Error::success ();
+	}
+
 	/// Lower LoadDquVector128 with LDDQU rather than a generic unaligned load.
 	static BuiltinResult load_dqu (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                               MonoMethod *)
@@ -364,6 +448,7 @@ struct SseEmitters : SimdEmit {
 const ClassKey sse = { nullptr, "System.Runtime.Intrinsics.X86", "Sse" };
 const ClassKey sse2 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse2" };
 const ClassKey sse3 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse3" };
+const ClassKey ssse3 = { nullptr, "System.Runtime.Intrinsics.X86", "Ssse3" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -495,6 +580,36 @@ const BuiltinBody sse3_table[] = {
 	{ sse3, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
 };
 
+const BuiltinBody ssse3_table[] = {
+	{ ssse3, "get_IsSupported", "", false, nullptr, SseEmitters::ssse3_is_supported },
+
+	{ ssse3, "Abs", "V", false, ssse3_lowering, SseEmitters::abs },
+	{ ssse3, "AlignRight", "VVS", false, ssse3_lowering, SseEmitters::align_right },
+
+	{ ssse3, "HorizontalAdd", "VV", false, ssse3_lowering,
+	  SseEmitters::horizontal_int<Intr::x86_ssse3_phadd_w_128, Intr::x86_ssse3_phadd_d_128> },
+	{ ssse3, "HorizontalAddSaturate", "VV", false, ssse3_lowering,
+	  SseEmitters::binary_intrinsic<Intr::x86_ssse3_phadd_sw_128> },
+	{ ssse3, "HorizontalSubtract", "VV", false, ssse3_lowering,
+	  SseEmitters::horizontal_int<Intr::x86_ssse3_phsub_w_128, Intr::x86_ssse3_phsub_d_128> },
+	{ ssse3, "HorizontalSubtractSaturate", "VV", false, ssse3_lowering,
+	  SseEmitters::binary_intrinsic<Intr::x86_ssse3_phsub_sw_128> },
+
+	{ ssse3, "MultiplyAddAdjacent", "VV", false, ssse3_lowering,
+	  SseEmitters::binary_intrinsic<Intr::x86_ssse3_pmadd_ub_sw_128> },
+	{ ssse3, "MultiplyHighRoundScale", "VV", false, ssse3_lowering,
+	  SseEmitters::binary_intrinsic<Intr::x86_ssse3_pmul_hr_sw_128> },
+
+	{ ssse3, "Shuffle", "VV", false, ssse3_lowering,
+	  SseEmitters::binary_intrinsic<Intr::x86_ssse3_pshuf_b_128> },
+
+	{ ssse3, "Sign", "VV", false, ssse3_lowering,
+	  SseEmitters::sign<Intr::x86_ssse3_psign_b_128, Intr::x86_ssse3_psign_w_128,
+	                    Intr::x86_ssse3_psign_d_128> },
+
+	{ ssse3, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
@@ -504,6 +619,7 @@ simd_x86_bodies ()
 		std::vector<BuiltinBody> made (std::begin (sse_table), std::end (sse_table));
 		made.insert (made.end (), std::begin (sse2_table), std::end (sse2_table));
 		made.insert (made.end (), std::begin (sse3_table), std::end (sse3_table));
+		made.insert (made.end (), std::begin (ssse3_table), std::end (ssse3_table));
 		return made;
 	} ();
 
