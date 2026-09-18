@@ -250,6 +250,9 @@ typedef struct _MonoThreadInfo {
 	/*async call machinery, thread MUST be suspended before accessing those fields*/
 	void (*async_target)(void*);
 	void *user_data;
+	/* The suspend context async_target runs against, copied while the thread
+	 * is still suspended so a second suspend cannot overwrite it first. */
+	MonoContext async_call_ctx;
 
 	/*
 	If true, this thread is running a critical region of code and cannot be suspended.

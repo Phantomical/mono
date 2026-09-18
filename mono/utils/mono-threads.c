@@ -1475,6 +1475,7 @@ mono_thread_info_setup_async_call (MonoThreadInfo *info, void (*target_func)(voi
 	info->async_target = target_func;
 	/* This is not GC tracked */
 	info->user_data = user_data;
+	info->async_call_ctx = mono_thread_info_get_suspend_state (info)->ctx;
 }
 
 /*

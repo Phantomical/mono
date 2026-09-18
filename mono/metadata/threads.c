@@ -5895,9 +5895,7 @@ self_interrupt_thread (void *_unused)
 	}
 
 	info = mono_thread_info_current ();
-
-	/* FIXME using thread_saved_state [ASYNC_SUSPEND_STATE_INDEX] can race with another suspend coming in. */
-	ctx = info->thread_saved_state [ASYNC_SUSPEND_STATE_INDEX].ctx;
+	ctx = info->async_call_ctx;
 
 	mono_raise_exception_with_context (exc, &ctx);
 }
