@@ -113,7 +113,13 @@ check_function_exists(clock_gettime HAVE_CLOCK_GETTIME)
 # statfs/statvfs need their headers to be declared at all on some libcs.
 check_symbol_exists(statfs  "sys/vfs.h;sys/statfs.h"   HAVE_STATFS)
 check_symbol_exists(statvfs "sys/statvfs.h"            HAVE_STATVFS)
-check_symbol_exists(access  "unistd.h"                 HAVE_ACCESS)
+# Windows carries the function as _access in io.h rather than access in
+# unistd.h. Either spelling means the platform has it.
+if(WIN32)
+  check_symbol_exists(_access "io.h"                    HAVE_ACCESS)
+else()
+  check_symbol_exists(access  "unistd.h"                HAVE_ACCESS)
+endif()
 check_symbol_exists(pipe2   "unistd.h"                 HAVE_PIPE2)
 check_symbol_exists(readdir_r "dirent.h"               HAVE_READDIR_R)
 check_symbol_exists(getaddrinfo "${_mono_socket_headers}" HAVE_GETADDRINFO)
