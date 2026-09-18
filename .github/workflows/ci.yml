@@ -174,11 +174,20 @@ jobs:
       - name: Package the KSP zip
         run: cmake --build build --target package-ksp -j "$(nproc)"
 
+      # upload-artifact zips whatever `path` names, so pointing it at the zip
+      # package-ksp already built would nest that zip inside the download's
+      # own. Extracting first and uploading the directory gives the
+      # downloaded artifact the package's own layout instead.
+      - name: Extract the KSP package
+        run: |
+          mkdir ksp-package-linux
+          unzip -q build/mono-llvm-jit-ksp-linux.zip -d ksp-package-linux
+
       - name: Upload the KSP package
         uses: actions/upload-artifact@v7
         with:
           name: ksp-package-linux-x64
-          path: build/mono-llvm-jit-ksp-linux.zip
+          path: ksp-package-linux
           if-no-files-found: error
 
       # The whole tree rather than a selection of it. 1.6G goes to 410M in 18s,
@@ -554,11 +563,17 @@ jobs:
         shell: pwsh
         run: cmake --build build --target package-ksp -j $env:NUMBER_OF_PROCESSORS
 
+      # See the Linux job's own "Extract the KSP package" step for why this
+      # has to happen before the upload.
+      - name: Extract the KSP package
+        shell: pwsh
+        run: Expand-Archive -Path build/mono-llvm-jit-ksp-windows.zip -DestinationPath ksp-package-windows
+
       - name: Upload the KSP package
         uses: actions/upload-artifact@v7
         with:
           name: ksp-package-windows-x64
-          path: build/mono-llvm-jit-ksp-windows.zip
+          path: ksp-package-windows
           if-no-files-found: error
 
   test-windows:
