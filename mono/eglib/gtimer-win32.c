@@ -86,8 +86,11 @@ g_timer_elapsed (GTimer *timer, gulong *microseconds)
 
 	delta = stop - timer->start;
 
+	/* The out-parameter is the sub-second part of the reading the return
+	 * value carries whole, so a caller that wants both does not add the
+	 * seconds in twice. */
 	if (microseconds)
-		*microseconds = (gulong) (delta * (1000000.0 / freq));
+		*microseconds = (gulong) ((delta % freq) * (1000000.0 / freq));
 
 	return (gdouble) delta / (gdouble) freq;
 }
