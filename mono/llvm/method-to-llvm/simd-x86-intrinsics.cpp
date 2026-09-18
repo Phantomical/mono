@@ -40,8 +40,7 @@ bool sse2_lowering ()
 struct SseEmitters : SimdEmit {
 	static bool is_float (llvm::Value *value)
 	{
-		return llvm::cast<llvm::FixedVectorType> (value->getType ())
-			->getElementType ()->isFloatingPointTy ();
+		return value->getType ()->isFPOrFPVectorTy ();
 	}
 
 	static BuiltinResult is_supported (bool supported, llvm::IRBuilder<> &builder)
