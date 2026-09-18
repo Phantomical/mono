@@ -17,8 +17,8 @@ using System.Threading;
  * differential on the field the backend reads.
  *
  * A shared call that outlived its thread would show up as the second thread
- * reporting the first one's id. The interpreter runs the property as written, so
- * the tier-0 answer is the third arm.
+ * reporting the first one's id. The classic tier-0 compiler runs the property
+ * as written, so the tier-0 answer is the third arm.
  */
 
 class Program {
@@ -58,10 +58,10 @@ class Program {
 
 	public static int Main ()
 	{
-		int interpreted = Reads ();
+		int tier0 = Reads ();
 
-		if (interpreted < 1) {
-			Console.WriteLine ("FAIL: tier 0 answered {0}", interpreted);
+		if (tier0 < 1) {
+			Console.WriteLine ("FAIL: tier 0 answered {0}", tier0);
 			return 1;
 		}
 
@@ -70,9 +70,9 @@ class Program {
 
 		int compiled = Reads ();
 
-		if (compiled != interpreted) {
+		if (compiled != tier0) {
 			Console.WriteLine ("FAIL: tier 2 answered {0}, tier 0 answered {1}",
-			                   compiled, interpreted);
+			                   compiled, tier0);
 			return 1;
 		}
 

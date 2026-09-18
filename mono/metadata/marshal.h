@@ -134,8 +134,6 @@ typedef enum {
 	/* Subtypes of MONO_WRAPPER_OTHER */
 	WRAPPER_SUBTYPE_GSHAREDVT_IN_SIG,
 	WRAPPER_SUBTYPE_GSHAREDVT_OUT_SIG,
-	WRAPPER_SUBTYPE_INTERP_IN,
-	WRAPPER_SUBTYPE_INTERP_LMF,
 	WRAPPER_SUBTYPE_AOT_INIT,
 	WRAPPER_SUBTYPE_LLVM_FUNC
 } WrapperSubtype;
@@ -214,10 +212,6 @@ typedef struct {
 	MonoMethod *method;
 } DelegateInvokeWrapperInfo;
 
-typedef struct {
-	MonoMethodSignature *sig;
-} InterpInWrapperInfo;
-
 typedef enum {
 	AOT_INIT_METHOD = 0,
 	AOT_INIT_METHOD_GSHARED_MRGCTX = 1,
@@ -285,8 +279,6 @@ typedef struct {
 		GsharedvtWrapperInfo gsharedvt;
 		/* DELEGATE_INVOKE */
 		DelegateInvokeWrapperInfo delegate_invoke;
-		/* INTERP_IN */
-		InterpInWrapperInfo interp_in;
 		/* AOT_INIT */
 		AOTInitWrapperInfo aot_init;
 		/* LLVM_FUNC */

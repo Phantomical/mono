@@ -130,7 +130,6 @@ MONO_JIT_ICALL (cominterop_restore_domain) \
 MONO_JIT_ICALL (cominterop_set_ccw_object_domain) \
 MONO_JIT_ICALL (cominterop_type_from_handle) \
 MONO_JIT_ICALL (g_free) \
-MONO_JIT_ICALL (interp_to_native_trampoline)	\
 MONO_JIT_ICALL (mini_llvm_init_method) \
 MONO_JIT_ICALL (mini_llvmonly_init_delegate) \
 MONO_JIT_ICALL (mini_llvmonly_init_delegate_virtual) \
@@ -142,7 +141,6 @@ MONO_JIT_ICALL (mini_llvmonly_resolve_vcall_gsharedvt) \
 MONO_JIT_ICALL (mini_llvmonly_throw_nullref_exception) \
 MONO_JIT_ICALL (mini_llvmonly_throw_aot_failed_exception) \
 MONO_JIT_ICALL (mini_llvmonly_pop_lmf) \
-MONO_JIT_ICALL (mini_llvmonly_get_interp_entry) \
 MONO_JIT_ICALL (mono_amd64_resume_unwind)	\
 MONO_JIT_ICALL (mono_amd64_start_gsharedvt_call)	\
 MONO_JIT_ICALL (mono_amd64_throw_corlib_exception)	\
@@ -219,8 +217,6 @@ MONO_JIT_ICALL (mono_helper_ldstr_mscorlib) \
 MONO_JIT_ICALL (mono_helper_newobj_mscorlib) \
 MONO_JIT_ICALL (mono_helper_stelem_ref_check) \
 MONO_JIT_ICALL (mono_init_vtable_slot) \
-MONO_JIT_ICALL (mono_interp_entry_from_trampoline) \
-MONO_JIT_ICALL (mono_interp_to_native_trampoline) \
 MONO_JIT_ICALL (mono_isfinite_double) \
 MONO_JIT_ICALL (mono_jit_set_domain) \
 MONO_JIT_ICALL (mono_ldftn) \
@@ -229,7 +225,6 @@ MONO_JIT_ICALL (mono_ldtoken_wrapper_generic_shared) \
 MONO_JIT_ICALL (mono_ldvirtfn) \
 MONO_JIT_ICALL (mono_ldvirtfn_gshared) \
 MONO_JIT_ICALL (mono_llvm_clear_exception) \
-MONO_JIT_ICALL (mono_llvm_interp_entry_from_context) \
 MONO_JIT_ICALL (mono_llvm_jit_body_for_current_domain) \
 MONO_JIT_ICALL (mono_llvm_jit_tier2_promote) \
 MONO_JIT_ICALL (mono_llvm_load_error_exception) \
@@ -338,7 +333,6 @@ MONO_JIT_ICALL (mono_value_copy_internal) \
 MONO_JIT_ICALL (mono_x86_start_gsharedvt_call)	\
 MONO_JIT_ICALL (mono_x86_throw_corlib_exception)	\
 MONO_JIT_ICALL (mono_x86_throw_exception)	\
-MONO_JIT_ICALL (native_to_interp_trampoline)	\
 MONO_JIT_ICALL (personality) \
 MONO_JIT_ICALL (pthread_getspecific) \
 MONO_JIT_ICALL (rgctx_fetch_trampoline_general)	\

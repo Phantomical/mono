@@ -17,8 +17,7 @@ class A
 	// anything invoked in between gets a frame over the very memory under test
 	// -- the block is below the stack pointer once Probe returns, so the next
 	// call writes through it. That is also why the block is small: it does not
-	// need to outrun an intervening frame, and the interpreter has its own
-	// reason to want it small (below).
+	// need to outrun an intervening frame.
 	static unsafe bool Probe (int size, byte value, bool write)
 	{
 		byte* data = stackalloc byte [0x400 + size];
@@ -44,12 +43,6 @@ class A
 		}
 	}
 }
-
-Keep the allocation inside the interpreter's frame-data fragment, which starts
-at 8192 bytes. A request bigger than that leaves the fragment and becomes a
-g_free/g_malloc round trip instead, and while glibc does hand the same chunk
-back, it writes its own free-list bookkeeping into the head of it -- so the
-first bytes come back as a pointer rather than as what was stored there.
 */
 
 .assembly extern mscorlib { }

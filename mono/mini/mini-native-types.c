@@ -54,9 +54,8 @@ mono_class_is_magic_assembly (MonoClass *klass)
 /*
  * Aborts unless a magic integer is the size of the native type it stands for.
  *
- * The interpreter holds a magic type as that native type, and CEE_LDFLD reads
- * the field straight out of it. Those two views name the same bytes only while
- * the sizes agree.
+ * A field of the magic type is laid out and read as its native type, so the
+ * two views name the same bytes only while the sizes agree.
  */
 static void
 check_magic_int_layout (MonoClass *klass)

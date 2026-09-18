@@ -9,9 +9,8 @@
  * and a compile already running for it does not take the entry when it lands.
  *
  * A detour reaches a caller only where the caller goes through the entry. A
- * compiled caller always does. An interpreted one does when it makes a jit call
- * to the entry, which is what resolve_code_type () settles, and does not when
- * the interpreter has copied the callee's body into it.
+ * compiled caller always does, because that address is the thunk. The
+ * exception is a callee whose body a caller already inlined.
  */
 
 #include "config.h"
@@ -98,8 +97,9 @@ public:
 		MONO_SKIP_WITHOUT_CLASS_LIBRARY ();
 
 		/*
-		 * With tier 0 off every method is compiled, and the interpreted
-		 * arms below then check nothing. Say so as a skip.
+		 * With tier 0 off every method goes straight to the backend, and the
+		 * arms below that assert a method starts at tier 0 then check
+		 * nothing. Say so as a skip.
 		 */
 		if (!mono_llvm_jit_tier0_enabled ())
 			GTEST_SKIP () << "tier 0 is off in this configuration";
@@ -561,8 +561,8 @@ TEST_F (MethodDetour, IsMissedByAnInlinedCallee)
 	ASSERT_EQ (1001, entry (1));
 
 	/* The classic compiler inlines nothing at tier 0, so its call goes through
-	 * the entry and sees the detour. Only an interpreted caller misses it. */
-	EXPECT_EQ (mono_llvm_jit_interp_tier0_enabled () ? 2 : 1001, invoke (caller, 1));
+	 * the entry and sees the detour. */
+	EXPECT_EQ (1001, invoke (caller, 1));
 }
 
 /*

@@ -32,14 +32,7 @@ typedef struct _MonoDomain MonoDomain;
 typedef struct _MonoJitInfo MonoJitInfo;
 typedef struct _MonoMethod MonoMethod;
 
-/* The interpreter's own record for a method. Only mono/interp reads it. */
-struct InterpMethod;
-
 namespace mono {
-
-namespace arch {
-struct InterpEntryLayout;
-}
 
 /// Which engine owns the address a method is entered at.
 ///
@@ -48,9 +41,8 @@ struct InterpEntryLayout;
 enum class MonoTier : uint8_t {
 	/// Published, with no code yet: the thunk points at the lazy resolver.
 	none = 0,
-	interp = 1,
-	/// Native code from the classic compiler (mono/mini/tier0/), which runs a
-	/// method at tier 0 in place of the interpreter.
+	/// Native code from the classic compiler (mono/mini/tier0/), which is
+	/// where a method starts.
 	tier0 = 2,
 	tier1 = 3,
 	tier2 = 4,
@@ -65,7 +57,6 @@ next_tier (MonoTier tier)
 {
 	switch (tier) {
 	case MonoTier::none:
-	case MonoTier::interp:
 	case MonoTier::tier0:
 		return MonoTier::tier1;
 	case MonoTier::tier1:
@@ -85,10 +76,6 @@ enum class BodyState : uint8_t {
 
 /// One compile of a method: where the code is, and the record something walking
 /// the stack reads to name a frame in it.
-///
-/// A body at tier 0 is the shared interpreter entry, and its record is null:
-/// every interpreted method enters through that code, so no frame in it belongs
-/// to this method rather than another.
 struct MonoMethodBody {
 	MonoTier tier = MonoTier::none;
 	BodyState state = BodyState::current;
@@ -100,8 +87,8 @@ using RecordLock = MonoRankedMutex<std::mutex, MONO_LOCK_RANK_DOMAIN_METHOD>;
 
 /// Everything the runtime knows about one method in one domain.
 ///
-/// The atomic reads - the tier, the call count and the interpreter's two slots -
-/// take no lock. Everything else takes the record's lock.
+/// The atomic reads - the tier and the call count - take no lock. Everything
+/// else takes the record's lock.
 class MonoDomainMethod {
 public:
 	MonoDomainMethod (MonoMethod *method, MonoDomain *domain) : method (method), domain (domain) {}
@@ -126,10 +113,7 @@ public:
 
 	/// Classic tier0's own live count of what remains before it asks for the
 	/// next tier. A call takes mono_llvm_jit_tier0_entry_weight () off it and a
-	/// loop's own back edge takes the loop's IL bytes. Armed from tier_budget,
-	/// the same as the interpreter arms InterpMethod::tier_counter. That
-	/// counter lives on InterpMethod instead, since interp keeps a record of
-	/// its own for every method.
+	/// loop's own back edge takes the loop's IL bytes. Armed from tier_budget.
 	std::atomic<int32_t> tier0_counter{0};
 
 	/// Redirects the method's entry at \p code, but only when \p tier outranks
@@ -153,7 +137,7 @@ public:
 	/// that is gone.
 	uint32_t inlines_epoch () const { return inlines_epoch_.load (std::memory_order_acquire); }
 
-	/// Whether the interpreter is closed to this method.
+	/// Whether tier 0 is closed to this method, having already run compiled.
 	bool past_tier0 () const { return past_tier0_.load (std::memory_order_acquire); }
 
 	/// Asks for the method to be run by the next tier up.
@@ -193,16 +177,6 @@ public:
 	/// on-stack replacement here. So this decides what later calls enter rather
 	/// than what is executing.
 	void drop_inlined_bodies ();
-
-	/// The method standing in for this one, or null while none does.
-	///
-	/// The interpreter reads this to decide whose bytecode a call runs. A
-	/// detour to plain native code leaves it null: there is no managed method
-	/// behind that entry to name.
-	MonoMethod *override_method () const
-	{
-		return override_.load (std::memory_order_acquire);
-	}
 
 	/// Takes the right to ask the override table about this method.
 	///
@@ -274,8 +248,8 @@ public:
 	void *trampoline = nullptr;
 
 	/// The re-entry trampoline that compiles the method, which the one above
-	/// sends it to when no interpreter runs it. Held for the same reason, and
-	/// rearmed beside it: a call can be on its way here while the entry moves.
+	/// sends it to. Held for the same reason, and rearmed beside it: a call
+	/// can be on its way here while the entry moves.
 	void *compile_trampoline = nullptr;
 
 	/// The jit-info record the thunk was registered under.
@@ -307,33 +281,11 @@ public:
 	/// What the compiling engine hung on this record, freed with the record.
 	std::unique_ptr<void, void (*) (void *)> engine_data{nullptr, nullptr};
 
-	/* -- The interpreter ------------------------------------------------- */
-
-	/// What the interpreter keeps for this method, or null while the
-	/// interpreter has not seen it. The record does not own it: an InterpMethod
-	/// comes out of the method's own memory and goes when the method does.
-	InterpMethod *interp_method () const
-	{
-		return interp_method_.load (std::memory_order_acquire);
-	}
-
-	/// Gives the record \p imethod and returns what the record holds.
-	///
-	/// The first caller wins. A later one gets that first record back and must
-	/// drop its own, so that every thread names the same one.
-	InterpMethod *set_interp_method (InterpMethod *imethod);
-
-	/// How a call from outside the interpreter is taken apart for it, or null
-	/// while nothing has asked. One layout serves every method with the same
-	/// prototype, so the record names one rather than owning it.
-	std::atomic<const arch::InterpEntryLayout *> interp_layout{nullptr};
-
 private:
 	std::atomic<void *> interop_entry_ { nullptr };
 
 	llvm::SmallVector<MonoMethodBody, 2> bodies_;
 
-	std::atomic<MonoMethod *> override_ { nullptr };
 	std::atomic<bool> override_checked_ { false };
 
 	/// The methods whose compiled bodies hold a copy of this one's.
@@ -350,8 +302,6 @@ private:
 	/* The highest tier anything has asked for, which is what keeps two requests
 	 * arriving at once from queueing the same compile twice. */
 	std::atomic<MonoTier> requested_ { MonoTier::none };
-
-	std::atomic<InterpMethod *> interp_method_ { nullptr };
 
 	mutable RecordLock lock_;
 };
@@ -399,19 +349,6 @@ llvm::Expected<void *> published_entry_of (MonoDomainMethod &dm);
 /// The record for \p method in \p domain, or null when nothing has asked for it
 /// yet.
 MonoDomainMethod *domain_method_find (MonoDomain *domain, MonoMethod *method);
-
-/// Whether any method anywhere has been overridden.
-///
-/// Every interpreted method asks whether it is overridden, so the answer has to
-/// be cheap in the ordinary case where nothing is.
-bool any_method_overridden ();
-
-/// The method standing in for \p method in \p domain, or null when none does.
-///
-/// Carves no thunk and builds no record, so it is cheap enough to ask at every
-/// call site. One hop: where the replacement is itself overridden, this still
-/// returns the replacement.
-MonoMethod *method_override_for (MonoDomain *domain, MonoMethod *method);
 
 /// The record for \p method in \p domain, built and published on first ask.
 ///

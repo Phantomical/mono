@@ -540,11 +540,8 @@ eventpipe_walk_managed_stack_for_thread_func (
 	case FRAME_TYPE_DEBUGGER_INVOKE:
 	case FRAME_TYPE_MANAGED_TO_NATIVE:
 	case FRAME_TYPE_TRAMPOLINE:
-	case FRAME_TYPE_INTERP_TO_MANAGED:
-	case FRAME_TYPE_INTERP_TO_MANAGED_WITH_CTX:
 		return FALSE;
 	case FRAME_TYPE_MANAGED:
-	case FRAME_TYPE_INTERP:
 		if (!frame->ji)
 			return FALSE;
 		MonoMethod *method = frame->ji->async ? NULL : frame->actual_method;

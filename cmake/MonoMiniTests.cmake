@@ -88,29 +88,10 @@ foreach(_t IN LISTS _regtests)
   set_tests_properties("mini-regression-tier0/${_stem}" PROPERTIES LABELS regression)
 endforeach()
 
-# And with the interpreter as tier 0: every method it accepts runs interpreted,
-# and everything else compiles and calls into it. That crossing is where a
-# method's entries have to agree with the convention its callers were compiled
-# against, and only this suite covers it at this scale -- the interpreter's own
-# harness interprets everything.
-if(MONO_ENABLE_INTERPRETER)
-  foreach(_t IN LISTS _regtests)
-    string(REGEX REPLACE "\\.exe$" "" _stem "${_t}")
-    add_test(NAME "mini-regression-interp/${_stem}"
-             COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
-                     "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0"
-                     "${_wrapper}" --regression ${_t}
-             WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-    set_tests_properties("mini-regression-interp/${_stem}"
-                         PROPERTIES LABELS interp)
-  endforeach()
-endif()
-
-# The tier-0-caller/compiled-callee crossing, once for each tier-0 engine. It
-# is where a callee's prototype has to agree with what its caller was compiled
-# against, and getting that wrong produces a wrong register rather than a
-# diagnostic. Both arms keep `regression` so the crossing is covered by the
-# fast set.
+# The tier-0-caller/compiled-callee crossing. It is where a callee's prototype
+# has to agree with what its caller was compiled against, and getting that
+# wrong produces a wrong register rather than a diagnostic. This keeps
+# `regression` so the crossing is covered by the fast set.
 #
 # The corpus loops until its callees are compiled underneath it, so the run has
 # to prove it got that far. MonoRunTracedTest fails it if any callee was never
@@ -126,18 +107,6 @@ add_test(NAME "mini-regression/tier-seam"
          WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties("mini-regression/tier-seam" PROPERTIES LABELS regression)
 
-if(MONO_ENABLE_INTERPRETER)
-  add_test(NAME "mini-regression/tier-seam-interp"
-           COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
-                   "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0"
-                   "${CMAKE_COMMAND}"
-                   "-DMONO_TRACE_REQUIRE=${_tier_seam_require}"
-                   -P "${CMAKE_SOURCE_DIR}/cmake/MonoRunTracedTest.cmake"
-                   -- "${_wrapper}" --regression tier-seam.exe
-           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-  set_tests_properties("mini-regression/tier-seam-interp" PROPERTIES LABELS regression)
-endif()
-
 # The same corpus with tier 0 out of the way, so a failure above says whether
 # the crossing broke it or the code generated for it is wrong.
 add_test(NAME "mini-regression/tier-seam-compiled"
@@ -148,11 +117,11 @@ add_test(NAME "mini-regression/tier-seam-compiled"
 set_tests_properties("mini-regression/tier-seam-compiled" PROPERTIES LABELS regression)
 
 # ldftn has to name the address the method is published at, not an entry of
-# whichever engine ran the frame that asked. Only these arms prove it: the
-# helper is compiled before its first call under every other setting, and then
-# both routes the corpus compares agree by construction. Pinning tier 0 to that
-# one method is what puts the ldftn in a tier-0 frame, and a threshold of zero
-# is what keeps it there. One arm for each tier-0 engine.
+# whichever engine ran the frame that asked. This arm proves it: the helper is
+# compiled before its first call under every other setting, and then both
+# routes the corpus compares agree by construction. Pinning tier 0 to that one
+# method is what puts the ldftn in a tier-0 frame, and a threshold of zero is
+# what keeps it there.
 add_test(NAME "mini-regression/iltests-classic-ldftn"
          COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
                  "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=tier0_ldftn_pointer --llvm-opt=-mono-tier1-threshold=0"
@@ -160,20 +129,9 @@ add_test(NAME "mini-regression/iltests-classic-ldftn"
          WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties("mini-regression/iltests-classic-ldftn"
                      PROPERTIES LABELS regression)
-if(MONO_ENABLE_INTERPRETER)
-  add_test(NAME "mini-regression/iltests-interp-ldftn"
-           COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class_dir}"
-                   "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0 --llvm-opt=-mono-tier0-filter=tier0_ldftn_pointer --llvm-opt=-mono-tier1-threshold=0"
-                   "${_wrapper}" --regression iltests.exe
-           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-  set_tests_properties("mini-regression/iltests-interp-ldftn"
-                       PROPERTIES LABELS regression)
-endif()
 
-# Cross-domain calls, once for each tier-0 engine. The interpreter's arm is the
-# frame it builds with no InterpMethod behind it. The crossing happens on the
-# first call rather than after a compile, so these need nothing to show they
-# got far enough.
+# Cross-domain calls. The crossing happens on the first call rather than after
+# a compile, so these need nothing to show they got far enough.
 #
 # The corpus directory joins MONO_PATH because the child domain resolves the
 # program by assembly name rather than by the path it was started from.
@@ -186,16 +144,6 @@ add_test(NAME "mini-regression/xdomain"
                  "${_wrapper}" xdomain.exe
          WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties("mini-regression/xdomain" PROPERTIES LABELS regression)
-
-if(MONO_ENABLE_INTERPRETER)
-  add_test(NAME "mini-regression/xdomain-interp"
-           COMMAND "${CMAKE_COMMAND}" -E env
-                   "MONO_PATH=${_xdomain_path}"
-                   "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0"
-                   "${_wrapper}" xdomain.exe
-           WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-  set_tests_properties("mini-regression/xdomain-interp" PROPERTIES LABELS regression)
-endif()
 
 add_test(NAME "mini-regression/xdomain-compiled"
          COMMAND "${CMAKE_COMMAND}" -E env

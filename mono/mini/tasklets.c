@@ -33,16 +33,6 @@ static mono_mutex_t tasklets_mutex;
 static const char*
 continuations_unsupported (void)
 {
-	/*
-	 * An interpreted frame keeps its locals on the interpreter's own execution
-	 * stack, which is a separate mapping that Store () does not copy and
-	 * Restore () could not rewind. Whether any particular frame is interpreted
-	 * is the tiering's business rather than the program's, so it is the
-	 * interpreter running at all that decides this.
-	 */
-	if (mono_use_interpreter)
-		return "Continuations do not work while the interpreter is running";
-
 	/* mono_gc_alloc_fixed () hands back GC memory under Boehm, so the saved
 	 * stack would need a keepalive this does not have. */
 	if (!mono_gc_is_moving ())

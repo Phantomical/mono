@@ -23,8 +23,9 @@ using System.Runtime.InteropServices;
  * wrapper runs. The calli inside the wrapper states it as well. A run passes
  * while either one holds, and fails when the value reaches C unfilled.
  *
- * An interpreted site reaches neither of those. Round () says what fills the
- * bits there.
+ * Round () checks this chain for a caller compiled at each tier: at tier 0 by
+ * the classic compiler and at tier 2 by the backend, both calling into the
+ * same managed-to-native wrapper.
  */
 
 static class Program {
@@ -104,11 +105,10 @@ static class Program {
 	/*
 	 * Calls each site once and checks what the C end found in the register.
 	 *
-	 * Each tier fills the bits its own way. A compiled site states the fill on
-	 * the call, and the interpreter fills the slot of its own CallContext
-	 * (mono_arch_set_native_call_context_args (), mono/mini/interp-amd64.c).
-	 * So a round runs at both, and the signed arms read the direction rather
-	 * than a zero.
+	 * Each tier fills the bits its own way: a compiled site states the fill on
+	 * the call, whichever tier compiled the caller. So a round runs at both
+	 * tier 0 and tier 2, and the signed arms read the direction rather than a
+	 * zero.
 	 */
 	static void Round (string tier)
 	{
@@ -147,13 +147,13 @@ static class Program {
 
 	public static int Main ()
 	{
-		// Whichever tier the interpreter is still on, these are its calls.
+		// These are tier 0's calls, compiled by the classic compiler.
 		Round ("tier 0");
 
 		/*
 		 * Round () holds the call sites and Dirty*() writes the high bits,
-		 * so both ends have to leave the interpreter before a compiled site
-		 * passes a compiled method's return value.
+		 * so both ends have to promote to tier 2 before a tier-2 compiled call
+		 * passes a tier-2 compiled method's return value.
 		 */
 		if (!Promote ("Round", new Type[] { typeof (string) })
 		    || !Promote ("DirtyChar", new Type[] { typeof (int) })

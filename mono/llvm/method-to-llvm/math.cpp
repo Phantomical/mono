@@ -31,8 +31,8 @@ namespace {
 enum class Body {
 	/// An internal call. The row replaces a call to its marshalling wrapper.
 	Icall,
-	/// Managed IL. The row replaces that body, which the interpreter runs, so
-	/// it has to compute what the IL computes on every input.
+	/// Managed IL. The row replaces that body, so it has to compute what the
+	/// IL itself computes on every input.
 	Managed,
 };
 
@@ -69,9 +69,9 @@ constexpr llvm::Intrinsic::ID no_intrinsic = llvm::Intrinsic::not_intrinsic;
  * keep a value in a register across it. Each row below computes the same value
  * with none of that.
  *
- * A managed row is held to a stricter test, because the interpreter runs the
- * method's IL. The intrinsic has to answer as that IL answers on every input,
- * rather than as the documentation reads.
+ * A managed row is held to a stricter test, because the method's own IL body
+ * still exists and can still run. The intrinsic has to answer as that IL
+ * answers on every input, rather than as the documentation reads.
  *
  * Truncate is `ModF (d, &d); return d`, and modf writes the integral part
  * through the pointer. That is llvm.trunc. Both give -0.0 for -0.5 and for -0.0,

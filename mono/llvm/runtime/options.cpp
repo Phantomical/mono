@@ -62,46 +62,6 @@ tier0_setting ()
 	return setting;
 }
 
-llvm::cl::opt<std::string> Tier0ClassicOpt (
-	"mono-tier0-classic", llvm::cl::Hidden, llvm::cl::init ("1"),
-	llvm::cl::desc ("Compile a tier-0 method whose full name contains this "
-	                "substring with the classic compiler and interpret the "
-	                "rest; 1 or true, the default, compiles every one, and 0, "
-	                "false or empty interprets every one"));
-
-bool
-is_select_all_sentinel (const char *value)
-{
-	llvm::StringRef set (value);
-
-	return set == "1" || set.equals_insensitive ("true");
-}
-
-struct Tier0ClassicSetting {
-	bool enabled = false;
-	const char *substring = nullptr;
-};
-
-const Tier0ClassicSetting &
-tier0_classic_setting ()
-{
-	static Tier0ClassicSetting setting = [] () -> Tier0ClassicSetting {
-#ifndef MONO_ENABLE_TIER0_CLASSIC
-		return {};
-#else
-		if (!is_truthy_env_var (Tier0ClassicOpt.c_str ()))
-			return {};
-
-		if (is_select_all_sentinel (Tier0ClassicOpt.c_str ()))
-			return { true, nullptr };
-
-		return { true, Tier0ClassicOpt.c_str () };
-#endif
-	} ();
-
-	return setting;
-}
-
 llvm::cl::opt<bool> EliminateCastsOpt (
 	"mono-eliminate-casts", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Answer a type test the translator can settle without a probe"));
@@ -131,10 +91,6 @@ llvm::cl::opt<bool> InlineClauseBearingCalleesOpt (
 llvm::cl::opt<bool> ThreadStaticFastPathOpt (
 	"mono-thread-static-fast-path", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Address a thread static directly instead of through the icall"));
-
-llvm::cl::opt<bool> DynCallsOpt (
-	"mono-dyn-calls", llvm::cl::Hidden, llvm::cl::init (true),
-	llvm::cl::desc ("Let the interpreter call compiled code through a dyn-call plan"));
 
 llvm::cl::opt<bool> TagNonPointerInvariantGroupOpt (
 	"mono-invariant-group-nonptr", llvm::cl::Hidden, llvm::cl::init (false),
@@ -343,8 +299,8 @@ compile_worker_count ()
 		 *
 		 * What the process gets back is not cheaper compiling. Eight threads
 		 * spend 75% more CPU compiling than four do, for 17% more bodies.
-		 * They win because a method waiting for a body runs interpreted, and
-		 * the interpretation the shorter wait displaces is worth more than
+		 * They win because a method waiting for a body runs at tier 0, and
+		 * the tier-0 time the shorter wait displaces is worth more than
 		 * the extra compiling costs - on that workload 34 s more compile CPU
 		 * against 39 s less of everything else.
 		 *
@@ -434,12 +390,6 @@ bool
 thread_static_fast_path ()
 {
 	return ThreadStaticFastPathOpt;
-}
-
-bool
-dyn_calls ()
-{
-	return DynCallsOpt;
 }
 
 bool
@@ -653,22 +603,12 @@ tier0_enabled ()
 	return tier0_setting ().enabled;
 }
 
-bool
-interp_tier0_enabled ()
-{
-	const Tier0ClassicSetting &classic = tier0_classic_setting ();
-
-	return tier0_enabled () && !(classic.enabled && classic.substring == nullptr);
-}
-
-/// Whether a wrapper of this kind can run at tier 0, given which engine tier
-/// 0 is for this method (\p for_classic).
+/// Whether a wrapper of this kind can run at tier 0.
 static bool
-wrapper_runs_at_tier0 (MonoMethod *method, bool for_classic)
+wrapper_runs_at_tier0 (MonoMethod *method)
 {
 	/*
-	 * A dynamic method carries IL of its own, and the interpreter's transform
-	 * reads the wrapper data its tokens name. What makes the exception worth
+	 * A dynamic method carries IL of its own. What makes the exception worth
 	 * having is what writes one. Reflection.Emit does, and a program that
 	 * generates code generates many: IronJS writes a dynamic method for each
 	 * JavaScript function. create_delegate_method_ptr () then compiles each of
@@ -710,57 +650,9 @@ wrapper_runs_at_tier0 (MonoMethod *method, bool for_classic)
 	if (is_exposed_to_native_code (method))
 		return false;
 
-	WrapperInfo *info = mono_marshal_get_wrapper_info (method);
-
 	// The classic compiler publishes the rest through the ordinary thunk,
-	// like any other method. Every refusal past this point is about what
-	// only interpreting gets wrong.
-	if (for_classic)
-		return true;
-
-	// Interpreting the array-allocation icall wrapper makes the interpreter
-	// allocate an array, which calls the same wrapper and runs the thread
-	// out of stack. Boehm is where this shows, because SGen's managed
-	// allocator keeps the hot path off the icall.
-	if (method->wrapper_type == MONO_WRAPPER_MANAGED_TO_NATIVE)
-		return false;
-
-	/*
-	 * common_call_trampoline () (`mono/mini/mini-trampolines.c`) resolves a
-	 * delegate-invoke wrapper through mono_jit_compile_method (), the same
-	 * thunk any other method's first vtable-slot resolution gets, so classic
-	 * publishes it the same way as any other wrapper past this point.
-	 * mono/tests/delegate-invoke-shapes.cs and vtable-slot-targets.cs gate
-	 * every dispatch shape this wrapper answers - static, instance, virtual,
-	 * closed static, open instance, multicast, and a null delegate's own
-	 * throw - and the full tier-0 corpus passes with the refusal lifted for
-	 * classic. Nothing here has run that sweep against the interpreter.
-	 */
-	if (method->wrapper_type == MONO_WRAPPER_DELEGATE_INVOKE)
-		return false;
-
-	if (info == nullptr)
-		return true;
-
-	// An interp_in wrapper is how compiled code reaches the interpreter, and
-	// interp_lmf carries the frame that crossing needs. To interpret either
-	// skips the crossing it exists to make.
-	switch (info->subtype) {
-	case WRAPPER_SUBTYPE_INTERP_IN:
-	case WRAPPER_SUBTYPE_INTERP_LMF:
-		return false;
-	/*
-	 * do_jit_call () reaches compiled code through this wrapper where
-	 * mono_llvm_jit_dyn_call_prepare () states no plan for the signature.
-	 * Interpreting it runs the thread out of stack. The wrapper's calli
-	 * arrives at the callee's compiled entry, MINT_CALLI resolves that entry
-	 * back to the callee, and do_jit_call () runs again.
-	 */
-	case WRAPPER_SUBTYPE_GSHAREDVT_OUT_SIG:
-		return false;
-	default:
-		return true;
-	}
+	// like any other method.
+	return true;
 }
 
 /*
@@ -770,41 +662,20 @@ wrapper_runs_at_tier0 (MonoMethod *method, bool for_classic)
  *    one goes back through mono_jit_compile_method;
  *  - a method this backend writes the body of has IL that only throws, so
  *    any tier that runs the IL runs the throw.
- *
- * force_use_interpreter is the interpreter as the whole engine, where there
- * is no tier to leave for and no counter tracks calls towards one.
  */
 bool
 runs_at_tier0 (MonoMethod *method)
 {
 	const Tier0Setting &setting = tier0_setting ();
 
-	if (!setting.enabled || mono_ee_features.force_use_interpreter)
+	if (!setting.enabled)
 		return false;
 
 	if (is_external_method (method) || builtin_body_replaces_il (method))
 		return false;
 
 	if (method->wrapper_type != MONO_WRAPPER_NONE
-	    && !wrapper_runs_at_tier0 (method, runs_classic_at_tier0 (method)))
-		return false;
-
-	if (setting.substring == nullptr)
-		return true;
-
-	char *name = mono_method_full_name (method, TRUE);
-	bool selected = strstr (name, setting.substring) != nullptr;
-
-	g_free (name);
-	return selected;
-}
-
-bool
-runs_classic_at_tier0 (MonoMethod *method)
-{
-	const Tier0ClassicSetting &setting = tier0_classic_setting ();
-
-	if (!setting.enabled)
+	    && !wrapper_runs_at_tier0 (method))
 		return false;
 
 	if (setting.substring == nullptr)

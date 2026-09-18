@@ -8,7 +8,6 @@
 #include <mono/metadata/abi-details.h>
 #include <mono/metadata/mono-debug.h>
 
-#include "mono/interp/interp.h"
 #include "mini.h"
 #include "trace.h"
 
@@ -108,10 +107,7 @@ mini_profiler_context_get_this (MonoProfilerCallContext *ctx)
 	if (!mono_method_signature_internal (ctx->method)->hasthis)
 		return NULL;
 
-	if (ctx->interp_frame)
-		return memdup_with_type (mini_get_interp_callbacks ()->frame_get_this (ctx->interp_frame), m_class_get_this_arg (ctx->method->klass));
-	else
-		return memdup_with_type (ctx->args [0], m_class_get_this_arg (ctx->method->klass));
+	return memdup_with_type (ctx->args [0], m_class_get_this_arg (ctx->method->klass));
 }
 
 gpointer
@@ -121,9 +117,6 @@ mini_profiler_context_get_argument (MonoProfilerCallContext *ctx, guint32 pos)
 
 	if (pos >= sig->param_count)
 		return NULL;
-
-	if (ctx->interp_frame)
-		return memdup_with_type (mini_get_interp_callbacks ()->frame_get_arg (ctx->interp_frame, pos), sig->params [pos]);
 
 	return memdup_with_type (ctx->args [sig->hasthis + pos], sig->params [pos]);
 }
@@ -143,9 +136,6 @@ mini_profiler_context_get_local (MonoProfilerCallContext *ctx, guint32 pos)
 	MonoType *t = header->locals [pos];
 
 	mono_metadata_free_mh (header);
-
-	if (ctx->interp_frame)
-		return memdup_with_type (mini_get_interp_callbacks ()->frame_get_local (ctx->interp_frame, pos), t);
 
 	MonoDebugMethodJitInfo *info = mono_debug_find_method (ctx->method, mono_domain_get ());
 

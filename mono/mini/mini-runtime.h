@@ -13,7 +13,6 @@
 #define __MONO_MINI_RUNTIME_H__
 
 #include "mini.h"
-#include "ee.h"
 
 #if defined(ENABLE_LLVM) && defined(HAVE_UNWIND_H)
 #include <unwind.h>
@@ -54,8 +53,6 @@ typedef struct
 	/* Maps MonoMethod -> 	MonoMethodRuntimeGenericContext */
 	GHashTable *mrgctx_hash;
 	GHashTable *method_rgctx_hash;
-	/* Maps gpointer -> InterpMethod */
-	GHashTable *interp_method_pointer_hash;
 	/* The MonoDomainMethod record of every method this domain has published */
 	gpointer domain_methods;
 	/*
@@ -152,20 +149,13 @@ struct MonoJitTlsData {
 	 * We will rethrow the exception upon exiting a catch clause that's
 	 * in a function stack frame above the water mark(isn't being called by
 	 * the catch block that caught the ThreadAbortException).
-	 *
-	 * The two fields are one mark. The first is the native frame the mark
-	 * is in. The second is the order the marked frame was entered in, for a
-	 * mark inside an interpreter invocation.
 	 */
 	gpointer abort_exc_stack_threshold;
-	gsize abort_exc_interp_ordinal;
 
 	/*
 	 * List of methods being JIT'd in the current thread.
 	 */
 	int active_jit_methods;
-
-	gpointer interp_context;
 
 #if defined(TARGET_WIN32)
 	MonoContext stack_restore_ctx;
@@ -173,8 +163,6 @@ struct MonoJitTlsData {
 };
 
 #define MONO_LMFEXT_DEBUGGER_INVOKE 1
-#define MONO_LMFEXT_INTERP_EXIT 2
-#define MONO_LMFEXT_INTERP_EXIT_WITH_CTX 3
 
 /*
  * The MonoLMF structure is arch specific, it includes at least these fields.
@@ -200,11 +188,7 @@ typedef struct {
 typedef struct {
 	struct MonoLMF lmf;
 	int kind;
-	MonoContext ctx; /* valid if kind == DEBUGGER_INVOKE || kind == INTERP_EXIT_WITH_CTX */
-	gpointer interp_exit_data; /* valid if kind == INTERP_EXIT || kind == INTERP_EXIT_WITH_CTX */
-#if defined (_MSC_VER)
-	gboolean interp_exit_label_set;
-#endif
+	MonoContext ctx; /* valid if kind == DEBUGGER_INVOKE */
 } MonoLMFExt;
 
 typedef void (*MonoFtnPtrEHCallback) (MonoGCHandle gchandle);
@@ -424,7 +408,6 @@ extern gboolean mono_do_crash_chaining;
 MONO_BEGIN_DECLS
 MONO_API_DATA gboolean mono_use_llvm;
 MONO_API_DATA gboolean mono_use_fast_math;
-MONO_API_DATA gboolean mono_use_interpreter;
 MONO_API_DATA MonoCPUFeatures mono_cpu_features_enabled;
 MONO_API_DATA MonoCPUFeatures mono_cpu_features_disabled;
 MONO_END_DECLS
@@ -436,14 +419,12 @@ MONO_END_DECLS
  */
 void     mini_set_use_llvm (gboolean use_llvm);
 gboolean mini_use_llvm_explicitly_set (void);
-extern const char* mono_interp_opts_string;
 extern gboolean mono_do_single_method_regression;
 extern guint32 mono_single_method_regression_opt;
 extern MonoMethod *mono_current_single_method;
 extern GSList *mono_single_method_list;
 extern GHashTable *mono_single_method_hash;
 extern MonoDebugOptions mini_debug_options;
-extern GSList *mono_interp_only_classes;
 extern char *sdb_options;
 extern MonoMethodDesc *mono_stats_method_desc;
 
@@ -459,19 +440,9 @@ typedef struct {
 	 * If true, trampolines are to be fetched from the AOT runtime instead of JIT compiled
 	 */
 	gboolean use_aot_trampolines;
-
-	/*
-	 * If true, the runtime will try to use the interpreter before looking for compiled code.
-	 */
-	gboolean force_use_interpreter;
 } MonoEEFeatures;
 
 extern MonoEEFeatures mono_ee_features;
-
-//XXX this enum *MUST extend MonoAotMode as they are consumed together.
-typedef enum {
-	MONO_EE_MODE_INTERP = MONO_AOT_MODE_INTERP_ONLY,
-} MonoEEMode;
 
 static inline MonoMethod*
 jinfo_get_method (MonoJitInfo *ji)
@@ -493,14 +464,6 @@ MONO_API char       *mono_parse_options_from        (const char *options, int *r
 MONO_API int         mono_regression_test_step      (int verbose_level, const char *image, const char *method_name);
 
 void                   mono_runtime_print_stats      (void);
-
-void                   mono_interp_stub_init         (void);
-void                   mini_install_interp_callbacks (const MonoEECallbacks *cbs);
-
-extern const
-MonoEECallbacks*       mono_interp_callbacks_pointer;
-
-#define mini_get_interp_callbacks() (mono_interp_callbacks_pointer)
 
 typedef struct _MonoDebuggerCallbacks MonoDebuggerCallbacks;
 
@@ -558,7 +521,6 @@ char*     mono_ji_to_string                 (const MonoJumpInfo *ji);
 void      mono_print_ji                     (const MonoJumpInfo *ji);
 MONO_API void      mono_print_method_from_ip         (void *ip);
 MONO_API char     *mono_pmip                         (void *ip);
-MONO_API int mono_ee_api_version (void);
 gboolean  mono_debug_count                  (void);
 
 #ifdef __linux__

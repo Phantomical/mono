@@ -26,8 +26,6 @@
 #include "mixed_callstack_plugin.h"
 #include "../llvm/runtime.h"
 
-#include "mono/interp/interp.h"
-
 /*
  * Address of the trampoline code.  This is used by the debugger to check
  * whether a method is a trampoline.
@@ -576,12 +574,8 @@ common_call_trampoline (host_mgreg_t *regs, guint8 *code, MonoMethod *m, MonoVTa
 					ji = mini_jit_info_table_find (mono_domain_get (), (char*)code, NULL);
 
 				if (ji && ji->has_generic_jit_info) {
-					if (target_ji && !target_ji->has_generic_jit_info) {
+					if (target_ji && !target_ji->has_generic_jit_info)
 						no_patch = TRUE;
-					} else if (mono_use_interpreter && !target_ji) {
-						/* compiled_method might be an interp entry trampoline and the interpreter has no generic sharing */
-						no_patch = TRUE;
-					}
 				}
 			}
 			if (!no_patch)
@@ -1199,15 +1193,6 @@ mono_create_jump_trampoline (MonoDomain *domain, MonoMethod *method, gboolean ad
 	guint32 code_size = 0;
 
 	error_init (error);
-
-	/* Only when every method is interpreted; otherwise the method has an entry
-	 * of its own, which is what the rest of this builds. */
-	if (mono_ee_features.force_use_interpreter && !mono_aot_only) {
-		gpointer ret = mini_get_interp_callbacks ()->create_method_pointer (method, FALSE, error);
-		if (!is_ok (error))
-			return NULL;
-		return ret;
-	}
 
 	if (mono_llvm_only) {
 		code = mono_jit_compile_method (method, error);

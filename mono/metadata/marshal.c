@@ -576,7 +576,6 @@ mono_delegate_free_ftnptr (MonoDelegate *delegate)
 		MonoMethod *method;
 
 		ji = mono_jit_info_table_find (mono_domain_get (), mono_get_addr_from_ftnptr (ptr));
-		/* FIXME we leak wrapper with the interpreter */
 		if (!ji)
 			return;
 
@@ -5354,7 +5353,6 @@ ptr_to_structure (gconstpointer src, MonoObjectHandle dst, MonoError *error)
 
 	gpointer pa [ ] = { &src, MONO_HANDLE_RAW (dst) };
 
-	// FIXMEcoop? mono_runtime_invoke_handle causes a GC assertion failure in marshal2 with interpreter
 	mono_runtime_invoke_checked (method, NULL, pa, error);
 }
 

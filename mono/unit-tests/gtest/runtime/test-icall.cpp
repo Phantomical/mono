@@ -117,10 +117,9 @@ protected:
 	/*
 	 * The address \p method is entered at once a promotion has given it a body.
 	 *
-	 * Every case here has to run compiled code: an interpreted caller reaches
-	 * its callees for itself, so it would answer for the interpreter rather
-	 * than for the backend. This goes through the compile queue, which is how a
-	 * method that is merely called gets a body.
+	 * Every case here has to run the backend's own code rather than the
+	 * classic tier-0 compiler's, so this waits for the promotion the compile
+	 * queue is how a method that is merely called gets.
 	 */
 	static void *compiled_entry (MonoMethod *method)
 	{

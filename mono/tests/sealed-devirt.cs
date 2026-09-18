@@ -15,9 +15,9 @@ using System.Runtime.CompilerServices;
  * receivers must still dispatch whatever the IL says: one whose class is open,
  * and one whose sealed class a transparent proxy can stand in for.
  *
- * Every probe is entered enough times to reach both compiled tiers. The
- * interpreter dispatches every one of these off the receiver, so it never
- * reaches the resolution being tested.
+ * Every probe is entered enough times to reach both compiled tiers. Tier 0
+ * dispatches every one of these off the receiver, so it never reaches the
+ * resolution being tested.
  */
 
 interface IName {
@@ -178,7 +178,7 @@ static class Program {
 
 	public static int Main ()
 	{
-		/* Enough entries to leave the interpreter and reach both compiled tiers. */
+		/* Enough entries to leave tier 0 and reach both compiled tiers. */
 		for (int i = 0; i < 30000; ++i) {
 			if (Run () != 0) {
 				Console.WriteLine ("stopped at iteration {0}", i);

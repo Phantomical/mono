@@ -81,9 +81,7 @@ bool wants_unbox_entry (MonoMethod *method, MonoMethodSignature *sig);
 /// only entry such a method has, rather than a second one beside the thunk.
 ///
 /// This settles the convention for every address this engine hands out: a
-/// compile, a stub, and the address an ldftn takes. Where the interpreter is
-/// the whole engine it publishes the entry itself, and
-/// interp_create_method_pointer () is what decides there.
+/// compile, a stub, and the address an ldftn takes.
 bool is_exposed_to_native_code (MonoMethod *method);
 
 /// Whether this engine gives a method an unboxing entry of its own, and so a

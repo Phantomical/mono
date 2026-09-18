@@ -26,7 +26,6 @@
 #include "aot-runtime.h"
 #include "mini-runtime.h"
 #include "llvmonly-runtime.h"
-#include "mono/interp/interp.h"
 
 #define ALLOW_PARTIAL_SHARING TRUE
 //#define ALLOW_PARTIAL_SHARING FALSE
@@ -567,7 +566,6 @@ inflate_info (MonoRuntimeGenericContextInfoTemplate *oti, MonoGenericContext *co
 	case MONO_RGCTX_INFO_METHOD_RGCTX:
 	case MONO_RGCTX_INFO_METHOD_CONTEXT:
 	case MONO_RGCTX_INFO_REMOTING_INVOKE_WITH_CHECK:
-	case MONO_RGCTX_INFO_INTERP_METHOD:
 	case MONO_RGCTX_INFO_METHOD_DELEGATE_CODE: {
 		MonoMethod *method = (MonoMethod *)data;
 		MonoMethod *inflated_method;
@@ -1698,292 +1696,6 @@ mini_get_gsharedvt_out_sig_wrapper (MonoMethodSignature *sig)
 	return res;
 }
 
-static gboolean
-signature_equal_pinvoke (MonoMethodSignature *sig1, MonoMethodSignature *sig2)
-{
-	/* mono_metadata_signature_equal () doesn't do this check */
-	if (sig1->pinvoke != sig2->pinvoke)
-		return FALSE;
-	return mono_metadata_signature_equal (sig1, sig2);
-}
-
-/*
- * mini_get_interp_in_wrapper:
- *
- *   Return a wrapper which can be used to transition from compiled code to the interpreter.
- * The wrapper has the same signature as SIG. It is very similar to a gsharedvt_in wrapper,
- * except the 'extra_arg' is passed in the rgctx reg, so this wrapper needs to be
- * called through a static rgctx trampoline.
- * FIXME: Move this elsewhere.
- */
-MonoMethod*
-mini_get_interp_in_wrapper (MonoMethodSignature *sig)
-{
-	MonoMethodBuilder *mb;
-	MonoMethod *res, *cached;
-	WrapperInfo *info;
-	MonoMethodSignature *csig, *entry_sig;
-	int i, pindex;
-	static GHashTable *cache;
-	const char *name;
-	gboolean generic = FALSE;
-	gboolean return_native_struct;
-
-	sig = mini_get_underlying_reg_signature (sig);
-
-	gshared_lock ();
-	if (!cache)
-		cache = g_hash_table_new_full ((GHashFunc)mono_signature_hash, (GEqualFunc)signature_equal_pinvoke, NULL, NULL);
-	res = (MonoMethod*)g_hash_table_lookup (cache, sig);
-	gshared_unlock ();
-	if (res) {
-		g_free (sig);
-		return res;
-	}
-
-	if (sig->param_count > MAX_INTERP_ENTRY_ARGS)
-		/* Call the generic interpreter entry point, the specialized ones only handle a limited number of arguments */
-		generic = TRUE;
-
-	/*
-	 * If we need to return a native struct, we can't allocate a local and store it
-	 * there since that assumes a managed representation. Instead we allocate on the
-	 * stack, pass this address to the interp_entry and when we return it we use
-	 * CEE_MONO_LDNATIVEOBJ
-	 */
-	return_native_struct = sig->ret->type == MONO_TYPE_VALUETYPE && sig->pinvoke;
-
-	/* Create the signature for the wrapper */
-	csig = g_malloc0 (MONO_SIZEOF_METHOD_SIGNATURE + (sig->param_count * sizeof (MonoType*)));
-	memcpy (csig, sig, mono_metadata_signature_size (sig));
-
-	for (i = 0; i < sig->param_count; i++) {
-		if (sig->params [i]->byref)
-			csig->params [i] = m_class_get_this_arg (mono_defaults.int_class);
-	}
-
-	MonoType *int_type = mono_get_int_type ();
-	/* Create the signature for the callee callconv */
-	if (generic) {
-		/*
-		 * The called function has the following signature:
-		 * interp_entry_general (gpointer this_arg, gpointer res, gpointer *args, gpointer rmethod)
-		 */
-		entry_sig = g_malloc0 (MONO_SIZEOF_METHOD_SIGNATURE + (4 * sizeof (MonoType*)));
-		entry_sig->ret = mono_get_void_type ();
-		entry_sig->param_count = 4;
-		entry_sig->params [0] = int_type;
-		entry_sig->params [1] = int_type;
-		entry_sig->params [2] = int_type;
-		entry_sig->params [3] = int_type;
-		name = "interp_in_generic";
-		generic = TRUE;
-	} else  {
-		/*
-		 * The called function has the following signature:
-		 * void entry(<optional this ptr>, <optional return ptr>, <arguments>, <extra arg>)
-		 */
-		entry_sig = g_malloc0 (MONO_SIZEOF_METHOD_SIGNATURE + ((sig->param_count + 2) * sizeof (MonoType*)));
-		memcpy (entry_sig, sig, mono_metadata_signature_size (sig));
-		pindex = 0;
-		/* The return value is returned using an explicit vret argument */
-		if (sig->ret->type != MONO_TYPE_VOID) {
-			entry_sig->params [pindex ++] = int_type;
-			entry_sig->ret = mono_get_void_type ();
-		}
-		for (i = 0; i < sig->param_count; i++) {
-			entry_sig->params [pindex] = sig->params [i];
-			if (!sig->params [i]->byref) {
-				entry_sig->params [pindex] = mono_metadata_type_dup (NULL, entry_sig->params [pindex]);
-				entry_sig->params [pindex]->byref = 1;
-			}
-			pindex ++;
-		}
-		/* Extra arg */
-		entry_sig->params [pindex ++] = int_type;
-		entry_sig->param_count = pindex;
-		name = sig->hasthis ? "interp_in" : "interp_in_static";
-	}
-
-	mb = mono_mb_new (mono_defaults.object_class, name, MONO_WRAPPER_OTHER);
-
-	/*
-	 * This is needed to be able to unwind out of interpreted code to managed.
-	 * When we are called from native code we can't unwind and we might also not
-	 * be attached.
-	 */
-	if (!sig->pinvoke)
-		mb->method->save_lmf = 1;
-
-#ifndef DISABLE_JIT
-	int retval_var = 0;
-	if (return_native_struct) {
-		retval_var = mono_mb_add_local (mb, int_type);
-		mono_mb_emit_icon (mb, mono_class_native_size (sig->ret->data.klass, NULL));
-		mono_mb_emit_byte (mb, CEE_PREFIX1);
-		mono_mb_emit_byte (mb, CEE_LOCALLOC);
-		mono_mb_emit_stloc (mb, retval_var);
-	} else if (sig->ret->type != MONO_TYPE_VOID) {
-		retval_var = mono_mb_add_local (mb, sig->ret);
-	}
-
-	/* Make the call */
-	if (generic) {
-		/* Collect arguments */
-		int args_var = mono_mb_add_local (mb, int_type);
-
-		mono_mb_emit_icon (mb, TARGET_SIZEOF_VOID_P * sig->param_count);
-		mono_mb_emit_byte (mb, CEE_PREFIX1);
-		mono_mb_emit_byte (mb, CEE_LOCALLOC);
-		mono_mb_emit_stloc (mb, args_var);
-
-		for (i = 0; i < sig->param_count; i++) {
-			mono_mb_emit_ldloc (mb, args_var);
-			mono_mb_emit_icon (mb, TARGET_SIZEOF_VOID_P * i);
-			mono_mb_emit_byte (mb, CEE_ADD);
-			if (sig->params [i]->byref)
-				mono_mb_emit_ldarg (mb, i + (sig->hasthis == TRUE));
-			else
-				mono_mb_emit_ldarg_addr (mb, i + (sig->hasthis == TRUE));
-			mono_mb_emit_byte (mb, CEE_STIND_I);
-		}
-
-		if (sig->hasthis)
-			mono_mb_emit_ldarg (mb, 0);
-		else
-			mono_mb_emit_byte (mb, CEE_LDNULL);
-		if (return_native_struct)
-			mono_mb_emit_ldloc (mb, retval_var);
-		else if (sig->ret->type != MONO_TYPE_VOID)
-			mono_mb_emit_ldloc_addr (mb, retval_var);
-		else
-			mono_mb_emit_byte (mb, CEE_LDNULL);
-		mono_mb_emit_ldloc (mb, args_var);
-	} else {
-		if (sig->hasthis)
-			mono_mb_emit_ldarg (mb, 0);
-		if (return_native_struct)
-			mono_mb_emit_ldloc (mb, retval_var);
-		else if (sig->ret->type != MONO_TYPE_VOID)
-			mono_mb_emit_ldloc_addr (mb, retval_var);
-		for (i = 0; i < sig->param_count; i++) {
-			if (sig->params [i]->byref)
-				mono_mb_emit_ldarg (mb, i + (sig->hasthis == TRUE));
-			else
-				mono_mb_emit_ldarg_addr (mb, i + (sig->hasthis == TRUE));
-		}
-	}
-	/* Extra arg */
-	mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
-	mono_mb_emit_byte (mb, CEE_MONO_GET_RGCTX_ARG);
-	mono_mb_emit_icon (mb, TARGET_SIZEOF_VOID_P);
-	mono_mb_emit_byte (mb, CEE_ADD);
-	mono_mb_emit_byte (mb, CEE_LDIND_I);
-	/* Method to call */
-	mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
-	mono_mb_emit_byte (mb, CEE_MONO_GET_RGCTX_ARG);
-	mono_mb_emit_byte (mb, CEE_LDIND_I);
-	mono_mb_emit_calli (mb, entry_sig);
-
-	if (return_native_struct) {
-		mono_mb_emit_ldloc (mb, retval_var);
-		mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
-		mono_mb_emit_op (mb, CEE_MONO_LDNATIVEOBJ, sig->ret->data.klass);
-	} else if (sig->ret->type != MONO_TYPE_VOID) {
-		mono_mb_emit_ldloc (mb, retval_var);
-	}
-	mono_mb_emit_byte (mb, CEE_RET);
-#endif
-
-	info = mono_wrapper_info_create (mb, WRAPPER_SUBTYPE_INTERP_IN);
-	info->d.interp_in.sig = csig;
-
-	res = mono_mb_create (mb, csig, sig->param_count + 16, info);
-
-	gshared_lock ();
-	cached = (MonoMethod*)g_hash_table_lookup (cache, sig);
-	if (cached) {
-		mono_free_method (res);
-		res = cached;
-	} else {
-		g_hash_table_insert (cache, sig, res);
-	}
-	gshared_unlock ();
-	mono_mb_free (mb);
-
-	return res;
-}
-
-/*
- *   This wrapper enables EH to resume directly to the code calling it. It is
- * needed so EH can resume directly into jitted code from interp, or into interp
- * when it needs to jump over native frames.
- */
-MonoMethod*
-mini_get_interp_lmf_wrapper (const char *name, gpointer target)
-{
-	static MonoMethod *cache [2];
-	g_assert (target == (gpointer)mono_interp_to_native_trampoline || target == (gpointer)mono_interp_entry_from_trampoline);
-	const int index = target == (gpointer)mono_interp_to_native_trampoline;
-	const MonoJitICallId jit_icall_id = index ? MONO_JIT_ICALL_mono_interp_to_native_trampoline : MONO_JIT_ICALL_mono_interp_entry_from_trampoline;
-
-	MonoMethod *res, *cached;
-	MonoMethodSignature *sig;
-	MonoMethodBuilder *mb;
-	WrapperInfo *info;
-
-	gshared_lock ();
-
-	res = cache [index];
-
-	gshared_unlock ();
-
-	if (res)
-		return res;
-
-	MonoType *int_type = mono_get_int_type ();
-
-	char *wrapper_name = g_strdup_printf ("__interp_lmf_%s", name);
-	mb = mono_mb_new (mono_defaults.object_class, wrapper_name, MONO_WRAPPER_OTHER);
-
-	sig = mono_metadata_signature_alloc (mono_defaults.corlib, 2);
-	sig->ret = mono_get_void_type ();
-	sig->params [0] = int_type;
-	sig->params [1] = int_type;
-
-	/* This is the only thing that the wrapper needs to do */
-	mb->method->save_lmf = 1;
-
-#ifndef DISABLE_JIT
-	mono_mb_emit_byte (mb, CEE_LDARG_0);
-	mono_mb_emit_byte (mb, CEE_LDARG_1);
-
-	mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
-	mono_mb_emit_byte (mb, CEE_MONO_ICALL);
-	mono_mb_emit_i4 (mb, jit_icall_id);
-
-	mono_mb_emit_byte (mb, CEE_RET);
-#endif
-	info = mono_wrapper_info_create (mb, WRAPPER_SUBTYPE_INTERP_LMF);
-	info->d.icall.jit_icall_id = jit_icall_id;
-	res = mono_mb_create (mb, sig, 4, info);
-
-	gshared_lock ();
-	cached = cache [index];
-	if (cached) {
-		mono_free_method (res);
-		res = cached;
-	} else {
-		cache [index] = res;
-	}
-	gshared_unlock ();
-	mono_mb_free (mb);
-
-	g_free (wrapper_name);
-
-	return res;
-}
-
 MonoMethodSignature*
 mini_get_gsharedvt_out_sig_wrapper_signature (gboolean has_this, gboolean has_ret, int param_count)
 {
@@ -2173,14 +1885,6 @@ instantiate_info (MonoDomain *domain, MonoRuntimeGenericContextInfoTemplate *oti
 	}
 	case MONO_RGCTX_INFO_METHOD:
 		return data;
-	/*
-	 * The interpreter calls through an InterpMethod rather than through code,
-	 * and a shared body needs the one belonging to the instantiation it is
-	 * running as. Holding it here is what keeps a call in such a body down to
-	 * an array read, the same as the data item a concrete body burns in.
-	 */
-	case MONO_RGCTX_INFO_INTERP_METHOD:
-		return mini_get_interp_callbacks ()->get_imethod ((MonoMethod *)data, error);
 	case MONO_RGCTX_INFO_GENERIC_METHOD_CODE: {
 		MonoMethod *m = (MonoMethod*)data;
 		gpointer addr;
@@ -2611,7 +2315,6 @@ mono_rgctx_info_type_to_str (MonoRgctxInfoType type)
 	case MONO_RGCTX_INFO_TYPE: return "TYPE";
 	case MONO_RGCTX_INFO_REFLECTION_TYPE: return "REFLECTION_TYPE";
 	case MONO_RGCTX_INFO_METHOD: return "METHOD";
-	case MONO_RGCTX_INFO_INTERP_METHOD: return "INTERP_METHOD";
 	case MONO_RGCTX_INFO_METHOD_FTNDESC: return "METHOD_FTNDESC";
 	case MONO_RGCTX_INFO_METHOD_GSHAREDVT_INFO: return "GSHAREDVT_INFO";
 	case MONO_RGCTX_INFO_GENERIC_METHOD_CODE: return "GENERIC_METHOD_CODE";
@@ -2724,7 +2427,6 @@ info_equal (gpointer data1, gpointer data2, MonoRgctxInfoType info_type)
 	case MONO_RGCTX_INFO_NULLABLE_CLASS_UNBOX:
 		return mono_class_from_mono_type_internal ((MonoType *)data1) == mono_class_from_mono_type_internal ((MonoType *)data2);
 	case MONO_RGCTX_INFO_METHOD:
-	case MONO_RGCTX_INFO_INTERP_METHOD:
 	case MONO_RGCTX_INFO_METHOD_FTNDESC:
 	case MONO_RGCTX_INFO_METHOD_GSHAREDVT_INFO:
 	case MONO_RGCTX_INFO_GENERIC_METHOD_CODE:

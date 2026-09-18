@@ -148,10 +148,11 @@ private:
 	/// the caller can be sent.
 	void *compile_entry (DomainState &domain, MonoDomainMethod &dm);
 
-	/// Points \p dm's entry at the interpreter and returns it.
+	/// Points \p dm's entry at a tier-0 body from the classic compiler and
+	/// returns it.
 	///
-	/// Fails when the interpreter does not run the method, which is the
-	/// caller's signal to compile it. A failure leaves the entry untouched.
+	/// Fails when tier 0 does not run the method, which is the caller's
+	/// signal to compile it. A failure leaves the entry untouched.
 	llvm::Expected<Compiled> tier0_entry (DomainState &domain, MonoDomainMethod &dm);
 
 	llvm::Expected<void *> dispatcher (DomainState &domain, MonoDomainMethod &dm);
@@ -160,10 +161,8 @@ private:
 	/// has not been compiled yet. This is what the stub in front of it is
 	/// redirected to on the first call through it.
 	///
-	/// With allow_tier0 false, this returns a compiled body. The interpreter
-	/// is not offered the method, and any interpreter entry it already has
-	/// is compiled over. Pass false if you cannot set the register the
-	/// interpreter reads its method from.
+	/// With allow_tier0 false, a fresh compile goes straight to tier 1 rather
+	/// than being offered to tier 0 first.
 	///
 	/// Compiles the method again when one it inlined was replaced while it
 	/// compiled.
@@ -238,7 +237,7 @@ private:
 	/// Gives \p dm a body at \p tier and points its stub at it, whether or
 	/// not it already has one.
 	///
-	/// With allow_tier0 the interpreter is offered the method first.
+	/// With allow_tier0 the classic compiler is offered the method first.
 	/// Promotion passes false, which is what makes it a compile rather than
 	/// a second trip through the tier the method is already running at. A
 	/// method whose entry has been taken off a compiled body is compiled
@@ -255,9 +254,9 @@ private:
 	///
 	/// Every method in \p dms is compiled at the one tier given. The results
 	/// line up with \p dms. A member that a shared body can serve leaves the
-	/// batch, and its result comes from that body instead. The interpreter is
-	/// offered none of them - compile_body () decides that before it gets
-	/// here, and promotion has already settled it.
+	/// batch, and its result comes from that body instead. Tier 0 is offered
+	/// none of them - compile_body () decides that before it gets here, and
+	/// promotion has already settled it.
 	std::vector<llvm::Expected<Compiled>>
 	compile_bodies (DomainState &domain, llvm::ArrayRef<MonoDomainMethod *> dms,
 	                MonoTier tier, bool for_sharing = false);

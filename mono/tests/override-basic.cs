@@ -8,8 +8,8 @@ using Mono.Overrides;
  * the method it names.
  *
  * Every target below is called far more often than the promotion threshold, so
- * each answer is checked against the interpreted body and against the compiled
- * one that replaces it. The replacement has to win in both.
+ * each answer is checked against the tier-0 body and against the compiled one
+ * that replaces it. The replacement has to win in both.
  */
 
 [assembly: MonoOverrideAssembly]
@@ -23,7 +23,7 @@ namespace Mono.Test {
 			return x + 1;
 		}
 
-		/* Small enough for the interpreter to copy into its callers. */
+		/* Small enough for the pre-pass to inline into its callers. */
 		public static int Small (int x)
 		{
 			return x + 2;
@@ -36,9 +36,9 @@ namespace Mono.Test {
 		}
 
 		/*
-		 * Eight parameters, which a native detour cannot carry into an
-		 * interpreted caller: mono_interp_jit_call_marshallable () refuses
-		 * more than six.
+		 * Eight parameters, more than the six integer registers the calling
+		 * convention passes arguments in, so this exercises a wide override's
+		 * stack-passed arguments as well as its register ones.
 		 */
 		[MethodImpl (MethodImplOptions.NoInlining)]
 		public static int Wide (int a, int b, int c, int d, int e, int f, int g, int h)

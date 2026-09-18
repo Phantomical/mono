@@ -13,9 +13,8 @@
 // NaN as unequal to itself and would hide the one difference a bit pattern
 // change is meant to catch.
 //
-// Which engine tier 0 is decides what the baseline measures. The classic
-// compiler is the default, and -mono-tier0-classic=0 makes it the interpreter;
-// runtime-suites.cmake runs an arm of each.
+// Tier 0 is always the classic compiler, so that engine sets the baseline
+// every promoted tier is checked against.
 
 using System;
 using System.Numerics;
@@ -326,7 +325,7 @@ class SimdSemantics
 			if (baseline == null || cur == null) {
 				if (baseline != cur) {
 					mismatches++;
-					Console.WriteLine (family + " " + op + " row" + row + ": interp=" +
+					Console.WriteLine (family + " " + op + " row" + row + ": tier0=" +
 						(baseline == null ? "threw" : "value") + " " + armNames[a] + "=" +
 						(cur == null ? "threw" : "value"));
 				}
@@ -353,7 +352,7 @@ class SimdSemantics
 				if (diff) {
 					mismatches++;
 					Console.WriteLine (family + " " + op + " row" + row + " lane" + (i / elemSize) +
-						" " + armNames[a] + ": interp=0x" + Hex (baseline, i, elemSize) +
+						" " + armNames[a] + ": tier0=0x" + Hex (baseline, i, elemSize) +
 						" " + armNames[a] + "=0x" + Hex (cur, i, elemSize));
 				}
 			}
@@ -364,9 +363,9 @@ class SimdSemantics
 
 	static void RunKernelOnly (string family, string op, string kernelName, Func<int, byte[]> kernel, int elemSize)
 	{
-		var interp = new byte[ROWS][];
+		var tier0 = new byte[ROWS][];
 		for (int r = 0; r < ROWS; r++)
-			interp[r] = kernel (r);
+			tier0[r] = kernel (r);
 
 		Promote (kernelName, TIER1);
 		var t1 = new byte[ROWS][];
@@ -379,15 +378,15 @@ class SimdSemantics
 			t2[r] = kernel (r);
 
 		for (int r = 0; r < ROWS; r++)
-			Report (family, op, r, interp[r], KernelArms, new[] { t1[r], t2[r] }, elemSize);
+			Report (family, op, r, tier0[r], KernelArms, new[] { t1[r], t2[r] }, elemSize);
 	}
 
 	static void RunBinary<TA, TB, TR> (string family, string op, string kernelName, Func<int, byte[]> kernel,
 	                                    MethodInfo body, TA[] a, TB[] b, Func<TR, byte[]> toBytes, int elemSize, bool floatRelax = false)
 	{
-		var interp = new byte[ROWS][];
+		var tier0 = new byte[ROWS][];
 		for (int r = 0; r < ROWS; r++)
-			interp[r] = kernel (r);
+			tier0[r] = kernel (r);
 
 		Promote (kernelName, TIER1);
 		var t1 = new byte[ROWS][];
@@ -412,15 +411,15 @@ class SimdSemantics
 			d2[r] = toBytes (del (a[r % a.Length], b[r % b.Length]));
 
 		for (int r = 0; r < ROWS; r++)
-			Report (family, op, r, interp[r], AllArms, new[] { t1[r], t2[r], d1[r], d2[r] }, elemSize, floatRelax);
+			Report (family, op, r, tier0[r], AllArms, new[] { t1[r], t2[r], d1[r], d2[r] }, elemSize, floatRelax);
 	}
 
 	static void RunUnary<TA, TR> (string family, string op, string kernelName, Func<int, byte[]> kernel,
 	                               MethodInfo body, TA[] a, Func<TR, byte[]> toBytes, int elemSize, bool floatRelax = false)
 	{
-		var interp = new byte[ROWS][];
+		var tier0 = new byte[ROWS][];
 		for (int r = 0; r < ROWS; r++)
-			interp[r] = kernel (r);
+			tier0[r] = kernel (r);
 
 		Promote (kernelName, TIER1);
 		var t1 = new byte[ROWS][];
@@ -445,15 +444,15 @@ class SimdSemantics
 			d2[r] = toBytes (del (a[r % a.Length]));
 
 		for (int r = 0; r < ROWS; r++)
-			Report (family, op, r, interp[r], AllArms, new[] { t1[r], t2[r], d1[r], d2[r] }, elemSize, floatRelax);
+			Report (family, op, r, tier0[r], AllArms, new[] { t1[r], t2[r], d1[r], d2[r] }, elemSize, floatRelax);
 	}
 
 	static void RunTernary<TA, TB, TC, TR> (string family, string op, string kernelName, Func<int, byte[]> kernel,
 	                                         MethodInfo body, TA[] a, TB[] b, TC c, Func<TR, byte[]> toBytes, int elemSize)
 	{
-		var interp = new byte[ROWS][];
+		var tier0 = new byte[ROWS][];
 		for (int r = 0; r < ROWS; r++)
-			interp[r] = kernel (r);
+			tier0[r] = kernel (r);
 
 		Promote (kernelName, TIER1);
 		var t1 = new byte[ROWS][];
@@ -478,7 +477,7 @@ class SimdSemantics
 			d2[r] = toBytes (del (a[r % a.Length], b[r % b.Length], c));
 
 		for (int r = 0; r < ROWS; r++)
-			Report (family, op, r, interp[r], AllArms, new[] { t1[r], t2[r], d1[r], d2[r] }, elemSize);
+			Report (family, op, r, tier0[r], AllArms, new[] { t1[r], t2[r], d1[r], d2[r] }, elemSize);
 	}
 
 	// ConditionalSelect takes three vectors that all vary per row, which the
@@ -486,9 +485,9 @@ class SimdSemantics
 	static void RunTernary3<TA, TB, TC, TR> (string family, string op, string kernelName, Func<int, byte[]> kernel,
 	                                          MethodInfo body, TA[] a, TB[] b, TC[] c, Func<TR, byte[]> toBytes, int elemSize)
 	{
-		var interp = new byte[ROWS][];
+		var tier0 = new byte[ROWS][];
 		for (int r = 0; r < ROWS; r++)
-			interp[r] = kernel (r);
+			tier0[r] = kernel (r);
 
 		Promote (kernelName, TIER1);
 		var t1 = new byte[ROWS][];
@@ -513,7 +512,7 @@ class SimdSemantics
 			d2[r] = toBytes (del (a[r % a.Length], b[r % b.Length], c[r % c.Length]));
 
 		for (int r = 0; r < ROWS; r++)
-			Report (family, op, r, interp[r], AllArms, new[] { t1[r], t2[r], d1[r], d2[r] }, elemSize);
+			Report (family, op, r, tier0[r], AllArms, new[] { t1[r], t2[r], d1[r], d2[r] }, elemSize);
 	}
 
 	static byte[] BoolBytes (bool v) { return new[] { (byte) (v ? 1 : 0) }; }
@@ -748,13 +747,9 @@ class SimdSemantics
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_Ctor4 (int r) { return Bytes (new Vector4f (FE[r % FE.Length], FE[(r + 1) % FE.Length], FE[(r + 2) % FE.Length], FE[(r + 3) % FE.Length])); }
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_V4f_CtorSplat (int r) { return Bytes (new Vector4f (FE[r % FE.Length])); }
 
-	// SimdRuntime.AccelMode is left on its own IL. A row answering the target's
-	// real SSE levels cannot be made consistent: il_agrees false reaches
-	// runs_at_tier0 (), which decides only for methods the backend is asked
-	// about, and the interpreter never asks about a callee it reached itself.
-	// Under classic tier 0 such a row is consistent, because runs_at_tier0 ()
-	// refuses the method and the call reaches tier 1 through the thunk. So this
-	// case is what fails on the interpreter arm if such a row is added back.
+	// SimdRuntime.AccelMode is left on its own IL. runs_at_tier0 () refuses the
+	// method, so the call always reaches tier 1 through the thunk and this row
+	// stays consistent with the target's real SSE levels.
 	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_AccelMode (int r) { return BitConverter.GetBytes ((int) SimdRuntime.AccelMode); }
 
 	// A prefetch answers nothing, so what this checks is that asking for one
@@ -2003,8 +1998,8 @@ class SimdSemantics
 		var del = (Func<Vector<int>, Vector<int>, Vector<int>>) Delegate.CreateDelegate (
 			typeof (Func<Vector<int>, Vector<int>, Vector<int>>), body);
 
-		var interp = new byte[ROWS][];
-		for (int r = 0; r < ROWS; r++) { int rr = r; interp[r] = Try (() => K_VIntDiv (rr)); }
+		var tier0 = new byte[ROWS][];
+		for (int r = 0; r < ROWS; r++) { int rr = r; tier0[r] = Try (() => K_VIntDiv (rr)); }
 
 		Promote (kernelMI, TIER1);
 		var t1 = new byte[ROWS][];
@@ -2023,7 +2018,7 @@ class SimdSemantics
 		for (int r = 0; r < ROWS; r++) { int rr = r; d2[r] = Try (() => Bytes (del (VIntDivA[rr % VIntDivA.Length], VIntDivB[rr % VIntDivB.Length]))); }
 
 		for (int r = 0; r < ROWS; r++)
-			Report (family, op, r, interp[r], AllArms, new[] { t1[r], t2[r], d1[r], d2[r] }, 4);
+			Report (family, op, r, tier0[r], AllArms, new[] { t1[r], t2[r], d1[r], d2[r] }, 4);
 	}
 
 	static int Main ()

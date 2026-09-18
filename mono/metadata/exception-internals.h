@@ -54,13 +54,8 @@ mono_install_get_seq_point (MonoGetSeqPointFunc func);
 /*
  * Places a frame's native offset in the IL, given the jit info of the body that
  * produced the offset. Returns -1 when that body has no IL-offset map.
- *
- * Pass the live interpreter frame when there is one. An interpreted body reached
- * through its frame returns without the domain's jit code hash lock, which a
- * thread dump, a crash context and a domain teardown cannot take. Pass NULL for a
- * captured trace, whose frames are gone by the time it is read.
  */
-typedef int (*MonoGetILOffsetFromJinfoFunc) (MonoDomain *domain, MonoJitInfo *ji, gpointer interp_frame, guint32 native_offset);
+typedef int (*MonoGetILOffsetFromJinfoFunc) (MonoDomain *domain, MonoJitInfo *ji, guint32 native_offset);
 
 void
 mono_install_get_il_offset_from_jinfo (MonoGetILOffsetFromJinfoFunc func);

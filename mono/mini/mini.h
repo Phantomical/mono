@@ -247,9 +247,7 @@ typedef enum {
 	/* Same as MONO_PATCH_INFO_METHOD_FTNDESC */
 	MONO_RGCTX_INFO_METHOD_FTNDESC                = 33,
 	/* mono_type_size () for a class */
-	MONO_RGCTX_INFO_CLASS_SIZEOF                  = 34,
-	/* The InterpMethod a shared body calls the method through */
-	MONO_RGCTX_INFO_INTERP_METHOD                 = 35
+	MONO_RGCTX_INFO_CLASS_SIZEOF                  = 34
 } MonoRgctxInfoType;
 
 typedef struct _MonoRuntimeGenericContextInfoTemplate {
@@ -389,7 +387,6 @@ typedef struct {
 	gint32 optimized_divisions;
 	gint32 methods_with_llvm;
 	gint32 methods_without_llvm;
-	gint32 methods_with_interp;
 	char *max_ratio_method;
 	char *biggest_method;
 	gint64 jit_method_to_ir;
@@ -663,20 +660,6 @@ gpointer    mono_arch_build_imt_trampoline      (MonoVTable *vtable, MonoDomain 
 guint8* mono_arch_get_call_target               (guint8 *code);
 guint32 mono_arch_get_plt_info_offset           (guint8 *plt_entry, host_mgreg_t *regs, guint8 *code);
 GSList *mono_arch_get_trampolines               (gboolean aot);
-gpointer mono_arch_get_interp_to_native_trampoline (MonoTrampInfo **info);
-gpointer mono_arch_get_native_to_interp_trampoline (MonoTrampInfo **info);
-
-#ifdef MONO_ARCH_HAVE_INTERP_PINVOKE_TRAMP
-// Moves data (arguments and return vt address) from the InterpFrame to the CallContext so a pinvoke call can be made.
-void mono_arch_set_native_call_context_args     (CallContext *ccontext, gpointer frame, MonoMethodSignature *sig);
-// Moves the return value from the InterpFrame to the ccontext, or to the retp (if native code passed the retvt address)
-void mono_arch_set_native_call_context_ret      (CallContext *ccontext, gpointer frame, MonoMethodSignature *sig, gpointer retp);
-// When entering interp from native, this moves the arguments from the ccontext to the InterpFrame. If we have a return
-// vt address, we return it. This ret vt address needs to be passed to mono_arch_set_native_call_context_ret.
-gpointer mono_arch_get_native_call_context_args     (CallContext *ccontext, gpointer frame, MonoMethodSignature *sig);
-// After the pinvoke call is done, this moves return value from the ccontext to the InterpFrame.
-void mono_arch_get_native_call_context_ret      (CallContext *ccontext, gpointer frame, MonoMethodSignature *sig);
-#endif
 
 /*New interruption machinery */
 void
@@ -908,10 +891,6 @@ gpointer mini_get_gsharedvt_wrapper (gboolean gsharedvt_in, gpointer addr, MonoM
 MonoMethod* mini_get_gsharedvt_in_sig_wrapper (MonoMethodSignature *sig);
 MonoMethod* mini_get_gsharedvt_out_sig_wrapper (MonoMethodSignature *sig);
 MonoMethodSignature* mini_get_gsharedvt_out_sig_wrapper_signature (gboolean has_this, gboolean has_ret, int param_count);
-G_EXTERN_C void mono_interp_entry_from_trampoline (gpointer ccontext, gpointer imethod);
-G_EXTERN_C void mono_interp_to_native_trampoline (gpointer addr, gpointer ccontext);
-MonoMethod* mini_get_interp_in_wrapper (MonoMethodSignature *sig);
-MonoMethod* mini_get_interp_lmf_wrapper (const char *name, gpointer target);
 char* mono_get_method_from_ip (void *ip);
 
 /* SIMD support */

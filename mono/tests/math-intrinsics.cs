@@ -10,10 +10,10 @@ using System.Runtime.CompilerServices;
  * Two things are checked, and they catch different faults.
  *
  * Sample () computes every operation and the tiers are compared entry by entry.
- * The interpreter answers each one with a MINT opcode over the same libm
- * function the icall calls, and the compiled tiers with an intrinsic, so the
- * three have to agree bit for bit. A tier that answers differently is what an
- * argument in the wrong order or a wrong overload looks like.
+ * Tier 0 answers each one through the icall itself, which calls the same libm
+ * function, and the compiled tiers with an intrinsic, so the three have to
+ * agree bit for bit. A tier that answers differently is what an argument in
+ * the wrong order or a wrong overload looks like.
  *
  * CheckPinned () holds the answers the standard settles, which no amount of
  * agreement between the tiers can supply. Math.Round is the reason it is worth
@@ -23,7 +23,7 @@ using System.Runtime.CompilerServices;
  * Most arguments come out of static fields, because a literal lets a compiled
  * tier fold the call at compile time and this test is about the instruction
  * each tier emits. SampleFolded () is the other half, with literals, so the
- * constant folder answers alongside libm and the interpreter.
+ * constant folder answers alongside libm and tier 0.
  */
 
 namespace Mono.Tiering {
@@ -92,8 +92,9 @@ static class Program {
 
 	/*
 	 * The same operations over literal arguments. A compiled tier folds these
-	 * at compile time, in LLVM's constant folder rather than in libm, and the
-	 * interpreter still computes them. Pow is where the two can part company:
+	 * at compile time, in LLVM's constant folder rather than in libm, and tier
+	 * 0 still computes them through libm at run time. Pow is where the two can
+	 * part company:
 	 * libm answers 1 for a NaN base with a zero exponent, and the .NET
 	 * documentation says NaN.
 	 */
@@ -243,8 +244,8 @@ static class Program {
 		Same ("Math.Ceiling (0)", Math.Ceiling (D (0.0)), 0.0);
 
 		/*
-		 * Round computes IEEE 754 roundToIntegralTiesToEven in both engines:
-		 * the mono_round_to_even () icall under the interpreter and
+		 * Round computes IEEE 754 roundToIntegralTiesToEven under both
+		 * mechanisms: the mono_round_to_even () icall at tier 0 and
 		 * llvm.roundeven in the compiled tiers. It rounds a half to the even
 		 * neighbour the way llvm.round does not, so the halves below catch
 		 * that substitution. The last pair is the one that says neither
@@ -452,9 +453,10 @@ static class Program {
 		CheckPinned ();
 
 		/*
-		 * Asked for rather than waited for. An interpreted caller reaches an
-		 * interpreted callee without the runtime being asked for it, so a loop
-		 * alone leaves both methods where they started.
+		 * Asked for rather than waited for: waiting on tier 0's own threshold
+		 * would spend an uncontrolled number of calls before a tier-1 body
+		 * exists at all, and the counter this test reads is in that body and
+		 * counts nothing until there is one.
 		 */
 		if (!Promote (sample, 3, "Sample ()") || !Promote (pinned, 3, "CheckPinned ()"))
 			return 1;

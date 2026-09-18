@@ -15,8 +15,9 @@
  *
  * A shape called returnable that LLVM demotes costs nothing: LLVM invents the
  * pointer itself. A shape called returnable that LLVM brings back on the x87
- * stack is the failure to catch, and no corpus catches it - a compiled caller
- * and a compiled callee agree, and only the interpreter seam loses the value.
+ * stack is the failure to catch, and no corpus catches it - a caller and a
+ * callee compiled by the same convention agree with each other even when
+ * both disagree with the ABI.
  */
 
 #include "hidden-return.hpp"

@@ -1,10 +1,8 @@
 using System;
 
-// --llvm-opt=-mono-tier0-classic=RetRegs puts the callees and their caller on
-// the classic compiler together, which is what a value-type return gathered
-// out of registers needs: the callee places it and the caller reads it back.
-// A filter naming only the callees would miss it. tier0-classic-backedge.cs's
-// header has why.
+// A value-type return gathered out of registers, one struct per shape of the
+// placement: the callee places it and the caller reads it back, both under
+// the classic compiler.
 //
 // The managed convention answers a value type in up to three integer and two
 // SSE registers, so each struct below is one shape of that placement: three

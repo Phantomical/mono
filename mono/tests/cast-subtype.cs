@@ -17,9 +17,8 @@ using System.Runtime.CompilerServices;
  * the interfaces an array gets on its element type. Each must give the answer
  * the runtime gives, whichever path carries it.
  *
- * Every probe is entered enough times to reach both compiled tiers, because
- * the interpreter answers a cast through the runtime and never reaches the
- * generated test at all.
+ * Every probe is entered enough times to reach both compiled tiers, which is
+ * where the inline tests above are generated.
  */
 
 interface IAlpha { }
@@ -224,7 +223,7 @@ static class Program {
 
 	public static int Main ()
 	{
-		/* Enough entries to leave the interpreter and both compiled tiers. */
+		/* Enough entries to leave tier 0 and reach both compiled tiers. */
 		for (int i = 0; i < 30000; ++i) {
 			if (Run (i) != 0) {
 				Console.WriteLine ("stopped at iteration {0}", i);

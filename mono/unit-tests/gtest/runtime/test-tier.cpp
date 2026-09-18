@@ -62,10 +62,6 @@ public:
 	{
 		MONO_SKIP_WITHOUT_CLASS_LIBRARY ();
 
-		// The first case needs a real classic tier-0 body, which carries a
-		// jit info. An interpreted one does not.
-		if (mono_llvm_jit_interp_tier0_enabled ())
-			GTEST_SKIP () << "the interpreter is tier 0 here, so this checks nothing";
 		if (!mono_llvm_jit_tier0_enabled ())
 			GTEST_SKIP () << "tier 0 is off in this configuration";
 		if (!mono_llvm_jit_tier2_enabled ())

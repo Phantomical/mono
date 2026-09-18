@@ -343,8 +343,6 @@ struct _MonoJitInfo {
 	 * d.tramp_info contains additional data in this case.
 	 */
 	guint32    is_trampoline:1;
-	/* Whenever this jit info refers to an interpreter method */
-	guint32    is_interp:1;
 
 	guint32    dbg_ignore : 1;
 

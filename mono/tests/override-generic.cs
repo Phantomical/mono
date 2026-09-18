@@ -7,9 +7,6 @@ using Mono.Overrides;
  * is instantiated with each of the target's own type arguments, so one
  * attribute covers every instantiation - including the ones that do not exist
  * when the assembly is read.
- *
- * A native detour reaches none of this from an interpreted caller:
- * mono_interp_jit_call_marshallable () refuses an inflated method outright.
  */
 
 [assembly: MonoOverrideAssembly]

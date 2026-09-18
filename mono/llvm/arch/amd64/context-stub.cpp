@@ -8,9 +8,8 @@
  * Every caller reaches a method through its own thunk, so the instantiation's
  * thunk is pointed at a context stub rather than at the shared body. The stub
  * writes the context that instantiation was published with, then jumps into
- * the shared method's own thunk. That covers a compiled caller, an
- * interpreted one, reflection and a delegate alike, because all four go
- * through the thunk.
+ * the shared method's own thunk. That covers a compiled caller, reflection
+ * and a delegate alike, because all three go through the thunk.
  */
 
 #include "arch/arch.hpp"

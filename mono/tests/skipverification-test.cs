@@ -30,7 +30,7 @@ class Program
 	static int failures;
 
 	// Past the tier-1 threshold, so the compiled engine checks the access as
-	// well as the interpreter.
+	// well as tier 0.
 	const int Calls = 40;
 
 	static void Allowed (string what, Func<int> access, int want)

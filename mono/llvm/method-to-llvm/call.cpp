@@ -1194,13 +1194,12 @@ MethodLLVMEmitter::emit_bad_image_call (MonoIrBuilder &builder, MonoMethodSignat
 	return llvm::Error::success ();
 }
 
-/// Reads String.Length straight out of the object, the same way the
-/// interpreter reads it.
+/// Reads String.Length straight out of the object rather than emitting a
+/// call to the property.
 ///
-/// The accessor's body is a field load either way, so this saves little on its
-/// own. It exists for the debugger: a step into `s.Length` that enters a
-/// one-line corlib property is a stop in code the user never wrote, one the
-/// interpreter does not have to make either.
+/// The accessor's body is a field load either way, so this saves little on
+/// its own. It exists for the debugger: a step into `s.Length` that enters a
+/// one-line corlib property is a stop in code the user never wrote.
 llvm::Error
 MethodLLVMEmitter::emit_string_length (MonoIrBuilder &builder)
 {
@@ -1280,9 +1279,8 @@ MethodLLVMEmitter::emit_get_type (MonoIrBuilder &builder, bool receiver_by_refer
 	 * mono_class_create_runtime_vtable () fills in `type` before it publishes
 	 * the vtable, so an object that exists has one. RuntimeType is the
 	 * exception: its own vtable takes `type` after the memory barrier, which
-	 * leaves a window where the field is null. The interpreter reads the field
-	 * unguarded and this follows it. A guard costs every site, and the window
-	 * it covers is one managed code cannot run in.
+	 * leaves a window where the field is null. A guard costs every site, and
+	 * the window it covers is one managed code cannot run in.
 	 *
 	 * For a transparent proxy the field holds the type it stands for. Its
 	 * vtable is a copy of the real class's, and mono_class_proxy_vtable ()

@@ -22,9 +22,9 @@ using System.Runtime.CompilerServices;
  * rank-1 array that carries one as well, and it is the case an emitter that
  * reads max_length for every rank-1 array gets wrong.
  *
- * Sample () is compared entry by entry across the tiers, because the
- * interpreter answers each accessor with the icall and the compiled tiers with
- * loads. Pinned () holds the answers the shapes settle, which agreement between
+ * Sample () is compared entry by entry across the tiers, because tier 0
+ * answers each accessor with the icall and the compiled tiers with loads.
+ * Pinned () holds the answers the shapes settle, which agreement between
  * the tiers cannot supply.
  */
 
@@ -200,9 +200,10 @@ static class Program {
 		Copy ("tier 0");
 
 		/*
-		 * Asked for rather than waited for. An interpreted caller reaches an
-		 * interpreted callee without the runtime being asked for it, so a loop
-		 * alone leaves both methods where they started.
+		 * Asked for rather than waited for: waiting on tier 0's own threshold
+		 * would spend an uncontrolled number of calls before a tier-1 body
+		 * exists at all, and the counter this test reads is in that body and
+		 * counts nothing until there is one.
 		 */
 		if (!PromoteAll (3))
 			return 1;

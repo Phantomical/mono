@@ -519,9 +519,8 @@ rewrite_call (CallBase *call)
 			// register of its own width, so LLVM emits nothing for
 			// signext and zeroext. The psABI promotes such an argument
 			// to i32 instead, where the attribute decides the fill.
-			// Mono fills those bits itself, as the interpreter does in
-			// extend_narrow_arg (). The compiled engine fills them
-			// here, so both engines tell native code the same thing.
+			// Mono fills those bits itself, here, so it tells native
+			// code the same thing the psABI's own convention would.
 			// i32 takes the register and the eight-byte stack slot the
 			// narrower type would have, so the argument does not move.
 			bool sign = pattrs.hasAttribute (Attribute::SExt);

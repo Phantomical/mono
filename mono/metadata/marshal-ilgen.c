@@ -6275,8 +6275,6 @@ emit_managed_wrapper_ilgen (MonoMethodBuilder *mb, MonoMethodSignature *invoke_s
 	/*
 	 * This icall is special cased in the JIT so it works in native-to-managed wrappers in unattached threads.
 	 * Keep this in sync with the CEE_JIT_ICALL code in the JIT.
-	 *
-	 * Special cased in interpreter, keep in sync.
 	 */
 	mono_mb_emit_icall (mb, mono_threads_attach_coop);
 	mono_mb_emit_stloc (mb, orig_domain);
@@ -6430,7 +6428,6 @@ emit_managed_wrapper_ilgen (MonoMethodBuilder *mb, MonoMethodSignature *invoke_s
 	/* mono_threads_detach_coop (orig_domain, &attach_cookie); */
 	mono_mb_emit_ldloc (mb, orig_domain);
 	mono_mb_emit_ldloc_addr (mb, attach_cookie);
-	/* Special cased in interpreter, keep in sync */
 	mono_mb_emit_icall (mb, mono_threads_detach_coop);
 
 	/* return ret; */

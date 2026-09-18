@@ -18,7 +18,7 @@ namespace mono {
 /// Starts reading overrides out of the assemblies this process loads.
 ///
 /// Call this once the root domain can load an assembly, and before anything an
-/// override can name has run: a caller the interpreter has already transformed
+/// override can name has run: a caller that has already inlined the target
 /// keeps the body it copied.
 void method_overrides_init ();
 

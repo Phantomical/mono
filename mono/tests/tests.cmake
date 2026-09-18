@@ -76,7 +76,6 @@ set(MONO_TESTS_CS_SRC
   merp-json-valid.cs
   merp-crash-test.cs
   dump-state-json-valid.cs
-  interp-frame-native-offset.cs
   exception19.cs
   exception20.cs
   exception21.cs
@@ -234,11 +233,6 @@ set(MONO_TESTS_CS_SRC
   bug-323114.cs
   bug-Xamarin-5278.cs
   interlocked.cs
-  interp-entries.cs
-  interp-calls-compiled.cs
-  interp-jit-call-wrappers.cs
-  interp-tier1-promotion.cs
-  interp-native-detour.cs
   trivial-inline.cs
   stack-merge-class.cs
   tier2-inline-override.cs
@@ -260,13 +254,7 @@ set(MONO_TESTS_CS_SRC
   thread-static-fast-path.cs
   pinvoke-narrow-arg.cs
   eh-stack-args.cs
-  tier0-classic.cs
-  tier0-classic-gsharedvt.cs
-  tier0-classic-static-rgctx.cs
-  tier0-classic-backedge.cs
   tier0-classic-struct-abi.cs
-  tier0-classic-conv-r-un.cs
-  tier0-classic-wide-args.cs
   tier0-classic-ret-regs.cs
   tier0-classic-unsafe-mov.cs
   tier0-classic-class-init.cs
@@ -279,7 +267,6 @@ set(MONO_TESTS_CS_SRC
   tbaa-field-aliasing.cs
   math-intrinsics.cs
   buffer-copy-intrinsics.cs
-  dyn-call.cs
   implicit-null-checks.cs
   monitor-fast-path.cs
   array-shape-intrinsics.cs
@@ -289,9 +276,6 @@ set(MONO_TESTS_CS_SRC
   override-icall.cs
   override-copies.cs
   callvirt-static.cs
-  interp-float-to-int.cs
-  interp-threadstatic-cctor.cs
-  interp-array-set-typecheck.cs
   volatile-prefix.cs
   delegate-async-exit.cs
   delegate-delegate-exit.cs
@@ -555,8 +539,6 @@ set(MONO_TESTS_CS_SRC
   dynamic-method-delegate.cs
   dynamic-method-gc-in-body.cs
   dynamic-method-gc-in-frame.cs
-  interp-stack-gc-root.cs
-  interp-jit-delegate.cs
   verbose.cs
   generic-unmanaged-constraint.cs
   bug-10834.cs
@@ -579,7 +561,6 @@ set(MONO_TESTS_CS_SRC
   finally-nested-resume.cs
   eliminate-empty-finally.cs
   bug-60862.cs
-  bug-unity-1.cs
 )
 
 # Tests written directly in IL, assembled with ilasm.
@@ -735,8 +716,6 @@ set(MONO_TESTS_IL_SRC
   calliGenericTest.il
   ckfiniteTest.il
   ckfinite-edges.il
-  interp-float-conv.il
-  tier0-classic-fpconv.il
   fault-handler.il
   locallocTest.il
   initblkTest.il
@@ -998,21 +977,6 @@ set(MONO_TESTS_UNHANDLED_EXCEPTION_255_SRC
 # says the process got to the end rather than aborting in a personality routine.
 set(MONO_TESTS_FORCED_UNWIND_SRC
   thread-forced-unwind.cs
-)
-
-# An exception caught above two interpreted frames rather than one. Which
-# methods are interpreted has to be pinned rather than left to promotion, so
-# this runs in a suite of its own with --llvm-opt=-mono-tier0-filter naming
-# them.
-set(MONO_TESTS_TIER_PINNED_SRC
-  handle-stack-tiers.cs
-  typedbyref-tier-entry.cs
-  eh-runtime-invoke-reentry.cs
-)
-
-# The same pinning, for a test whose calli has to be written by hand.
-set(MONO_TESTS_TIER_PINNED_IL_SRC
-  bug-unity-2.il
 )
 
 # A classic tier-0 body pinned there by a threshold of zero. No general suite
@@ -1333,87 +1297,11 @@ set(MONO_TESTS_DISABLED
   verbose.exe
 )
 
-# Additionally excluded when running under the interpreter.
-set(MONO_TESTS_INTERP_DISABLED
-  # The two below are the same interpreter defects
-  # MONO_TESTS_INTERP_TIER0_DISABLED names, and the reasons are written there.
-  # They fail here for the same reason: the engine is the interpreter either
-  # way.
-  interp-threadstatic-cctor.exe
-  interp-array-set-typecheck.exe
-  # A patch over a method's entry reaches the callers that go through it. Those
-  # are the compiled callers. With the interpreter as the whole engine there is
-  # no compiled tier, so the test cannot compile its caller.
-  interp-native-detour.exe
-  delegate-async-exception.exe
-  bug-348522.2.exe
-  bug-459094.exe
-  delegate-invoke.exe
-  bug-Xamarin-5278.exe
-  appdomain-marshalbyref-assemblyload.exe
-  abort-try-holes.exe
-  threads-init.exe
-  recursive-struct-arrays.exe
-  merp-json-valid.exe
-  merp-crash-test.exe
-  finally_guard.exe
-  bug-60843.exe
-  calli_sig_check.exe
-  dim-diamondshape.exe
-  pinvoke3.exe
-  cominterop.exe
-  ccw-class-iface.exe
-  bug-60862.exe
-  bug-48015.exe
-  # Asserts that a method called once still reaches tier 1, off its loop's
-  # own back edges. The interpreter's own counter is calls alone, so under
-  # the interpreter as the whole engine this stays at tier 0 forever.
-  tier0-classic-backedge.exe
-)
-
 # Additionally excluded at the default tier, where a method starts in the
 # classic compiler and is compiled by the backend underneath its callers once it
 # is hot. Each entry has to say what classic tier 0 cannot do that the backend
 # can, because this is the tier every program starts in.
 set(MONO_TESTS_CLASSIC_TIER0_DISABLED
-)
-
-# Additionally excluded with the interpreter as tier 0
-# (-mono-tier0-classic=0), where a method starts interpreted and is compiled
-# underneath its callers once it is hot.
-#
-# Each of these passes with everything compiled and fails both here and under
-# --interpreter, so what they are missing is something the interpreter does not
-# do rather than anything about the tier seam. Say which, per entry: the point
-# of this list being separate from MONO_TESTS_INTERP_DISABLED is that "tier 0
-# cannot do this" and "the pure interpreter could not" are different claims.
-set(MONO_TESTS_INTERP_TIER0_DISABLED
-  # A COM-visible call reaches Object::Equals through a remoting-invoke wrapper,
-  # which answers "The method or operation is not implemented".
-  cominterop.exe
-  # calli does not check the signature it is handed. The test wants the
-  # mismatched call to throw and gets a return.
-  calli_sig_check.exe
-  # A default-interface diamond resolves to one of the implementations where
-  # the ambiguity is meant to raise.
-  dim-diamondshape.exe
-  # Reading a thread-static does not run the class initializer. The
-  # special-static path carries the field's offset and no vtable, so nothing on
-  # it can run one. ECMA-335 II.10.5.3.
-  interp-threadstatic-cctor.exe
-  # Storing into a multidimensional array checks the call site's static element
-  # type rather than the value, so a Derived is refused by a Derived[,] that is
-  # held in a Base[,] variable.
-  interp-array-set-typecheck.exe
-  # Overflows a thread's stack on purpose and wants a StackOverflowException
-  # back. The interpreter does not recurse for a managed call, but it allocas
-  # an InterpFrame for every new depth, so the native stack runs out anyway and
-  # the fault lands in unmanaged code where it cannot become a managed
-  # exception. Not the engine-alternation path: identical with tier 1 disabled.
-  bug-60862.exe
-  # The same reason as MONO_TESTS_INTERP_DISABLED: the method starts
-  # interpreted here too, and only a classic body counts its back edges.
-  tier0-classic-backedge.exe
 )
 
 # Not tests: source files that another tailcall test links against.
@@ -1477,8 +1365,6 @@ set(MONO_TESTS_BOEHM_DISABLED
   # this test does not run correctly under a conservative gc
   monitor-resurrection.exe
 )
-
-# The interpreter runs on Boehm too, and the same three come off that half.
 
 # Mono.Runtime.DumpStateTotal () is the structured crash reporter, which this
 # build leaves out on Windows because summarizing a thread there means

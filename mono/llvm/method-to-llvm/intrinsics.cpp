@@ -193,8 +193,7 @@ struct BuiltinEmitters {
 	 * one load.
 	 *
 	 * Reflection on a proxy gives GetType () a meaning of its own, and the
-	 * runtime-invoke wrapper is how it gets there. The interpreter refuses the
-	 * same site (mono/interp/transform/intrinsics.cpp).
+	 * runtime-invoke wrapper is how it gets there.
 	 */
 	static BuiltinResult get_type (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                               const BuiltinCall &call)

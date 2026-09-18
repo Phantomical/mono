@@ -155,9 +155,9 @@ TEST_F (FunctionPointer, SurvivesPromotion)
 	ASSERT_NE (nullptr, before);
 
 	/*
-	 * What tier 0 left: no body under the interpreter, the classic body under
-	 * the classic compiler. A promotion has to replace it either way, which is
-	 * what makes this a promotion rather than a second look.
+	 * What tier 0 left: no body under the LLVM backend, only the classic
+	 * compiler's own. A promotion has to replace it, which is what makes this
+	 * a promotion rather than a second look.
 	 */
 	void *tier0_body = mono_llvm_jit_find_body (domain, method);
 	ASSERT_TRUE (mono_promote_method (method, domain));

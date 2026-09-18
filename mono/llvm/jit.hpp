@@ -124,7 +124,7 @@ struct ProfileCounters {
 /// Which of the two IR pipelines a module is compiled through.
 ///
 /// This is the JIT's own choice of pipeline, and it is not the runtime's ranking
-/// of tiers - MonoJit knows nothing about the interpreter or a detour.
+/// of tiers - MonoJit knows nothing about tier 0 or a detour.
 enum class JitTier {
 	/// The O1 function pipeline with FastISel behind it, instrumented so that
 	/// a later compile has counts to read.

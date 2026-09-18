@@ -138,10 +138,6 @@ struct _MonoProfilerCallContext {
 	 * is a JIT frame; otherwise, zeroed.
 	 */
 	MonoContext context;
-	/*
-	 * A non-NULL MonoInterpFrameHandle if this is an interpreter frame.
-	 */
-	gpointer interp_frame;
 	MonoMethod *method;
 	/*
 	 * Points to the return value for an epilogue context. For a prologue, this

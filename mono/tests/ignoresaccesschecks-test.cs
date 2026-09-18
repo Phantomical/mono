@@ -24,10 +24,9 @@ namespace System.Runtime.CompilerServices
 
 class Program
 {
-	// One access per method, and none of them inlined. The interpreter
-	// refuses the access while it transforms the method that holds it, so an
-	// access sitting in Main would take Main down with it and never reach a
-	// catch.
+	// One access per method, and none of them inlined. A refused field access
+	// fails the whole method that holds it, so an access sitting in Main
+	// would take Main down with it and never reach a catch.
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int GrantedPrivateField () { return GrantedAssembly.Target.privateField; }
 

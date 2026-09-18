@@ -81,7 +81,7 @@ error_init
 
 error_init_reuse
 	This indicates an error has been cleaned up and will be reused.
-	A common usage is to reduce stack pressure, e.g. in the interpreter.
+	A common usage is to reduce stack pressure.
 	Consider also changing mono_error_cleanup to call error_init_internal,
 	and then remove these.
 

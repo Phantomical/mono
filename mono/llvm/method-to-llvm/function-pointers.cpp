@@ -99,9 +99,9 @@ MethodLLVMEmitter::emit_ldftn (MonoIrBuilder &builder, uint32_t token)
 	/*
 	 * The pointer is what a delegate cannot take. The one address a method
 	 * native code owns is published in the C convention, and Invoke would call
-	 * it in this one. The whole method is refused, the way the interpreter's
-	 * transform refuses it, so that a program sees the same exception whichever
-	 * engine reached the site.
+	 * it in this one. The whole method is refused, the way the classic
+	 * compiler (mono/mini/tier0/method-to-ir.c) refuses it, so that a program
+	 * sees the same exception whichever tier compiled the caller.
 	 */
 	if (mono_method_is_unmanaged_callers_only (*target)
 	    && constructs_a_delegate (method, code, code_size, ip)) {

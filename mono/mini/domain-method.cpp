@@ -42,8 +42,8 @@ private:
 };
 
 /*
- * A lookup takes the lock shared. Every interpreted call that has to name a
- * method reads this table, and those reads must not queue behind each other.
+ * A lookup takes the lock shared, so concurrent readers never queue behind
+ * each other.
  */
 using TableLock = MonoRankedMutex<std::shared_mutex, MONO_LOCK_RANK_DOMAIN_METHOD_TABLE>;
 
@@ -174,18 +174,6 @@ MonoDomainMethod::foreach_body (llvm::function_ref<void (const MonoMethodBody &)
 		visit (body);
 }
 
-InterpMethod *
-MonoDomainMethod::set_interp_method (InterpMethod *imethod)
-{
-	InterpMethod *held = nullptr;
-
-	if (interp_method_.compare_exchange_strong (held, imethod, std::memory_order_acq_rel,
-	                                            std::memory_order_acquire))
-		return imethod;
-
-	return held;
-}
-
 llvm::Expected<void *>
 MonoDomainMethod::interop_entry ()
 {
@@ -220,20 +208,11 @@ MonoDomainMethod::install_detour (void *target)
 
 	/*
 	 * A compiled body that inlined this method holds a copy of it that sits
-	 * under no thunk, so the redirect above misses it. Outside publish () for
-	 * the same reason the interpreter's callback is: this reaches other records
-	 * through the domain's table, whose lock is outside a record's.
+	 * under no thunk, so the redirect above misses it. Outside publish (): this
+	 * reaches other records through the domain's table, whose lock is outside
+	 * a record's.
 	 */
 	drop_inlined_bodies ();
-
-	/*
-	 * The interpreter settles once whether it calls a method or interprets it,
-	 * and an answer taken before this did not know the entry is native. Outside
-	 * publish (), which holds the record lock: this reads the domain's table,
-	 * and the table's lock is the outer one.
-	 */
-	if (mono_use_interpreter)
-		mini_get_interp_callbacks ()->method_compiled (domain, method);
 }
 
 void
@@ -274,9 +253,8 @@ MonoDomainMethod::unwind_inlined_body ()
 
 	/*
 	 * The rearm before the redirect, on the terms that call states. Both
-	 * trampolines: the entry goes back to the first, which sends a method no
-	 * interpreter runs straight to the second, and a stale answer cached on
-	 * either one is a call that never reaches the compile below.
+	 * trampolines: the entry goes back to the first, and a stale answer cached
+	 * on either one is a call that never reaches the compile below.
 	 */
 	mono_llvm_jit_rearm_trampoline (domain, compile_trampoline);
 	mono_llvm_jit_rearm_trampoline (domain, trampoline);
@@ -287,9 +265,8 @@ MonoDomainMethod::unwind_inlined_body ()
 	requested_.store (MonoTier::none, std::memory_order_release);
 
 	/*
-	 * Tier 0 is closed to the method from here. It ran compiled, so the call
-	 * counter that promotes it out of the interpreter is spent, and nothing
-	 * re-arms one.
+	 * Tier 0 is closed to the method from here. It ran compiled, so its
+	 * tier-0 call counter is spent, and nothing re-arms one.
 	 */
 	past_tier0_.store (true, std::memory_order_release);
 }
@@ -310,49 +287,9 @@ MonoDomainMethod::drop_inlined_bodies ()
 			dm->unwind_inlined_body ();
 }
 
-/*
- * No override is ever uninstalled, so this count only rises. That is what
- * keeps the question off the interpreter's call path in a process with no
- * overrides.
- */
-std::atomic<uint32_t> overrides_installed { 0 };
-
-bool
-any_method_overridden ()
-{
-	return overrides_installed.load (std::memory_order_relaxed) != 0;
-}
-
-MonoMethod *
-method_override_for (MonoDomain *domain, MonoMethod *method)
-{
-	if (!any_method_overridden () && !method_overrides_registered ())
-		return nullptr;
-
-	/* An override installed through the API is recorded on the method. */
-	if (MonoDomainMethod *dm = domain_method_find (domain, method))
-		if (MonoMethod *replacement = dm->override_method ())
-			return replacement;
-
-	/*
-	 * An override that the assembly names is installed when the method's entry
-	 * is first asked for, which can come later than this. Answering from the
-	 * table rather than building the record keeps a caller that only wants to
-	 * name its callee from carving a thunk for every call site it reads.
-	 */
-	return get_method_override (method);
-}
-
 void
 MonoDomainMethod::install_override (MonoMethod *replacement, void *target)
 {
-	/*
-	 * Before the entry moves. A caller that reaches the new entry and then asks
-	 * the record who is behind it has to be told the replacement, not nothing.
-	 */
-	override_.store (replacement, std::memory_order_release);
-	overrides_installed.fetch_add (1, std::memory_order_relaxed);
-
 	install_detour (target);
 }
 
@@ -432,8 +369,7 @@ domain_method_get (MonoDomain *domain, MonoMethod *method)
 
 	/*
 	 * Outside the table's lock and once per record. Installing compiles the
-	 * replacement, which comes back through here, and then tells the
-	 * interpreter, which reads the table too.
+	 * replacement, which comes back through here.
 	 */
 	if (dm && method_overrides_registered () && (*dm)->claim_override_check ())
 		if (MonoMethod *replacement = get_method_override (method))

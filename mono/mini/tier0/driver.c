@@ -2207,7 +2207,7 @@ mono_resolve_patch_target (MonoMethod *method, MonoDomain *domain, guint8 *code,
 		break;
 	case MONO_PATCH_INFO_METHOD_FTNDESC: {
 		/*
-		 * Return an ftndesc for either AOTed code, or for an interp entry.
+		 * Return an ftndesc for the AOTed code.
 		 */
 		target = mini_llvmonly_load_method_ftndesc (patch_info->data.method, FALSE, FALSE, error);
 		return_val_if_nok (error, NULL);
@@ -3270,17 +3270,6 @@ insert_safepoints (MonoCompile *cfg)
 		return;
 	}
 
-	if (cfg->method->wrapper_type == MONO_WRAPPER_OTHER) {
-		WrapperInfo *info = mono_marshal_get_wrapper_info (cfg->method);
-
-		if (info && (info->subtype == WRAPPER_SUBTYPE_INTERP_IN || info->subtype == WRAPPER_SUBTYPE_INTERP_LMF)) {
-			/* These wrappers shouldn't do any icalls */
-			if (cfg->verbose_level > 1)
-				printf ("SKIPPING SAFEPOINTS for interp-in wrappers.\n");
-			return;
-		}
-	}
-
 	if (cfg->verbose_level > 1)
 		printf ("INSERTING SAFEPOINTS\n");
 	if (cfg->verbose_level > 2)
@@ -3623,7 +3612,6 @@ mini_method_compile (MonoMethod *method, guint32 opts, MonoDomain *domain, JitFl
 	cfg->gen_sdb_seq_points = mini_debug_options.gen_sdb_seq_points;
 	cfg->llvm_only = (flags & JIT_FLAG_LLVM_ONLY) != 0;
 	cfg->llvm_ir_only = (flags & JIT_FLAG_LLVM_IR_ONLY) != 0;
-	cfg->interp = (flags & JIT_FLAG_INTERP) != 0;
 	cfg->use_current_cpu = (flags & JIT_FLAG_USE_CURRENT_CPU) != 0;
 	cfg->self_init = (flags & JIT_FLAG_SELF_INIT) != 0;
 	cfg->code_exec_only = (flags & JIT_FLAG_CODE_EXEC_ONLY) != 0;

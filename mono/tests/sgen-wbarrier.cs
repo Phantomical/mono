@@ -20,9 +20,10 @@ using System.Runtime.CompilerServices;
  *
  * Two things make the test decide rather than pass by luck.
  * Mono.Tiering.MonoTier::PromoteNow compiles the store methods on this thread,
- * because the interpreter has a barrier of its own and inlines bodies this small
- * into their caller. And the count is large, because a handful of payloads can
- * survive on a conservatively pinned stack slot whatever the cards say.
+ * so each round runs at the tier requested rather than whatever tier a natural
+ * promotion threshold would reach. And the count is large, because a handful
+ * of payloads can survive on a conservatively pinned stack slot whatever the
+ * cards say.
  */
 
 namespace Mono.Tiering {
@@ -243,8 +244,8 @@ class Driver {
 	{
 		MakeTheArraysOld ();
 
-		// The interpreted round first, then each compiled tier. A round stores
-		// over payloads the round before it promoted, so it marks cards the
+		// Tier 0 runs first, then each compiled tier. A round stores over
+		// payloads the round before it promoted, so it marks cards the
 		// collection in between has cleaned.
 		if (!Round (1000000, "tier 0") || !OldToOld ("tier 0"))
 			return 1;

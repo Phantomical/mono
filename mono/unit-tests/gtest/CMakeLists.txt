@@ -37,4 +37,3 @@ endfunction()
 
 add_subdirectory(runtime)
 add_subdirectory(llvm)
-add_subdirectory(interp)

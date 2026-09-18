@@ -12,7 +12,7 @@ function(mono_add_unit_test name)
   cmake_parse_arguments(ARG "RUNTIME" "" "SOURCES" ${ARGN})
 
   # Naming the object libraries links only the ones listed here, so mini, the
-  # interpreter, the debugger agent and mono-llvm are left out.
+  # debugger agent and mono-llvm are left out.
   if(ARG_RUNTIME)
     set(_libs monosgen-static)
   else()
@@ -93,18 +93,6 @@ mono_unit_test_cases(test-mono-runtime test-type-init-recursion
 mono_unit_test_cases(test-mono-runtime test-tier          "MethodTier.*")
 mono_unit_test_cases(test-mono-runtime test-etw-profiler
                      "EtwProfiler.*:EtwProfilerNaming.*:EtwProfilerPure.*")
-
-# The cases above that read a tier-0 caller's behaviour, again with the
-# interpreter as tier 0. The default arms run the classic compiler there, and
-# the two engines answer some of these differently: an interpreted caller
-# misses a detour on a callee it copied in, where a classic one inlines nothing.
-set(_interp_tier0 "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-classic=0")
-mono_unit_test_cases(test-mono-runtime test-function-pointer-interp
-                     "FunctionPointer.*" ENV "${_interp_tier0}")
-mono_unit_test_cases(test-mono-runtime test-detour-interp
-                     "MethodDetour.*" ENV "${_interp_tier0}")
-mono_unit_test_cases(test-mono-runtime test-unmanaged-callers-only-interp
-                     "UnmanagedCallersOnly.*" ENV "${_interp_tier0}")
 
 # One case each, and there cannot be a second. The samples they are built out
 # of run a domain to completion and call mono_jit_cleanup. Nothing in the

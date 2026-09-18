@@ -157,7 +157,7 @@ mono_debug_domain_create (MonoDomain *domain)
 	info = g_new0 (DebugDomainInfo, 1);
 	/*
 	 * A method registers once per body, so a promoted method registers twice -
-	 * the interpreter's line table and then the compiled one. The table holds
+	 * the tier-0 line table and then the tier-1 one. The table holds
 	 * the newest, and the destroy function is what frees the one it replaces.
 	 */
 	info->method_hash = g_hash_table_new_full (NULL, NULL, NULL, g_free);
@@ -949,7 +949,7 @@ mono_install_get_seq_point (MonoGetSeqPointFunc func)
 	get_seq_point = func;
 }
 
-static int (*get_il_offset_from_jinfo) (MonoDomain *domain, MonoJitInfo *ji, gpointer interp_frame, guint32 native_offset);
+static int (*get_il_offset_from_jinfo) (MonoDomain *domain, MonoJitInfo *ji, guint32 native_offset);
 
 void
 mono_install_get_il_offset_from_jinfo (MonoGetILOffsetFromJinfoFunc func)
@@ -1028,20 +1028,17 @@ mono_debug_print_stack_frame (MonoMethod *method, guint32 native_offset, MonoDom
 
 /**
  * mono_debug_il_offset_from_jinfo:
- * \param interp_frame The live interpreter frame, or NULL for a captured trace.
  * Places a frame's native offset in the IL, asking the body the offset came from
  * rather than the per-method tables, which a method that has run in more than one
- * engine has only one of. Returns -1 when the body has no IL-offset map.
- *
- * A caller that cannot take the domain's jit code hash lock must pass the frame.
+ * tier has only one of. Returns -1 when the body has no IL-offset map.
  */
 int
-mono_debug_il_offset_from_jinfo (MonoJitInfo *ji, gpointer interp_frame, MonoDomain *domain, guint32 native_offset)
+mono_debug_il_offset_from_jinfo (MonoJitInfo *ji, MonoDomain *domain, guint32 native_offset)
 {
 	if (!ji || !get_il_offset_from_jinfo)
 		return -1;
 
-	return get_il_offset_from_jinfo (domain, ji, interp_frame, native_offset);
+	return get_il_offset_from_jinfo (domain, ji, native_offset);
 }
 
 /**
