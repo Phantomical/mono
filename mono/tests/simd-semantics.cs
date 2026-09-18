@@ -222,6 +222,7 @@ class SimdSemantics
 	static unsafe byte[] Bytes (Vector16b v) { byte[] r = new byte[sizeof (Vector16b)]; fixed (byte* p = r) *(Vector16b*) p = v; return r; }
 	static unsafe byte[] Bytes (Vector16sb v) { byte[] r = new byte[sizeof (Vector16sb)]; fixed (byte* p = r) *(Vector16sb*) p = v; return r; }
 	static unsafe byte[] Bytes (System.Numerics.Vector4 v) { byte[] r = new byte[sizeof (System.Numerics.Vector4)]; fixed (byte* p = r) *(System.Numerics.Vector4*) p = v; return r; }
+	static unsafe byte[] Bytes (System.Numerics.Vector2 v) { byte[] r = new byte[sizeof (System.Numerics.Vector2)]; fixed (byte* p = r) *(System.Numerics.Vector2*) p = v; return r; }
 
 	static byte[] Bytes<T> (Vector<T> v) where T : struct
 	{
@@ -626,6 +627,14 @@ class SimdSemantics
 		return r;
 	}
 
+	static System.Numerics.Vector2[] MakeSNV2 (float[] e, int shift)
+	{
+		var r = new System.Numerics.Vector2[ROWS];
+		for (int i = 0; i < ROWS; i++)
+			r[i] = new System.Numerics.Vector2 (e[(i + shift) % e.Length], e[(i + shift + 1) % e.Length]);
+		return r;
+	}
+
 	static Vector<T> MakeVecT<T> (T[] e, int shift) where T : struct
 	{
 		int count = Vector<T>.Count;
@@ -654,6 +663,7 @@ class SimdSemantics
 	static Vector16b[] V16bA = MakeV16b (BE, 0), V16bB = MakeV16b (BE, 3);
 	static Vector16sb[] V16sbA = MakeV16sb (SBE, 0), V16sbB = MakeV16sb (SBE, 3);
 	static System.Numerics.Vector4[] SNV4A = MakeSNV4 (FE, 0), SNV4B = MakeSNV4 (FE, 5);
+	static System.Numerics.Vector2[] SNV2A = MakeSNV2 (FE, 0), SNV2B = MakeSNV2 (FE, 5);
 
 	static Vector<float>[] VFA = MakeVecTRows<float> (FE, 0), VFB = MakeVecTRows<float> (FE, 5);
 	static Vector<double>[] VDA = MakeVecTRows<double> (DE, 0), VDB = MakeVecTRows<double> (DE, 5);
@@ -681,6 +691,7 @@ class SimdSemantics
 	static Vector16b[] EqV16bA = MakeV16b (BEqA, 0), EqV16bB = MakeV16b (BEqB, 0);
 	static Vector16sb[] EqV16sbA = MakeV16sb (SBEqA, 0), EqV16sbB = MakeV16sb (SBEqB, 0);
 	static System.Numerics.Vector4[] EqSNV4A = MakeSNV4 (FEqA, 0), EqSNV4B = MakeSNV4 (FEqB, 0);
+	static System.Numerics.Vector2[] EqSNV2A = MakeSNV2 (FEqA, 0), EqSNV2B = MakeSNV2 (FEqB, 0);
 
 	static Vector<float>[] EqVFA = MakeVecTRows<float> (FEqA, 0), EqVFB = MakeVecTRows<float> (FEqB, 0);
 	static Vector<double>[] EqVDA = MakeVecTRows<double> (DEqA, 0), EqVDB = MakeVecTRows<double> (DEqB, 0);
@@ -1511,6 +1522,96 @@ class SimdSemantics
 		RunKernelOnly (f, "Vector4.CopyTo", "K_SNV4_CopyTo", K_SNV4_CopyTo, 4);
 	}
 
+	// ==================== System.Numerics.Vector2 ====================
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Add (int r) { return Bytes (SNV2A[r] + SNV2B[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Sub (int r) { return Bytes (SNV2A[r] - SNV2B[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Mul (int r) { return Bytes (SNV2A[r] * SNV2B[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_MulScalar (int r) { return Bytes (SNV2A[r] * FA (r)); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Div (int r) { return Bytes (SNV2A[r] / SNV2B[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_DivScalar (int r) { return Bytes (SNV2A[r] / FA (r)); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Neg (int r) { return Bytes (-SNV2A[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Min (int r) { return Bytes (System.Numerics.Vector2.Min (SNV2A[r], SNV2B[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Max (int r) { return Bytes (System.Numerics.Vector2.Max (SNV2A[r], SNV2B[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Abs (int r) { return Bytes (System.Numerics.Vector2.Abs (SNV2A[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Sqrt (int r) { return Bytes (System.Numerics.Vector2.SquareRoot (SNV2A[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Dot (int r) { return BitConverter.GetBytes (System.Numerics.Vector2.Dot (SNV2A[r], SNV2B[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Dist (int r) { return BitConverter.GetBytes (System.Numerics.Vector2.Distance (SNV2A[r], SNV2B[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Len (int r) { return BitConverter.GetBytes (SNV2A[r].Length ()); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Norm (int r) { return Bytes (System.Numerics.Vector2.Normalize (SNV2A[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Clamp (int r) { return Bytes (System.Numerics.Vector2.Clamp (SNV2A[r], -System.Numerics.Vector2.One, System.Numerics.Vector2.One)); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Lerp (int r) { return Bytes (System.Numerics.Vector2.Lerp (SNV2A[r], SNV2B[r], FA (r) == 0f ? 0f : 0.25f)); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Eq (int r) { return BoolBytes (EqSNV2A[r] == EqSNV2B[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Ne (int r) { return BoolBytes (EqSNV2A[r] != EqSNV2B[r]); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_MulScalarL (int r) { return Bytes (FA (r) * SNV2A[r]); }
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_NAdd (int r) { return Bytes (System.Numerics.Vector2.Add (SNV2A[r], SNV2B[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_NSub (int r) { return Bytes (System.Numerics.Vector2.Subtract (SNV2A[r], SNV2B[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_NMul (int r) { return Bytes (System.Numerics.Vector2.Multiply (SNV2A[r], SNV2B[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_NMulVS (int r) { return Bytes (System.Numerics.Vector2.Multiply (SNV2A[r], FA (r))); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_NMulSV (int r) { return Bytes (System.Numerics.Vector2.Multiply (FA (r), SNV2A[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_NDiv (int r) { return Bytes (System.Numerics.Vector2.Divide (SNV2A[r], SNV2B[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_NDivVS (int r) { return Bytes (System.Numerics.Vector2.Divide (SNV2A[r], FA (r))); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_NNeg (int r) { return Bytes (System.Numerics.Vector2.Negate (SNV2A[r])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_Ctor2 (int r) { return Bytes (new System.Numerics.Vector2 (FE[r % FE.Length], FE[(r + 1) % FE.Length])); }
+	[MethodImpl (MethodImplOptions.NoInlining)] static byte[] K_SNV2_CtorSplat (int r) { return Bytes (new System.Numerics.Vector2 (FE[r % FE.Length])); }
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static byte[] K_SNV2_CopyTo (int r)
+	{
+		float[] a = new float[2];
+		SNV2A[r].CopyTo (a);
+		byte[] result = new byte[8];
+		Buffer.BlockCopy (a, 0, result, 0, 8);
+		return result;
+	}
+
+	static void CheckVector2 ()
+	{
+		string f = "System.Numerics.Vector2";
+		Type t = typeof (System.Numerics.Vector2);
+		Type[] tt = { t, t };
+		Type[] tf = { t, typeof (float) };
+		Type[] ft = { typeof (float), t };
+
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2 +", "K_SNV2_Add", K_SNV2_Add, t.GetMethod ("op_Addition", tt), SNV2A, SNV2B, Bytes, 4);
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2 -", "K_SNV2_Sub", K_SNV2_Sub, t.GetMethod ("op_Subtraction", tt), SNV2A, SNV2B, Bytes, 4);
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2 *", "K_SNV2_Mul", K_SNV2_Mul, t.GetMethod ("op_Multiply", tt), SNV2A, SNV2B, Bytes, 4);
+		RunBinary<System.Numerics.Vector2, float, System.Numerics.Vector2> (f, "Vector2 * scalar", "K_SNV2_MulScalar", K_SNV2_MulScalar, t.GetMethod ("op_Multiply", tf), SNV2A, FE, Bytes, 4, floatRelax: true);
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2 /", "K_SNV2_Div", K_SNV2_Div, t.GetMethod ("op_Division", tt), SNV2A, SNV2B, Bytes, 4);
+		RunBinary<System.Numerics.Vector2, float, System.Numerics.Vector2> (f, "Vector2 / scalar", "K_SNV2_DivScalar", K_SNV2_DivScalar, t.GetMethod ("op_Division", tf), SNV2A, FE, Bytes, 4);
+		RunUnary<System.Numerics.Vector2, System.Numerics.Vector2> (f, "-Vector2", "K_SNV2_Neg", K_SNV2_Neg, t.GetMethod ("op_UnaryNegation", new[] { t }), SNV2A, Bytes, 4);
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2.Min", "K_SNV2_Min", K_SNV2_Min, t.GetMethod ("Min", tt), SNV2A, SNV2B, Bytes, 4);
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2.Max", "K_SNV2_Max", K_SNV2_Max, t.GetMethod ("Max", tt), SNV2A, SNV2B, Bytes, 4);
+		RunUnary<System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2.Abs", "K_SNV2_Abs", K_SNV2_Abs, t.GetMethod ("Abs", new[] { t }), SNV2A, Bytes, 4);
+		RunUnary<System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2.SquareRoot", "K_SNV2_Sqrt", K_SNV2_Sqrt, t.GetMethod ("SquareRoot", new[] { t }), SNV2A, Bytes, 4);
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, float> (f, "Vector2.Dot", "K_SNV2_Dot", K_SNV2_Dot, t.GetMethod ("Dot", tt), SNV2A, SNV2B, BitConverter.GetBytes, 4, floatRelax: true);
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, float> (f, "Vector2.Distance", "K_SNV2_Dist", K_SNV2_Dist, t.GetMethod ("Distance", tt), SNV2A, SNV2B, BitConverter.GetBytes, 4, floatRelax: true);
+		// Length () is an instance method, and an open-instance delegate over a
+		// struct method fails to bind on this runtime, so this checks only the
+		// three arms that do not go through a delegate.
+		RunKernelOnly (f, "Vector2.Length", "K_SNV2_Len", K_SNV2_Len, 4);
+		RunUnary<System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2.Normalize", "K_SNV2_Norm", K_SNV2_Norm, t.GetMethod ("Normalize", new[] { t }), SNV2A, Bytes, 4, floatRelax: true);
+
+		RunKernelOnly (f, "Vector2.Clamp", "K_SNV2_Clamp", K_SNV2_Clamp, 4);
+		RunKernelOnly (f, "Vector2.Lerp", "K_SNV2_Lerp", K_SNV2_Lerp, 4);
+		RunBinary<float, System.Numerics.Vector2, System.Numerics.Vector2> (f, "scalar * Vector2", "K_SNV2_MulScalarL", K_SNV2_MulScalarL, t.GetMethod ("op_Multiply", ft), FE, SNV2A, Bytes, 4, floatRelax: true);
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, bool> (f, "Vector2 ==", "K_SNV2_Eq", K_SNV2_Eq, t.GetMethod ("op_Equality", tt), EqSNV2A, EqSNV2B, BoolBytes, 1);
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, bool> (f, "Vector2 !=", "K_SNV2_Ne", K_SNV2_Ne, t.GetMethod ("op_Inequality", tt), EqSNV2A, EqSNV2B, BoolBytes, 1);
+
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2.Add", "K_SNV2_NAdd", K_SNV2_NAdd, t.GetMethod ("Add", tt), SNV2A, SNV2B, Bytes, 4);
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2.Subtract", "K_SNV2_NSub", K_SNV2_NSub, t.GetMethod ("Subtract", tt), SNV2A, SNV2B, Bytes, 4);
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2.Multiply", "K_SNV2_NMul", K_SNV2_NMul, t.GetMethod ("Multiply", tt), SNV2A, SNV2B, Bytes, 4);
+		RunBinary<System.Numerics.Vector2, float, System.Numerics.Vector2> (f, "Vector2.Multiply(V,S)", "K_SNV2_NMulVS", K_SNV2_NMulVS, t.GetMethod ("Multiply", tf), SNV2A, FE, Bytes, 4, floatRelax: true);
+		RunBinary<float, System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2.Multiply(S,V)", "K_SNV2_NMulSV", K_SNV2_NMulSV, t.GetMethod ("Multiply", ft), FE, SNV2A, Bytes, 4, floatRelax: true);
+		RunBinary<System.Numerics.Vector2, System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2.Divide", "K_SNV2_NDiv", K_SNV2_NDiv, t.GetMethod ("Divide", tt), SNV2A, SNV2B, Bytes, 4);
+		RunBinary<System.Numerics.Vector2, float, System.Numerics.Vector2> (f, "Vector2.Divide(V,S)", "K_SNV2_NDivVS", K_SNV2_NDivVS, t.GetMethod ("Divide", tf), SNV2A, FE, Bytes, 4);
+		RunUnary<System.Numerics.Vector2, System.Numerics.Vector2> (f, "Vector2.Negate", "K_SNV2_NNeg", K_SNV2_NNeg, t.GetMethod ("Negate", new[] { t }), SNV2A, Bytes, 4);
+
+		RunKernelOnly (f, "Vector2 ctor(2)", "K_SNV2_Ctor2", K_SNV2_Ctor2, 4);
+		RunKernelOnly (f, "Vector2 ctor(splat)", "K_SNV2_CtorSplat", K_SNV2_CtorSplat, 4);
+		RunKernelOnly (f, "Vector2.CopyTo", "K_SNV2_CopyTo", K_SNV2_CopyTo, 4);
+	}
+
 	// ==================== System.Numerics.Vector<T> ====================
 
 	static byte[] ScalarBytes (byte v) { return new[] { v }; }
@@ -2037,6 +2138,7 @@ class SimdSemantics
 		CheckVector16b ();
 		CheckSimdRest ();
 		CheckVector4 ();
+		CheckVector2 ();
 		CheckVectorT ();
 		CheckIntDivByZero ();
 
