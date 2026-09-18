@@ -1138,7 +1138,11 @@ arg_leaf_bound_for (MonoMethodSignature *sig, MonoType *t)
 		return 0;
 	if (sig->pinvoke)
 		return 2;
-	return mono_class_value_size (mono_class_from_mono_type_internal (t), NULL);
+	/* A struct of no bytes still takes one scalar, because the Windows
+	 * convention gives an empty struct a register and cannot drop the
+	 * argument. Counting its bytes alone reserves nothing, and the leaf placed
+	 * for it then writes past the pool. */
+	return MAX (mono_class_value_size (mono_class_from_mono_type_internal (t), NULL), 1);
 }
 
 static int
@@ -1159,9 +1163,16 @@ add_valuetype (MonoMethodSignature *sig, ArgInfo *ainfo, MonoType *type,
 			   guint32 *gr, guint32 *fr, guint32 *stack_size, ArgLeaf **pool)
 {
 #ifdef TARGET_WIN32
+	int size;
+
 	add_valuetype_win64 (sig, ainfo, type, is_return, gr, fr, stack_size);
-	fill_leaves_from_pairs (ainfo, pool,
-	                        mono_class_value_size (mono_class_from_mono_type_internal (type), NULL));
+	/* An empty struct takes a whole register here, so the register's width is
+	 * what the caller writes and what the callee reserves, not the struct's own
+	 * byte count. */
+	size = ainfo->pass_empty_struct
+	       ? SIZEOF_REGISTER
+	       : mono_class_value_size (mono_class_from_mono_type_internal (type), NULL);
+	fill_leaves_from_pairs (ainfo, pool, size);
 #else
 	guint32 size, quad, nquads, i, nfields;
 	/* Keep track of the size used in each quad so we can */
