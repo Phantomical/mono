@@ -24,7 +24,7 @@ is_same_class (const llvm::CallBase *a, const llvm::CallBase *b)
 		return false;
 
 	for (unsigned i = 0; i < a->arg_size (); ++i)
-		if (strip_casts (a->getArgOperand (i)) != strip_casts (b->getArgOperand (i)))
+		if (!is_same_address (a->getArgOperand (i), b->getArgOperand (i)))
 			return false;
 
 	return true;

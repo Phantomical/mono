@@ -228,10 +228,10 @@ walk_to_slot (uint32_t index, bool mrgctx)
 /// What a fetch site tells RgctxFetchPass: the operand the context arrives in,
 /// and the walk that reaches the slot from it.
 static std::string
-fetch_spec (const llvm::Function *fill, uint32_t index, bool mrgctx)
+fetch_spec (const llvm::Function *placeholder, uint32_t index, bool mrgctx)
 {
 	std::string spec =
-		"ctx=" + std::to_string (natural_parameter_index (0, fill)) + ",walk=";
+		"ctx=" + std::to_string (natural_parameter_index (0, placeholder)) + ",walk=";
 	const char *separator = "";
 
 	for (uint32_t offset : walk_to_slot (index, mrgctx)) {
@@ -309,20 +309,35 @@ MethodLLVMEmitter::rgctx_fetch (MonoIrBuilder &builder, MonoRgctxInfoType info_t
 	 * finds the slot filled, and RgctxFetchPass puts the load that reads it in
 	 * front of the call. That lowering runs late: the guard it builds is a
 	 * diamond, which hides the call from a pass that reads the call whole.
+	 *
+	 * The call below names a placeholder rather than the icall itself, taking
+	 * the context as a pointer where the icall takes it as an integer, so that
+	 * this body's own IR carries the context as a pointer up to the point
+	 * RgctxFetchPass builds the real call. That is where the one conversion to
+	 * what the icall's signature takes belongs.
 	 */
-	(*fill)->addFnAttr (rgctx_fetch_attribute);
+	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
+	llvm::Function *placeholder = llvm::cast<llvm::Function> (
+		module->getOrInsertFunction (
+			       mrgctx ? "mono.rgctx.fetch.method" : "mono.rgctx.fetch.class",
+			       llvm::FunctionType::get ((*fill)->getReturnType (),
+			                                {ptr, builder.getInt32Ty ()}, false))
+			.getCallee ());
 
-	std::string spec = fetch_spec (*fill, index, mrgctx);
+	placeholder->addFnAttr (rgctx_fetch_attribute);
+
+	std::string spec = fetch_spec (placeholder, index, mrgctx);
 	llvm::Value *info = emit_protected_call (
-		builder, *fill,
-		adapt_to_callee (builder, *fill, {rgctx, builder.getInt32 (index)}),
+		builder, placeholder, {rgctx, builder.getInt32 (index)},
 		[&] (llvm::CallBase *site) {
 			site->addFnAttr (llvm::Attribute::get (
 				context (), rgctx_walk_attribute, spec));
-		});
+		},
+		/*hidden=*/nullptr, /*at=*/0,
+		{llvm::OperandBundleDef (rgctx_fill_bundle.str (), llvm::ArrayRef<llvm::Value *> (*fill))});
 
 	if (!info->getType ()->isPointerTy ())
-		info = builder.CreateIntToPtr (info, llvm::PointerType::get (context (), 0));
+		info = builder.CreateIntToPtr (info, ptr);
 
 	return info;
 }

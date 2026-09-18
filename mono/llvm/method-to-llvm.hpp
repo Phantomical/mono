@@ -953,7 +953,8 @@ private:
 		MonoIrBuilder &builder, llvm::FunctionCallee callee,
 		llvm::ArrayRef<llvm::Value *> args,
 		llvm::function_ref<void (llvm::CallBase *)> describe_site = {},
-		llvm::Type *hidden = nullptr, unsigned at = 0);
+		llvm::Type *hidden = nullptr, unsigned at = 0,
+		llvm::ArrayRef<llvm::OperandBundleDef> bundles = {});
 
 	llvm::Expected<MonoMethod *> resolve_method (uint32_t token);
 	llvm::Expected<MonoMethodSignature *> call_site_signature (MonoMethod *target,
