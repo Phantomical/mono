@@ -561,6 +561,7 @@ set(MONO_TESTS_CS_SRC
   finally-nested-resume.cs
   eliminate-empty-finally.cs
   bug-60862.cs
+  x86-hwintrinsics.cs
 )
 
 # Tests written directly in IL, assembled with ilasm.

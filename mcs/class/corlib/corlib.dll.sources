@@ -1652,6 +1652,26 @@ corert/PreAllocatedOverlapped.platformnotsupported.cs
 corert/RuntimeAugments.cs
 ../../../external/corert/src/Common/src/Interop/Unix/System.Private.CoreLib.Native/Interop.Number.cs
 
+System.Runtime.Intrinsics/Vector64.cs
+System.Runtime.Intrinsics/Vector128.cs
+System.Runtime.Intrinsics/Vector256.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Enums.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse2.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse3.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Ssse3.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse41.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse42.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Avx.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Avx2.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Aes.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Bmi1.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Bmi2.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Fma.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Lzcnt.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Pclmulqdq.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Popcnt.PlatformNotSupported.cs
+
 ../../../external/corert/src/Common/src/System/Collections/Generic/LowLevelList.cs
 
 ../../../external/corert/src/Common/src/System/Numerics/Hashing/HashHelpers.cs
