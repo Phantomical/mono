@@ -79,6 +79,19 @@ lazy_compile_failed ()
 	_exit (1);
 }
 
+/// Returns whether t is passed in a register wider than 128 bits.
+bool
+type_needs_wide_vector_register (MonoType *t)
+{
+	if (t->byref)
+		return false;
+
+	MonoClass *klass = mono_class_from_mono_type_internal (t);
+
+	return klass != nullptr && m_class_is_simd_type (klass)
+	       && mono_class_value_size (klass, NULL) > 16;
+}
+
 #ifdef HOST_WIN32
 typedef BOOLEAN (NTAPI *RtlDllShutdownInProgressPtr) (void);
 
@@ -409,16 +422,23 @@ MonoBackend::attach_entry (DomainState &domain, MonoDomainMethod &dm)
 	 * sends to a compiled tier is published at this one instead, so a thread
 	 * that has to wait for a body waits at the top of the thunk it entered
 	 * rather than somewhere down the compile.
+	 *
+	 * Both entries need the resolver selected from the method signature. The
+	 * result is cached before taking the domain lock because reading a signature
+	 * can acquire the loader lock.
 	 */
+	ResolverKind kind = dm.needs_wide_vector_register ? ResolverKind::Avx
+	                                                  : ResolverKind::Default;
+
 	llvm::Expected<void *> compiling = domain.callbacks->reserve (
-		[this, &domain, &dm] () -> void * { return compile_entry (domain, dm); });
+		[this, &domain, &dm] () -> void * { return compile_entry (domain, dm); }, kind);
 	if (!compiling)
 		return compiling.takeError ();
 
 	dm.compile_trampoline = *compiling;
 
 	llvm::Expected<void *> trampoline = domain.callbacks->reserve (
-		[this, &domain, &dm] () -> void * { return policy_entry (domain, dm); });
+		[this, &domain, &dm] () -> void * { return policy_entry (domain, dm); }, kind);
 	if (!trampoline) {
 		domain.callbacks->release (*compiling);
 		return trampoline.takeError ();
@@ -548,6 +568,24 @@ int32_t
 method_tier0_budget (MonoMethod *method)
 {
 	return tier0_budget (method);
+}
+
+bool
+method_needs_wide_vector_register (MonoMethod *method)
+{
+	MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+	if (sig == nullptr)
+		return false;
+
+	if (type_needs_wide_vector_register (sig->ret))
+		return true;
+
+	for (int i = 0; i < sig->param_count; ++i)
+		if (type_needs_wide_vector_register (sig->params[i]))
+			return true;
+
+	return false;
 }
 
 llvm::Error

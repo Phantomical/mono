@@ -60,6 +60,11 @@ bool sse42_lowering ()
 	return mono_hwcap_x86_has_sse42;
 }
 
+bool avx_lowering ()
+{
+	return mono_hwcap_x86_has_avx;
+}
+
 /// Return whether the Vector128<T> parameter at index has an unsigned element type.
 /// LLVM vector types do not encode signedness, so some lowerings must recover it
 /// from the managed signature.
@@ -96,6 +101,63 @@ std::vector<int> low_lanes_mask (unsigned n)
 	return mask;
 }
 
+/// Returns the number of elements in one 128-bit half of value.
+unsigned half_lanes (llvm::Value *value)
+{
+	llvm::Type *elem = llvm::cast<llvm::FixedVectorType> (value->getType ())->getElementType ();
+	return 128 / elem->getScalarSizeInBits ();
+}
+
+bool is_256 (llvm::Value *value)
+{
+	return llvm::cast<llvm::FixedVectorType> (value->getType ())
+		       ->getPrimitiveSizeInBits ()
+		       .getFixedValue () == 256;
+}
+
+/// Selects the low or high 128-bit half of value using the low bit of index.
+llvm::Value *avx_low_or_high (llvm::IRBuilder<> &builder, llvm::Value *value, llvm::Value *index)
+{
+	unsigned half = llvm::cast<llvm::FixedVectorType> (value->getType ())->getNumElements () / 2;
+	llvm::Value *low = builder.CreateShuffleVector (value, low_lanes_mask (half));
+	std::vector<int> high_mask (half);
+
+	for (unsigned i = 0; i < half; i++)
+		high_mask[i] = (int) (half + i);
+
+	llvm::Value *high = builder.CreateShuffleVector (value, high_mask);
+	llvm::Value *bit0 =
+		builder.CreateICmpNE (builder.CreateAnd (index, builder.getInt8 (1)), builder.getInt8 (0));
+
+	return builder.CreateSelect (bit0, high, low);
+}
+
+/// Replaces the low or high 128-bit half of value, selected by index bit 0.
+llvm::Value *avx_insert_half (llvm::IRBuilder<> &builder, llvm::Value *value, llvm::Value *data,
+                              llvm::Value *index)
+{
+	unsigned lanes = llvm::cast<llvm::FixedVectorType> (value->getType ())->getNumElements ();
+	unsigned half = lanes / 2;
+	std::vector<int> extend_mask (half * 2, -1);
+
+	for (unsigned i = 0; i < half; i++)
+		extend_mask[i] = (int) i;
+
+	llvm::Value *data_ext = builder.CreateShuffleVector (data, extend_mask);
+	std::vector<int> low_mask (lanes), high_mask (lanes);
+
+	for (unsigned i = 0; i < lanes; i++) {
+		low_mask[i] = i < half ? (int) i : (int) (lanes + i);
+		high_mask[i] = i < half ? (int) (lanes + i) : (int) (i - half);
+	}
+
+	llvm::Value *low_result = builder.CreateShuffleVector (data_ext, value, low_mask);
+	llvm::Value *high_result = builder.CreateShuffleVector (data_ext, value, high_mask);
+	llvm::Value *bit0 =
+		builder.CreateICmpNE (builder.CreateAnd (index, builder.getInt8 (1)), builder.getInt8 (0));
+
+	return builder.CreateSelect (bit0, high_result, low_result);
+}
 /// Dispatch a runtime selector to blocks that call emit_case with a constant value.
 /// This permits use of LLVM intrinsics whose control operands must be immediate.
 llvm::Value *dispatch_control (llvm::IRBuilder<> &builder, llvm::Value *selector,
@@ -220,6 +282,12 @@ struct SseEmitters : SimdEmit {
 		return is_supported (mono_hwcap_x86_has_sse42, builder);
 	}
 
+	static BuiltinResult avx_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                       MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_avx, builder);
+	}
+
 	static bool is_double_vector (llvm::Value *value)
 	{
 		return llvm::cast<llvm::FixedVectorType> (value->getType ())
@@ -325,6 +393,14 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
+	/// Returns an i32 vector type with the same total width as value.
+	static llvm::Type *i32_lanes (llvm::LLVMContext &ctx, llvm::Type *value)
+	{
+		unsigned bits = llvm::cast<llvm::FixedVectorType> (value)
+			->getPrimitiveSizeInBits ().getFixedValue ();
+		return llvm::FixedVectorType::get (llvm::Type::getInt32Ty (ctx), bits / 32);
+	}
+
 	template <llvm::BinaryOperator::BinaryOps op>
 	static BuiltinResult bitwise (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                              MonoMethod *)
@@ -332,12 +408,11 @@ struct SseEmitters : SimdEmit {
 		llvm::Value *left = argument (emitter, 0);
 		llvm::Value *right = argument (emitter, 1);
 		llvm::Type *original = left->getType ();
-		llvm::Type *i32x4 = llvm::FixedVectorType::get (
-			llvm::Type::getInt32Ty (context (emitter)), 4);
+		llvm::Type *i32xn = i32_lanes (context (emitter), original);
 
 		builder.CreateRet (builder.CreateBitCast (
-			builder.CreateBinOp (op, builder.CreateBitCast (left, i32x4),
-			                     builder.CreateBitCast (right, i32x4)),
+			builder.CreateBinOp (op, builder.CreateBitCast (left, i32xn),
+			                     builder.CreateBitCast (right, i32xn)),
 			original));
 		return llvm::Error::success ();
 	}
@@ -349,12 +424,11 @@ struct SseEmitters : SimdEmit {
 		llvm::Value *left = argument (emitter, 0);
 		llvm::Value *right = argument (emitter, 1);
 		llvm::Type *original = left->getType ();
-		llvm::Type *i32x4 = llvm::FixedVectorType::get (
-			llvm::Type::getInt32Ty (context (emitter)), 4);
+		llvm::Type *i32xn = i32_lanes (context (emitter), original);
 
 		builder.CreateRet (builder.CreateBitCast (
-			builder.CreateAnd (builder.CreateNot (builder.CreateBitCast (left, i32x4)),
-			                   builder.CreateBitCast (right, i32x4)),
+			builder.CreateAnd (builder.CreateNot (builder.CreateBitCast (left, i32xn)),
+			                   builder.CreateBitCast (right, i32xn)),
 			original));
 		return llvm::Error::success ();
 	}
@@ -778,8 +852,11 @@ struct SseEmitters : SimdEmit {
 	static BuiltinResult load_dqu (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                               MonoMethod *)
 	{
+		bool is256 = llvm::cast<llvm::FixedVectorType> (return_type (emitter))
+			             ->getPrimitiveSizeInBits ().getFixedValue () == 256;
 		llvm::Value *loaded = builder.CreateIntrinsic (
-			llvm::Intrinsic::x86_sse3_ldu_dq, {}, { argument (emitter, 0) });
+			is256 ? llvm::Intrinsic::x86_avx_ldu_dq_256 : llvm::Intrinsic::x86_sse3_ldu_dq, {},
+			{ argument (emitter, 0) });
 
 		builder.CreateRet (builder.CreateBitCast (loaded, return_type (emitter)));
 		return llvm::Error::success ();
@@ -1035,6 +1112,559 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
+	/// Loads one scalar and broadcasts it to every result lane.
+	static BuiltinResult broadcast_scalar (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                       MonoMethod *)
+	{
+		llvm::Type *vector_type = return_type (emitter);
+		llvm::Type *elem = llvm::cast<llvm::FixedVectorType> (vector_type)->getElementType ();
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (vector_type)->getNumElements ();
+		llvm::Value *scalar = builder.CreateLoad (elem, argument (emitter, 0));
+
+		builder.CreateRet (builder.CreateVectorSplat (lanes, scalar));
+		return llvm::Error::success ();
+	}
+
+	/// Loads one 128-bit vector and copies it to both result halves.
+	static BuiltinResult broadcast_vector128 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                          MonoMethod *)
+	{
+		llvm::Type *vector_type = return_type (emitter);
+		llvm::Type *elem = llvm::cast<llvm::FixedVectorType> (vector_type)->getElementType ();
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (vector_type)->getNumElements ();
+		llvm::Type *half_type = llvm::FixedVectorType::get (elem, lanes / 2);
+		llvm::Value *half = builder.CreateLoad (half_type, argument (emitter, 0));
+		std::vector<int> mask (lanes);
+
+		for (unsigned i = 0; i < lanes; i++)
+			mask[i] = (int) (i % (lanes / 2));
+
+		builder.CreateRet (builder.CreateShuffleVector (half, mask));
+		return llvm::Error::success ();
+	}
+
+	/// Dispatches the runtime comparison mode to an intrinsic call with a
+	/// constant immediate. The legacy intrinsic also represents the VEX-encoded
+	/// 128-bit form.
+	static BuiltinResult avx_compare (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                  MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *mode = argument (emitter, 2);
+		bool is_double = is_double_vector (left);
+		llvm::Intrinsic::ID id = is_double
+			? (is_256 (left) ? llvm::Intrinsic::x86_avx_cmp_pd_256 : llvm::Intrinsic::x86_sse2_cmp_pd)
+			: (is_256 (left) ? llvm::Intrinsic::x86_avx_cmp_ps_256 : llvm::Intrinsic::x86_sse_cmp_ps);
+		llvm::Value *result = dispatch_control (builder, mode, 32, left->getType (), [&] (unsigned p) {
+			return builder.CreateIntrinsic (id, {}, { left, right, builder.getInt8 (p) });
+		});
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	/// Dispatches a runtime scalar comparison mode to a constant immediate.
+	static BuiltinResult avx_compare_scalar (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *mode = argument (emitter, 2);
+		llvm::Intrinsic::ID id = is_double_vector (left) ? llvm::Intrinsic::x86_sse2_cmp_sd
+		                                                 : llvm::Intrinsic::x86_sse_cmp_ss;
+		llvm::Value *result = dispatch_control (builder, mode, 32, left->getType (), [&] (unsigned p) {
+			return builder.CreateIntrinsic (id, {}, { left, right, builder.getInt8 (p) });
+		});
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	/// Emits the 256-bit AVX rounding intrinsic for imm8.
+	template <int imm8>
+	static BuiltinResult avx_round (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+
+		builder.CreateRet (builder.CreateIntrinsic (
+			is_double_vector (value) ? llvm::Intrinsic::x86_avx_round_pd_256
+			                         : llvm::Intrinsic::x86_avx_round_ps_256,
+			{}, { value, builder.getInt32 (imm8) }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult avx_blend_variable (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *mask = argument (emitter, 2);
+		llvm::Intrinsic::ID id = is_double_vector (left) ? llvm::Intrinsic::x86_avx_blendv_pd_256
+		                                                 : llvm::Intrinsic::x86_avx_blendv_ps_256;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { left, right, mask }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult to_single (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                MonoMethod *)
+	{
+		builder.CreateRet (builder.CreateExtractElement (argument (emitter, 0), (uint64_t) 0));
+		return llvm::Error::success ();
+	}
+
+	/// VCVTDQ2PS is equivalent to a signed integer-to-float conversion.
+	static BuiltinResult int_to_float (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                   MonoMethod *)
+	{
+		builder.CreateRet (builder.CreateSIToFP (argument (emitter, 0), return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
+	/// Widens integer or float lanes to double using generic LLVM conversions.
+	static BuiltinResult widen_to_double (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                      MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Type *dest = return_type (emitter);
+		llvm::Type *elem =
+			llvm::cast<llvm::FixedVectorType> (value->getType ())->getElementType ();
+
+		builder.CreateRet (elem->isIntegerTy () ? builder.CreateSIToFP (value, dest)
+		                                        : builder.CreateFPExt (value, dest));
+		return llvm::Error::success ();
+	}
+
+	/// Implements VDPPS with a runtime control byte. Each 128-bit half computes
+	/// its own four-element sum using the same control bits.
+	static BuiltinResult avx_dot_product (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                      MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *control = builder.CreateZExt (argument (emitter, 2), builder.getInt32Ty ());
+		llvm::Type *vector_type = left->getType ();
+		llvm::Type *elem = llvm::cast<llvm::FixedVectorType> (vector_type)->getElementType ();
+		llvm::Value *zero = llvm::ConstantFP::get (elem, 0.0);
+		llvm::Value *product = builder.CreateFMul (left, right);
+		llvm::Value *result = llvm::Constant::getNullValue (vector_type);
+
+		for (unsigned half = 0; half < 2; half++) {
+			llvm::Value *sum = zero;
+
+			for (unsigned j = 0; j < 4; j++) {
+				unsigned i = half * 4 + j;
+				llvm::Value *bit = builder.CreateICmpNE (
+					builder.CreateAnd (control, builder.getInt32 (0x10u << j)),
+					builder.getInt32 (0));
+
+				sum = builder.CreateFAdd (
+					sum,
+					builder.CreateSelect (bit, builder.CreateExtractElement (product, i), zero));
+			}
+
+			for (unsigned j = 0; j < 4; j++) {
+				unsigned i = half * 4 + j;
+				llvm::Value *bit = builder.CreateICmpNE (
+					builder.CreateAnd (control, builder.getInt32 (1u << j)), builder.getInt32 (0));
+
+				result =
+					builder.CreateInsertElement (result, builder.CreateSelect (bit, sum, zero), i);
+			}
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult extract_vector128 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                        MonoMethod *)
+	{
+		builder.CreateRet (
+			avx_low_or_high (builder, argument (emitter, 0), argument (emitter, 1)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult extract_vector128_store (MethodLLVMEmitter &emitter,
+	                                              llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *address = argument (emitter, 0);
+		llvm::Value *selected =
+			avx_low_or_high (builder, argument (emitter, 1), argument (emitter, 2));
+
+		builder.CreateAlignedStore (selected, address, llvm::Align (4));
+		builder.CreateRetVoid ();
+		return llvm::Error::success ();
+	}
+
+	/// Extends to 256 bits while leaving the upper half unspecified.
+	static BuiltinResult extend_to_vector256 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                          MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		unsigned half = llvm::cast<llvm::FixedVectorType> (value->getType ())->getNumElements ();
+		std::vector<int> mask (half * 2, -1);
+
+		for (unsigned i = 0; i < half; i++)
+			mask[i] = (int) i;
+
+		builder.CreateRet (builder.CreateShuffleVector (value, mask));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult get_lower_half (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                     MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		unsigned half = llvm::cast<llvm::FixedVectorType> (return_type (emitter))->getNumElements ();
+
+		builder.CreateRet (builder.CreateShuffleVector (value, low_lanes_mask (half)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult insert_vector128 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                       MonoMethod *)
+	{
+		builder.CreateRet (avx_insert_half (builder, argument (emitter, 0), argument (emitter, 1),
+		                                    argument (emitter, 2)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult insert_vector128_load (MethodLLVMEmitter &emitter,
+	                                            llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *address = argument (emitter, 1);
+		llvm::Value *index = argument (emitter, 2);
+		llvm::Type *value_type = value->getType ();
+		llvm::Type *half_type = llvm::FixedVectorType::get (
+			llvm::cast<llvm::FixedVectorType> (value_type)->getElementType (),
+			llvm::cast<llvm::FixedVectorType> (value_type)->getNumElements () / 2);
+		llvm::Value *data = builder.CreateAlignedLoad (half_type, address, llvm::Align (4));
+
+		builder.CreateRet (avx_insert_half (builder, value, data, index));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult load_aligned256 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                      MonoMethod *)
+	{
+		return load (emitter, builder, llvm::Align (32));
+	}
+
+	static BuiltinResult store_aligned256 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                       MonoMethod *)
+	{
+		return store (emitter, builder, llvm::Align (32));
+	}
+
+	static llvm::Intrinsic::ID mask_load_id (bool wide, bool is_double)
+	{
+		return is_double ? (wide ? llvm::Intrinsic::x86_avx_maskload_pd_256
+		                        : llvm::Intrinsic::x86_avx_maskload_pd)
+		                 : (wide ? llvm::Intrinsic::x86_avx_maskload_ps_256
+		                        : llvm::Intrinsic::x86_avx_maskload_ps);
+	}
+
+	static llvm::Intrinsic::ID mask_store_id (bool wide, bool is_double)
+	{
+		return is_double ? (wide ? llvm::Intrinsic::x86_avx_maskstore_pd_256
+		                        : llvm::Intrinsic::x86_avx_maskstore_pd)
+		                 : (wide ? llvm::Intrinsic::x86_avx_maskstore_ps_256
+		                        : llvm::Intrinsic::x86_avx_maskstore_ps);
+	}
+
+	/// VMASKMOVPS/PD use the sign bit of each mask lane.
+	static BuiltinResult mask_load (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                MonoMethod *)
+	{
+		llvm::Value *address = argument (emitter, 0);
+		llvm::Value *mask = argument (emitter, 1);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (mask->getType ())->getNumElements ();
+		bool is_double = is_double_vector (mask);
+		llvm::Type *int_type = llvm::FixedVectorType::get (
+			is_double ? builder.getInt64Ty () : builder.getInt32Ty (), lanes);
+
+		builder.CreateRet (builder.CreateIntrinsic (
+			mask_load_id (is_256 (mask), is_double), {},
+			{ address, builder.CreateBitCast (mask, int_type) }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult mask_store (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                 MonoMethod *)
+	{
+		llvm::Value *address = argument (emitter, 0);
+		llvm::Value *mask = argument (emitter, 1);
+		llvm::Value *source = argument (emitter, 2);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (mask->getType ())->getNumElements ();
+		bool is_double = is_double_vector (mask);
+		llvm::Type *int_type = llvm::FixedVectorType::get (
+			is_double ? builder.getInt64Ty () : builder.getInt32Ty (), lanes);
+
+		builder.CreateIntrinsic (mask_store_id (is_256 (mask), is_double), {},
+		                         { address, builder.CreateBitCast (mask, int_type), source });
+		builder.CreateRetVoid ();
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult avx_movmsk (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                 MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Intrinsic::ID id = is_double_vector (value) ? llvm::Intrinsic::x86_avx_movmsk_pd_256
+		                                                  : llvm::Intrinsic::x86_avx_movmsk_ps_256;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { value }));
+		return llvm::Error::success ();
+	}
+
+	/// Permutes within each 128-bit half. Float selectors repeat for the upper
+	/// half; double selectors occupy one bit per destination lane.
+	static BuiltinResult permute (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                              MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *control = builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ());
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (value->getType ())->getNumElements ();
+		unsigned half = half_lanes (value);
+		bool is_double = is_double_vector (value);
+		llvm::Value *result = llvm::Constant::getNullValue (value->getType ());
+
+		for (unsigned i = 0; i < lanes; i++) {
+			unsigned h = i / half;
+			unsigned j = i % half;
+			llvm::Value *select = is_double
+				? builder.CreateAnd (builder.CreateLShr (control, i), 1)
+				: builder.CreateAnd (builder.CreateLShr (control, 2 * j), 3);
+			llvm::Value *source_lane =
+				builder.CreateAdd (builder.getInt32 (h * half), select);
+
+			result = builder.CreateInsertElement (
+				result, builder.CreateExtractElement (value, source_lane), i);
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	/// Shuffles within each 128-bit half, selecting its lower lanes from left
+	/// and upper lanes from right.
+	static BuiltinResult avx_shuffle (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                  MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *control = builder.CreateZExt (argument (emitter, 2), builder.getInt32Ty ());
+		llvm::Type *vector_type = left->getType ();
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (vector_type)->getNumElements ();
+		unsigned half = half_lanes (left);
+		bool is_double = is_double_vector (left);
+		llvm::Value *result = llvm::Constant::getNullValue (vector_type);
+
+		for (unsigned i = 0; i < lanes; i++) {
+			unsigned h = i / half;
+			unsigned j = i % half;
+			llvm::Value *operand = j >= half / 2 ? right : left;
+			llvm::Value *select = is_double
+				? builder.CreateAnd (builder.CreateLShr (control, i), 1)
+				: builder.CreateAnd (builder.CreateLShr (control, 2 * j), 3);
+			llvm::Value *source_lane =
+				builder.CreateAdd (builder.getInt32 (h * half), select);
+
+			result = builder.CreateInsertElement (
+				result, builder.CreateExtractElement (operand, source_lane), i);
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	/// Implements VPERM2F128 control semantics: bits 1:0 and 5:4 select each
+	/// destination half, while bits 3 and 7 zero their respective halves.
+	static BuiltinResult permute2x128 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                   MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *control = builder.CreateZExt (argument (emitter, 2), builder.getInt32Ty ());
+		llvm::Type *vector_type = left->getType ();
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (vector_type)->getNumElements ();
+		unsigned half = lanes / 2;
+		llvm::Value *left_low = builder.CreateShuffleVector (left, low_lanes_mask (half));
+		llvm::Value *right_low = builder.CreateShuffleVector (right, low_lanes_mask (half));
+		std::vector<int> high_mask (half);
+
+		for (unsigned i = 0; i < half; i++)
+			high_mask[i] = (int) (half + i);
+
+		llvm::Value *left_high = builder.CreateShuffleVector (left, high_mask);
+		llvm::Value *right_high = builder.CreateShuffleVector (right, high_mask);
+		llvm::Value *zero = llvm::Constant::getNullValue (left_low->getType ());
+		llvm::Value *result = llvm::Constant::getNullValue (vector_type);
+
+		for (unsigned half_index = 0; half_index < 2; half_index++) {
+			llvm::Value *field =
+				builder.CreateAnd (builder.CreateLShr (control, half_index * 4), 3);
+			llvm::Value *from_left = builder.CreateICmpULT (field, builder.getInt32 (2));
+			llvm::Value *is_high =
+				builder.CreateICmpNE (builder.CreateAnd (field, 1), builder.getInt32 (0));
+			llvm::Value *left_choice = builder.CreateSelect (is_high, left_high, left_low);
+			llvm::Value *right_choice = builder.CreateSelect (is_high, right_high, right_low);
+			llvm::Value *selected = builder.CreateSelect (from_left, left_choice, right_choice);
+			llvm::Value *zero_bit = builder.CreateICmpNE (
+				builder.CreateAnd (control, builder.getInt32 (0x8u << (half_index * 4))),
+				builder.getInt32 (0));
+			llvm::Value *half_result = builder.CreateSelect (zero_bit, zero, selected);
+
+			for (unsigned i = 0; i < half; i++)
+				result = builder.CreateInsertElement (
+					result, builder.CreateExtractElement (half_result, i), half_index * half + i);
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult permute_var (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                  MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *control = argument (emitter, 1);
+		bool is_double = is_double_vector (left);
+		llvm::Intrinsic::ID id = is_double
+			? (is_256 (left) ? llvm::Intrinsic::x86_avx_vpermilvar_pd_256
+			                : llvm::Intrinsic::x86_avx_vpermilvar_pd)
+			: (is_256 (left) ? llvm::Intrinsic::x86_avx_vpermilvar_ps_256
+			                : llvm::Intrinsic::x86_avx_vpermilvar_ps);
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { left, control }));
+		return llvm::Error::success ();
+	}
+
+	/// The SetVector256 overloads place their last argument in lane zero.
+	static BuiltinResult set_vector256 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                    MonoMethod *)
+	{
+		llvm::Type *vector_type = return_type (emitter);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (vector_type)->getNumElements ();
+		llvm::Value *result = llvm::Constant::getNullValue (vector_type);
+
+		for (unsigned i = 0; i < lanes; i++)
+			result = builder.CreateInsertElement (result, argument (emitter, i), lanes - 1 - i);
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult set_all_vector256 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                        MonoMethod *)
+	{
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (return_type (emitter))->getNumElements ();
+
+		builder.CreateRet (builder.CreateVectorSplat (lanes, argument (emitter, 0)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult set_high_low (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                   MonoMethod *)
+	{
+		llvm::Value *hi = argument (emitter, 0);
+		llvm::Value *lo = argument (emitter, 1);
+		unsigned half = llvm::cast<llvm::FixedVectorType> (hi->getType ())->getNumElements ();
+
+		builder.CreateRet (builder.CreateShuffleVector (lo, hi, low_lanes_mask (half * 2)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult static_cast_vector (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *)
+	{
+		builder.CreateRet (builder.CreateBitCast (argument (emitter, 0), return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult duplicate_even_indexed (MethodLLVMEmitter &emitter,
+	                                             llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (value->getType ())->getNumElements ();
+		std::vector<int> mask (lanes);
+
+		for (unsigned i = 0; i < lanes; i++)
+			mask[i] = (int) (i & ~1u);
+
+		builder.CreateRet (builder.CreateShuffleVector (value, mask));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult duplicate_odd_indexed (MethodLLVMEmitter &emitter,
+	                                            llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (value->getType ())->getNumElements ();
+		std::vector<int> mask (lanes);
+
+		for (unsigned i = 0; i < lanes; i++)
+			mask[i] = (int) (i | 1u);
+
+		builder.CreateRet (builder.CreateShuffleVector (value, mask));
+		return llvm::Error::success ();
+	}
+
+	/// Interleaves each 128-bit half independently.
+	template <bool high>
+	static BuiltinResult unpack (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Type *vector_type = left->getType ();
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (vector_type)->getNumElements ();
+		unsigned half = half_lanes (left);
+		unsigned quarter = half / 2;
+		std::vector<int> mask (lanes);
+
+		for (unsigned i = 0; i < lanes; i++) {
+			unsigned h = i / half;
+			unsigned j = i % half;
+			unsigned base = h * half + (high ? quarter : 0) + j / 2;
+
+			mask[i] = j % 2 == 0 ? (int) base : (int) (lanes + base);
+		}
+
+		builder.CreateRet (builder.CreateShuffleVector (left, right, mask));
+		return llvm::Error::success ();
+	}
+
+	/// Uses v4i64 for the integer PTEST form and native vector types for VTEST.
+	template <llvm::Intrinsic::ID ps128, llvm::Intrinsic::ID pd128, llvm::Intrinsic::ID ps256,
+	         llvm::Intrinsic::ID pd256, llvm::Intrinsic::ID i256>
+	static BuiltinResult avx_test (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                               MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Type *elem = llvm::cast<llvm::FixedVectorType> (left->getType ())->getElementType ();
+		llvm::Value *result;
+
+		if (elem->isDoubleTy ())
+			result = builder.CreateIntrinsic (is_256 (left) ? pd256 : pd128, {}, { left, right });
+		else if (elem->isFloatTy ())
+			result = builder.CreateIntrinsic (is_256 (left) ? ps256 : ps128, {}, { left, right });
+		else {
+			llvm::Type *i64x4 =
+				llvm::FixedVectorType::get (builder.getInt64Ty (), 4);
+
+			result = builder.CreateIntrinsic (
+				i256, {}, { builder.CreateBitCast (left, i64x4), builder.CreateBitCast (right, i64x4) });
+		}
+
+		builder.CreateRet (builder.CreateTrunc (result, return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
 	/// Leaves methods with managed implementations alone and rejects unmatched intrinsics.
 	static BuiltinResult unimplemented (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &,
 	                                    MonoMethod *method)
@@ -1055,6 +1685,7 @@ const ClassKey sse3 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse3" };
 const ClassKey ssse3 = { nullptr, "System.Runtime.Intrinsics.X86", "Ssse3" };
 const ClassKey sse41 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse41" };
 const ClassKey sse42 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse42" };
+const ClassKey avx = { nullptr, "System.Runtime.Intrinsics.X86", "Avx" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -1323,6 +1954,132 @@ const BuiltinBody sse42_table[] = {
 	{ sse42, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
 };
 
+const BuiltinBody avx_table[] = {
+	{ avx, "get_IsSupported", "", false, nullptr, SseEmitters::avx_is_supported },
+
+	{ avx, "Add", "VV", false, avx_lowering, SseEmitters::binary<SseEmitters::add> },
+	{ avx, "Subtract", "VV", false, avx_lowering, SseEmitters::binary<SseEmitters::sub> },
+	{ avx, "Multiply", "VV", false, avx_lowering, SseEmitters::binary<SseEmitters::mul> },
+	{ avx, "Divide", "VV", false, avx_lowering, SseEmitters::binary<SseEmitters::div> },
+
+	{ avx, "And", "VV", false, avx_lowering, SseEmitters::bitwise<Ops::And> },
+	{ avx, "Or", "VV", false, avx_lowering, SseEmitters::bitwise<Ops::Or> },
+	{ avx, "Xor", "VV", false, avx_lowering, SseEmitters::bitwise<Ops::Xor> },
+	{ avx, "AndNot", "VV", false, avx_lowering, SseEmitters::and_not },
+
+	{ avx, "AddSubtract", "VV", false, avx_lowering,
+	  SseEmitters::horizontal<Intr::x86_avx_addsub_ps_256, Intr::x86_avx_addsub_pd_256> },
+	{ avx, "HorizontalAdd", "VV", false, avx_lowering,
+	  SseEmitters::horizontal<Intr::x86_avx_hadd_ps_256, Intr::x86_avx_hadd_pd_256> },
+	{ avx, "HorizontalSubtract", "VV", false, avx_lowering,
+	  SseEmitters::horizontal<Intr::x86_avx_hsub_ps_256, Intr::x86_avx_hsub_pd_256> },
+	{ avx, "Max", "VV", false, avx_lowering,
+	  SseEmitters::horizontal<Intr::x86_avx_max_ps_256, Intr::x86_avx_max_pd_256> },
+	{ avx, "Min", "VV", false, avx_lowering,
+	  SseEmitters::horizontal<Intr::x86_avx_min_ps_256, Intr::x86_avx_min_pd_256> },
+
+	{ avx, "Sqrt", "V", false, avx_lowering, SseEmitters::sqrt },
+	{ avx, "Reciprocal", "V", false, avx_lowering,
+	  SseEmitters::unary_intrinsic<Intr::x86_avx_rcp_ps_256> },
+	{ avx, "ReciprocalSqrt", "V", false, avx_lowering,
+	  SseEmitters::unary_intrinsic<Intr::x86_avx_rsqrt_ps_256> },
+
+	{ avx, "Compare", "VVS", false, avx_lowering, SseEmitters::avx_compare },
+	{ avx, "CompareScalar", "VVS", false, avx_lowering, SseEmitters::avx_compare_scalar },
+
+	{ avx, "Ceiling", "V", false, avx_lowering, SseEmitters::avx_round<10> },
+	{ avx, "Floor", "V", false, avx_lowering, SseEmitters::avx_round<9> },
+	{ avx, "RoundToNearestInteger", "V", false, avx_lowering, SseEmitters::avx_round<8> },
+	{ avx, "RoundToNegativeInfinity", "V", false, avx_lowering, SseEmitters::avx_round<9> },
+	{ avx, "RoundToPositiveInfinity", "V", false, avx_lowering, SseEmitters::avx_round<10> },
+	{ avx, "RoundToZero", "V", false, avx_lowering, SseEmitters::avx_round<11> },
+	{ avx, "RoundCurrentDirection", "V", false, avx_lowering, SseEmitters::avx_round<4> },
+
+	{ avx, "Blend", "VVS", false, avx_lowering, SseEmitters::blend },
+	{ avx, "BlendVariable", "VVV", false, avx_lowering, SseEmitters::avx_blend_variable },
+
+	{ avx, "BroadcastScalarToVector128", "S", false, avx_lowering, SseEmitters::broadcast_scalar },
+	{ avx, "BroadcastScalarToVector256", "S", false, avx_lowering, SseEmitters::broadcast_scalar },
+	{ avx, "BroadcastVector128ToVector256", "S", false, avx_lowering,
+	  SseEmitters::broadcast_vector128 },
+
+	{ avx, "ConvertToSingle", "V", false, avx_lowering, SseEmitters::to_single },
+	{ avx, "ConvertToVector128Int32", "V", false, avx_lowering,
+	  SseEmitters::unary_intrinsic<Intr::x86_avx_cvt_pd2dq_256> },
+	{ avx, "ConvertToVector128Single", "V", false, avx_lowering,
+	  SseEmitters::unary_intrinsic<Intr::x86_avx_cvt_pd2_ps_256> },
+	{ avx, "ConvertToVector128Int32WithTruncation", "V", false, avx_lowering,
+	  SseEmitters::unary_intrinsic<Intr::x86_avx_cvtt_pd2dq_256> },
+	{ avx, "ConvertToVector256Int32", "V", false, avx_lowering,
+	  SseEmitters::unary_intrinsic<Intr::x86_avx_cvt_ps2dq_256> },
+	{ avx, "ConvertToVector256Int32WithTruncation", "V", false, avx_lowering,
+	  SseEmitters::unary_intrinsic<Intr::x86_avx_cvtt_ps2dq_256> },
+	{ avx, "ConvertToVector256Single", "V", false, avx_lowering, SseEmitters::int_to_float },
+	{ avx, "ConvertToVector256Double", "V", false, avx_lowering, SseEmitters::widen_to_double },
+
+	{ avx, "DotProduct", "VVS", false, avx_lowering, SseEmitters::avx_dot_product },
+
+	{ avx, "DuplicateEvenIndexed", "V", false, avx_lowering,
+	  SseEmitters::duplicate_even_indexed },
+	{ avx, "DuplicateOddIndexed", "V", false, avx_lowering, SseEmitters::duplicate_odd_indexed },
+
+	{ avx, "ExtractVector128", "VS", false, avx_lowering, SseEmitters::extract_vector128 },
+	{ avx, "ExtractVector128", "SVS", false, avx_lowering,
+	  SseEmitters::extract_vector128_store },
+	{ avx, "InsertVector128", "VVS", false, avx_lowering, SseEmitters::insert_vector128 },
+	{ avx, "InsertVector128", "VSS", false, avx_lowering, SseEmitters::insert_vector128_load },
+
+	{ avx, "ExtendToVector256", "V", false, avx_lowering, SseEmitters::extend_to_vector256 },
+	{ avx, "GetLowerHalf", "V", false, avx_lowering, SseEmitters::get_lower_half },
+
+	{ avx, "LoadVector256", "S", false, avx_lowering, SseEmitters::load_unaligned },
+	{ avx, "LoadAlignedVector256", "S", false, avx_lowering, SseEmitters::load_aligned256 },
+	{ avx, "LoadDquVector256", "S", false, avx_lowering, SseEmitters::load_dqu },
+	{ avx, "Store", "SV", false, avx_lowering, SseEmitters::store_unaligned },
+	{ avx, "StoreAligned", "SV", false, avx_lowering, SseEmitters::store_aligned256 },
+	{ avx, "StoreAlignedNonTemporal", "SV", false, avx_lowering, SseEmitters::store_aligned256 },
+
+	{ avx, "MaskLoad", "SV", false, avx_lowering, SseEmitters::mask_load },
+	{ avx, "MaskStore", "SVV", false, avx_lowering, SseEmitters::mask_store },
+
+	{ avx, "MoveMask", "V", false, avx_lowering, SseEmitters::avx_movmsk },
+
+	{ avx, "Permute", "VS", false, avx_lowering, SseEmitters::permute },
+	{ avx, "PermuteVar", "VV", false, avx_lowering, SseEmitters::permute_var },
+	{ avx, "Permute2x128", "VVS", false, avx_lowering, SseEmitters::permute2x128 },
+	{ avx, "Shuffle", "VVS", false, avx_lowering, SseEmitters::avx_shuffle },
+
+	{ avx, "SetVector256", "SSSS", false, avx_lowering, SseEmitters::set_vector256 },
+	{ avx, "SetVector256", "SSSSSSSS", false, avx_lowering, SseEmitters::set_vector256 },
+	{ avx, "SetVector256", "SSSSSSSS" "SSSSSSSS", false, avx_lowering,
+	  SseEmitters::set_vector256 },
+	{ avx, "SetVector256", "SSSSSSSS" "SSSSSSSS" "SSSSSSSS" "SSSSSSSS", false, avx_lowering,
+	  SseEmitters::set_vector256 },
+	{ avx, "SetAllVector256", "S", false, avx_lowering, SseEmitters::set_all_vector256 },
+	{ avx, "SetHighLow", "VV", false, avx_lowering, SseEmitters::set_high_low },
+	{ avx, "SetZeroVector256", "", false, avx_lowering, SseEmitters::set_zero },
+
+	{ avx, "StaticCast", "V", false, avx_lowering, SseEmitters::static_cast_vector },
+
+	{ avx, "UnpackHigh", "VV", false, avx_lowering, SseEmitters::unpack<true> },
+	{ avx, "UnpackLow", "VV", false, avx_lowering, SseEmitters::unpack<false> },
+
+	{ avx, "TestC", "VV", false, avx_lowering,
+	  SseEmitters::avx_test<Intr::x86_avx_vtestc_ps, Intr::x86_avx_vtestc_pd,
+	                        Intr::x86_avx_vtestc_ps_256, Intr::x86_avx_vtestc_pd_256,
+	                        Intr::x86_avx_ptestc_256> },
+	{ avx, "TestZ", "VV", false, avx_lowering,
+	  SseEmitters::avx_test<Intr::x86_avx_vtestz_ps, Intr::x86_avx_vtestz_pd,
+	                        Intr::x86_avx_vtestz_ps_256, Intr::x86_avx_vtestz_pd_256,
+	                        Intr::x86_avx_ptestz_256> },
+	{ avx, "TestNotZAndNotC", "VV", false, avx_lowering,
+	  SseEmitters::avx_test<Intr::x86_avx_vtestnzc_ps, Intr::x86_avx_vtestnzc_pd,
+	                        Intr::x86_avx_vtestnzc_ps_256, Intr::x86_avx_vtestnzc_pd_256,
+	                        Intr::x86_avx_ptestnzc_256> },
+
+	{ avx, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
@@ -1335,6 +2092,7 @@ simd_x86_bodies ()
 		made.insert (made.end (), std::begin (ssse3_table), std::end (ssse3_table));
 		made.insert (made.end (), std::begin (sse41_table), std::end (sse41_table));
 		made.insert (made.end (), std::begin (sse42_table), std::end (sse42_table));
+		made.insert (made.end (), std::begin (avx_table), std::end (avx_table));
 		return made;
 	} ();
 

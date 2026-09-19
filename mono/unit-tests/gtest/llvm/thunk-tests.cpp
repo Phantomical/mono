@@ -175,7 +175,8 @@ public:
 				std::lock_guard<std::mutex> lock (published_mutex_);
 				published_[owned].redirect (*code);
 				return *code;
-			});
+			},
+			ResolverKind::Default);
 		if (!trampoline)
 			return trampoline.takeError ();
 

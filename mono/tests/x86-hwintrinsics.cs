@@ -1,4 +1,4 @@
-/* Tests LLVM lowering for System.Runtime.Intrinsics.X86.Sse, Sse2, Sse3, Ssse3, Sse41 and Sse42. */
+/* Tests LLVM lowering for System.Runtime.Intrinsics.X86.*. */
 using System;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
@@ -225,6 +225,73 @@ class Tests
 	{
 		long[] r = ToArrayI64 (v);
 		Check (what, r [0] == e0 && r [1] == e1);
+	}
+
+	static unsafe Vector256<float> LoadF256 (float e0, float e1, float e2, float e3, float e4,
+	                                         float e5, float e6, float e7)
+	{
+		float* e = stackalloc float[8] { e0, e1, e2, e3, e4, e5, e6, e7 };
+		return Avx.LoadVector256 (e);
+	}
+
+	static unsafe float[] ToArrayF256 (Vector256<float> v)
+	{
+		float[] r = new float[8];
+		fixed (float* p = r)
+			Avx.Store (p, v);
+		return r;
+	}
+
+	static void CheckLanesF256 (string what, Vector256<float> v, float e0, float e1, float e2,
+	                            float e3, float e4, float e5, float e6, float e7)
+	{
+		float[] r = ToArrayF256 (v);
+		Check (what, r [0] == e0 && r [1] == e1 && r [2] == e2 && r [3] == e3 && r [4] == e4
+		            && r [5] == e5 && r [6] == e6 && r [7] == e7);
+	}
+
+	static unsafe Vector256<double> LoadD256 (double e0, double e1, double e2, double e3)
+	{
+		double* e = stackalloc double[4] { e0, e1, e2, e3 };
+		return Avx.LoadVector256 (e);
+	}
+
+	static unsafe double[] ToArrayD256 (Vector256<double> v)
+	{
+		double[] r = new double[4];
+		fixed (double* p = r)
+			Avx.Store (p, v);
+		return r;
+	}
+
+	static void CheckLanesD256 (string what, Vector256<double> v, double e0, double e1, double e2,
+	                            double e3)
+	{
+		double[] r = ToArrayD256 (v);
+		Check (what, r [0] == e0 && r [1] == e1 && r [2] == e2 && r [3] == e3);
+	}
+
+	static unsafe Vector256<int> LoadI256 (int e0, int e1, int e2, int e3, int e4, int e5, int e6,
+	                                       int e7)
+	{
+		int* e = stackalloc int[8] { e0, e1, e2, e3, e4, e5, e6, e7 };
+		return Avx.LoadVector256 (e);
+	}
+
+	static unsafe int[] ToArrayI256 (Vector256<int> v)
+	{
+		int[] r = new int[8];
+		fixed (int* p = r)
+			Avx.Store (p, v);
+		return r;
+	}
+
+	static void CheckLanesI256 (string what, Vector256<int> v, int e0, int e1, int e2, int e3,
+	                            int e4, int e5, int e6, int e7)
+	{
+		int[] r = ToArrayI256 (v);
+		Check (what, r [0] == e0 && r [1] == e1 && r [2] == e2 && r [3] == e3 && r [4] == e4
+		            && r [5] == e5 && r [6] == e6 && r [7] == e7);
 	}
 
 	static unsafe int Main ()
@@ -633,7 +700,9 @@ class Tests
 			              0, 100, 65535, 5, 65535, 3, 0, 40000);
 
 			unsafe {
-				int* np = stackalloc int[4] { 9, 8, 7, 6 };
+				int* rawNp = stackalloc int[8];
+				int* np = (int *) (((long) rawNp + 15) & ~15L);
+				np[0] = 9; np[1] = 8; np[2] = 7; np[3] = 6;
 				CheckLanesI32 ("Sse41.LoadAlignedVector128NonTemporal",
 				              Sse41.LoadAlignedVector128NonTemporal (np), 9, 8, 7, 6);
 			}
@@ -753,6 +822,297 @@ class Tests
 			Check ("Sse42.CompareImplicitLengthIndex(short)",
 			      Sse42.CompareImplicitLengthIndex (wordLeft, wordRight,
 			                                        StringComparisonMode.EqualAny) == 0);
+		}
+
+		if (Avx.IsSupported) {
+			Check ("Avx.IsSupported", Avx.IsSupported);
+
+			Vector256<float> fa = LoadF256 (1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f);
+			Vector256<float> fb = LoadF256 (10f, 20f, 30f, 40f, 50f, 60f, 70f, 80f);
+
+			CheckLanesF256 ("Avx.Add", Avx.Add (fa, fb), 11f, 22f, 33f, 44f, 55f, 66f, 77f, 88f);
+			CheckLanesF256 ("Avx.Subtract", Avx.Subtract (fa, fb), -9f, -18f, -27f, -36f, -45f,
+			               -54f, -63f, -72f);
+			CheckLanesF256 ("Avx.Multiply", Avx.Multiply (fa, fb), 10f, 40f, 90f, 160f, 250f, 360f,
+			               490f, 640f);
+			CheckLanesF256 ("Avx.Divide", Avx.Divide (fb, fa), 10f, 10f, 10f, 10f, 10f, 10f, 10f,
+			               10f);
+
+			Vector256<float> fmax = LoadF256 (1f, -2f, 3f, 4f, 5f, -6f, 7f, -8f);
+			Vector256<float> fzero = LoadF256 (0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f);
+			CheckLanesF256 ("Avx.Max", Avx.Max (fmax, fzero), 1f, 0f, 3f, 4f, 5f, 0f, 7f, 0f);
+			CheckLanesF256 ("Avx.Min", Avx.Min (fmax, fzero), 0f, -2f, 0f, 0f, 0f, -6f, 0f, -8f);
+
+			CheckLanesF256 ("Avx.Sqrt", Avx.Sqrt (LoadF256 (4f, 9f, 16f, 25f, 36f, 49f, 64f, 81f)),
+			               2f, 3f, 4f, 5f, 6f, 7f, 8f, 9f);
+
+			float avxRecip =
+				ToArrayF256 (Avx.Reciprocal (LoadF256 (4f, 4f, 4f, 4f, 4f, 4f, 4f, 4f))) [0];
+			Check ("Avx.Reciprocal is approximately 1/4", Math.Abs (avxRecip - 0.25f) < 0.001f);
+			float rsqrt =
+				ToArrayF256 (Avx.ReciprocalSqrt (LoadF256 (4f, 4f, 4f, 4f, 4f, 4f, 4f, 4f))) [0];
+			Check ("Avx.ReciprocalSqrt is approximately 1/2", Math.Abs (rsqrt - 0.5f) < 0.001f);
+
+			Vector256<float> bitsA = LoadF256 (0xFFFFFFFFu.ToSingle (), 0, 0, 0, 0, 0, 0, 0);
+			Vector256<float> bitsB = LoadF256 (0x0000FFFFu.ToSingle (), 0, 0, 0, 0, 0, 0, 0);
+			Check ("Avx.And",
+			      unchecked ((uint) BitConverter.SingleToInt32Bits (
+					      ToArrayF256 (Avx.And (bitsA, bitsB)) [0])) == 0x0000FFFFu);
+			Check ("Avx.Or",
+			      unchecked ((uint) BitConverter.SingleToInt32Bits (
+					      ToArrayF256 (Avx.Or (bitsA, bitsB)) [0])) == 0xFFFFFFFFu);
+			Check ("Avx.Xor",
+			      unchecked ((uint) BitConverter.SingleToInt32Bits (
+					      ToArrayF256 (Avx.Xor (bitsA, bitsB)) [0])) == 0xFFFF0000u);
+			Check ("Avx.AndNot",
+			      unchecked ((uint) BitConverter.SingleToInt32Bits (
+					      ToArrayF256 (Avx.AndNot (bitsB, bitsA)) [0])) == 0xFFFF0000u);
+
+			CheckLanesF256 ("Avx.AddSubtract", Avx.AddSubtract (fa, fb), -9f, 22f, -27f, 44f, -45f,
+			               66f, -63f, 88f);
+			CheckLanesF256 ("Avx.HorizontalAdd", Avx.HorizontalAdd (fa, fb), 3f, 7f, 30f, 70f, 11f,
+			               15f, 110f, 150f);
+			CheckLanesF256 ("Avx.HorizontalSubtract", Avx.HorizontalSubtract (fa, fb), -1f, -1f,
+			               -10f, -10f, -1f, -1f, -10f, -10f);
+
+			bool cmpAllTrue = true, cmpAllFalse = true;
+			float[] lt =
+				ToArrayF256 (Avx.Compare (fa, fb, FloatComparisonMode.LessThanOrderedSignaling));
+			float[] ge =
+				ToArrayF256 (Avx.Compare (fb, fa, FloatComparisonMode.LessThanOrderedSignaling));
+			for (int i = 0; i < 8; i++) {
+				cmpAllTrue &= BitConverter.SingleToInt32Bits (lt [i]) == -1;
+				cmpAllFalse &= BitConverter.SingleToInt32Bits (ge [i]) == 0;
+			}
+			Check ("Avx.Compare(Vector256<float>, LessThan) is true everywhere", cmpAllTrue);
+			Check ("Avx.Compare(Vector256<float>, LessThan) is false everywhere", cmpAllFalse);
+
+			Vector128<float> lo128 = Load (1f, 2f, 3f, 4f);
+			Vector128<float> hi128 = Load (10f, 20f, 30f, 40f);
+			float[] lt128 = ToArray (
+				Avx.Compare (lo128, hi128, FloatComparisonMode.LessThanOrderedSignaling));
+			Check ("Avx.Compare(Vector128<float>, LessThan)",
+			      BitConverter.SingleToInt32Bits (lt128 [0]) == -1);
+
+			float[] cmpScalar =
+				ToArray (Avx.CompareScalar (lo128, hi128, FloatComparisonMode.LessThanOrderedSignaling));
+			Check ("Avx.CompareScalar lane 0 compares",
+			      BitConverter.SingleToInt32Bits (cmpScalar [0]) == -1);
+			Check ("Avx.CompareScalar leaves the other lanes",
+			      cmpScalar [1] == 2f && cmpScalar [2] == 3f && cmpScalar [3] == 4f);
+
+			Vector256<float> round = LoadF256 (1.2f, -1.2f, 2.7f, -2.7f, 0.4f, -0.4f, 3.6f, -3.6f);
+			CheckLanesF256 ("Avx.Ceiling", Avx.Ceiling (round), 2f, -1f, 3f, -2f, 1f, 0f, 4f, -3f);
+			CheckLanesF256 ("Avx.Floor", Avx.Floor (round), 1f, -2f, 2f, -3f, 0f, -1f, 3f, -4f);
+			CheckLanesF256 ("Avx.RoundToNearestInteger", Avx.RoundToNearestInteger (round), 1f, -1f,
+			               3f, -3f, 0f, 0f, 4f, -4f);
+			CheckLanesF256 ("Avx.RoundToZero", Avx.RoundToZero (round), 1f, -1f, 2f, -2f, 0f, 0f, 3f,
+			               -3f);
+			Check ("Avx.RoundToNegativeInfinity lane 0",
+			      ToArrayF256 (Avx.RoundToNegativeInfinity (round)) [0] == 1f);
+			Check ("Avx.RoundToPositiveInfinity lane 0",
+			      ToArrayF256 (Avx.RoundToPositiveInfinity (round)) [0] == 2f);
+			Check ("Avx.RoundCurrentDirection lane 0",
+			      ToArrayF256 (Avx.RoundCurrentDirection (round)) [0] == 1f);
+
+			CheckLanesF256 ("Avx.Blend", Avx.Blend (fa, fb, 0xAA), 1f, 20f, 3f, 40f, 5f, 60f, 7f,
+			               80f);
+
+			Vector256<float> blendMask =
+				LoadF256 (-1f, 1f, -1f, 1f, -1f, 1f, -1f, 1f);
+			CheckLanesF256 ("Avx.BlendVariable", Avx.BlendVariable (fa, fb, blendMask), 10f, 2f, 30f,
+			               4f, 50f, 6f, 70f, 8f);
+
+			float broadcastSource = 42f;
+			CheckLanes ("Avx.BroadcastScalarToVector128", Avx.BroadcastScalarToVector128 (&broadcastSource),
+			           42f, 42f, 42f, 42f);
+			CheckLanesF256 ("Avx.BroadcastScalarToVector256",
+			               Avx.BroadcastScalarToVector256 (&broadcastSource), 42f, 42f, 42f, 42f, 42f,
+			               42f, 42f, 42f);
+
+			double broadcastD = 3.5;
+			CheckLanesD256 ("Avx.BroadcastScalarToVector256(double)",
+			                Avx.BroadcastScalarToVector256 (&broadcastD), 3.5, 3.5, 3.5, 3.5);
+
+			Vector128<float> broadcastHalf = Load (1f, 2f, 3f, 4f);
+			float* broadcastHalfBuffer = stackalloc float[4];
+			Sse.Store (broadcastHalfBuffer, broadcastHalf);
+			CheckLanesF256 ("Avx.BroadcastVector128ToVector256",
+			               Avx.BroadcastVector128ToVector256 (broadcastHalfBuffer), 1f, 2f, 3f, 4f,
+			               1f, 2f, 3f, 4f);
+
+			Check ("Avx.ConvertToSingle", Avx.ConvertToSingle (LoadF256 (5f, 0, 0, 0, 0, 0, 0, 0)) == 5f);
+
+			CheckLanesI32 ("Avx.ConvertToVector128Int32",
+			              Avx.ConvertToVector128Int32 (LoadD256 (1.7, -1.7, 2.5, -2.5)), 2, -2, 2,
+			              -2);
+			CheckLanes ("Avx.ConvertToVector128Single",
+			           Avx.ConvertToVector128Single (LoadD256 (1.5, 2.5, 3.5, 4.5)), 1.5f, 2.5f, 3.5f,
+			           4.5f);
+			CheckLanesI256 ("Avx.ConvertToVector256Int32",
+			                Avx.ConvertToVector256Int32 (LoadF256 (1.7f, -1.7f, 2.5f, -2.5f, 3.5f,
+			                                                       -3.5f, 0.4f, -0.4f)),
+			                2, -2, 2, -2, 4, -4, 0, 0);
+			CheckLanesF256 ("Avx.ConvertToVector256Single",
+			                Avx.ConvertToVector256Single (
+					                LoadI256 (1, -1, 2, -2, 3, -3, 1000000, -1000000)),
+			                1f, -1f, 2f, -2f, 3f, -3f, 1000000f, -1000000f);
+			CheckLanesD256 ("Avx.ConvertToVector256Double(float)",
+			                Avx.ConvertToVector256Double (Load (1f, 2f, 3f, 4f)), 1, 2, 3, 4);
+			CheckLanesD256 ("Avx.ConvertToVector256Double(int)",
+			                Avx.ConvertToVector256Double (LoadI32 (5, -5, 100, -100)), 5, -5, 100,
+			                -100);
+			CheckLanesI32 ("Avx.ConvertToVector128Int32WithTruncation",
+			              Avx.ConvertToVector128Int32WithTruncation (LoadD256 (1.9, -1.9, 2.1, -2.1)),
+			              1, -1, 2, -2);
+			CheckLanesI256 ("Avx.ConvertToVector256Int32WithTruncation",
+			                Avx.ConvertToVector256Int32WithTruncation (
+					                LoadF256 (1.9f, -1.9f, 2.1f, -2.1f, 3.9f, -3.9f, 0.9f, -0.9f)),
+			                1, -1, 2, -2, 3, -3, 0, 0);
+
+			Vector256<float> dpLeft = LoadF256 (1f, 2f, 3f, 4f, 100f, 200f, 300f, 400f);
+			Vector256<float> dpRight = LoadF256 (1f, 1f, 1f, 1f, 1f, 1f, 1f, 1f);
+			CheckLanesF256 ("Avx.DotProduct", Avx.DotProduct (dpLeft, dpRight, 0xF1), 10f, 0f, 0f,
+			               0f, 1000f, 0f, 0f, 0f);
+
+			CheckLanesF256 ("Avx.DuplicateEvenIndexed", Avx.DuplicateEvenIndexed (fa), 1f, 1f, 3f,
+			               3f, 5f, 5f, 7f, 7f);
+			CheckLanesF256 ("Avx.DuplicateOddIndexed", Avx.DuplicateOddIndexed (fa), 2f, 2f, 4f, 4f,
+			               6f, 6f, 8f, 8f);
+			CheckLanesD256 ("Avx.DuplicateEvenIndexed(double)",
+			                Avx.DuplicateEvenIndexed (LoadD256 (1, 2, 3, 4)), 1, 1, 3, 3);
+
+			CheckLanes ("Avx.ExtractVector128 low", Avx.ExtractVector128 (fa, 0), 1f, 2f, 3f, 4f);
+			CheckLanes ("Avx.ExtractVector128 high", Avx.ExtractVector128 (fa, 1), 5f, 6f, 7f, 8f);
+			CheckLanes ("Avx.ExtractVector128 wraps", Avx.ExtractVector128 (fa, 3), 5f, 6f, 7f, 8f);
+
+			float* extractBuffer = stackalloc float[4];
+			Avx.ExtractVector128 (extractBuffer, fa, 1);
+			CheckLanes ("Avx.ExtractVector128(store)", Sse.LoadVector128 (extractBuffer), 5f, 6f,
+			           7f, 8f);
+
+			Vector128<float> insertData = Load (90f, 91f, 92f, 93f);
+			CheckLanesF256 ("Avx.InsertVector128 low", Avx.InsertVector128 (fa, insertData, 0), 90f,
+			               91f, 92f, 93f, 5f, 6f, 7f, 8f);
+			CheckLanesF256 ("Avx.InsertVector128 high", Avx.InsertVector128 (fa, insertData, 1), 1f,
+			               2f, 3f, 4f, 90f, 91f, 92f, 93f);
+
+			float* insertBuffer = stackalloc float[4] { 190f, 191f, 192f, 193f };
+			CheckLanesF256 ("Avx.InsertVector128(load)", Avx.InsertVector128 (fa, insertBuffer, 0),
+			               190f, 191f, 192f, 193f, 5f, 6f, 7f, 8f);
+
+			CheckLanes ("Avx.GetLowerHalf", Avx.GetLowerHalf (fa), 1f, 2f, 3f, 4f);
+			CheckLanes ("Avx.ExtendToVector256 keeps its low half",
+			           Avx.GetLowerHalf (Avx.ExtendToVector256 (insertData)), 90f, 91f, 92f, 93f);
+
+			float* raw = stackalloc float[16];
+			float* aligned = (float *) (((long) raw + 31) & ~31L);
+			Avx.StoreAligned (aligned, fa);
+			CheckLanesF256 ("Avx.LoadAlignedVector256/StoreAligned", Avx.LoadAlignedVector256 (aligned),
+			               1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f);
+			Avx.StoreAlignedNonTemporal (aligned, fb);
+			CheckLanesF256 ("Avx.StoreAlignedNonTemporal", Avx.LoadAlignedVector256 (aligned), 10f,
+			               20f, 30f, 40f, 50f, 60f, 70f, 80f);
+
+			int* dquBuffer = stackalloc int[8];
+			Avx.Store (dquBuffer, LoadI256 (1, 2, 3, 4, 5, 6, 7, 8));
+			CheckLanesI256 ("Avx.LoadDquVector256", Avx.LoadDquVector256 (dquBuffer), 1, 2, 3, 4, 5,
+			               6, 7, 8);
+
+			Vector256<float> maskLoadMask = LoadF256 (-1f, 1f, -1f, 1f, -1f, 1f, -1f, 1f);
+			float* maskLoadBuffer = stackalloc float[8] { 1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f };
+			CheckLanesF256 ("Avx.MaskLoad", Avx.MaskLoad (maskLoadBuffer, maskLoadMask), 1f, 0f, 3f,
+			               0f, 5f, 0f, 7f, 0f);
+
+			float* maskStoreBuffer = stackalloc float[8] { 999f, 999f, 999f, 999f, 999f, 999f, 999f,
+				999f };
+			Avx.MaskStore (maskStoreBuffer, maskLoadMask, fb);
+			Check ("Avx.MaskStore",
+			      maskStoreBuffer [0] == 10f && maskStoreBuffer [1] == 999f
+			      && maskStoreBuffer [2] == 30f && maskStoreBuffer [3] == 999f
+			      && maskStoreBuffer [4] == 50f && maskStoreBuffer [5] == 999f
+			      && maskStoreBuffer [6] == 70f && maskStoreBuffer [7] == 999f);
+
+			Vector256<float> movmskValue =
+				LoadF256 (-1f, 2f, -3f, 4f, -5f, 6f, -7f, 8f);
+			Check ("Avx.MoveMask", Avx.MoveMask (movmskValue) == 0x55);
+			Check ("Avx.MoveMask(double)",
+			      Avx.MoveMask (LoadD256 (-1, 2, -3, 4)) == 0x5);
+
+			CheckLanesF256 ("Avx.Permute(Vector256<float>)",
+			                Avx.Permute (LoadF256 (10f, 20f, 30f, 40f, 50f, 60f, 70f, 80f), 0xE1),
+			                20f, 10f, 30f, 40f, 60f, 50f, 70f, 80f);
+			CheckLanes ("Avx.Permute(Vector128<float>)",
+			           Avx.Permute (Load (10f, 20f, 30f, 40f), 0xE1), 20f, 10f, 30f, 40f);
+			CheckLanesD256 ("Avx.Permute(Vector256<double>)",
+			                Avx.Permute (LoadD256 (10, 20, 30, 40), 0b1101), 20, 10, 40, 40);
+
+			Vector256<int> permuteVarControl = LoadI256 (1, 0, 2, 3, 1, 0, 2, 3);
+			CheckLanesF256 ("Avx.PermuteVar",
+			                Avx.PermuteVar (LoadF256 (10f, 20f, 30f, 40f, 50f, 60f, 70f, 80f),
+			                                permuteVarControl),
+			                20f, 10f, 30f, 40f, 60f, 50f, 70f, 80f);
+
+			Vector256<float> p2left = LoadF256 (1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f);
+			Vector256<float> p2right = LoadF256 (21f, 22f, 23f, 24f, 25f, 26f, 27f, 28f);
+			CheckLanesF256 ("Avx.Permute2x128 low+low", Avx.Permute2x128 (p2left, p2right, 0x20),
+			               1f, 2f, 3f, 4f, 21f, 22f, 23f, 24f);
+			CheckLanesF256 ("Avx.Permute2x128 high+high", Avx.Permute2x128 (p2left, p2right, 0x31),
+			               5f, 6f, 7f, 8f, 25f, 26f, 27f, 28f);
+			CheckLanesF256 ("Avx.Permute2x128 zeroed high",
+			               Avx.Permute2x128 (p2left, p2right, 0x81), 5f, 6f, 7f, 8f, 0f, 0f, 0f, 0f);
+			CheckLanesF256 ("Avx.Permute2x128 zeroed low",
+			               Avx.Permute2x128 (p2left, p2right, 0x08), 0f, 0f, 0f, 0f, 1f, 2f, 3f, 4f);
+
+			Vector256<float> shufLeft = LoadF256 (10f, 20f, 30f, 40f, 50f, 60f, 70f, 80f);
+			Vector256<float> shufRight = LoadF256 (110f, 120f, 130f, 140f, 150f, 160f, 170f, 180f);
+			CheckLanesF256 ("Avx.Shuffle(float)", Avx.Shuffle (shufLeft, shufRight, 0x1B), 40f, 30f,
+			               120f, 110f, 80f, 70f, 160f, 150f);
+			Vector256<double> shufDLeft = LoadD256 (10, 20, 30, 40);
+			Vector256<double> shufDRight = LoadD256 (110, 120, 130, 140);
+			CheckLanesD256 ("Avx.Shuffle(double)", Avx.Shuffle (shufDLeft, shufDRight, 0b1010), 10,
+			               120, 30, 140);
+
+			CheckLanesI256 ("Avx.SetVector256(int)",
+			                Avx.SetVector256 (7, 6, 5, 4, 3, 2, 1, 0), 0, 1, 2, 3, 4, 5, 6, 7);
+			CheckLanesF256 ("Avx.SetVector256(float)",
+			                Avx.SetVector256 (7f, 6f, 5f, 4f, 3f, 2f, 1f, 0f), 0f, 1f, 2f, 3f, 4f,
+			                5f, 6f, 7f);
+			CheckLanesD256 ("Avx.SetVector256(double)", Avx.SetVector256 (3.0, 2.0, 1.0, 0.0), 0, 1,
+			               2, 3);
+
+			CheckLanesF256 ("Avx.SetAllVector256", Avx.SetAllVector256 (9f), 9f, 9f, 9f, 9f, 9f, 9f,
+			               9f, 9f);
+			CheckLanesF256 ("Avx.SetHighLow", Avx.SetHighLow (insertData, lo128), 1f, 2f, 3f, 4f,
+			               90f, 91f, 92f, 93f);
+			CheckLanesF256 ("Avx.SetZeroVector256", Avx.SetZeroVector256<float> (), 0f, 0f, 0f, 0f,
+			               0f, 0f, 0f, 0f);
+
+			CheckLanesF256 ("Avx.StaticCast", Avx.StaticCast<int, float> (LoadI256 (
+					                                BitConverter.SingleToInt32Bits (1f),
+					                                BitConverter.SingleToInt32Bits (2f), 0, 0, 0, 0,
+					                                0, 0)),
+			                1f, 2f, 0f, 0f, 0f, 0f, 0f, 0f);
+
+			CheckLanesF256 ("Avx.UnpackLow", Avx.UnpackLow (fa, fb), 1f, 10f, 2f, 20f, 5f, 50f, 6f,
+			               60f);
+			CheckLanesF256 ("Avx.UnpackHigh", Avx.UnpackHigh (fa, fb), 3f, 30f, 4f, 40f, 7f, 70f, 8f,
+			               80f);
+
+			Vector128<float> testAllZero = Load (0f, 0f, 0f, 0f);
+			Vector128<float> testAllOnes = Load (
+				BitConverter.Int32BitsToSingle (-1), BitConverter.Int32BitsToSingle (-1),
+				BitConverter.Int32BitsToSingle (-1), BitConverter.Int32BitsToSingle (-1));
+			Check ("Avx.TestZ(Vector128<float>) all zero", Avx.TestZ (testAllZero, testAllOnes));
+			Check ("Avx.TestC(Vector128<float>) all ones mask", Avx.TestC (testAllOnes, testAllZero));
+			Check ("Avx.TestNotZAndNotC(Vector128<float>) mixed is false on all-zero value",
+			      !Avx.TestNotZAndNotC (testAllZero, testAllOnes));
+
+			Vector256<int> testAllZero256 = LoadI256 (0, 0, 0, 0, 0, 0, 0, 0);
+			Vector256<int> testAllOnes256 = LoadI256 (-1, -1, -1, -1, -1, -1, -1, -1);
+			Check ("Avx.TestZ<int>(Vector256) all zero", Avx.TestZ (testAllZero256, testAllOnes256));
+			Check ("Avx.TestC<int>(Vector256) all ones mask",
+			      Avx.TestC (testAllOnes256, testAllZero256));
 		}
 
 		if (failures == 0)

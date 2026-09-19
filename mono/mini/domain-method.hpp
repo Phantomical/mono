@@ -104,6 +104,10 @@ public:
 	/// produces it, and the table sets it before attaching the record.
 	std::string name;
 
+	/// Whether the signature passes a value in a register wider than 128 bits.
+	/// Compute this before taking the domain lock to preserve lock ordering.
+	bool needs_wide_vector_register = false;
+
 	/// The tier that owns the entry now.
 	MonoTier tier () const { return tier_.load (std::memory_order_acquire); }
 
@@ -322,6 +326,11 @@ llvm::Error attach_method_entries (MonoDomainMethod &dm);
 /// description resolves the classes a custom modifier names, which takes the
 /// loader lock.
 std::string method_stub_symbol (MonoMethod *method);
+
+/// Returns whether \p method passes a Vector256<T> parameter or return value.
+/// Call this without the domain lock because reading the signature can acquire
+/// the loader lock.
+bool method_needs_wide_vector_register (MonoMethod *method);
 
 /// What \p method's tier-0 counter starts at, or 0 for a method that does not
 /// run at tier 0.

@@ -31,6 +31,12 @@ namespace mono {
 /// lands.
 using LazyCompile = llvm::unique_function<void *()>;
 
+/// Register-save ABI used by a lazy-entry resolver.
+enum class ResolverKind {
+	Default,
+	Avx,
+};
+
 /// The re-entry trampolines lazy stubs point at, and the compile behind each.
 ///
 /// ORC has this as well (JITCompileCallbackManager), but a callback it hands
@@ -56,14 +62,14 @@ public:
 	LazyCallbacks &operator= (const LazyCallbacks &) = delete;
 
 	/// Reserve a trampoline that runs compile and continues into the address it
-	/// returns, and hand back its address.
+	/// returns, using the requested resolver ABI.
 	///
 	/// A later call returns that address rather than running compile again,
 	/// until rearm () takes it away. Threads that arrive together all land on
 	/// the same address, and each of them can run compile to get there, so
 	/// compile must be safe to run again and to run on more than one thread
 	/// at once.
-	llvm::Expected<void *> reserve (LazyCompile compile);
+	llvm::Expected<void *> reserve (LazyCompile compile, ResolverKind kind);
 
 	/// Give trampoline back, for a later reserve () to hand out again, and drop
 	/// the compile behind it. An address this never handed out is ignored.
@@ -91,6 +97,9 @@ private:
 		LazyCompile compile;
 		std::atomic<void *> landing { nullptr };
 
+		/// Pool to which release () returns the trampoline.
+		ResolverKind kind;
+
 		/// How many times this trampoline has been re-armed. A compile reads
 		/// it before it starts and gives up its answer if it has moved since.
 		std::atomic<uint32_t> epoch { 0 };
@@ -104,16 +113,20 @@ private:
 	/// whichever thread entered the stub, from the resolver.
 	void *fire (const arch::LazyEntryFrame *frame);
 
+	/// Returns the pool for kind, falling back to the default pool.
+	llvm::orc::TrampolinePool &pool_for (ResolverKind kind);
+
 	void *on_error_;
 
 	std::mutex mutex_;
 	llvm::DenseMap<llvm::orc::ExecutorAddr, std::shared_ptr<Callback>> callbacks_;
 
 	/*
-	 * Declared last: the pool's resolver closure holds this object, so it has
-	 * to be torn down before the maps it reads.
+	 * Declared last: each pool's resolver closure holds this object, so they
+	 * have to be torn down before the maps they read.
 	 */
 	std::unique_ptr<llvm::orc::TrampolinePool> pool_;
+	std::unique_ptr<llvm::orc::TrampolinePool> pool_avx_;
 };
 
 } // namespace mono

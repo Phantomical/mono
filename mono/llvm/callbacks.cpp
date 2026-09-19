@@ -7,6 +7,8 @@
 
 #include "arch/arch.hpp"
 
+#include "mono/utils/mono-hwcap.h"
+
 #include <llvm/ExecutionEngine/Orc/IndirectionUtils.h>
 
 #include <utility>
@@ -37,21 +39,45 @@ LazyCallbacks::create (void *on_error)
 		return pool.takeError ();
 
 	self->pool_ = std::move (*pool);
+
+	/* The AVX resolver executes VMOVUPS before entering managed code. */
+	if (mono_hwcap_x86_has_avx) {
+		auto avx_pool = LocalTrampolinePool<arch::LazyEntryAvxABI>::Create (
+			[raw] (ExecutorAddr frame,
+			       TrampolinePool::NotifyLandingResolvedFunction resolved) {
+				resolved (ExecutorAddr::fromPtr (
+					raw->fire (frame.toPtr<const arch::LazyEntryFrame *> ())));
+			});
+		if (!avx_pool)
+			return avx_pool.takeError ();
+
+		self->pool_avx_ = std::move (*avx_pool);
+	}
+
 	return std::move (self);
 }
 
 LazyCallbacks::~LazyCallbacks () = default;
 
-Expected<void *>
-LazyCallbacks::reserve (LazyCompile compile)
+TrampolinePool &
+LazyCallbacks::pool_for (ResolverKind kind)
 {
-	Expected<ExecutorAddr> trampoline = pool_->getTrampoline ();
+	if (kind == ResolverKind::Avx && pool_avx_)
+		return *pool_avx_;
+	return *pool_;
+}
+
+Expected<void *>
+LazyCallbacks::reserve (LazyCompile compile, ResolverKind kind)
+{
+	Expected<ExecutorAddr> trampoline = pool_for (kind).getTrampoline ();
 
 	if (!trampoline)
 		return trampoline.takeError ();
 
 	auto callback = std::make_shared<Callback> ();
 	callback->compile = std::move (compile);
+	callback->kind = kind;
 
 	std::lock_guard<std::mutex> lock (mutex_);
 	callbacks_[*trampoline] = std::move (callback);
@@ -65,10 +91,20 @@ LazyCallbacks::release (void *trampoline)
 		return;
 
 	ExecutorAddr addr = ExecutorAddr::fromPtr (trampoline);
-	std::lock_guard<std::mutex> lock (mutex_);
+	ResolverKind kind;
 
-	if (callbacks_.erase (addr))
-		pool_->releaseTrampoline (addr);
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		auto it = callbacks_.find (addr);
+
+		if (it == callbacks_.end ())
+			return;
+
+		kind = it->second->kind;
+		callbacks_.erase (it);
+	}
+
+	pool_for (kind).releaseTrampoline (addr);
 }
 
 void
