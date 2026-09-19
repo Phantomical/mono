@@ -29,6 +29,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <unordered_set>
 
 #include <glib.h>
 
@@ -231,6 +232,21 @@ file_stem (const char *name)
 	return stem.empty () ? std::string ("method") : stem;
 }
 
+std::mutex &
+claimed_this_run_lock ()
+{
+	static std::mutex m;
+	return m;
+}
+
+/// The paths open_dump_file () has already claimed this run.
+std::unordered_set<std::string> &
+claimed_this_run ()
+{
+	static std::unordered_set<std::string> paths;
+	return paths;
+}
+
 /// Opens the file a dump goes to, or reports on stderr and returns null.
 FILE *
 open_dump_file (DumpPoint point, const char *name)
@@ -245,19 +261,33 @@ open_dump_file (DumpPoint point, const char *name)
 	}
 
 	std::string stem = file_stem (name);
+	std::string base_path = dir + "/" + stem + "." + how.extension;
+	bool first_claim;
 
-	// Two dumps can want one name: a generic instantiation differs from another
-	// only in characters the stem drops, and a method can be compiled more than
-	// once. O_EXCL is what makes counting up a suffix safe while several compile
-	// threads run - the loser of a race gets EEXIST and takes the next number,
-	// instead of the two writing over one file.
-	for (unsigned attempt = 0; attempt < 10000; attempt++) {
-		std::string path = dir + "/" + stem;
+	{
+		std::lock_guard<std::mutex> guard (claimed_this_run_lock ());
+		first_claim = claimed_this_run ().insert (base_path).second;
+	}
 
-		if (attempt != 0)
-			path += "." + std::to_string (attempt);
-		path += ".";
-		path += how.extension;
+	// This is the name's first claim this run, so overwrite in place instead
+	// of counting up a suffix.
+	if (first_claim) {
+		int fd = open (base_path.c_str (), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+
+		if (fd >= 0)
+			return fdopen (fd, "w");
+
+		fprintf (stderr, "MONO_JIT_DUMP_DIR: cannot write %s: %s\n",
+		         base_path.c_str (), g_strerror (errno));
+		return nullptr;
+	}
+
+	// O_EXCL makes counting up a suffix safe under concurrent compiles. The
+	// loser of a race gets EEXIST and takes the next number, instead of two
+	// threads writing over one file.
+	for (unsigned attempt = 1; attempt < 10000; attempt++) {
+		std::string path = dir + "/" + stem + "." + std::to_string (attempt)
+		                  + "." + how.extension;
 
 		int fd = open (path.c_str (), O_WRONLY | O_CREAT | O_EXCL, 0644);
 
