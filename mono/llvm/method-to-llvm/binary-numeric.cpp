@@ -413,8 +413,21 @@ MethodLLVMEmitter::emit_add (MonoIrBuilder &builder)
 	auto [value1, value2, result] = *operands;
 	llvm::Value *sum;
 
+	bool v1_ptr = value1.value->getType ()->isPointerTy ();
+	bool v2_ptr = value2.value->getType ()->isPointerTy ();
+
 	if (result->byref) {
 		auto [base, index] = pointer_and_index (*operands);
+
+		sum = builder.CreateGEP (builder.getInt8Ty (), base,
+		                         coerce (builder, index, native_int_type (builder)));
+	} else if (v1_ptr != v2_ptr) {
+		// One operand already carries pointer provenance even though the IL types this
+		// native int, the same case coerce () documents. A GEP keeps that provenance
+		// visible to GVN and the implicit-null-check fold; ptrtoint/inttoptr would hide
+		// it behind an integer with no relation to the pointer it came from.
+		llvm::Value *base = v1_ptr ? value1.value : value2.value;
+		llvm::Value *index = v1_ptr ? value2.value : value1.value;
 
 		sum = builder.CreateGEP (builder.getInt8Ty (), base,
 		                         coerce (builder, index, native_int_type (builder)));
@@ -480,7 +493,14 @@ MethodLLVMEmitter::emit_sub (MonoIrBuilder &builder)
 	auto [value1, value2, result] = *operands;
 	llvm::Value *difference;
 
-	if (result->byref) {
+	// value1 already a pointer and value2 a plain offset is the same case emit_add ()
+	// keeps a GEP for: an unmanaged pointer or IntPtr that travels as one even though
+	// the IL types both operands native int. value2 alone carrying pointer provenance
+	// is the pointer-difference case below instead, which has no GEP to give back.
+	bool ptr_offset = value1.value->getType ()->isPointerTy ()
+	                  && !value2.value->getType ()->isPointerTy ();
+
+	if (result->byref || ptr_offset) {
 		// When the result is a managed pointer, value1 is always that pointer. Only
 		// `& - int` produces one, per the table above. `int - &` produces a number
 		// instead. This indexes the pointer the same way add does, backwards.
@@ -936,8 +956,20 @@ MethodLLVMEmitter::emit_add_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	auto [value1, value2, result] = *operands;
 	llvm::Value *sum;
 
+	bool v1_ptr = value1.value->getType ()->isPointerTy ();
+	bool v2_ptr = value2.value->getType ()->isPointerTy ();
+
 	if (result->byref) {
 		auto [base, index] = pointer_and_index (*operands);
+
+		sum = emit_checked_pointer_offset (
+			builder, base, coerce (builder, index, native_int_type (builder)), false);
+	} else if (is_unsigned && v1_ptr != v2_ptr) {
+		// Same pointer-provenance case as emit_add (); restricted to the unsigned form
+		// because that is the only one the table gives a pointer cell, so the checked
+		// offset helper's unsigned overflow check is the one the IL actually asked for.
+		llvm::Value *base = v1_ptr ? value1.value : value2.value;
+		llvm::Value *index = v1_ptr ? value2.value : value1.value;
 
 		sum = emit_checked_pointer_offset (
 			builder, base, coerce (builder, index, native_int_type (builder)), false);
@@ -998,7 +1030,12 @@ MethodLLVMEmitter::emit_sub_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	auto [value1, value2, result] = *operands;
 	llvm::Value *difference;
 
-	if (result->byref) {
+	// As with emit_sub (), restricted to the unsigned form for the same reason
+	// emit_add_ovf () restricts its own pointer-provenance case.
+	bool ptr_offset = is_unsigned && value1.value->getType ()->isPointerTy ()
+	                  && !value2.value->getType ()->isPointerTy ();
+
+	if (result->byref || ptr_offset) {
 		// As with sub, only `& - int` gives back a pointer, so value1 is the pointer.
 		difference = emit_checked_pointer_offset (
 			builder, value1.value,
