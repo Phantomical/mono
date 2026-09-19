@@ -53,6 +53,7 @@ void unity_mono_exit( int code );
 void unity_mono_close_output(void);
 
 extern MonoString* mono_unity_get_embeddinghostname(void);
+extern gboolean mono_unity_is_embedded(void);
 
 #ifdef WIN32
 FILE* unity_fopen( const char *name, const char *mode );

@@ -24,6 +24,10 @@
 
 #include "version.h"
 
+// unity-utils.h depends on metadata types that are unavailable here, so declare
+// only the embedding-state query needed by the LLVM runtime.
+extern "C" mono_bool mono_unity_is_embedded (void);
+
 namespace {
 
 /// Returns the revision component of FULL_VERSION when present.
@@ -73,8 +77,9 @@ finish (llvm::Expected<void *> code, MonoError *error)
 void
 mono_llvm_jit_init (void)
 {
-	// Identify the backend and revision without requiring tracing to be enabled.
-	llvm::errs () << "Mono LLVM JIT -- Phantomical/mono#" << build_shorthash () << "\n";
+	// Unity sets its embedding host name before initializing the JIT.
+	if (mono_unity_is_embedded ())
+		llvm::errs () << "Mono LLVM JIT -- Phantomical/mono#" << build_shorthash () << "\n";
 
 	// mini_init () reads mono_llvm_jit_tier0_enabled () right after this
 	// call, before any method has asked to compile - before MonoJit::create ()
