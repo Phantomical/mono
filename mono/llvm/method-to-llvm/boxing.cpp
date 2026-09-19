@@ -242,12 +242,17 @@ MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, Mono
 	                     "InvalidCastException");
 
 	llvm::Value *cls = builder.CreateCall (vtable_klass_decl (*module), { vtable });
-	llvm::Value *element = builder.CreateAlignedLoad (
+	llvm::LoadInst *element = builder.CreateAlignedLoad (
 		ptr,
 		builder.CreateGEP (builder.getInt8Ty (), cls,
 	                           builder.getInt32 (static_cast<int32_t> (
 					   m_class_offsetof_element_class ()))),
 		llvm::Align (TARGET_SIZEOF_VOID_P));
+
+	// element_class is initialized before the class's vtable is exposed and
+	// never changes afterward.
+	element->setMetadata (llvm::LLVMContext::MD_invariant_load,
+	                      llvm::MDNode::get (context (), {}));
 
 	emit_cond_exception (
 		builder,
