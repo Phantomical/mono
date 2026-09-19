@@ -4,6 +4,7 @@
 
 #include "inline-scope.hpp"
 #include "method-to-llvm.hpp"
+#include "method-to-llvm/intrinsics.hpp"
 
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/SmallVector.h>
@@ -385,6 +386,10 @@ const CallRule known_calls[] = {
 Value
 fold_call (MonoMethod *target, ArrayRef<Value> args, bool sharing)
 {
+	// Use the value emitted by the backend when determining which IL is reachable.
+	if (is_vector_hardware_accelerated_getter (target))
+		return Value::boolean (true);
+
 	for (const CallRule &rule : known_calls) {
 		if (target->klass != rule.klass () || strcmp (target->name, rule.name) != 0)
 			continue;

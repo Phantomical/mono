@@ -710,4 +710,10 @@ builtin_body_replaces_il (MonoMethod *method)
 	return entry != nullptr && !entry->il_agrees;
 }
 
+bool
+is_vector_hardware_accelerated_getter (MonoMethod *method)
+{
+	return builtin_body_for (method) == &vector_hwaccel_body;
+}
+
 } // namespace mono

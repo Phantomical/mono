@@ -57,6 +57,10 @@ BuiltinResult emit_builtin_body (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &
 /// its own IL computes something else.
 bool builtin_body_replaces_il (MonoMethod *method);
 
+/// Whether method is the Vector.IsHardwareAccelerated getter replaced by the
+/// backend.
+bool is_vector_hardware_accelerated_getter (MonoMethod *method);
+
 /// The param_count of an entry that matches whatever arity it is asked about.
 constexpr int any_params = -1;
 
