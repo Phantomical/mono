@@ -104,6 +104,12 @@ mono_atomic_xchg_ptr (volatile gpointer *dest, gpointer exch)
 	return InterlockedExchangePointer ((PVOID volatile *)dest, (PVOID)exch);
 }
 
+static inline gint8
+mono_atomic_xchg_i8 (volatile gint8 *dest, gint8 exch)
+{
+	return _InterlockedExchange8 ((CHAR volatile *)dest, (CHAR)exch);
+}
+
 static inline gint32
 mono_atomic_fetch_add_i32 (volatile gint32 *dest, gint32 add)
 {
@@ -279,6 +285,15 @@ static inline gpointer mono_atomic_xchg_ptr(volatile gpointer *val,
 						  gpointer new_val)
 {
 	gpointer old_val;
+	do {
+		old_val = *val;
+	} while (gcc_sync_val_compare_and_swap (val, old_val, new_val) != old_val);
+	return old_val;
+}
+
+static inline gint8 mono_atomic_xchg_i8(volatile gint8 *val, gint8 new_val)
+{
+	gint8 old_val;
 	do {
 		old_val = *val;
 	} while (gcc_sync_val_compare_and_swap (val, old_val, new_val) != old_val);
@@ -466,6 +481,7 @@ extern gint32 mono_atomic_inc_i32(volatile gint32 *dest);
 extern gint64 mono_atomic_inc_i64(volatile gint64 *dest);
 extern gint32 mono_atomic_dec_i32(volatile gint32 *dest);
 extern gint64 mono_atomic_dec_i64(volatile gint64 *dest);
+extern gint8 mono_atomic_xchg_i8(volatile gint8 *dest, gint8 exch);
 extern gint32 mono_atomic_xchg_i32(volatile gint32 *dest, gint32 exch);
 extern gint64 mono_atomic_xchg_i64(volatile gint64 *dest, gint64 exch);
 extern gpointer mono_atomic_xchg_ptr(volatile gpointer *dest, gpointer exch);
