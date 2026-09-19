@@ -24,9 +24,9 @@ namespace mono {
 /// Lowers each alloca, and each memory operation that reaches one, to the stack
 /// alignment the data layout names.
 ///
-/// It acts only on a function that carries `no-realign-stack`. Run it after
-/// every pass that can make an alloca or raise one's alignment, which puts it
-/// last in the pipeline.
+/// It acts on functions marked `no-realign-stack` and detects frame-offset
+/// escapes introduced by inlining after the attribute was selected. Run it
+/// after every pass that can inline, create an alloca, or raise its alignment.
 class ClampFrameAlignPass : public llvm::PassInfoMixin<ClampFrameAlignPass> {
 public:
 	llvm::PreservedAnalyses run (llvm::Function &f,
