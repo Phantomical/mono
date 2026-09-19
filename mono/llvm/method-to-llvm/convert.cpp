@@ -365,7 +365,11 @@ MethodLLVMEmitter::emit_conv (MonoIrBuilder &builder, ConvType type)
 	bool from_float = stack_type (value.type) == Float;
 	llvm::Value *result;
 
-	if (target.is_float) {
+	if ((type == ConvType::I || type == ConvType::U) && value.value->getType ()->isPointerTy ()) {
+		// Preserve pointer form through no-op native-width conversions so later
+		// pointer arithmetic can remain a GEP.
+		result = value.value;
+	} else if (target.is_float) {
 		llvm::Type *to = target.bits == 32 ? builder.getFloatTy () : builder.getDoubleTy ();
 
 		// conv.r4 and conv.r8 read the integer as signed. conv.r.un has its own emitter,
