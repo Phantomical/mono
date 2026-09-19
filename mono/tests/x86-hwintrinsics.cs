@@ -57,6 +57,25 @@ class Tests
 		      r [1] == l [1] && r [2] == l [2] && r [3] == l [3]);
 	}
 
+	static void CheckScalarCompareD (string what, Vector128<double> result, Vector128<double> left,
+	                                 bool expected)
+	{
+		double[] r = ToArray (result);
+		double[] l = ToArray (left);
+
+		Check (what + " lane 0", BitConverter.DoubleToInt64Bits (r [0]) == (expected ? -1L : 0L));
+		Check (what + " passes through left's upper lane", r [1] == l [1]);
+	}
+
+	// A packed double compare's lane is all-one or all-zero.
+	static void CheckCompareD (string what, Vector128<double> result, bool e0, bool e1)
+	{
+		double[] r = ToArray (result);
+
+		Check (what, BitConverter.DoubleToInt64Bits (r [0]) == (e0 ? -1L : 0L)
+		            && BitConverter.DoubleToInt64Bits (r [1]) == (e1 ? -1L : 0L));
+	}
+
 	// Packed comparisons produce either all-one or all-zero lanes.
 	static unsafe void CheckCompare (string what, Vector128<float> v, bool e0, bool e1,
 	                                 bool e2, bool e3)
@@ -747,6 +766,282 @@ class Tests
 			Check ("Sse2.Min(byte)", br [0] == 5 && br [1] == 100 && br [2] == 3 && br [3] == 4);
 			fixed (byte* p = br) Sse2.Store (p, Sse2.Max (vbe, vbf));
 			Check ("Sse2.Max(byte)", br [0] == 10 && br [1] == 200 && br [2] == 3 && br [3] == 9);
+		}
+
+		CheckLanesF64 ("Sse2.SetScalarVector128", Sse2.SetScalarVector128 (7.0), 7.0, 0.0);
+
+		CheckLanesF64 ("Sse2.MaxScalar(double)", Sse2.MaxScalar (da, db), 4.0, 9.0);
+		CheckLanesF64 ("Sse2.MinScalar(double)", Sse2.MinScalar (da, db), 2.0, 9.0);
+		CheckLanesF64 ("Sse2.MultiplyScalar(double)", Sse2.MultiplyScalar (da, db), 8.0, 9.0);
+		CheckLanesF64 ("Sse2.SqrtScalar(double)", Sse2.SqrtScalar (LoadF64 (9.0, 16.0)), 3.0, 16.0);
+		CheckLanesF64 ("Sse2.SqrtScalar(double, upper)",
+		              Sse2.SqrtScalar (LoadF64 (1.0, 2.0), LoadF64 (9.0, 0.0)), 3.0, 2.0);
+
+		CheckCompareD ("Sse2.CompareGreaterThanOrEqual(double)",
+		              Sse2.CompareGreaterThanOrEqual (da, db), true, true);
+		CheckCompareD ("Sse2.CompareLessThanOrEqual(double)",
+		              Sse2.CompareLessThanOrEqual (da, db), false, false);
+		CheckCompareD ("Sse2.CompareNotEqual(double)", Sse2.CompareNotEqual (da, db), true, true);
+		CheckCompareD ("Sse2.CompareNotGreaterThan(double)",
+		              Sse2.CompareNotGreaterThan (da, db), false, false);
+		CheckCompareD ("Sse2.CompareNotGreaterThanOrEqual(double)",
+		              Sse2.CompareNotGreaterThanOrEqual (da, db), false, false);
+		CheckCompareD ("Sse2.CompareNotLessThan(double)", Sse2.CompareNotLessThan (da, db), true,
+		              true);
+		CheckCompareD ("Sse2.CompareNotLessThanOrEqual(double)",
+		              Sse2.CompareNotLessThanOrEqual (da, db), true, true);
+		CheckCompareD ("Sse2.CompareOrdered(double)", Sse2.CompareOrdered (da, db), true, true);
+		CheckCompareD ("Sse2.CompareUnordered(double)", Sse2.CompareUnordered (da, db), false,
+		              false);
+
+		CheckScalarCompareD ("Sse2.CompareEqualScalar", Sse2.CompareEqualScalar (da, db), da, false);
+		CheckScalarCompareD ("Sse2.CompareLessThanScalar", Sse2.CompareLessThanScalar (da, db), da,
+		                    false);
+		CheckScalarCompareD ("Sse2.CompareLessThanOrEqualScalar",
+		                    Sse2.CompareLessThanOrEqualScalar (da, db), da, false);
+		CheckScalarCompareD ("Sse2.CompareUnorderedScalar", Sse2.CompareUnorderedScalar (da, db), da,
+		                    false);
+		CheckScalarCompareD ("Sse2.CompareNotEqualScalar", Sse2.CompareNotEqualScalar (da, db), da,
+		                    true);
+		CheckScalarCompareD ("Sse2.CompareNotLessThanScalar",
+		                    Sse2.CompareNotLessThanScalar (da, db), da, true);
+		CheckScalarCompareD ("Sse2.CompareGreaterThanOrEqualScalar",
+		                    Sse2.CompareGreaterThanOrEqualScalar (da, db), da, true);
+		CheckScalarCompareD ("Sse2.CompareNotLessThanOrEqualScalar",
+		                    Sse2.CompareNotLessThanOrEqualScalar (da, db), da, true);
+		CheckScalarCompareD ("Sse2.CompareGreaterThanScalar", Sse2.CompareGreaterThanScalar (da, db),
+		                    da, true);
+		CheckScalarCompareD ("Sse2.CompareOrderedScalar", Sse2.CompareOrderedScalar (da, db), da,
+		                    true);
+		CheckScalarCompareD ("Sse2.CompareNotGreaterThanScalar",
+		                    Sse2.CompareNotGreaterThanScalar (da, db), da, false);
+		CheckScalarCompareD ("Sse2.CompareNotGreaterThanOrEqualScalar",
+		                    Sse2.CompareNotGreaterThanOrEqualScalar (da, db), da, false);
+
+		Check ("Sse2.CompareEqualOrderedScalar", Sse2.CompareEqualOrderedScalar (da, db) == false);
+		Check ("Sse2.CompareEqualUnorderedScalar",
+		      Sse2.CompareEqualUnorderedScalar (da, db) == false);
+		Check ("Sse2.CompareLessThanOrderedScalar",
+		      Sse2.CompareLessThanOrderedScalar (da, db) == false);
+		Check ("Sse2.CompareLessThanUnorderedScalar",
+		      Sse2.CompareLessThanUnorderedScalar (da, db) == false);
+		Check ("Sse2.CompareLessThanOrEqualOrderedScalar",
+		      Sse2.CompareLessThanOrEqualOrderedScalar (da, db) == false);
+		Check ("Sse2.CompareLessThanOrEqualUnorderedScalar",
+		      Sse2.CompareLessThanOrEqualUnorderedScalar (da, db) == false);
+		Check ("Sse2.CompareGreaterThanOrderedScalar",
+		      Sse2.CompareGreaterThanOrderedScalar (da, db) == true);
+		Check ("Sse2.CompareGreaterThanUnorderedScalar",
+		      Sse2.CompareGreaterThanUnorderedScalar (da, db) == true);
+		Check ("Sse2.CompareGreaterThanOrEqualOrderedScalar",
+		      Sse2.CompareGreaterThanOrEqualOrderedScalar (da, db) == true);
+		Check ("Sse2.CompareGreaterThanOrEqualUnorderedScalar",
+		      Sse2.CompareGreaterThanOrEqualUnorderedScalar (da, db) == true);
+		Check ("Sse2.CompareNotEqualOrderedScalar",
+		      Sse2.CompareNotEqualOrderedScalar (da, db) == true);
+		Check ("Sse2.CompareNotEqualUnorderedScalar",
+		      Sse2.CompareNotEqualUnorderedScalar (da, db) == true);
+
+		Check ("Sse2.ConvertToInt32(double)", Sse2.ConvertToInt32 (da) == 4);
+		Check ("Sse2.ConvertToInt32(int)", Sse2.ConvertToInt32 (ia) == 1);
+		Check ("Sse2.ConvertToInt32WithTruncation",
+		      Sse2.ConvertToInt32WithTruncation (LoadF64 (3.7, 0.0)) == 3);
+		Check ("Sse2.ConvertToInt64(double)", Sse2.ConvertToInt64 (da) == 4L);
+		Check ("Sse2.ConvertToInt64(long)", Sse2.ConvertToInt64 (LoadI64 (42, 0)) == 42L);
+		Check ("Sse2.ConvertToInt64WithTruncation",
+		      Sse2.ConvertToInt64WithTruncation (LoadF64 (3.7, 0.0)) == 3L);
+		Check ("Sse2.ConvertToUInt32 round-trip",
+		      Sse2.ConvertToUInt32 (Sse2.ConvertScalarToVector128UInt32 (5u)) == 5u);
+		Check ("Sse2.ConvertToUInt64 round-trip",
+		      Sse2.ConvertToUInt64 (Sse2.ConvertScalarToVector128UInt64 (5ul)) == 5ul);
+		Check ("Sse2.ConvertToDouble", Sse2.ConvertToDouble (da) == 4.0);
+
+		CheckLanesF64 ("Sse2.ConvertScalarToVector128Double(int)",
+		              Sse2.ConvertScalarToVector128Double (LoadF64 (9.0, 9.0), 5), 5.0, 9.0);
+		CheckLanesF64 ("Sse2.ConvertScalarToVector128Double(long)",
+		              Sse2.ConvertScalarToVector128Double (LoadF64 (9.0, 9.0), 7L), 7.0, 9.0);
+		CheckLanesF64 ("Sse2.ConvertScalarToVector128Double(float)",
+		              Sse2.ConvertScalarToVector128Double (LoadF64 (9.0, 9.0), Load (2.5f, 0f, 0f, 0f)),
+		              2.5, 9.0);
+		CheckLanes ("Sse2.ConvertScalarToVector128Single(double)",
+		           Sse2.ConvertScalarToVector128Single (Load (9f, 9f, 9f, 9f), LoadF64 (2.5, 0.0)),
+		           2.5f, 9f, 9f, 9f);
+		CheckLanesI32 ("Sse2.ConvertScalarToVector128Int32",
+		              Sse2.ConvertScalarToVector128Int32 (5), 5, 0, 0, 0);
+		CheckLanesI64 ("Sse2.ConvertScalarToVector128Int64",
+		              Sse2.ConvertScalarToVector128Int64 (7L), 7L, 0L);
+		Check ("Sse2.ConvertScalarToVector128UInt32",
+		      Sse2.ConvertToUInt32 (Sse2.ConvertScalarToVector128UInt32 (9u)) == 9u);
+		Check ("Sse2.ConvertScalarToVector128UInt64",
+		      Sse2.ConvertToUInt64 (Sse2.ConvertScalarToVector128UInt64 (9ul)) == 9ul);
+
+		CheckLanesI32 ("Sse2.ConvertToVector128Int32(float)",
+		              Sse2.ConvertToVector128Int32 (Load (1.6f, 2.4f, -1.6f, -2.4f)), 2, 2, -2, -2);
+		CheckLanesI32 ("Sse2.ConvertToVector128Int32(double)",
+		              Sse2.ConvertToVector128Int32 (LoadF64 (1.6, -1.6)), 2, -2, 0, 0);
+		CheckLanesI32 ("Sse2.ConvertToVector128Int32WithTruncation(float)",
+		              Sse2.ConvertToVector128Int32WithTruncation (Load (1.9f, -1.9f, 0f, 0f)), 1, -1,
+		              0, 0);
+		CheckLanesI32 ("Sse2.ConvertToVector128Int32WithTruncation(double)",
+		              Sse2.ConvertToVector128Int32WithTruncation (LoadF64 (1.9, -1.9)), 1, -1, 0, 0);
+		CheckLanes ("Sse2.ConvertToVector128Single(int)",
+		           Sse2.ConvertToVector128Single (LoadI32 (1, 2, 3, 4)), 1f, 2f, 3f, 4f);
+		CheckLanes ("Sse2.ConvertToVector128Single(double)",
+		           Sse2.ConvertToVector128Single (LoadF64 (2.5, -2.5)), 2.5f, -2.5f, 0f, 0f);
+		CheckLanesF64 ("Sse2.ConvertToVector128Double(int)",
+		              Sse2.ConvertToVector128Double (LoadI32 (5, -5, 99, 99)), 5.0, -5.0);
+		CheckLanesF64 ("Sse2.ConvertToVector128Double(float)",
+		              Sse2.ConvertToVector128Double (Load (2.5f, -2.5f, 9f, 9f)), 2.5, -2.5);
+
+		Check ("Sse2.Extract", Sse2.Extract (LoadU16 (10, 20, 30, 40, 50, 60, 70, 80), 3) == 40);
+		ushort[] insertResult =
+			ToArrayU16 (Sse2.Insert (LoadU16 (1, 2, 3, 4, 5, 6, 7, 8), (ushort) 99, 3));
+		Check ("Sse2.Insert", insertResult [3] == 99 && insertResult [0] == 1);
+
+		Check ("Sse2.MoveMask(double)", Sse2.MoveMask (LoadF64 (-1.0, 1.0)) == 0b01);
+		Check ("Sse2.MoveMask(byte)",
+		      Sse2.MoveMask (LoadU8 (0x80, 0, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)) == 0b0101);
+		CheckLanesF64 ("Sse2.MoveScalar(double)", Sse2.MoveScalar (da, db), 2.0, 9.0);
+
+		Vector128<short> shortA = LoadI16 (300, 300, 300, 300, 300, 300, 300, 300);
+
+		CheckArrayI16 ("Sse2.MultiplyHigh(short)", ToArrayI16 (Sse2.MultiplyHigh (shortA, shortA)), 1,
+		              1, 1, 1, 1, 1, 1, 1);
+		CheckArrayI16 ("Sse2.MultiplyLow(short)", ToArrayI16 (Sse2.MultiplyLow (shortA, shortA)),
+		              24464, 24464, 24464, 24464, 24464, 24464, 24464, 24464);
+		Vector128<ushort> ushortA = LoadU16 (32768, 32768, 32768, 32768, 32768, 32768, 32768, 32768);
+		CheckArrayU16 ("Sse2.MultiplyHigh(ushort)", ToArrayU16 (Sse2.MultiplyHigh (ushortA, ushortA)),
+		              16384, 16384, 16384, 16384, 16384, 16384, 16384, 16384);
+
+		CheckLanesI32 ("Sse2.MultiplyAddAdjacent", Sse2.MultiplyAddAdjacent (shortA, shortA), 180000,
+		              180000, 180000, 180000);
+
+		CheckArrayI8 ("Sse2.PackSignedSaturate(short)",
+		             ToArrayI8 (Sse2.PackSignedSaturate (LoadI16 (-200, 50, 300, -300, 0, 0, 0, 0),
+		                                                 LoadI16 (0, 0, 0, 0, 0, 0, 0, 0))),
+		             -128, 50, 127, -128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+		CheckArrayI16 ("Sse2.PackSignedSaturate(int)",
+		              ToArrayI16 (Sse2.PackSignedSaturate (LoadI32 (-40000, 20000, 40000, -40000),
+		                                                   LoadI32 (0, 0, 0, 0))),
+		              -32768, 20000, 32767, -32768, 0, 0, 0, 0);
+		CheckArrayU8 ("Sse2.PackUnsignedSaturate",
+		             ToArrayU8 (Sse2.PackUnsignedSaturate (LoadI16 (-10, 50, 300, 200, 0, 0, 0, 0),
+		                                                   LoadI16 (0, 0, 0, 0, 0, 0, 0, 0))),
+		             0, 50, 255, 200, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+
+		byte[] addSatU8 = ToArrayU8 (Sse2.AddSaturate (LoadU8 (250, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		                                                       0, 0, 0, 0),
+		                                               LoadU8 (10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		                                                       0, 0, 0, 0)));
+		Check ("Sse2.AddSaturate(byte)", addSatU8 [0] == 255);
+		sbyte[] addSatI8 = ToArrayI8 (Sse2.AddSaturate (LoadI8 (120, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		                                                        0, 0, 0, 0),
+		                                                LoadI8 (20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		                                                        0, 0, 0, 0)));
+		Check ("Sse2.AddSaturate(sbyte)", addSatI8 [0] == 127);
+		byte[] subSatU8 = ToArrayU8 (Sse2.SubtractSaturate (LoadU8 (5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		                                                            0, 0, 0, 0, 0),
+		                                                    LoadU8 (10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		                                                            0, 0, 0, 0, 0)));
+		Check ("Sse2.SubtractSaturate(byte)", subSatU8 [0] == 0);
+
+		CheckArrayU16 ("Sse2.Average(ushort)",
+		              ToArrayU16 (Sse2.Average (LoadU16 (100, 200, 0, 0, 0, 0, 0, 0),
+		                                       LoadU16 (50, 300, 0, 0, 0, 0, 0, 0))),
+		              75, 250, 0, 0, 0, 0, 0, 0);
+		byte[] avgU8 = ToArrayU8 (Sse2.Average (LoadU8 (3, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		                                                0),
+		                                       LoadU8 (5, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		                                               0)));
+		Check ("Sse2.Average(byte)", avgU8 [0] == 4 && avgU8 [1] == 8);
+
+		ushort[] sse2SadResult =
+			ToArrayU16 (Sse2.SumAbsoluteDifferences (
+				LoadU8 (10, 20, 30, 40, 50, 60, 70, 80, 0, 0, 0, 0, 0, 0, 0, 0),
+				LoadU8 (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)));
+		Check ("Sse2.SumAbsoluteDifferences", sse2SadResult [0] == 360 && sse2SadResult [4] == 0);
+
+		CheckLanesI32 ("Sse2.Shuffle", Sse2.Shuffle (ia, 0x1B), 4, 3, -2, 1);
+		CheckArrayI16 ("Sse2.ShuffleLow",
+		              ToArrayI16 (Sse2.ShuffleLow (LoadI16 (1, 2, 3, 4, 5, 6, 7, 8), 0x1B)), 4, 3, 2,
+		              1, 5, 6, 7, 8);
+		CheckArrayI16 ("Sse2.ShuffleHigh",
+		              ToArrayI16 (Sse2.ShuffleHigh (LoadI16 (1, 2, 3, 4, 5, 6, 7, 8), 0x1B)), 1, 2, 3,
+		              4, 8, 7, 6, 5);
+
+		CheckLanesI32 ("Sse2.ShiftLeftLogical(immediate)", Sse2.ShiftLeftLogical (ia, (byte) 2), 4,
+		              -8, 12, 16);
+		Vector128<int> sse2ShiftNeg = LoadI32 (-8, 0, 0, 0);
+		Check ("Sse2.ShiftRightLogical(immediate) fills zero",
+		      ToArray (Sse2.ShiftRightLogical (sse2ShiftNeg, (byte) 1)) [0]
+		      == unchecked ((int) 0x7FFFFFFC));
+		Check ("Sse2.ShiftRightArithmetic(immediate) sign-extends",
+		      ToArray (Sse2.ShiftRightArithmetic (sse2ShiftNeg, (byte) 1)) [0] == -4);
+		// The count vector's low 64 bits hold one shift count applied to every
+		// lane, the way _mm_sll_epi16 documents it. The rest must be zero.
+		CheckArrayI16 ("Sse2.ShiftLeftLogical(count vector)",
+		              ToArrayI16 (Sse2.ShiftLeftLogical (LoadI16 (1, 2, 3, 4, 5, 6, 7, 8),
+		                                                 LoadI16 (1, 0, 0, 0, 0, 0, 0, 0))),
+		              2, 4, 6, 8, 10, 12, 14, 16);
+
+		CheckArrayU8 ("Sse2.ShiftLeftLogical128BitLane",
+		             ToArrayU8 (Sse2.ShiftLeftLogical128BitLane (
+			             LoadU8 (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16), 4)),
+		             0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
+		CheckArrayU8 ("Sse2.ShiftRightLogical128BitLane",
+		             ToArrayU8 (Sse2.ShiftRightLogical128BitLane (
+			             LoadU8 (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16), 4)),
+		             5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 0, 0, 0, 0);
+
+		CheckLanesI32 ("Sse2.UnpackLow(int)", Sse2.UnpackLow (ia, ib), 1, 10, -2, 20);
+		CheckLanesI32 ("Sse2.UnpackHigh(int)", Sse2.UnpackHigh (ia, ib), 3, -30, 4, 4);
+
+		Sse2.LoadFence ();
+		Sse2.MemoryFence ();
+		Check ("Sse2.LoadFence/MemoryFence execute", true);
+
+		unsafe {
+			int* sse2Scratch = stackalloc int[4] { 55, 66, 77, 88 };
+			CheckLanesI32 ("Sse2.LoadScalarVector128", Sse2.LoadScalarVector128 (sse2Scratch), 55, 0,
+			              0, 0);
+
+			double* doubleScratch = stackalloc double[2] { 111.0, 222.0 };
+			CheckLanesF64 ("Sse2.LoadLow(double)",
+			              Sse2.LoadLow (LoadF64 (1.0, 2.0), doubleScratch), 111.0, 2.0);
+			CheckLanesF64 ("Sse2.LoadHigh(double)",
+			              Sse2.LoadHigh (LoadF64 (1.0, 2.0), doubleScratch), 1.0, 111.0);
+
+			double* storeScalarOutD = stackalloc double[1];
+			Sse2.StoreScalar (storeScalarOutD, LoadF64 (9.0, 8.0));
+			Check ("Sse2.StoreScalar(double)", storeScalarOutD [0] == 9.0);
+
+			long* storeLowOutL = stackalloc long[1];
+			Sse2.StoreLow (storeLowOutL, LoadI64 (42, 99));
+			Check ("Sse2.StoreLow(long)", storeLowOutL [0] == 42L);
+
+			double* storeHighOutD = stackalloc double[1];
+			Sse2.StoreHigh (storeHighOutD, LoadF64 (9.0, 8.0));
+			Check ("Sse2.StoreHigh(double)", storeHighOutD [0] == 8.0);
+
+			int* ntRawI = stackalloc int[8];
+			int* ntAlignedI = (int *) (((long) ntRawI + 15) & ~15L);
+			Sse2.StoreAlignedNonTemporal (ntAlignedI, ia);
+			CheckLanesI32 ("Sse2.StoreAlignedNonTemporal",
+			              Sse2.LoadAlignedVector128 (ntAlignedI), 1, -2, 3, 4);
+
+			int* ntScalar = stackalloc int[1];
+			Sse2.StoreNonTemporal (ntScalar, 777);
+			Check ("Sse2.StoreNonTemporal", ntScalar [0] == 777);
+
+			sbyte* maskAddress = stackalloc sbyte[16] { -99, -99, -99, -99, -99, -99, -99, -99, -99,
+				                                        -99, -99, -99, -99, -99, -99, -99 };
+			Vector128<sbyte> maskSource =
+				LoadI8 (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
+			Vector128<sbyte> maskSelect =
+				LoadI8 (-1, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+			Sse2.MaskMove (maskSource, maskSelect, maskAddress);
+			Check ("Sse2.MaskMove", maskAddress [0] == 1 && maskAddress [1] == -99
+			                       && maskAddress [2] == 3 && maskAddress [3] == -99);
 		}
 
 		Check ("Sse3.IsSupported", Sse3.IsSupported);

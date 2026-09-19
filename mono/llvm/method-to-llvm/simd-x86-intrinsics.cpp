@@ -1113,6 +1113,19 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
+	/// Sse2.MoveMask overloads on Vector128<double> (MOVMSKPD) and on the byte
+	/// vectors (PMOVMSKB); both share one row because both take a single vector.
+	static BuiltinResult move_mask_sse2 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                     MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Intrinsic::ID id = is_double_vector (value) ? llvm::Intrinsic::x86_sse2_movmsk_pd
+		                                                  : llvm::Intrinsic::x86_sse2_pmovmskb_128;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { value }));
+		return llvm::Error::success ();
+	}
+
 	/// RCPSS/RSQRTSS already carry value's own upper lanes when used as both
 	/// operands, which is what the one-operand overload asks for.
 	template <llvm::Intrinsic::ID id>
@@ -1169,6 +1182,20 @@ struct SseEmitters : SimdEmit {
 	                                    MonoMethod *)
 	{
 		builder.CreateRet (builder.CreateIntrinsic (id, {}, { argument (emitter, 0) }));
+		return llvm::Error::success ();
+	}
+
+	/// One row for both managed overloads, which take a single vector argument
+	/// each: Vector128<double> rounds through CVTSD2SI, Vector128<int/long> is
+	/// a bare MOVD/MOVQ lane read.
+	template <llvm::Intrinsic::ID id>
+	static BuiltinResult convert_to_int_sse2 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                          MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+
+		builder.CreateRet (is_float (value) ? builder.CreateIntrinsic (id, {}, { value })
+		                                    : builder.CreateExtractElement (value, (uint64_t) 0));
 		return llvm::Error::success ();
 	}
 
@@ -1274,35 +1301,49 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// MOVLPS/MOVLPD: replace lanes 0-1 with two scalars read from address.
+	/// MOVLPS/MOVLPD: replace the lower half of upper's lanes with scalars read
+	/// from address. A 2-lane vector's lower half is lane 0 alone.
 	static BuiltinResult load_low (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                               MonoMethod *)
 	{
 		llvm::Value *upper = argument (emitter, 0);
 		llvm::Value *address = argument (emitter, 1);
 		llvm::Type *elem = llvm::cast<llvm::FixedVectorType> (upper->getType ())->getElementType ();
-		llvm::Value *ptr1 = builder.CreateConstInBoundsGEP1_32 (elem, address, 1);
-		llvm::Value *lane0 = builder.CreateAlignedLoad (elem, address, llvm::Align (4));
-		llvm::Value *lane1 = builder.CreateAlignedLoad (elem, ptr1, llvm::Align (4));
-		llvm::Value *result = builder.CreateInsertElement (upper, lane0, (uint64_t) 0);
+		unsigned half =
+			llvm::cast<llvm::FixedVectorType> (upper->getType ())->getNumElements () / 2;
+		llvm::Value *result = upper;
 
-		builder.CreateRet (builder.CreateInsertElement (result, lane1, (uint64_t) 1));
+		for (unsigned i = 0; i < half; i++) {
+			llvm::Value *ptr = builder.CreateConstInBoundsGEP1_32 (elem, address, i);
+			llvm::Value *lane = builder.CreateAlignedLoad (elem, ptr, llvm::Align (4));
+
+			result = builder.CreateInsertElement (result, lane, i);
+		}
+
+		builder.CreateRet (result);
 		return llvm::Error::success ();
 	}
 
-	/// MOVHPS/MOVHPD: replace lanes 2-3 with two scalars read from address.
+	/// MOVHPS/MOVHPD: replace the upper half of lower's lanes with scalars read
+	/// from address.
 	static BuiltinResult load_high (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                MonoMethod *)
 	{
 		llvm::Value *lower = argument (emitter, 0);
 		llvm::Value *address = argument (emitter, 1);
 		llvm::Type *elem = llvm::cast<llvm::FixedVectorType> (lower->getType ())->getElementType ();
-		llvm::Value *ptr1 = builder.CreateConstInBoundsGEP1_32 (elem, address, 1);
-		llvm::Value *lane2 = builder.CreateAlignedLoad (elem, address, llvm::Align (4));
-		llvm::Value *lane3 = builder.CreateAlignedLoad (elem, ptr1, llvm::Align (4));
-		llvm::Value *result = builder.CreateInsertElement (lower, lane2, (uint64_t) 2);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (lower->getType ())->getNumElements ();
+		unsigned half = lanes / 2;
+		llvm::Value *result = lower;
 
-		builder.CreateRet (builder.CreateInsertElement (result, lane3, (uint64_t) 3));
+		for (unsigned i = 0; i < half; i++) {
+			llvm::Value *ptr = builder.CreateConstInBoundsGEP1_32 (elem, address, i);
+			llvm::Value *lane = builder.CreateAlignedLoad (elem, ptr, llvm::Align (4));
+
+			result = builder.CreateInsertElement (result, lane, half + i);
+		}
+
+		builder.CreateRet (result);
 		return llvm::Error::success ();
 	}
 
@@ -1318,34 +1359,44 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
+	/// MOVLPS/MOVLPD: store the lower half of source's lanes to address.
 	static BuiltinResult store_low (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                MonoMethod *)
 	{
 		llvm::Value *address = argument (emitter, 0);
 		llvm::Value *source = argument (emitter, 1);
 		llvm::Type *elem = llvm::cast<llvm::FixedVectorType> (source->getType ())->getElementType ();
-		llvm::Value *ptr1 = builder.CreateConstInBoundsGEP1_32 (elem, address, 1);
+		unsigned half =
+			llvm::cast<llvm::FixedVectorType> (source->getType ())->getNumElements () / 2;
 
-		builder.CreateAlignedStore (builder.CreateExtractElement (source, (uint64_t) 0), address,
-		                           llvm::Align (4));
-		builder.CreateAlignedStore (builder.CreateExtractElement (source, (uint64_t) 1), ptr1,
-		                           llvm::Align (4));
+		for (unsigned i = 0; i < half; i++) {
+			llvm::Value *ptr = builder.CreateConstInBoundsGEP1_32 (elem, address, i);
+
+			builder.CreateAlignedStore (builder.CreateExtractElement (source, i), ptr,
+			                           llvm::Align (4));
+		}
+
 		builder.CreateRetVoid ();
 		return llvm::Error::success ();
 	}
 
+	/// MOVHPS/MOVHPD: store the upper half of source's lanes to address.
 	static BuiltinResult store_high (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                 MonoMethod *)
 	{
 		llvm::Value *address = argument (emitter, 0);
 		llvm::Value *source = argument (emitter, 1);
 		llvm::Type *elem = llvm::cast<llvm::FixedVectorType> (source->getType ())->getElementType ();
-		llvm::Value *ptr1 = builder.CreateConstInBoundsGEP1_32 (elem, address, 1);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (source->getType ())->getNumElements ();
+		unsigned half = lanes / 2;
 
-		builder.CreateAlignedStore (builder.CreateExtractElement (source, (uint64_t) 2), address,
-		                           llvm::Align (4));
-		builder.CreateAlignedStore (builder.CreateExtractElement (source, (uint64_t) 3), ptr1,
-		                           llvm::Align (4));
+		for (unsigned i = 0; i < half; i++) {
+			llvm::Value *ptr = builder.CreateConstInBoundsGEP1_32 (elem, address, i);
+
+			builder.CreateAlignedStore (builder.CreateExtractElement (source, half + i), ptr,
+			                           llvm::Align (4));
+		}
+
 		builder.CreateRetVoid ();
 		return llvm::Error::success ();
 	}
@@ -2707,8 +2758,8 @@ struct SseEmitters : SimdEmit {
 	}
 
 	template <llvm::Intrinsic::ID w_id, llvm::Intrinsic::ID d_id, llvm::Intrinsic::ID q_id>
-	static BuiltinResult avx2_shift_count (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
-	                                       MonoMethod *)
+	static BuiltinResult shift_count (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                  MonoMethod *)
 	{
 		llvm::Value *value = argument (emitter, 0);
 		llvm::Value *count = argument (emitter, 1);
@@ -2721,8 +2772,8 @@ struct SseEmitters : SimdEmit {
 	}
 
 	template <llvm::Intrinsic::ID w_id, llvm::Intrinsic::ID d_id>
-	static BuiltinResult avx2_shift_count_arith (MethodLLVMEmitter &emitter,
-	                                             llvm::IRBuilder<> &builder, MonoMethod *)
+	static BuiltinResult shift_count_arith (MethodLLVMEmitter &emitter,
+	                                        llvm::IRBuilder<> &builder, MonoMethod *)
 	{
 		llvm::Value *value = argument (emitter, 0);
 		llvm::Value *count = argument (emitter, 1);
@@ -2736,8 +2787,8 @@ struct SseEmitters : SimdEmit {
 
 	/// LLVM models the count as i32 rather than requiring a constant.
 	template <llvm::Intrinsic::ID w_id, llvm::Intrinsic::ID d_id, llvm::Intrinsic::ID q_id>
-	static BuiltinResult avx2_shift_immediate (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
-	                                           MonoMethod *)
+	static BuiltinResult shift_immediate (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                      MonoMethod *)
 	{
 		llvm::Value *value = argument (emitter, 0);
 		llvm::Value *count = builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ());
@@ -2750,8 +2801,8 @@ struct SseEmitters : SimdEmit {
 	}
 
 	template <llvm::Intrinsic::ID w_id, llvm::Intrinsic::ID d_id>
-	static BuiltinResult avx2_shift_immediate_arith (MethodLLVMEmitter &emitter,
-	                                                 llvm::IRBuilder<> &builder, MonoMethod *)
+	static BuiltinResult shift_immediate_arith (MethodLLVMEmitter &emitter,
+	                                            llvm::IRBuilder<> &builder, MonoMethod *)
 	{
 		llvm::Value *value = argument (emitter, 0);
 		llvm::Value *count = builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ());
@@ -2841,9 +2892,9 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// PSHUFD applies its control byte independently to each 128-bit half.
-	static BuiltinResult avx2_shuffle_epi32 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
-	                                         MonoMethod *)
+	/// PSHUFD applies its control byte independently to each 128-bit chunk of value.
+	static BuiltinResult shuffle_epi32 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                    MonoMethod *)
 	{
 		llvm::Value *value = argument (emitter, 0);
 		llvm::Value *control = builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ());
@@ -2918,6 +2969,152 @@ struct SseEmitters : SimdEmit {
 			});
 
 		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	/// CVTSS2SD/CVTSD2SS: convert value's lane zero to upper's element type and
+	/// insert it at lane zero.
+	static BuiltinResult convert_scalar_fp_to_vector (MethodLLVMEmitter &emitter,
+	                                                  llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *upper = argument (emitter, 0);
+		llvm::Value *value = argument (emitter, 1);
+		llvm::Type *dest_elem = llvm::cast<llvm::FixedVectorType> (upper->getType ())->getElementType ();
+		llvm::Value *lane0 = builder.CreateExtractElement (value, (uint64_t) 0);
+		llvm::Value *converted =
+			dest_elem->getScalarSizeInBits () > lane0->getType ()->getScalarSizeInBits ()
+				? builder.CreateFPExt (lane0, dest_elem)
+				: builder.CreateFPTrunc (lane0, dest_elem);
+
+		builder.CreateRet (builder.CreateInsertElement (upper, converted, (uint64_t) 0));
+		return llvm::Error::success ();
+	}
+
+	/// CVTDQ2PD/CVTPS2PD: convert the low two lanes to double, dropping the rest.
+	static BuiltinResult convert_low_to_double (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                            MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *narrow = builder.CreateShuffleVector (value, low_lanes_mask (2));
+		llvm::Type *dest = return_type (emitter);
+
+		builder.CreateRet (is_float (narrow) ? builder.CreateFPExt (narrow, dest)
+		                                     : builder.CreateSIToFP (narrow, dest));
+		return llvm::Error::success ();
+	}
+
+	/// CVT(T)PS2DQ/CVT(T)PD2DQ share a row across their two managed overloads,
+	/// which differ only in value's element type.
+	template <llvm::Intrinsic::ID float_id, llvm::Intrinsic::ID double_id>
+	static BuiltinResult convert_to_vector_int_sse2 (MethodLLVMEmitter &emitter,
+	                                                 llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Intrinsic::ID id = is_double_vector (value) ? double_id : float_id;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { value }));
+		return llvm::Error::success ();
+	}
+
+	/// CVTDQ2PS has no rounding ambiguity to resolve, unlike the int-producing
+	/// conversions above, so plain IR is exact. CVTPD2PS does need the real
+	/// instruction: it also halves the lane count, which plain IR cannot.
+	static BuiltinResult convert_to_vector_single_sse2 (MethodLLVMEmitter &emitter,
+	                                                    llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+
+		builder.CreateRet (
+			is_double_vector (value)
+				? builder.CreateIntrinsic (llvm::Intrinsic::x86_sse2_cvtpd2ps, {}, { value })
+				: builder.CreateSIToFP (value, return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult multiply_high_sse2 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *method)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		llvm::Intrinsic::ID id = param_is_unsigned (method, 0) ? llvm::Intrinsic::x86_sse2_pmulhu_w
+		                                                       : llvm::Intrinsic::x86_sse2_pmulh_w;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { lhs, rhs }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult multiply_add_adjacent_sse2 (MethodLLVMEmitter &emitter,
+	                                                 llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		builder.CreateRet (builder.CreateIntrinsic (
+			llvm::Intrinsic::x86_sse2_pmadd_wd, {}, { argument (emitter, 0), argument (emitter, 1) }));
+		return llvm::Error::success ();
+	}
+
+	/// PAVGB or PAVGW, selected by the element width.
+	static BuiltinResult average_sse2 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                   MonoMethod *)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		unsigned bits =
+			llvm::cast<llvm::FixedVectorType> (lhs->getType ())->getElementType ()->getIntegerBitWidth ();
+		llvm::Intrinsic::ID id =
+			bits == 8 ? llvm::Intrinsic::x86_sse2_pavg_b : llvm::Intrinsic::x86_sse2_pavg_w;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { lhs, rhs }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult sum_abs_diff_sse2 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                        MonoMethod *)
+	{
+		llvm::Value *result = builder.CreateIntrinsic (
+			llvm::Intrinsic::x86_sse2_psad_bw, {}, { argument (emitter, 0), argument (emitter, 1) });
+
+		builder.CreateRet (builder.CreateBitCast (result, return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult pack_signed_saturate_128 (MethodLLVMEmitter &emitter,
+	                                               llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		unsigned bits =
+			llvm::cast<llvm::FixedVectorType> (left->getType ())->getElementType ()->getIntegerBitWidth ();
+		llvm::Intrinsic::ID id = bits == 16 ? llvm::Intrinsic::x86_sse2_packsswb_128
+		                                    : llvm::Intrinsic::x86_sse2_packssdw_128;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { left, right }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult pack_unsigned_saturate_128 (MethodLLVMEmitter &emitter,
+	                                                 llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		builder.CreateRet (builder.CreateIntrinsic (llvm::Intrinsic::x86_sse2_packuswb_128, {},
+		                                            { argument (emitter, 0), argument (emitter, 1) }));
+		return llvm::Error::success ();
+	}
+
+	/// MASKMOVDQU stores each byte of source whose mask byte's top bit is set.
+	static BuiltinResult mask_move (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                MonoMethod *)
+	{
+		builder.CreateIntrinsic (llvm::Intrinsic::x86_sse2_maskmov_dqu, {},
+		                         { argument (emitter, 0), argument (emitter, 1), argument (emitter, 2) });
+		builder.CreateRetVoid ();
+		return llvm::Error::success ();
+	}
+
+	/// This backend does not model the non-temporal hint, the same simplification
+	/// LoadAlignedVector128NonTemporal and StoreAlignedNonTemporal already make.
+	static BuiltinResult store_nontemporal_scalar (MethodLLVMEmitter &emitter,
+	                                               llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		builder.CreateStore (argument (emitter, 1), argument (emitter, 0));
+		builder.CreateRetVoid ();
 		return llvm::Error::success ();
 	}
 
@@ -3158,6 +3355,184 @@ const BuiltinBody sse2_table[] = {
 	{ sse2, "StoreAligned", "SV", false, sse2_lowering, SseEmitters::store_aligned },
 
 	{ sse2, "SetZeroVector128", "", false, sse2_lowering, SseEmitters::set_zero },
+	{ sse2, "SetScalarVector128", "S", false, sse2_lowering, SseEmitters::set_scalar },
+
+	{ sse2, "MaxScalar", "VV", false, sse2_lowering,
+	  SseEmitters::binary_intrinsic<Intr::x86_sse2_max_sd> },
+	{ sse2, "MinScalar", "VV", false, sse2_lowering,
+	  SseEmitters::binary_intrinsic<Intr::x86_sse2_min_sd> },
+	{ sse2, "MultiplyScalar", "VV", false, sse2_lowering,
+	  SseEmitters::binary_scalar<SseEmitters::mul> },
+	{ sse2, "SqrtScalar", "V", false, sse2_lowering, SseEmitters::sqrt_scalar1 },
+	{ sse2, "SqrtScalar", "VV", false, sse2_lowering, SseEmitters::sqrt_scalar2 },
+
+	// The rest of the CMPPD immediate predicates, same values as the SSE table.
+	{ sse2, "CompareGreaterThanOrEqual", "VV", false, sse2_lowering,
+	  SseEmitters::compare2<5, llvm::CmpInst::ICMP_SGE> },
+	{ sse2, "CompareLessThanOrEqual", "VV", false, sse2_lowering,
+	  SseEmitters::compare2<2, llvm::CmpInst::ICMP_SLE> },
+	{ sse2, "CompareNotEqual", "VV", false, sse2_lowering,
+	  SseEmitters::compare2<4, llvm::CmpInst::ICMP_NE> },
+	{ sse2, "CompareNotGreaterThan", "VV", false, sse2_lowering,
+	  SseEmitters::compare2<2, llvm::CmpInst::ICMP_SLE> },
+	{ sse2, "CompareNotGreaterThanOrEqual", "VV", false, sse2_lowering,
+	  SseEmitters::compare2<1, llvm::CmpInst::ICMP_SLT> },
+	{ sse2, "CompareNotLessThan", "VV", false, sse2_lowering,
+	  SseEmitters::compare2<5, llvm::CmpInst::ICMP_SGE> },
+	{ sse2, "CompareNotLessThanOrEqual", "VV", false, sse2_lowering,
+	  SseEmitters::compare2<6, llvm::CmpInst::ICMP_SGT> },
+	{ sse2, "CompareOrdered", "VV", false, sse2_lowering,
+	  SseEmitters::compare2<7, llvm::CmpInst::ICMP_EQ> },
+	{ sse2, "CompareUnordered", "VV", false, sse2_lowering,
+	  SseEmitters::compare2<3, llvm::CmpInst::ICMP_EQ> },
+
+	// CMPSD immediate predicates, same values as the packed CMPPD table above.
+	{ sse2, "CompareEqualScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar<Intr::x86_sse2_cmp_sd, 0> },
+	{ sse2, "CompareLessThanScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar<Intr::x86_sse2_cmp_sd, 1> },
+	{ sse2, "CompareLessThanOrEqualScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar<Intr::x86_sse2_cmp_sd, 2> },
+	{ sse2, "CompareUnorderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar<Intr::x86_sse2_cmp_sd, 3> },
+	{ sse2, "CompareNotEqualScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar<Intr::x86_sse2_cmp_sd, 4> },
+	{ sse2, "CompareNotLessThanScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar<Intr::x86_sse2_cmp_sd, 5> },
+	{ sse2, "CompareGreaterThanOrEqualScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar<Intr::x86_sse2_cmp_sd, 5> },
+	{ sse2, "CompareNotLessThanOrEqualScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar<Intr::x86_sse2_cmp_sd, 6> },
+	{ sse2, "CompareGreaterThanScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar<Intr::x86_sse2_cmp_sd, 6> },
+	{ sse2, "CompareOrderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar<Intr::x86_sse2_cmp_sd, 7> },
+	{ sse2, "CompareNotGreaterThanScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar<Intr::x86_sse2_cmp_sd, 2> },
+	{ sse2, "CompareNotGreaterThanOrEqualScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar<Intr::x86_sse2_cmp_sd, 1> },
+
+	// COMISD/UCOMISD, bool-returning.
+	{ sse2, "CompareEqualOrderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar_bool<Intr::x86_sse2_comieq_sd> },
+	{ sse2, "CompareEqualUnorderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar_bool<Intr::x86_sse2_ucomieq_sd> },
+	{ sse2, "CompareLessThanOrderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar_bool<Intr::x86_sse2_comilt_sd> },
+	{ sse2, "CompareLessThanUnorderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar_bool<Intr::x86_sse2_ucomilt_sd> },
+	{ sse2, "CompareLessThanOrEqualOrderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar_bool<Intr::x86_sse2_comile_sd> },
+	{ sse2, "CompareLessThanOrEqualUnorderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar_bool<Intr::x86_sse2_ucomile_sd> },
+	{ sse2, "CompareGreaterThanOrderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar_bool<Intr::x86_sse2_comigt_sd> },
+	{ sse2, "CompareGreaterThanUnorderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar_bool<Intr::x86_sse2_ucomigt_sd> },
+	{ sse2, "CompareGreaterThanOrEqualOrderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar_bool<Intr::x86_sse2_comige_sd> },
+	{ sse2, "CompareGreaterThanOrEqualUnorderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar_bool<Intr::x86_sse2_ucomige_sd> },
+	{ sse2, "CompareNotEqualOrderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar_bool<Intr::x86_sse2_comineq_sd> },
+	{ sse2, "CompareNotEqualUnorderedScalar", "VV", false, sse2_lowering,
+	  SseEmitters::compare_scalar_bool<Intr::x86_sse2_ucomineq_sd> },
+
+	{ sse2, "ConvertToInt32", "V", false, sse2_lowering,
+	  SseEmitters::convert_to_int_sse2<Intr::x86_sse2_cvtsd2si> },
+	{ sse2, "ConvertToInt32WithTruncation", "V", false, sse2_lowering,
+	  SseEmitters::scalar_to_int<Intr::x86_sse2_cvttsd2si> },
+	{ sse2, "ConvertToInt64", "V", false, sse2_lowering,
+	  SseEmitters::convert_to_int_sse2<Intr::x86_sse2_cvtsd2si64> },
+	{ sse2, "ConvertToInt64WithTruncation", "V", false, sse2_lowering,
+	  SseEmitters::scalar_to_int<Intr::x86_sse2_cvttsd2si64> },
+	{ sse2, "ConvertToUInt32", "V", false, sse2_lowering, SseEmitters::extract_lane0 },
+	{ sse2, "ConvertToUInt64", "V", false, sse2_lowering, SseEmitters::extract_lane0 },
+	{ sse2, "ConvertToDouble", "V", false, sse2_lowering, SseEmitters::extract_lane0 },
+
+	{ sse2, "ConvertScalarToVector128Double", "VS", false, sse2_lowering,
+	  SseEmitters::convert_scalar_to_vector },
+	{ sse2, "ConvertScalarToVector128Double", "VV", false, sse2_lowering,
+	  SseEmitters::convert_scalar_fp_to_vector },
+	{ sse2, "ConvertScalarToVector128Single", "VV", false, sse2_lowering,
+	  SseEmitters::convert_scalar_fp_to_vector },
+	{ sse2, "ConvertScalarToVector128Int32", "S", false, sse2_lowering, SseEmitters::set_scalar },
+	{ sse2, "ConvertScalarToVector128Int64", "S", false, sse2_lowering, SseEmitters::set_scalar },
+	{ sse2, "ConvertScalarToVector128UInt32", "S", false, sse2_lowering, SseEmitters::set_scalar },
+	{ sse2, "ConvertScalarToVector128UInt64", "S", false, sse2_lowering, SseEmitters::set_scalar },
+
+	{ sse2, "ConvertToVector128Int32", "V", false, sse2_lowering,
+	  SseEmitters::convert_to_vector_int_sse2<Intr::x86_sse2_cvtps2dq, Intr::x86_sse2_cvtpd2dq> },
+	{ sse2, "ConvertToVector128Int32WithTruncation", "V", false, sse2_lowering,
+	  SseEmitters::convert_to_vector_int_sse2<Intr::x86_sse2_cvttps2dq, Intr::x86_sse2_cvttpd2dq> },
+	{ sse2, "ConvertToVector128Single", "V", false, sse2_lowering,
+	  SseEmitters::convert_to_vector_single_sse2 },
+	{ sse2, "ConvertToVector128Double", "V", false, sse2_lowering,
+	  SseEmitters::convert_low_to_double },
+
+	{ sse2, "Extract", "VS", false, sse2_lowering, SseEmitters::extract },
+	{ sse2, "Insert", "VSS", false, sse2_lowering, SseEmitters::insert },
+
+	{ sse2, "MoveMask", "V", false, sse2_lowering, SseEmitters::move_mask_sse2 },
+	{ sse2, "MoveScalar", "VV", false, sse2_lowering, SseEmitters::move_scalar },
+
+	{ sse2, "MultiplyHigh", "VV", false, sse2_lowering, SseEmitters::multiply_high_sse2 },
+	{ sse2, "MultiplyLow", "VV", false, sse2_lowering, SseEmitters::multiply_low },
+	{ sse2, "MultiplyAddAdjacent", "VV", false, sse2_lowering,
+	  SseEmitters::multiply_add_adjacent_sse2 },
+
+	{ sse2, "PackSignedSaturate", "VV", false, sse2_lowering,
+	  SseEmitters::pack_signed_saturate_128 },
+	{ sse2, "PackUnsignedSaturate", "VV", false, sse2_lowering,
+	  SseEmitters::pack_unsigned_saturate_128 },
+
+	{ sse2, "AddSaturate", "VV", false, sse2_lowering, SseEmitters::saturating<true> },
+	{ sse2, "SubtractSaturate", "VV", false, sse2_lowering, SseEmitters::saturating<false> },
+	{ sse2, "Average", "VV", false, sse2_lowering, SseEmitters::average_sse2 },
+	{ sse2, "SumAbsoluteDifferences", "VV", false, sse2_lowering, SseEmitters::sum_abs_diff_sse2 },
+
+	{ sse2, "Shuffle", "VS", false, sse2_lowering, SseEmitters::shuffle_epi32 },
+	{ sse2, "ShuffleHigh", "VS", false, sse2_lowering, SseEmitters::avx2_shuffle_words<true> },
+	{ sse2, "ShuffleLow", "VS", false, sse2_lowering, SseEmitters::avx2_shuffle_words<false> },
+
+	{ sse2, "ShiftLeftLogical", "VV", false, sse2_lowering,
+	  SseEmitters::shift_count<Intr::x86_sse2_psll_w, Intr::x86_sse2_psll_d,
+	                           Intr::x86_sse2_psll_q> },
+	{ sse2, "ShiftLeftLogical", "VS", false, sse2_lowering,
+	  SseEmitters::shift_immediate<Intr::x86_sse2_pslli_w, Intr::x86_sse2_pslli_d,
+	                               Intr::x86_sse2_pslli_q> },
+	{ sse2, "ShiftRightLogical", "VV", false, sse2_lowering,
+	  SseEmitters::shift_count<Intr::x86_sse2_psrl_w, Intr::x86_sse2_psrl_d,
+	                           Intr::x86_sse2_psrl_q> },
+	{ sse2, "ShiftRightLogical", "VS", false, sse2_lowering,
+	  SseEmitters::shift_immediate<Intr::x86_sse2_psrli_w, Intr::x86_sse2_psrli_d,
+	                               Intr::x86_sse2_psrli_q> },
+	{ sse2, "ShiftRightArithmetic", "VV", false, sse2_lowering,
+	  SseEmitters::shift_count_arith<Intr::x86_sse2_psra_w, Intr::x86_sse2_psra_d> },
+	{ sse2, "ShiftRightArithmetic", "VS", false, sse2_lowering,
+	  SseEmitters::shift_immediate_arith<Intr::x86_sse2_psrai_w, Intr::x86_sse2_psrai_d> },
+
+	{ sse2, "ShiftLeftLogical128BitLane", "VS", false, sse2_lowering,
+	  SseEmitters::shift_128_bit_lane<true> },
+	{ sse2, "ShiftRightLogical128BitLane", "VS", false, sse2_lowering,
+	  SseEmitters::shift_128_bit_lane<false> },
+
+	{ sse2, "UnpackHigh", "VV", false, sse2_lowering, SseEmitters::unpack<true> },
+	{ sse2, "UnpackLow", "VV", false, sse2_lowering, SseEmitters::unpack<false> },
+
+	{ sse2, "LoadFence", "", false, sse2_lowering, SseEmitters::fence<Intr::x86_sse2_lfence> },
+	{ sse2, "MemoryFence", "", false, sse2_lowering, SseEmitters::fence<Intr::x86_sse2_mfence> },
+
+	{ sse2, "LoadScalarVector128", "S", false, sse2_lowering, SseEmitters::load_scalar },
+	{ sse2, "LoadLow", "VS", false, sse2_lowering, SseEmitters::load_low },
+	{ sse2, "LoadHigh", "VS", false, sse2_lowering, SseEmitters::load_high },
+	{ sse2, "StoreScalar", "SV", false, sse2_lowering, SseEmitters::store_scalar },
+	{ sse2, "StoreLow", "SV", false, sse2_lowering, SseEmitters::store_low },
+	{ sse2, "StoreHigh", "SV", false, sse2_lowering, SseEmitters::store_high },
+	{ sse2, "StoreAlignedNonTemporal", "SV", false, sse2_lowering, SseEmitters::store_aligned },
+	{ sse2, "StoreNonTemporal", "SS", false, sse2_lowering, SseEmitters::store_nontemporal_scalar },
+
+	{ sse2, "MaskMove", "VVS", false, sse2_lowering, SseEmitters::mask_move },
 
 	{ sse2, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
 };
@@ -3544,21 +3919,21 @@ const BuiltinBody avx2_table[] = {
 	{ avx2, "PermuteVar8x32", "VV", false, avx2_lowering, SseEmitters::avx2_permute_var8x32 },
 
 	{ avx2, "ShiftLeftLogical", "VV", false, avx2_lowering,
-	  SseEmitters::avx2_shift_count<Intr::x86_avx2_psll_w, Intr::x86_avx2_psll_d,
+	  SseEmitters::shift_count<Intr::x86_avx2_psll_w, Intr::x86_avx2_psll_d,
 	                                Intr::x86_avx2_psll_q> },
 	{ avx2, "ShiftLeftLogical", "VS", false, avx2_lowering,
-	  SseEmitters::avx2_shift_immediate<Intr::x86_avx2_pslli_w, Intr::x86_avx2_pslli_d,
+	  SseEmitters::shift_immediate<Intr::x86_avx2_pslli_w, Intr::x86_avx2_pslli_d,
 	                                    Intr::x86_avx2_pslli_q> },
 	{ avx2, "ShiftRightLogical", "VV", false, avx2_lowering,
-	  SseEmitters::avx2_shift_count<Intr::x86_avx2_psrl_w, Intr::x86_avx2_psrl_d,
+	  SseEmitters::shift_count<Intr::x86_avx2_psrl_w, Intr::x86_avx2_psrl_d,
 	                                Intr::x86_avx2_psrl_q> },
 	{ avx2, "ShiftRightLogical", "VS", false, avx2_lowering,
-	  SseEmitters::avx2_shift_immediate<Intr::x86_avx2_psrli_w, Intr::x86_avx2_psrli_d,
+	  SseEmitters::shift_immediate<Intr::x86_avx2_psrli_w, Intr::x86_avx2_psrli_d,
 	                                    Intr::x86_avx2_psrli_q> },
 	{ avx2, "ShiftRightArithmetic", "VV", false, avx2_lowering,
-	  SseEmitters::avx2_shift_count_arith<Intr::x86_avx2_psra_w, Intr::x86_avx2_psra_d> },
+	  SseEmitters::shift_count_arith<Intr::x86_avx2_psra_w, Intr::x86_avx2_psra_d> },
 	{ avx2, "ShiftRightArithmetic", "VS", false, avx2_lowering,
-	  SseEmitters::avx2_shift_immediate_arith<Intr::x86_avx2_psrai_w, Intr::x86_avx2_psrai_d> },
+	  SseEmitters::shift_immediate_arith<Intr::x86_avx2_psrai_w, Intr::x86_avx2_psrai_d> },
 
 	{ avx2, "ShiftLeftLogical128BitLane", "VS", false, avx2_lowering,
 	  SseEmitters::shift_128_bit_lane<true> },
@@ -3576,7 +3951,7 @@ const BuiltinBody avx2_table[] = {
 
 	{ avx2, "Shuffle", "VV", false, avx2_lowering,
 	  SseEmitters::binary_intrinsic<Intr::x86_avx2_pshuf_b> },
-	{ avx2, "Shuffle", "VS", false, avx2_lowering, SseEmitters::avx2_shuffle_epi32 },
+	{ avx2, "Shuffle", "VS", false, avx2_lowering, SseEmitters::shuffle_epi32 },
 	{ avx2, "ShuffleHigh", "VS", false, avx2_lowering, SseEmitters::avx2_shuffle_words<true> },
 	{ avx2, "ShuffleLow", "VS", false, avx2_lowering, SseEmitters::avx2_shuffle_words<false> },
 
