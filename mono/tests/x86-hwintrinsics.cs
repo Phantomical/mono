@@ -1817,6 +1817,18 @@ class Tests
 			Check ("Popcnt.PopCount(ulong)", Popcnt.PopCount (0x8000000000000001ul) == 2);
 		}
 
+		Check ("Lzcnt.IsSupported", Lzcnt.IsSupported);
+
+		if (Lzcnt.IsSupported) {
+			Check ("Lzcnt.LeadingZeroCount(uint) zero", Lzcnt.LeadingZeroCount (0u) == 32);
+			Check ("Lzcnt.LeadingZeroCount(uint) one", Lzcnt.LeadingZeroCount (1u) == 31);
+			Check ("Lzcnt.LeadingZeroCount(uint) top bit", Lzcnt.LeadingZeroCount (0x80000000u) == 0);
+			Check ("Lzcnt.LeadingZeroCount(ulong) zero", Lzcnt.LeadingZeroCount (0ul) == 64);
+			Check ("Lzcnt.LeadingZeroCount(ulong) one", Lzcnt.LeadingZeroCount (1ul) == 63);
+			Check ("Lzcnt.LeadingZeroCount(ulong) top bit",
+			      Lzcnt.LeadingZeroCount (0x8000000000000000ul) == 0);
+		}
+
 		if (failures == 0)
 			Console.WriteLine ("OK");
 		return failures;

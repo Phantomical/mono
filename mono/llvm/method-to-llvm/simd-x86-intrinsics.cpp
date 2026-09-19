@@ -75,6 +75,11 @@ bool popcnt_lowering ()
 	return mono_hwcap_x86_has_popcnt;
 }
 
+bool lzcnt_lowering ()
+{
+	return mono_hwcap_x86_has_lzcnt;
+}
+
 /// Return whether the Vector128<T> parameter at index has an unsigned element type.
 /// LLVM vector types do not encode signedness, so some lowerings must recover it
 /// from the managed signature.
@@ -344,6 +349,12 @@ struct SseEmitters : SimdEmit {
 	                                          MonoMethod *)
 	{
 		return is_supported (mono_hwcap_x86_has_popcnt, builder);
+	}
+
+	static BuiltinResult lzcnt_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_lzcnt, builder);
 	}
 
 	static bool is_double_vector (llvm::Value *value)
@@ -1020,6 +1031,17 @@ struct SseEmitters : SimdEmit {
 
 		builder.CreateRet (
 			builder.CreateIntrinsic (llvm::Intrinsic::ctpop, { value->getType () }, { value }));
+		return llvm::Error::success ();
+	}
+
+	/// LZCNT's result for a zero operand is the operand width, not poison.
+	static BuiltinResult leading_zero_count (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+
+		builder.CreateRet (builder.CreateIntrinsic (
+			llvm::Intrinsic::ctlz, { value->getType () }, { value, builder.getFalse () }));
 		return llvm::Error::success ();
 	}
 
@@ -2314,6 +2336,7 @@ const ClassKey sse42 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse42" };
 const ClassKey avx = { nullptr, "System.Runtime.Intrinsics.X86", "Avx" };
 const ClassKey avx2 = { nullptr, "System.Runtime.Intrinsics.X86", "Avx2" };
 const ClassKey popcnt = { nullptr, "System.Runtime.Intrinsics.X86", "Popcnt" };
+const ClassKey lzcnt = { nullptr, "System.Runtime.Intrinsics.X86", "Lzcnt" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -2858,6 +2881,12 @@ const BuiltinBody popcnt_table[] = {
 	{ popcnt, "PopCount", "S", false, popcnt_lowering, SseEmitters::popcount },
 };
 
+const BuiltinBody lzcnt_table[] = {
+	{ lzcnt, "get_IsSupported", "", false, nullptr, SseEmitters::lzcnt_is_supported },
+
+	{ lzcnt, "LeadingZeroCount", "S", false, lzcnt_lowering, SseEmitters::leading_zero_count },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
@@ -2873,6 +2902,7 @@ simd_x86_bodies ()
 		made.insert (made.end (), std::begin (avx_table), std::end (avx_table));
 		made.insert (made.end (), std::begin (avx2_table), std::end (avx2_table));
 		made.insert (made.end (), std::begin (popcnt_table), std::end (popcnt_table));
+		made.insert (made.end (), std::begin (lzcnt_table), std::end (lzcnt_table));
 		return made;
 	} ();
 
