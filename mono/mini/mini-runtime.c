@@ -3197,6 +3197,7 @@ MONO_SIG_HANDLER_FUNC (, mono_sigsegv_signal_handler)
 	}
 	int signo = info->si_signo;
 #else
+	fault_addr = debug_fault_addr;
 	int signo = SIGSEGV;
 #endif
 
