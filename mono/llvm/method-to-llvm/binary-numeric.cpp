@@ -413,8 +413,19 @@ MethodLLVMEmitter::emit_add (MonoIrBuilder &builder)
 	auto [value1, value2, result] = *operands;
 	llvm::Value *sum;
 
+	bool v1_ptr = value1.value->getType ()->isPointerTy ();
+	bool v2_ptr = value2.value->getType ()->isPointerTy ();
+
 	if (result->byref) {
 		auto [base, index] = pointer_and_index (*operands);
+
+		sum = builder.CreateGEP (builder.getInt8Ty (), base,
+		                         coerce (builder, index, native_int_type (builder)));
+	} else if (v1_ptr != v2_ptr) {
+		// Native-int values may retain their LLVM pointer representation. Keep
+		// pointer-plus-offset operations as GEPs instead of converting through integers.
+		llvm::Value *base = v1_ptr ? value1.value : value2.value;
+		llvm::Value *index = v1_ptr ? value2.value : value1.value;
 
 		sum = builder.CreateGEP (builder.getInt8Ty (), base,
 		                         coerce (builder, index, native_int_type (builder)));
@@ -480,7 +491,12 @@ MethodLLVMEmitter::emit_sub (MonoIrBuilder &builder)
 	auto [value1, value2, result] = *operands;
 	llvm::Value *difference;
 
-	if (result->byref) {
+	// Keep pointer-minus-offset operations as GEPs when a native-int value retains
+	// its LLVM pointer representation.
+	bool ptr_offset = value1.value->getType ()->isPointerTy ()
+	                  && !value2.value->getType ()->isPointerTy ();
+
+	if (result->byref || ptr_offset) {
 		// When the result is a managed pointer, value1 is always that pointer. Only
 		// `& - int` produces one, per the table above. `int - &` produces a number
 		// instead. This indexes the pointer the same way add does, backwards.
@@ -936,8 +952,18 @@ MethodLLVMEmitter::emit_add_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	auto [value1, value2, result] = *operands;
 	llvm::Value *sum;
 
+	bool v1_ptr = value1.value->getType ()->isPointerTy ();
+	bool v2_ptr = value2.value->getType ()->isPointerTy ();
+
 	if (result->byref) {
 		auto [base, index] = pointer_and_index (*operands);
+
+		sum = emit_checked_pointer_offset (
+			builder, base, coerce (builder, index, native_int_type (builder)), false);
+	} else if (is_unsigned && v1_ptr != v2_ptr) {
+		// Only the unsigned overflow form permits pointer arithmetic.
+		llvm::Value *base = v1_ptr ? value1.value : value2.value;
+		llvm::Value *index = v1_ptr ? value2.value : value1.value;
 
 		sum = emit_checked_pointer_offset (
 			builder, base, coerce (builder, index, native_int_type (builder)), false);
@@ -998,7 +1024,11 @@ MethodLLVMEmitter::emit_sub_ovf (MonoIrBuilder &builder, bool is_unsigned)
 	auto [value1, value2, result] = *operands;
 	llvm::Value *difference;
 
-	if (result->byref) {
+	// Only the unsigned overflow form permits pointer arithmetic.
+	bool ptr_offset = is_unsigned && value1.value->getType ()->isPointerTy ()
+	                  && !value2.value->getType ()->isPointerTy ();
+
+	if (result->byref || ptr_offset) {
 		// As with sub, only `& - int` gives back a pointer, so value1 is the pointer.
 		difference = emit_checked_pointer_offset (
 			builder, value1.value,
