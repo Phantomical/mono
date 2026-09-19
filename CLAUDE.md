@@ -24,8 +24,15 @@ An assertions build stays useful for finding a fault, because it catches the API
 misuse the distro LLVM tolerated in silence. Reach for it to explain a crash, not to
 measure.
 
-Scope: amd64 and Linux first, JIT only, unmodified LLVM. AOT and llvmonly are out of
-scope and deleted. The design doc is `.claude/plans/orc-direct-multitier.md`.
+Scope: amd64, JIT only, unmodified LLVM. Linux and Windows are both first-class build
+hosts — `cmake/MonoOptions.cmake` answers `MONO_HOST_LINUX`/`MONO_HOST_WINDOWS` off
+`CMAKE_SYSTEM_NAME` and fails the configure on anything else, and `ci.yml` builds and
+tests both: `build`/`test` on Ubuntu with clang and gcc, `build-windows`/`test-windows`
+on `windows-2025` with `clang-cl` against a downloaded LLVM release and a vcpkg
+toolchain file. `build.md` only walks the Linux invocation; `ci.yml`'s `build-windows`
+job is the authoritative Windows one until that gap is closed. AOT and llvmonly are out
+of scope and deleted, and so are Darwin, mobile, wasm, cross builds and the netcore
+profile. The design doc is `.claude/plans/orc-direct-multitier.md`.
 
 ## Build
 
