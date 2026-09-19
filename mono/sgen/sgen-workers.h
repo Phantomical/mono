@@ -20,6 +20,7 @@ typedef gint32 State;
 
 typedef void (*SgenWorkersFinishCallback) (void);
 typedef void (*SgenWorkerCallback) (WorkerData *data);
+typedef void (*SgenGrayObjectCallback) (GCObject *obj, void *data);
 
 struct _WorkerData {
 	gint32 state;
@@ -106,8 +107,10 @@ int sgen_workers_get_job_split_count (int generation);
 int sgen_workers_get_active_worker_count (int generation);
 #ifndef DISABLE_SGEN_MAJOR_MARKSWEEP_CONC
 void sgen_workers_foreach (int generation, SgenWorkerCallback callback);
+void sgen_workers_foreach_gray_object (int generation, SgenGrayObjectCallback callback, void *data);
 #else
 #define sgen_workers_foreach(...)
+#define sgen_workers_foreach_gray_object(...)
 #endif
 gboolean sgen_workers_is_worker_thread (MonoNativeThreadId id);
 

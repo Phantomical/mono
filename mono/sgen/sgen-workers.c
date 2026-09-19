@@ -636,6 +636,37 @@ sgen_workers_foreach (int generation, SgenWorkerCallback callback)
 		callback (&context->workers_data [i]);
 }
 
+/* Visit objects that workers have marked but not yet scanned. */
+void
+sgen_workers_foreach_gray_object (int generation, SgenGrayObjectCallback callback, void *data)
+{
+	WorkerContext *context = &worker_contexts [generation];
+	GrayQueueSection *section;
+	int i, j;
+
+	SGEN_ASSERT (0, !sgen_workers_are_working (context), "Gray queues can only be inspected while workers are stopped");
+
+	for (section = context->workers_distribute_gray_queue.first; section; section = section->next) {
+		for (j = 0; j < section->size; ++j)
+			callback (section->entries [j].obj, data);
+	}
+
+	for (i = 0; i < context->workers_num; ++i) {
+		SgenGrayQueue *queue = &context->workers_data [i].private_gray_queue;
+		GrayQueueEntry *entry;
+
+		if (sgen_gray_object_queue_is_empty (queue))
+			continue;
+		/* The first section is populated through cursor; later sections use size. */
+		for (entry = queue->first->entries; entry <= queue->cursor; ++entry)
+			callback (entry->obj, data);
+		for (section = queue->first->next; section; section = section->next) {
+			for (j = 0; j < section->size; ++j)
+				callback (section->entries [j].obj, data);
+		}
+	}
+}
+
 gboolean
 sgen_workers_is_worker_thread (MonoNativeThreadId id)
 {
