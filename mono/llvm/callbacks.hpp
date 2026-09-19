@@ -121,6 +121,9 @@ private:
 	std::mutex mutex_;
 	llvm::DenseMap<llvm::orc::ExecutorAddr, std::shared_ptr<Callback>> callbacks_;
 
+	llvm::orc::ExecutorAddr resolver_;
+	llvm::orc::ExecutorAddr resolver_avx_;
+
 	/*
 	 * Declared last: each pool's resolver closure holds this object, so they
 	 * have to be torn down before the maps they read.
