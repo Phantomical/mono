@@ -215,14 +215,17 @@ def main():
         bins[i].extend(sorted(members))
         loads[i] += len(members)
 
-    # The shared support tree carries the source side of dlls/ too, so a shard
-    # sees one merged dlls/ directory of sources and built assemblies.
+    # Copy sources into the shared dlls/ directory alongside built assemblies.
+    # The Windows artifact round-trip materializes symlinks as copies, and nested
+    # links can become empty files when their targets have not been restored yet.
     if (src / "dlls").is_dir():
         for p in (src / "dlls").rglob("*"):
             if p.is_file():
-                link = support / "dlls" / p.relative_to(src / "dlls")
-                link.parent.mkdir(parents=True, exist_ok=True)
-                stage_file(p, link)
+                staged = support / "dlls" / p.relative_to(src / "dlls")
+                staged.parent.mkdir(parents=True, exist_ok=True)
+                if staged.is_symlink() or staged.exists():
+                    staged.unlink()
+                shutil.copy2(p, staged)
 
     for stale in dest.glob("run-*"):
         if stale.is_dir() and int(stale.name[4:]) >= args.shards:
