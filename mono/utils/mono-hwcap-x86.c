@@ -144,6 +144,11 @@ mono_hwcap_arch_init (void)
 			mono_hwcap_x86_has_avx = TRUE;
 	}
 
+	if (mono_hwcap_x86_call_cpuidex (7, 0, &eax, &ebx, &ecx, &edx)) {
+		if (ebx & (1 << 5))
+			mono_hwcap_x86_has_avx2 = TRUE;
+	}
+
 	if (mono_hwcap_x86_call_cpuidex (0x80000000, 0, &eax, &ebx, &ecx, &edx)) {
 		if ((unsigned int) eax >= 0x80000001 && ebx == 0x68747541 && ecx == 0x444D4163 && edx == 0x69746E65) {
 			if (mono_hwcap_x86_call_cpuidex (0x80000001, 0, &eax, &ebx, &ecx, &edx)) {

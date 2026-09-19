@@ -294,6 +294,137 @@ class Tests
 		            && r [5] == e5 && r [6] == e6 && r [7] == e7);
 	}
 
+	static unsafe Vector256<uint> LoadU256 (uint e0, uint e1, uint e2, uint e3, uint e4, uint e5,
+	                                        uint e6, uint e7)
+	{
+		uint* e = stackalloc uint[8] { e0, e1, e2, e3, e4, e5, e6, e7 };
+		return Avx.LoadVector256 (e);
+	}
+
+	static unsafe uint[] ToArrayU256 (Vector256<uint> v)
+	{
+		uint[] r = new uint[8];
+		fixed (uint* p = r)
+			Avx.Store (p, v);
+		return r;
+	}
+
+	static unsafe Vector256<sbyte> LoadI8x256 (params sbyte[] e)
+	{
+		fixed (sbyte* p = e)
+			return Avx.LoadVector256 (p);
+	}
+
+	static unsafe sbyte[] ToArrayI8x256 (Vector256<sbyte> v)
+	{
+		sbyte[] r = new sbyte[32];
+		fixed (sbyte* p = r)
+			Avx.Store (p, v);
+		return r;
+	}
+
+	static unsafe Vector256<byte> LoadU8x256 (params byte[] e)
+	{
+		fixed (byte* p = e)
+			return Avx.LoadVector256 (p);
+	}
+
+	static unsafe byte[] ToArrayU8x256 (Vector256<byte> v)
+	{
+		byte[] r = new byte[32];
+		fixed (byte* p = r)
+			Avx.Store (p, v);
+		return r;
+	}
+
+	static unsafe Vector256<short> LoadI16x256 (params short[] e)
+	{
+		fixed (short* p = e)
+			return Avx.LoadVector256 (p);
+	}
+
+	static unsafe short[] ToArrayI16x256 (Vector256<short> v)
+	{
+		short[] r = new short[16];
+		fixed (short* p = r)
+			Avx.Store (p, v);
+		return r;
+	}
+
+	static unsafe Vector256<ushort> LoadU16x256 (params ushort[] e)
+	{
+		fixed (ushort* p = e)
+			return Avx.LoadVector256 (p);
+	}
+
+	static unsafe ushort[] ToArrayU16x256 (Vector256<ushort> v)
+	{
+		ushort[] r = new ushort[16];
+		fixed (ushort* p = r)
+			Avx.Store (p, v);
+		return r;
+	}
+
+	static unsafe Vector256<long> LoadI64x256 (long e0, long e1, long e2, long e3)
+	{
+		long* e = stackalloc long[4] { e0, e1, e2, e3 };
+		return Avx.LoadVector256 (e);
+	}
+
+	static unsafe long[] ToArrayI64x256 (Vector256<long> v)
+	{
+		long[] r = new long[4];
+		fixed (long* p = r)
+			Avx.Store (p, v);
+		return r;
+	}
+
+	static unsafe Vector256<ulong> LoadU64x256 (ulong e0, ulong e1, ulong e2, ulong e3)
+	{
+		ulong* e = stackalloc ulong[4] { e0, e1, e2, e3 };
+		return Avx.LoadVector256 (e);
+	}
+
+	static unsafe ulong[] ToArrayU64x256 (Vector256<ulong> v)
+	{
+		ulong[] r = new ulong[4];
+		fixed (ulong* p = r)
+			Avx.Store (p, v);
+		return r;
+	}
+
+	static void CheckArrayI8x256 (string what, sbyte[] got, params sbyte[] expected)
+	{
+		bool ok = got.Length == expected.Length;
+		for (int i = 0; ok && i < got.Length; i++)
+			ok &= got [i] == expected [i];
+		Check (what, ok);
+	}
+
+	static void CheckArrayI16x256 (string what, short[] got, params short[] expected)
+	{
+		bool ok = got.Length == expected.Length;
+		for (int i = 0; ok && i < got.Length; i++)
+			ok &= got [i] == expected [i];
+		Check (what, ok);
+	}
+
+	static void CheckArrayU8x256 (string what, byte[] got, params byte[] expected)
+	{
+		bool ok = got.Length == expected.Length;
+		for (int i = 0; ok && i < got.Length; i++)
+			ok &= got [i] == expected [i];
+		Check (what, ok);
+	}
+
+	static void CheckArrayU16x256 (string what, ushort[] got, params ushort[] expected)
+	{
+		bool ok = got.Length == expected.Length;
+		for (int i = 0; ok && i < got.Length; i++)
+			ok &= got [i] == expected [i];
+		Check (what, ok);
+	}
+
 	static unsafe int Main ()
 	{
 		Check ("Sse.IsSupported", Sse.IsSupported);
@@ -1113,6 +1244,566 @@ class Tests
 			Check ("Avx.TestZ<int>(Vector256) all zero", Avx.TestZ (testAllZero256, testAllOnes256));
 			Check ("Avx.TestC<int>(Vector256) all ones mask",
 			      Avx.TestC (testAllOnes256, testAllZero256));
+		}
+
+		if (Avx2.IsSupported) {
+			Check ("Avx2.IsSupported", Avx2.IsSupported);
+
+			sbyte[] seq8 = new sbyte[32];
+			sbyte[] negSeq8 = new sbyte[32];
+			for (int i = 0; i < 32; i++) {
+				seq8 [i] = (sbyte) (i + 1);
+				negSeq8 [i] = (sbyte) -(i + 1);
+			}
+			Vector256<sbyte> i8seq = LoadI8x256 (seq8);
+			Vector256<sbyte> i8negSeq = LoadI8x256 (negSeq8);
+
+			byte[] absResult = ToArrayU8x256 (Avx2.Abs (i8negSeq));
+			bool absOk = true;
+			for (int i = 0; i < 32; i++)
+				absOk &= absResult [i] == (byte) (i + 1);
+			Check ("Avx2.Abs", absOk);
+
+			sbyte[] addResult = ToArrayI8x256 (Avx2.Add (i8seq, i8seq));
+			bool addOk = true;
+			for (int i = 0; i < 32; i++)
+				addOk &= addResult [i] == (sbyte) (2 * (i + 1));
+			Check ("Avx2.Add", addOk);
+
+			sbyte[] hundred = new sbyte[32];
+			for (int i = 0; i < 32; i++) hundred [i] = 100;
+			Vector256<sbyte> i8hundred = LoadI8x256 (hundred);
+			sbyte[] addSatResult = ToArrayI8x256 (Avx2.AddSaturate (i8hundred, i8hundred));
+			bool addSatOk = true;
+			for (int i = 0; i < 32; i++)
+				addSatOk &= addSatResult [i] == 127;
+			Check ("Avx2.AddSaturate", addSatOk);
+
+			byte[] twoHundred = new byte[32];
+			for (int i = 0; i < 32; i++) twoHundred [i] = 200;
+			Vector256<byte> u8twoHundred = LoadU8x256 (twoHundred);
+			byte[] addSatUResult = ToArrayU8x256 (Avx2.AddSaturate (u8twoHundred, u8twoHundred));
+			bool addSatUOk = true;
+			for (int i = 0; i < 32; i++)
+				addSatUOk &= addSatUResult [i] == 255;
+			Check ("Avx2.AddSaturate(byte)", addSatUOk);
+
+			sbyte[] subResult = ToArrayI8x256 (Avx2.Subtract (i8seq, i8seq));
+			bool subOk = true;
+			for (int i = 0; i < 32; i++)
+				subOk &= subResult [i] == 0;
+			Check ("Avx2.Subtract", subOk);
+
+			sbyte[] negHundred = new sbyte[32];
+			for (int i = 0; i < 32; i++) negHundred [i] = -100;
+			sbyte[] subSatResult =
+				ToArrayI8x256 (Avx2.SubtractSaturate (LoadI8x256 (negHundred), i8hundred));
+			bool subSatOk = true;
+			for (int i = 0; i < 32; i++)
+				subSatOk &= subSatResult [i] == -128;
+			Check ("Avx2.SubtractSaturate", subSatOk);
+
+			CheckArrayI8x256 ("Avx2.AlignRight(mask=0) is right",
+			                 ToArrayI8x256 (Avx2.AlignRight (i8seq, i8negSeq, 0)), negSeq8);
+			CheckArrayI8x256 ("Avx2.AlignRight(mask=16) is left",
+			                 ToArrayI8x256 (Avx2.AlignRight (i8seq, i8negSeq, 16)), seq8);
+			CheckArrayI8x256 ("Avx2.AlignRight(mask=32) is zero",
+			                 ToArrayI8x256 (Avx2.AlignRight (i8seq, i8negSeq, 32)), new sbyte[32]);
+
+			Vector256<int> bitsA = LoadI256 (0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF);
+			Vector256<int> bitsB = LoadI256 (0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F);
+			CheckLanesI256 ("Avx2.And", Avx2.And (bitsA, bitsB), 0x0F, 0x0F, 0x0F, 0x0F, 0x0F, 0x0F,
+			               0x0F, 0x0F);
+			CheckLanesI256 ("Avx2.AndNot", Avx2.AndNot (bitsB, bitsA), 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+			               0xF0, 0xF0, 0xF0);
+			CheckLanesI256 ("Avx2.Or", Avx2.Or (bitsA, bitsB), 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+			               0xFF, 0xFF);
+			CheckLanesI256 ("Avx2.Xor", Avx2.Xor (bitsA, bitsB), 0xF0, 0xF0, 0xF0, 0xF0, 0xF0, 0xF0,
+			               0xF0, 0xF0);
+
+			byte[] avgAArr = new byte[32];
+			byte[] avgBArr = new byte[32];
+			for (int i = 0; i < 32; i++) { avgAArr [i] = 10; avgBArr [i] = 21; }
+			byte[] avgResult =
+				ToArrayU8x256 (Avx2.Average (LoadU8x256 (avgAArr), LoadU8x256 (avgBArr)));
+			bool avgOk = true;
+			for (int i = 0; i < 32; i++)
+				avgOk &= avgResult [i] == 16;
+			Check ("Avx2.Average", avgOk);
+
+			ushort[] avgU16A = new ushort[16];
+			ushort[] avgU16B = new ushort[16];
+			for (int i = 0; i < 16; i++) { avgU16A [i] = 1000; avgU16B [i] = 2001; }
+			ushort[] avgU16Result =
+				ToArrayU16x256 (Avx2.Average (LoadU16x256 (avgU16A), LoadU16x256 (avgU16B)));
+			bool avgU16Ok = true;
+			for (int i = 0; i < 16; i++)
+				avgU16Ok &= avgU16Result [i] == 1501;
+			Check ("Avx2.Average(ushort)", avgU16Ok);
+
+			Vector256<int> blendLeftI = LoadI256 (1, 2, 3, 4, 5, 6, 7, 8);
+			Vector256<int> blendRightI = LoadI256 (10, 20, 30, 40, 50, 60, 70, 80);
+			CheckLanesI256 ("Avx2.Blend(int)", Avx2.Blend (blendLeftI, blendRightI, 0xAA), 1, 20, 3,
+			               40, 5, 60, 7, 80);
+
+			short[] blendLeftArr = new short[16];
+			short[] blendRightArr = new short[16];
+			for (int i = 0; i < 16; i++) {
+				blendLeftArr [i] = (short) (i + 1);
+				blendRightArr [i] = (short) (100 + i);
+			}
+			short[] blendResult = ToArrayI16x256 (
+				Avx2.Blend (LoadI16x256 (blendLeftArr), LoadI16x256 (blendRightArr), 0xAA));
+			bool blendOk = true;
+			for (int i = 0; i < 16; i++)
+				blendOk &= blendResult [i] == (i % 2 == 1 ? blendRightArr [i] : blendLeftArr [i]);
+			Check ("Avx2.Blend(short)", blendOk);
+
+			sbyte[] bvLeftArr = new sbyte[32];
+			sbyte[] bvRightArr = new sbyte[32];
+			sbyte[] bvMaskArr = new sbyte[32];
+			for (int i = 0; i < 32; i++) {
+				bvLeftArr [i] = 1;
+				bvRightArr [i] = 2;
+				bvMaskArr [i] = (sbyte) (i % 2 == 0 ? 0 : -1);
+			}
+			sbyte[] bvResult = ToArrayI8x256 (Avx2.BlendVariable (
+				LoadI8x256 (bvLeftArr), LoadI8x256 (bvRightArr), LoadI8x256 (bvMaskArr)));
+			bool bvOk = true;
+			for (int i = 0; i < 32; i++)
+				bvOk &= bvResult [i] == (i % 2 == 0 ? (sbyte) 1 : (sbyte) 2);
+			Check ("Avx2.BlendVariable", bvOk);
+
+			Vector128<int> bcastSrc128 = LoadI32 (42, 0, 0, 0);
+			CheckLanesI32 ("Avx2.BroadcastScalarToVector128",
+			              Avx2.BroadcastScalarToVector128 (bcastSrc128), 42, 42, 42, 42);
+			CheckLanesI256 ("Avx2.BroadcastScalarToVector256",
+			               Avx2.BroadcastScalarToVector256 (bcastSrc128), 42, 42, 42, 42, 42, 42, 42,
+			               42);
+
+			int[] bcastHalf = { 1, 2, 3, 4 };
+			fixed (int* bcastHalfPtr = bcastHalf)
+				CheckLanesI256 ("Avx2.BroadcastVector128ToVector256",
+				               Avx2.BroadcastVector128ToVector256 (bcastHalfPtr), 1, 2, 3, 4, 1, 2,
+				               3, 4);
+
+			Vector256<int> cmpA = LoadI256 (1, 2, 3, 4, 5, 6, 7, 8);
+			Vector256<int> cmpB = LoadI256 (1, 0, 3, 0, 5, 0, 7, 0);
+			CheckLanesI256 ("Avx2.CompareEqual", Avx2.CompareEqual (cmpA, cmpB), -1, 0, -1, 0, -1, 0,
+			               -1, 0);
+			CheckLanesI256 ("Avx2.CompareGreaterThan", Avx2.CompareGreaterThan (cmpA, cmpB), 0, -1, 0,
+			               -1, 0, -1, 0, -1);
+
+			Check ("Avx2.ConvertToDouble", Avx2.ConvertToDouble (LoadD256 (7.5, 0, 0, 0)) == 7.5);
+			Check ("Avx2.ConvertToInt32",
+			      Avx2.ConvertToInt32 (LoadI256 (99, 0, 0, 0, 0, 0, 0, 0)) == 99);
+			Check ("Avx2.ConvertToUInt32",
+			      Avx2.ConvertToUInt32 (LoadU256 (99u, 0, 0, 0, 0, 0, 0, 0)) == 99u);
+
+			sbyte[] convSrc8 = new sbyte[16];
+			for (int i = 0; i < 16; i++) convSrc8 [i] = (sbyte) (i - 8);
+			short[] conv16Result = ToArrayI16x256 (Avx2.ConvertToVector256Int16 (LoadI8 (convSrc8)));
+			bool conv16Ok = true;
+			for (int i = 0; i < 16; i++)
+				conv16Ok &= conv16Result [i] == (short) (i - 8);
+			Check ("Avx2.ConvertToVector256Int16", conv16Ok);
+
+			byte[] convSrcU8 = new byte[16];
+			for (int i = 0; i < 16; i++) convSrcU8 [i] = (byte) (i + 1);
+			ushort[] convU16Result =
+				ToArrayU16x256 (Avx2.ConvertToVector256UInt16 (LoadU8 (convSrcU8)));
+			bool convU16Ok = true;
+			for (int i = 0; i < 16; i++)
+				convU16Ok &= convU16Result [i] == (ushort) (i + 1);
+			Check ("Avx2.ConvertToVector256UInt16", convU16Ok);
+
+			sbyte[] i32SrcSbyte = new sbyte[16];
+			for (int i = 0; i < 16; i++) i32SrcSbyte [i] = (sbyte) (i - 8);
+			CheckLanesI256 ("Avx2.ConvertToVector256Int32(sbyte)",
+			               Avx2.ConvertToVector256Int32 (LoadI8 (i32SrcSbyte)), -8, -7, -6, -5, -4,
+			               -3, -2, -1);
+
+			short[] i32SrcShort = new short[8];
+			for (int i = 0; i < 8; i++) i32SrcShort [i] = (short) (i * 10);
+			CheckLanesI256 ("Avx2.ConvertToVector256Int32(short)",
+			               Avx2.ConvertToVector256Int32 (LoadI16 (i32SrcShort)), 0, 10, 20, 30, 40,
+			               50, 60, 70);
+
+			byte[] u32SrcByte = new byte[16];
+			for (int i = 0; i < 16; i++) u32SrcByte [i] = (byte) (i + 1);
+			uint[] u32Result = ToArrayU256 (Avx2.ConvertToVector256UInt32 (LoadU8 (u32SrcByte)));
+			bool u32Ok = true;
+			for (int i = 0; i < 8; i++)
+				u32Ok &= u32Result [i] == (uint) (i + 1);
+			Check ("Avx2.ConvertToVector256UInt32(byte)", u32Ok);
+
+			long[] i64Result = ToArrayI64x256 (Avx2.ConvertToVector256Int64 (LoadI8 (i32SrcSbyte)));
+			bool i64Ok = true;
+			for (int i = 0; i < 4; i++)
+				i64Ok &= i64Result [i] == i - 8;
+			Check ("Avx2.ConvertToVector256Int64(sbyte)", i64Ok);
+
+			ulong[] u64Result = ToArrayU64x256 (Avx2.ConvertToVector256UInt64 (LoadU8 (u32SrcByte)));
+			bool u64Ok = true;
+			for (int i = 0; i < 4; i++)
+				u64Ok &= u64Result [i] == (ulong) (i + 1);
+			Check ("Avx2.ConvertToVector256UInt64(byte)", u64Ok);
+
+			Vector256<int> extSrc = LoadI256 (1, 2, 3, 4, 5, 6, 7, 8);
+			CheckLanesI32 ("Avx2.ExtractVector128(index0)", Avx2.ExtractVector128 (extSrc, 0), 1, 2,
+			              3, 4);
+			CheckLanesI32 ("Avx2.ExtractVector128(index1)", Avx2.ExtractVector128 (extSrc, 1), 5, 6,
+			              7, 8);
+
+			int[] extStoreBuf = new int[4];
+			fixed (int* extStorePtr = extStoreBuf)
+				Avx2.ExtractVector128 (extStorePtr, extSrc, 1);
+			Check ("Avx2.ExtractVector128(store)",
+			      extStoreBuf [0] == 5 && extStoreBuf [1] == 6 && extStoreBuf [2] == 7
+			      && extStoreBuf [3] == 8);
+
+			Vector128<int> insData = LoadI32 (100, 200, 300, 400);
+			CheckLanesI256 ("Avx2.InsertVector128(reg)", Avx2.InsertVector128 (extSrc, insData, 1),
+			               1, 2, 3, 4, 100, 200, 300, 400);
+
+			fixed (int* insLoadPtr = extStoreBuf)
+				CheckLanesI256 ("Avx2.InsertVector128(load)",
+				               Avx2.InsertVector128 (extSrc, insLoadPtr, 0), 5, 6, 7, 8, 5, 6, 7, 8);
+
+			int[] gatherData = { 10, 20, 30, 40, 50, 60, 70, 80 };
+			fixed (int* gatherPtr = gatherData) {
+				Vector128<int> gatherIdx128 = LoadI32 (0, 2, 4, 6);
+				CheckLanesI32 ("Avx2.GatherVector128", Avx2.GatherVector128 (gatherPtr, gatherIdx128,
+				                                                            4), 10, 30, 50, 70);
+
+				Vector256<int> gatherIdx256 = LoadI256 (0, 1, 2, 3, 4, 5, 6, 7);
+				CheckLanesI256 ("Avx2.GatherVector256",
+				               Avx2.GatherVector256 (gatherPtr, gatherIdx256, 4), 10, 20, 30, 40, 50,
+				               60, 70, 80);
+
+				Vector128<int> gatherMask = LoadI32 (-1, 0, -1, 0);
+				Vector128<int> gatherSrc = LoadI32 (999, 999, 999, 999);
+				CheckLanesI32 ("Avx2.GatherMaskVector128",
+				              Avx2.GatherMaskVector128 (gatherSrc, gatherPtr, gatherIdx128,
+				                                        gatherMask, 4), 10, 999, 50, 999);
+			}
+
+			int[] mlData = { 1, 2, 3, 4, 5, 6, 7, 8 };
+			fixed (int* mlPtr = mlData) {
+				Vector256<int> mlMask = LoadI256 (-1, 0, -1, 0, -1, 0, -1, 0);
+				CheckLanesI256 ("Avx2.MaskLoad", Avx2.MaskLoad (mlPtr, mlMask), 1, 0, 3, 0, 5, 0, 7,
+				               0);
+			}
+
+			int[] msBuf = new int[8];
+			fixed (int* msPtr = msBuf) {
+				Vector256<int> msMask = LoadI256 (-1, 0, -1, 0, -1, 0, -1, 0);
+				Vector256<int> msSource = LoadI256 (11, 22, 33, 44, 55, 66, 77, 88);
+				Avx2.MaskStore (msPtr, msMask, msSource);
+			}
+			Check ("Avx2.MaskStore",
+			      msBuf [0] == 11 && msBuf [1] == 0 && msBuf [2] == 33 && msBuf [3] == 0
+			      && msBuf [4] == 55 && msBuf [5] == 0 && msBuf [6] == 77 && msBuf [7] == 0);
+
+			Vector256<int> maxA = LoadI256 (1, -2, 3, -4, 5, -6, 7, -8);
+			Vector256<int> maxB = LoadI256 (0, 0, 0, 0, 0, 0, 0, 0);
+			CheckLanesI256 ("Avx2.Max", Avx2.Max (maxA, maxB), 1, 0, 3, 0, 5, 0, 7, 0);
+			CheckLanesI256 ("Avx2.Min", Avx2.Min (maxA, maxB), 0, -2, 0, -4, 0, -6, 0, -8);
+
+			sbyte[] mmSrc = new sbyte[32];
+			for (int i = 0; i < 32; i++) mmSrc [i] = (sbyte) (i % 2 == 0 ? 1 : -1);
+			int mmResult = Avx2.MoveMask (LoadI8x256 (mmSrc));
+			int mmExpected = 0;
+			for (int i = 0; i < 32; i++)
+				if (i % 2 == 1) mmExpected |= 1 << i;
+			Check ("Avx2.MoveMask", mmResult == mmExpected);
+
+			byte[] msadSrc = new byte[32];
+			for (int i = 0; i < 32; i++) msadSrc [i] = 5;
+			ushort[] msadResult = ToArrayU16x256 (
+				Avx2.MultipleSumAbsoluteDifferences (LoadU8x256 (msadSrc), LoadU8x256 (msadSrc), 0));
+			bool msadOk = true;
+			for (int i = 0; i < 16; i++)
+				msadOk &= msadResult [i] == 0;
+			Check ("Avx2.MultipleSumAbsoluteDifferences(equal constant inputs is zero)", msadOk);
+
+			Vector256<int> mulWA = LoadI256 (2, 0, 3, 0, 4, 0, 5, 0);
+			Vector256<int> mulWB = LoadI256 (10, 0, 10, 0, 10, 0, 10, 0);
+			long[] mulWResult = ToArrayI64x256 (Avx2.Multiply (mulWA, mulWB));
+			Check ("Avx2.Multiply(int->long)",
+			      mulWResult [0] == 20 && mulWResult [1] == 30 && mulWResult [2] == 40
+			      && mulWResult [3] == 50);
+
+			Vector256<uint> mulWUA = LoadU256 (2, 0, 3, 0, 4, 0, 5, 0);
+			Vector256<uint> mulWUB = LoadU256 (10, 0, 10, 0, 10, 0, 10, 0);
+			ulong[] mulWUResult = ToArrayU64x256 (Avx2.Multiply (mulWUA, mulWUB));
+			Check ("Avx2.Multiply(uint->ulong)",
+			      mulWUResult [0] == 20 && mulWUResult [1] == 30 && mulWUResult [2] == 40
+			      && mulWUResult [3] == 50);
+
+			short[] mulHiA = new short[16];
+			short[] mulHiB = new short[16];
+			for (int i = 0; i < 16; i++) { mulHiA [i] = 30000; mulHiB [i] = 30000; }
+			short[] mulHiResult =
+				ToArrayI16x256 (Avx2.MultiplyHigh (LoadI16x256 (mulHiA), LoadI16x256 (mulHiB)));
+			bool mulHiOk = true;
+			for (int i = 0; i < 16; i++)
+				mulHiOk &= mulHiResult [i] == (short) ((30000 * 30000) >> 16);
+			Check ("Avx2.MultiplyHigh", mulHiOk);
+
+			ushort[] mulHiUA = new ushort[16];
+			ushort[] mulHiUB = new ushort[16];
+			for (int i = 0; i < 16; i++) { mulHiUA [i] = 60000; mulHiUB [i] = 60000; }
+			ushort[] mulHiUResult =
+				ToArrayU16x256 (Avx2.MultiplyHigh (LoadU16x256 (mulHiUA), LoadU16x256 (mulHiUB)));
+			ushort expectedHiU = (ushort) ((60000u * 60000u) >> 16);
+			bool mulHiUOk = true;
+			for (int i = 0; i < 16; i++)
+				mulHiUOk &= mulHiUResult [i] == expectedHiU;
+			Check ("Avx2.MultiplyHigh(ushort)", mulHiUOk);
+
+			short[] mhrsA = new short[16];
+			short[] mhrsB = new short[16];
+			for (int i = 0; i < 16; i++) { mhrsA [i] = 0; mhrsB [i] = 12345; }
+			short[] mhrsResult =
+				ToArrayI16x256 (Avx2.MultiplyHighRoundScale (LoadI16x256 (mhrsA), LoadI16x256 (mhrsB)));
+			bool mhrsOk = true;
+			for (int i = 0; i < 16; i++)
+				mhrsOk &= mhrsResult [i] == 0;
+			Check ("Avx2.MultiplyHighRoundScale(zero operand is zero)", mhrsOk);
+
+			short[] mlowA = new short[16];
+			short[] mlowB = new short[16];
+			for (int i = 0; i < 16; i++) { mlowA [i] = (short) (i + 1); mlowB [i] = 3; }
+			short[] mlowResult =
+				ToArrayI16x256 (Avx2.MultiplyLow (LoadI16x256 (mlowA), LoadI16x256 (mlowB)));
+			bool mlowOk = true;
+			for (int i = 0; i < 16; i++)
+				mlowOk &= mlowResult [i] == (short) (3 * (i + 1));
+			Check ("Avx2.MultiplyLow(short)", mlowOk);
+
+			Vector256<int> mlowIntA = LoadI256 (1, 2, 3, 4, 5, 6, 7, 8);
+			Vector256<int> mlowIntB = LoadI256 (3, 3, 3, 3, 3, 3, 3, 3);
+			CheckLanesI256 ("Avx2.MultiplyLow(int)", Avx2.MultiplyLow (mlowIntA, mlowIntB), 3, 6, 9,
+			               12, 15, 18, 21, 24);
+
+			short[] pmaddA = new short[16];
+			short[] pmaddB = new short[16];
+			for (int i = 0; i < 16; i++) { pmaddA [i] = (short) (i + 1); pmaddB [i] = 2; }
+			int[] pmaddResult =
+				ToArrayI256 (Avx2.MultiplyAddAdjacent (LoadI16x256 (pmaddA), LoadI16x256 (pmaddB)));
+			bool pmaddOk = true;
+			for (int i = 0; i < 8; i++)
+				pmaddOk &= pmaddResult [i] == (2 * i + 1) * 2 + (2 * i + 2) * 2;
+			Check ("Avx2.MultiplyAddAdjacent(short)", pmaddOk);
+
+			byte[] pmaddUA = new byte[32];
+			sbyte[] pmaddSB = new sbyte[32];
+			for (int i = 0; i < 32; i++) {
+				pmaddUA [i] = 10;
+				pmaddSB [i] = (sbyte) (i % 2 == 0 ? 1 : -1);
+			}
+			short[] pmaddUResult = ToArrayI16x256 (
+				Avx2.MultiplyAddAdjacent (LoadU8x256 (pmaddUA), LoadI8x256 (pmaddSB)));
+			bool pmaddUOk = true;
+			for (int i = 0; i < 16; i++)
+				pmaddUOk &= pmaddUResult [i] == 0;
+			Check ("Avx2.MultiplyAddAdjacent(byte,sbyte)", pmaddUOk);
+
+			short[] packSA = new short[16];
+			short[] packSB = new short[16];
+			for (int i = 0; i < 16; i++) { packSA [i] = 200; packSB [i] = -200; }
+			sbyte[] packSResult =
+				ToArrayI8x256 (Avx2.PackSignedSaturate (LoadI16x256 (packSA), LoadI16x256 (packSB)));
+			bool packSOk = true;
+			for (int i = 0; i < 32; i++)
+				packSOk &= packSResult [i] == (sbyte) (i % 16 < 8 ? 127 : -128);
+			Check ("Avx2.PackSignedSaturate(short->sbyte)", packSOk);
+
+			Vector256<int> packDA = LoadI256 (40000, 40000, 40000, 40000, 40000, 40000, 40000, 40000);
+			Vector256<int> packDB =
+				LoadI256 (-40000, -40000, -40000, -40000, -40000, -40000, -40000, -40000);
+			short[] packDResult = ToArrayI16x256 (Avx2.PackSignedSaturate (packDA, packDB));
+			bool packDOk = true;
+			for (int i = 0; i < 16; i++)
+				packDOk &= packDResult [i] == (short) (i % 8 < 4 ? 32767 : -32768);
+			Check ("Avx2.PackSignedSaturate(int->short)", packDOk);
+
+			short[] packUSA = new short[16];
+			short[] packUSB = new short[16];
+			for (int i = 0; i < 16; i++) { packUSA [i] = 300; packUSB [i] = -50; }
+			byte[] packUSResult = ToArrayU8x256 (
+				Avx2.PackUnsignedSaturate (LoadI16x256 (packUSA), LoadI16x256 (packUSB)));
+			bool packUSOk = true;
+			for (int i = 0; i < 32; i++)
+				packUSOk &= packUSResult [i] == (byte) (i % 16 < 8 ? 255 : 0);
+			Check ("Avx2.PackUnsignedSaturate(short->byte)", packUSOk);
+
+			Vector256<int> packUDA = LoadI256 (70000, 70000, 70000, 70000, 70000, 70000, 70000, 70000);
+			Vector256<int> packUDB = LoadI256 (-10, -10, -10, -10, -10, -10, -10, -10);
+			ushort[] packUDResult = ToArrayU16x256 (Avx2.PackUnsignedSaturate (packUDA, packUDB));
+			bool packUDOk = true;
+			for (int i = 0; i < 16; i++)
+				packUDOk &= packUDResult [i] == (ushort) (i % 8 < 4 ? 65535 : 0);
+			Check ("Avx2.PackUnsignedSaturate(int->ushort)", packUDOk);
+
+			Vector256<int> permLeft = LoadI256 (1, 2, 3, 4, 5, 6, 7, 8);
+			Vector256<int> permRight = LoadI256 (10, 20, 30, 40, 50, 60, 70, 80);
+			CheckLanesI256 ("Avx2.Permute2x128", Avx2.Permute2x128 (permLeft, permRight, 0x20), 1, 2,
+			               3, 4, 10, 20, 30, 40);
+
+			Vector256<long> permQ = LoadI64x256 (10, 20, 30, 40);
+			long[] permQResult = ToArrayI64x256 (Avx2.Permute4x64 (permQ, 0x1B));
+			Check ("Avx2.Permute4x64",
+			      permQResult [0] == 40 && permQResult [1] == 30 && permQResult [2] == 20
+			      && permQResult [3] == 10);
+
+			Vector256<int> pvSrc = LoadI256 (10, 20, 30, 40, 50, 60, 70, 80);
+			Vector256<int> pvIdx = LoadI256 (7, 6, 5, 4, 3, 2, 1, 0);
+			CheckLanesI256 ("Avx2.PermuteVar8x32(int)", Avx2.PermuteVar8x32 (pvSrc, pvIdx), 80, 70,
+			               60, 50, 40, 30, 20, 10);
+
+			Vector256<float> pvSrcF = LoadF256 (1f, 2f, 3f, 4f, 5f, 6f, 7f, 8f);
+			CheckLanesF256 ("Avx2.PermuteVar8x32(float)", Avx2.PermuteVar8x32 (pvSrcF, pvIdx), 8f, 7f,
+			               6f, 5f, 4f, 3f, 2f, 1f);
+
+			Vector256<int> shiftSrc = LoadI256 (1, 2, 3, 4, 5, 6, 7, 8);
+			CheckLanesI256 ("Avx2.ShiftLeftLogical(imm)", Avx2.ShiftLeftLogical (shiftSrc, (byte) 2),
+			               4, 8, 12, 16, 20, 24, 28, 32);
+			CheckLanesI256 ("Avx2.ShiftRightLogical(imm)",
+			               Avx2.ShiftRightLogical (shiftSrc, (byte) 1), 0, 1, 1, 2, 2, 3, 3, 4);
+
+			Vector256<int> shiftNeg = LoadI256 (-8, -4, -2, -1, 8, 4, 2, 1);
+			CheckLanesI256 ("Avx2.ShiftRightArithmetic(imm)",
+			               Avx2.ShiftRightArithmetic (shiftNeg, (byte) 1), -4, -2, -1, -1, 4, 2, 1,
+			               0);
+
+			Vector128<int> shiftCount = LoadI32 (1, 0, 0, 0);
+			CheckLanesI256 ("Avx2.ShiftLeftLogical(count)",
+			               Avx2.ShiftLeftLogical (shiftSrc, shiftCount), 2, 4, 6, 8, 10, 12, 14, 16);
+			CheckLanesI256 ("Avx2.ShiftRightLogical(count)",
+			               Avx2.ShiftRightLogical (shiftSrc, shiftCount), 0, 1, 1, 2, 2, 3, 3, 4);
+			CheckLanesI256 ("Avx2.ShiftRightArithmetic(count)",
+			               Avx2.ShiftRightArithmetic (shiftNeg, shiftCount), -4, -2, -1, -1, 4, 2, 1,
+			               0);
+
+			byte[] laneShiftSrc = new byte[32];
+			for (int i = 0; i < 32; i++) laneShiftSrc [i] = (byte) (i % 16 + 1);
+			byte[] laneShiftLeftResult =
+				ToArrayU8x256 (Avx2.ShiftLeftLogical128BitLane (LoadU8x256 (laneShiftSrc), 1));
+			bool laneLeftOk = true;
+			for (int h = 0; h < 2; h++) {
+				laneLeftOk &= laneShiftLeftResult [h * 16] == 0;
+				for (int i = 1; i < 16; i++)
+					laneLeftOk &= laneShiftLeftResult [h * 16 + i] == laneShiftSrc [h * 16 + i - 1];
+			}
+			Check ("Avx2.ShiftLeftLogical128BitLane", laneLeftOk);
+
+			byte[] laneShiftRightResult =
+				ToArrayU8x256 (Avx2.ShiftRightLogical128BitLane (LoadU8x256 (laneShiftSrc), 1));
+			bool laneRightOk = true;
+			for (int h = 0; h < 2; h++) {
+				for (int i = 0; i < 15; i++)
+					laneRightOk &= laneShiftRightResult [h * 16 + i] == laneShiftSrc [h * 16 + i + 1];
+				laneRightOk &= laneShiftRightResult [h * 16 + 15] == 0;
+			}
+			Check ("Avx2.ShiftRightLogical128BitLane", laneRightOk);
+
+			Vector256<uint> shiftVarCounts = LoadU256 (0, 1, 2, 3, 4, 5, 6, 7);
+			Vector256<int> shiftVarBase = LoadI256 (1, 1, 1, 1, 1, 1, 1, 1);
+			CheckLanesI256 ("Avx2.ShiftLeftLogicalVariable",
+			               Avx2.ShiftLeftLogicalVariable (shiftVarBase, shiftVarCounts), 1, 2, 4, 8,
+			               16, 32, 64, 128);
+
+			Vector256<uint> shiftVarSrc = LoadU256 (256, 256, 256, 256, 256, 256, 256, 256);
+			uint[] shiftVarRightResult =
+				ToArrayU256 (Avx2.ShiftRightLogicalVariable (shiftVarSrc, shiftVarCounts));
+			Check ("Avx2.ShiftRightLogicalVariable",
+			      shiftVarRightResult [0] == 256 && shiftVarRightResult [1] == 128
+			      && shiftVarRightResult [2] == 64 && shiftVarRightResult [3] == 32
+			      && shiftVarRightResult [4] == 16 && shiftVarRightResult [5] == 8
+			      && shiftVarRightResult [6] == 4 && shiftVarRightResult [7] == 2);
+
+			Vector256<int> shiftVarNeg = LoadI256 (-256, -256, -256, -256, -256, -256, -256, -256);
+			CheckLanesI256 ("Avx2.ShiftRightArithmeticVariable",
+			               Avx2.ShiftRightArithmeticVariable (shiftVarNeg, shiftVarCounts), -256,
+			               -128, -64, -32, -16, -8, -4, -2);
+
+			Vector128<uint> shiftVar128Counts = LoadU32 (0, 1, 2, 3);
+			Vector128<int> shiftVar128Base = LoadI32 (1, 1, 1, 1);
+			CheckLanesI32 ("Avx2.ShiftLeftLogicalVariable(128)",
+			              Avx2.ShiftLeftLogicalVariable (shiftVar128Base, shiftVar128Counts), 1, 2,
+			              4, 8);
+
+			byte[] shufSrc = new byte[32];
+			for (int i = 0; i < 32; i++) shufSrc [i] = (byte) i;
+			byte[] shufMask = new byte[32];
+			for (int i = 0; i < 32; i++) shufMask [i] = (byte) (15 - i % 16);
+			byte[] shufResult =
+				ToArrayU8x256 (Avx2.Shuffle (LoadU8x256 (shufSrc), LoadU8x256 (shufMask)));
+			bool shufOk = true;
+			for (int i = 0; i < 32; i++)
+				shufOk &= shufResult [i] == (byte) (i / 16 * 16 + (15 - i % 16));
+			Check ("Avx2.Shuffle(VV)", shufOk);
+
+			Vector256<int> shufDSrc = LoadI256 (1, 2, 3, 4, 5, 6, 7, 8);
+			CheckLanesI256 ("Avx2.Shuffle(int)", Avx2.Shuffle (shufDSrc, 0x1B), 4, 3, 2, 1, 8, 7, 6,
+			               5);
+
+			short[] shufHLSrc = new short[16];
+			for (int i = 0; i < 16; i++) shufHLSrc [i] = (short) i;
+			short[] shufHighResult =
+				ToArrayI16x256 (Avx2.ShuffleHigh (LoadI16x256 (shufHLSrc), 0x1B));
+			bool shufHighOk = true;
+			for (int h = 0; h < 2; h++) {
+				for (int i = 0; i < 4; i++)
+					shufHighOk &= shufHighResult [h * 8 + i] == shufHLSrc [h * 8 + i];
+				for (int i = 0; i < 4; i++)
+					shufHighOk &=
+						shufHighResult [h * 8 + 4 + i] == shufHLSrc [h * 8 + 4 + (3 - i)];
+			}
+			Check ("Avx2.ShuffleHigh", shufHighOk);
+
+			short[] shufLowResult = ToArrayI16x256 (Avx2.ShuffleLow (LoadI16x256 (shufHLSrc), 0x1B));
+			bool shufLowOk = true;
+			for (int h = 0; h < 2; h++) {
+				for (int i = 0; i < 4; i++)
+					shufLowOk &= shufLowResult [h * 8 + i] == shufHLSrc [h * 8 + (3 - i)];
+				for (int i = 0; i < 4; i++)
+					shufLowOk &= shufLowResult [h * 8 + 4 + i] == shufHLSrc [h * 8 + 4 + i];
+			}
+			Check ("Avx2.ShuffleLow", shufLowOk);
+
+			sbyte[] signCtrl8 = new sbyte[32];
+			for (int i = 0; i < 32; i++)
+				signCtrl8 [i] = (sbyte) (i % 3 == 0 ? -1 : i % 3 == 1 ? 0 : 1);
+			sbyte[] signResult = ToArrayI8x256 (Avx2.Sign (LoadI8x256 (seq8), LoadI8x256 (signCtrl8)));
+			bool signOk = true;
+			for (int i = 0; i < 32; i++) {
+				sbyte expected = (sbyte) (i % 3 == 0 ? -seq8 [i] : i % 3 == 1 ? 0 : seq8 [i]);
+				signOk &= signResult [i] == expected;
+			}
+			Check ("Avx2.Sign(sbyte)", signOk);
+
+			byte[] sadA = new byte[32];
+			byte[] sadB = new byte[32];
+			for (int i = 0; i < 32; i++) {
+				sadA [i] = (byte) (i % 16 + 10);
+				sadB [i] = (byte) (i % 16);
+			}
+			ushort[] sadResult =
+				ToArrayU16x256 (Avx2.SumAbsoluteDifferences (LoadU8x256 (sadA), LoadU8x256 (sadB)));
+			bool sadOk = true;
+			for (int i = 0; i < 16; i++)
+				sadOk &= sadResult [i] == (i % 4 == 0 ? 80 : 0);
+			Check ("Avx2.SumAbsoluteDifferences", sadOk);
+
+			Vector256<int> unpackA = LoadI256 (1, 2, 3, 4, 5, 6, 7, 8);
+			Vector256<int> unpackB = LoadI256 (10, 20, 30, 40, 50, 60, 70, 80);
+			CheckLanesI256 ("Avx2.UnpackLow", Avx2.UnpackLow (unpackA, unpackB), 1, 10, 2, 20, 5, 50,
+			               6, 60);
+			CheckLanesI256 ("Avx2.UnpackHigh", Avx2.UnpackHigh (unpackA, unpackB), 3, 30, 4, 40, 7,
+			               70, 8, 80);
 		}
 
 		if (failures == 0)

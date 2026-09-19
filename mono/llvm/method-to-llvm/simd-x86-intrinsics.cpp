@@ -65,6 +65,11 @@ bool avx_lowering ()
 	return mono_hwcap_x86_has_avx;
 }
 
+bool avx2_lowering ()
+{
+	return mono_hwcap_x86_has_avx2;
+}
+
 /// Return whether the Vector128<T> parameter at index has an unsigned element type.
 /// LLVM vector types do not encode signedness, so some lowerings must recover it
 /// from the managed signature.
@@ -194,6 +199,42 @@ llvm::Value *dispatch_control (llvm::IRBuilder<> &builder, llvm::Value *selector
 	return phi;
 }
 
+/// Dispatch runtime gather scales to calls with constant operands.
+llvm::Value *dispatch_scale (llvm::IRBuilder<> &builder, llvm::Value *scale, llvm::Type *result_type,
+                             llvm::function_ref<llvm::Value *(uint8_t)> emit_case)
+{
+	static const uint8_t values[] = { 1, 2, 4, 8 };
+	const unsigned case_count = 4;
+	llvm::LLVMContext &ctx = builder.getContext ();
+	llvm::Function *function = builder.GetInsertBlock ()->getParent ();
+	std::vector<llvm::BasicBlock *> blocks (case_count);
+
+	for (unsigned i = 0; i < case_count; i++)
+		blocks[i] = llvm::BasicBlock::Create (ctx, "", function);
+
+	llvm::BasicBlock *merge = llvm::BasicBlock::Create (ctx, "", function);
+	llvm::SwitchInst *sw = builder.CreateSwitch (scale, blocks[case_count - 1], case_count);
+
+	for (unsigned i = 0; i < case_count; i++)
+		sw->addCase (llvm::ConstantInt::get (llvm::Type::getInt8Ty (ctx), values[i]), blocks[i]);
+
+	builder.SetInsertPoint (merge);
+	llvm::PHINode *phi = builder.CreatePHI (result_type, case_count);
+
+	for (unsigned i = 0; i < case_count; i++) {
+		builder.SetInsertPoint (blocks[i]);
+
+		llvm::Value *result = emit_case (values[i]);
+		llvm::BasicBlock *end_block = builder.GetInsertBlock ();
+
+		builder.CreateBr (merge);
+		phi->addIncoming (result, end_block);
+	}
+
+	builder.SetInsertPoint (merge);
+	return phi;
+}
+
 /// Encode element width and signedness in bits 1:0 of a PCMPxSTR control byte.
 /// Recover both properties from the managed signature after vector normalization.
 uint8_t string_format_bits (MonoMethod *method, llvm::Value *left)
@@ -286,6 +327,12 @@ struct SseEmitters : SimdEmit {
 	                                       MonoMethod *)
 	{
 		return is_supported (mono_hwcap_x86_has_avx, builder);
+	}
+
+	static BuiltinResult avx2_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                        MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_avx2, builder);
 	}
 
 	static bool is_double_vector (llvm::Value *value)
@@ -1665,6 +1712,565 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
+	template <bool add>
+	static BuiltinResult saturating (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                 MonoMethod *method)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		bool is_unsigned = param_is_unsigned (method, 0);
+		llvm::Intrinsic::ID id = is_unsigned
+			? (add ? llvm::Intrinsic::uadd_sat : llvm::Intrinsic::usub_sat)
+			: (add ? llvm::Intrinsic::sadd_sat : llvm::Intrinsic::ssub_sat);
+
+		builder.CreateRet (builder.CreateIntrinsic (id, { lhs->getType () }, { lhs, rhs }));
+		return llvm::Error::success ();
+	}
+
+	/// PALIGNR operates on each 128-bit half independently.
+	static BuiltinResult avx2_align_right (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                       MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *mask = argument (emitter, 2);
+		llvm::LLVMContext &ctx = context (emitter);
+		llvm::Type *i128 = llvm::Type::getIntNTy (ctx, 128);
+		llvm::Type *i256 = llvm::Type::getIntNTy (ctx, 256);
+		llvm::Type *lane_type = llvm::FixedVectorType::get (builder.getInt8Ty (), 16);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (left->getType ())->getNumElements ();
+		llvm::Value *shift =
+			builder.CreateShl (builder.CreateZExt (mask, i256), llvm::ConstantInt::get (i256, 3));
+		llvm::Value *result = llvm::Constant::getNullValue (left->getType ());
+
+		for (unsigned h = 0; h < lanes / 16; h++) {
+			std::vector<int> lane_mask (16);
+
+			for (unsigned i = 0; i < 16; i++)
+				lane_mask[i] = (int) (h * 16 + i);
+
+			llvm::Value *left_lane = builder.CreateShuffleVector (left, lane_mask);
+			llvm::Value *right_lane = builder.CreateShuffleVector (right, lane_mask);
+			llvm::Value *hi = builder.CreateShl (
+				builder.CreateZExt (builder.CreateBitCast (left_lane, i128), i256),
+				llvm::ConstantInt::get (i256, 128));
+			llvm::Value *lo = builder.CreateZExt (builder.CreateBitCast (right_lane, i128), i256);
+			llvm::Value *concat = builder.CreateOr (hi, lo);
+			llvm::Value *shifted = builder.CreateBitCast (
+				builder.CreateTrunc (builder.CreateLShr (concat, shift), i128), lane_type);
+			llvm::Value *lane_result = builder.CreateSelect (
+				builder.CreateICmpUGE (mask, builder.getInt8 (32)),
+				llvm::Constant::getNullValue (lane_type), shifted);
+
+			for (unsigned i = 0; i < 16; i++)
+				result = builder.CreateInsertElement (
+					result, builder.CreateExtractElement (lane_result, i), h * 16 + i);
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	/// Unlike the AVX forms, these broadcasts take a vector rather than a pointer.
+	static BuiltinResult avx2_broadcast_scalar_reg (MethodLLVMEmitter &emitter,
+	                                                llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (return_type (emitter))->getNumElements ();
+		llvm::Value *scalar = builder.CreateExtractElement (value, (uint64_t) 0);
+
+		builder.CreateRet (builder.CreateVectorSplat (lanes, scalar));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult avx2_average (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                   MonoMethod *)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		unsigned bits =
+			llvm::cast<llvm::FixedVectorType> (lhs->getType ())->getElementType ()->getIntegerBitWidth ();
+		llvm::Intrinsic::ID id =
+			bits == 8 ? llvm::Intrinsic::x86_avx2_pavg_b : llvm::Intrinsic::x86_avx2_pavg_w;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { lhs, rhs }));
+		return llvm::Error::success ();
+	}
+
+	/// The eight control bits repeat for the upper half of a 16-bit vector.
+	static BuiltinResult avx2_blend (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                 MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *control = argument (emitter, 2);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (left->getType ())->getNumElements ();
+		llvm::Value *result = left;
+
+		for (unsigned i = 0; i < lanes; i++) {
+			llvm::Value *bit = builder.CreateICmpNE (
+				builder.CreateAnd (control, builder.getInt8 (1u << (i % 8))), builder.getInt8 (0));
+
+			result = builder.CreateInsertElement (
+				result,
+				builder.CreateSelect (bit, builder.CreateExtractElement (right, i),
+				                      builder.CreateExtractElement (left, i)),
+				i);
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult avx2_blend_variable (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                          MonoMethod *)
+	{
+		builder.CreateRet (builder.CreateIntrinsic (
+			llvm::Intrinsic::x86_avx2_pblendvb, {},
+			{ argument (emitter, 0), argument (emitter, 1), argument (emitter, 2) }));
+		return llvm::Error::success ();
+	}
+
+	/// Gather intrinsics are specialized by element type and index vector shape.
+	static llvm::Intrinsic::ID gather_intrinsic (llvm::Value *index, llvm::Type *elem)
+	{
+		bool index64 =
+			llvm::cast<llvm::FixedVectorType> (index->getType ())->getElementType ()->getIntegerBitWidth ()
+			== 64;
+		bool wide = is_256 (index);
+
+		using ID = llvm::Intrinsic::ID;
+		ID q_256, q, d_256, d;
+
+		if (elem->isDoubleTy ()) {
+			q_256 = llvm::Intrinsic::x86_avx2_gather_q_pd_256;
+			q = llvm::Intrinsic::x86_avx2_gather_q_pd;
+			d_256 = llvm::Intrinsic::x86_avx2_gather_d_pd_256;
+			d = llvm::Intrinsic::x86_avx2_gather_d_pd;
+		} else if (elem->isFloatTy ()) {
+			q_256 = llvm::Intrinsic::x86_avx2_gather_q_ps_256;
+			q = llvm::Intrinsic::x86_avx2_gather_q_ps;
+			d_256 = llvm::Intrinsic::x86_avx2_gather_d_ps_256;
+			d = llvm::Intrinsic::x86_avx2_gather_d_ps;
+		} else if (elem->getIntegerBitWidth () == 64) {
+			q_256 = llvm::Intrinsic::x86_avx2_gather_q_q_256;
+			q = llvm::Intrinsic::x86_avx2_gather_q_q;
+			d_256 = llvm::Intrinsic::x86_avx2_gather_d_q_256;
+			d = llvm::Intrinsic::x86_avx2_gather_d_q;
+		} else {
+			q_256 = llvm::Intrinsic::x86_avx2_gather_q_d_256;
+			q = llvm::Intrinsic::x86_avx2_gather_q_d;
+			d_256 = llvm::Intrinsic::x86_avx2_gather_d_d_256;
+			d = llvm::Intrinsic::x86_avx2_gather_d_d;
+		}
+
+		return index64 ? (wide ? q_256 : q) : (wide ? d_256 : d);
+	}
+
+	/// Model an unmasked gather with an all-ones mask and a zero source.
+	template <bool masked>
+	static BuiltinResult avx2_gather (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                  MonoMethod *)
+	{
+		unsigned i = 0;
+		llvm::Type *ret_type = return_type (emitter);
+		llvm::Value *source = masked ? argument (emitter, i++) : llvm::Constant::getNullValue (ret_type);
+		llvm::Value *address = argument (emitter, i++);
+		llvm::Value *index = argument (emitter, i++);
+		llvm::Value *mask;
+
+		if (masked) {
+			mask = argument (emitter, i++);
+		} else {
+			unsigned lanes = llvm::cast<llvm::FixedVectorType> (ret_type)->getNumElements ();
+			llvm::Type *int_equiv =
+				llvm::FixedVectorType::get (builder.getIntNTy (ret_type->getScalarSizeInBits ()), lanes);
+
+			mask = builder.CreateBitCast (llvm::Constant::getAllOnesValue (int_equiv), ret_type);
+		}
+
+		llvm::Value *scale = argument (emitter, i++);
+		llvm::Intrinsic::ID id =
+			gather_intrinsic (index, llvm::cast<llvm::FixedVectorType> (ret_type)->getElementType ());
+		llvm::Value *result = dispatch_scale (builder, scale, ret_type, [&] (uint8_t s) {
+			return builder.CreateIntrinsic (id, {}, { source, address, index, mask, builder.getInt8 (s) });
+		});
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	static llvm::Intrinsic::ID avx2_maskload_id (bool wide64, bool wide256)
+	{
+		if (wide64)
+			return wide256 ? llvm::Intrinsic::x86_avx2_maskload_q_256 : llvm::Intrinsic::x86_avx2_maskload_q;
+		return wide256 ? llvm::Intrinsic::x86_avx2_maskload_d_256 : llvm::Intrinsic::x86_avx2_maskload_d;
+	}
+
+	static llvm::Intrinsic::ID avx2_maskstore_id (bool wide64, bool wide256)
+	{
+		if (wide64)
+			return wide256 ? llvm::Intrinsic::x86_avx2_maskstore_q_256
+			              : llvm::Intrinsic::x86_avx2_maskstore_q;
+		return wide256 ? llvm::Intrinsic::x86_avx2_maskstore_d_256
+		              : llvm::Intrinsic::x86_avx2_maskstore_d;
+	}
+
+	static BuiltinResult avx2_mask_load (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                     MonoMethod *)
+	{
+		llvm::Value *address = argument (emitter, 0);
+		llvm::Value *mask = argument (emitter, 1);
+		bool wide64 =
+			llvm::cast<llvm::FixedVectorType> (mask->getType ())->getElementType ()->getIntegerBitWidth ()
+			== 64;
+
+		builder.CreateRet (
+			builder.CreateIntrinsic (avx2_maskload_id (wide64, is_256 (mask)), {}, { address, mask }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult avx2_mask_store (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                      MonoMethod *)
+	{
+		llvm::Value *address = argument (emitter, 0);
+		llvm::Value *mask = argument (emitter, 1);
+		llvm::Value *source = argument (emitter, 2);
+		bool wide64 =
+			llvm::cast<llvm::FixedVectorType> (mask->getType ())->getElementType ()->getIntegerBitWidth ()
+			== 64;
+
+		builder.CreateIntrinsic (avx2_maskstore_id (wide64, is_256 (mask)), {},
+		                         { address, mask, source });
+		builder.CreateRetVoid ();
+		return llvm::Error::success ();
+	}
+
+	/// LLVM has no PMULDQ/PMULUDQ intrinsic, so widen and multiply the even lanes.
+	static BuiltinResult avx2_multiply_widen (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                          MonoMethod *method)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		llvm::Type *wide = return_type (emitter);
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (wide)->getNumElements ();
+		std::vector<int> even_mask (lanes);
+
+		for (unsigned i = 0; i < lanes; i++)
+			even_mask[i] = (int) (2 * i);
+
+		llvm::Value *lhs_even = builder.CreateShuffleVector (lhs, even_mask);
+		llvm::Value *rhs_even = builder.CreateShuffleVector (rhs, even_mask);
+		bool is_unsigned = param_is_unsigned (method, 0);
+		llvm::Value *lhs_wide =
+			is_unsigned ? builder.CreateZExt (lhs_even, wide) : builder.CreateSExt (lhs_even, wide);
+		llvm::Value *rhs_wide =
+			is_unsigned ? builder.CreateZExt (rhs_even, wide) : builder.CreateSExt (rhs_even, wide);
+
+		builder.CreateRet (builder.CreateMul (lhs_wide, rhs_wide));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult avx2_multiply_high (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *method)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		llvm::Intrinsic::ID id = param_is_unsigned (method, 0) ? llvm::Intrinsic::x86_avx2_pmulhu_w
+		                                                       : llvm::Intrinsic::x86_avx2_pmulh_w;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { lhs, rhs }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult avx2_multiply_add_adjacent (MethodLLVMEmitter &emitter,
+	                                                 llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *lhs = argument (emitter, 0);
+		llvm::Value *rhs = argument (emitter, 1);
+		unsigned bits =
+			llvm::cast<llvm::FixedVectorType> (lhs->getType ())->getElementType ()->getIntegerBitWidth ();
+		llvm::Intrinsic::ID id = bits == 8 ? llvm::Intrinsic::x86_avx2_pmadd_ub_sw
+		                                   : llvm::Intrinsic::x86_avx2_pmadd_wd;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { lhs, rhs }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult avx2_pack_signed_saturate (MethodLLVMEmitter &emitter,
+	                                                llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		unsigned bits =
+			llvm::cast<llvm::FixedVectorType> (left->getType ())->getElementType ()->getIntegerBitWidth ();
+		llvm::Intrinsic::ID id = bits == 16 ? llvm::Intrinsic::x86_avx2_packsswb
+		                                    : llvm::Intrinsic::x86_avx2_packssdw;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { left, right }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult avx2_pack_unsigned_saturate (MethodLLVMEmitter &emitter,
+	                                                  llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		unsigned bits =
+			llvm::cast<llvm::FixedVectorType> (left->getType ())->getElementType ()->getIntegerBitWidth ();
+		llvm::Intrinsic::ID id = bits == 16 ? llvm::Intrinsic::x86_avx2_packuswb
+		                                    : llvm::Intrinsic::x86_avx2_packusdw;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { left, right }));
+		return llvm::Error::success ();
+	}
+
+	/// VPERMQ/VPERMPD select from the full register, not within 128-bit lanes.
+	static BuiltinResult permute4x64 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                  MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *control = builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ());
+		llvm::Value *result = llvm::Constant::getNullValue (value->getType ());
+
+		for (unsigned i = 0; i < 4; i++) {
+			llvm::Value *select = builder.CreateAnd (builder.CreateLShr (control, 2 * i), 3);
+
+			result =
+				builder.CreateInsertElement (result, builder.CreateExtractElement (value, select), i);
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult avx2_permute_var8x32 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                           MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *control = argument (emitter, 1);
+		llvm::Intrinsic::ID id = is_float (left) ? llvm::Intrinsic::x86_avx2_permps
+		                                         : llvm::Intrinsic::x86_avx2_permd;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { left, control }));
+		return llvm::Error::success ();
+	}
+
+	template <llvm::Intrinsic::ID w_id, llvm::Intrinsic::ID d_id, llvm::Intrinsic::ID q_id>
+	static BuiltinResult avx2_shift_count (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                       MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *count = argument (emitter, 1);
+		unsigned bits =
+			llvm::cast<llvm::FixedVectorType> (value->getType ())->getElementType ()->getIntegerBitWidth ();
+		llvm::Intrinsic::ID id = bits == 16 ? w_id : (bits == 32 ? d_id : q_id);
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { value, count }));
+		return llvm::Error::success ();
+	}
+
+	template <llvm::Intrinsic::ID w_id, llvm::Intrinsic::ID d_id>
+	static BuiltinResult avx2_shift_count_arith (MethodLLVMEmitter &emitter,
+	                                             llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *count = argument (emitter, 1);
+		unsigned bits =
+			llvm::cast<llvm::FixedVectorType> (value->getType ())->getElementType ()->getIntegerBitWidth ();
+
+		builder.CreateRet (
+			builder.CreateIntrinsic (bits == 16 ? w_id : d_id, {}, { value, count }));
+		return llvm::Error::success ();
+	}
+
+	/// LLVM models the count as i32 rather than requiring a constant.
+	template <llvm::Intrinsic::ID w_id, llvm::Intrinsic::ID d_id, llvm::Intrinsic::ID q_id>
+	static BuiltinResult avx2_shift_immediate (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                           MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *count = builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ());
+		unsigned bits =
+			llvm::cast<llvm::FixedVectorType> (value->getType ())->getElementType ()->getIntegerBitWidth ();
+		llvm::Intrinsic::ID id = bits == 16 ? w_id : (bits == 32 ? d_id : q_id);
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { value, count }));
+		return llvm::Error::success ();
+	}
+
+	template <llvm::Intrinsic::ID w_id, llvm::Intrinsic::ID d_id>
+	static BuiltinResult avx2_shift_immediate_arith (MethodLLVMEmitter &emitter,
+	                                                 llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *count = builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ());
+		unsigned bits =
+			llvm::cast<llvm::FixedVectorType> (value->getType ())->getElementType ()->getIntegerBitWidth ();
+
+		builder.CreateRet (
+			builder.CreateIntrinsic (bits == 16 ? w_id : d_id, {}, { value, count }));
+		return llvm::Error::success ();
+	}
+
+	/// Shift one 128-bit lane by a runtime byte count.
+	static llvm::Value *lane_byte_shift (llvm::IRBuilder<> &builder, llvm::Value *lane,
+	                                     llvm::Value *count, bool left)
+	{
+		llvm::Type *i128 = llvm::Type::getIntNTy (builder.getContext (), 128);
+		llvm::Value *wide = builder.CreateBitCast (lane, i128);
+		llvm::Value *shift = builder.CreateShl (builder.CreateZExt (count, i128),
+		                                        llvm::ConstantInt::get (i128, 3));
+		llvm::Value *shifted = left ? builder.CreateShl (wide, shift) : builder.CreateLShr (wide, shift);
+		llvm::Value *result = builder.CreateBitCast (shifted, lane->getType ());
+
+		return builder.CreateSelect (builder.CreateICmpUGE (count, builder.getInt8 (16)),
+		                             llvm::Constant::getNullValue (lane->getType ()), result);
+	}
+
+	/// PSLLDQ/PSRLDQ operate on each 128-bit half independently.
+	template <bool left>
+	static BuiltinResult shift_128_bit_lane (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *count = argument (emitter, 1);
+		llvm::Type *original = value->getType ();
+		llvm::Type *byte_vec = llvm::FixedVectorType::get (
+			builder.getInt8Ty (),
+			llvm::cast<llvm::FixedVectorType> (original)->getPrimitiveSizeInBits ().getFixedValue () / 8);
+		llvm::Value *bytes = builder.CreateBitCast (value, byte_vec);
+		unsigned total_bytes = llvm::cast<llvm::FixedVectorType> (byte_vec)->getNumElements ();
+		llvm::Value *result = llvm::Constant::getNullValue (byte_vec);
+
+		for (unsigned h = 0; h < total_bytes / 16; h++) {
+			std::vector<int> lane_mask (16);
+
+			for (unsigned i = 0; i < 16; i++)
+				lane_mask[i] = (int) (h * 16 + i);
+
+			llvm::Value *lane = builder.CreateShuffleVector (bytes, lane_mask);
+			llvm::Value *shifted = lane_byte_shift (builder, lane, count, left);
+
+			for (unsigned i = 0; i < 16; i++)
+				result = builder.CreateInsertElement (
+					result, builder.CreateExtractElement (shifted, i), h * 16 + i);
+		}
+
+		builder.CreateRet (builder.CreateBitCast (result, original));
+		return llvm::Error::success ();
+	}
+
+	template <llvm::Intrinsic::ID d128, llvm::Intrinsic::ID d256, llvm::Intrinsic::ID q128,
+	         llvm::Intrinsic::ID q256>
+	static BuiltinResult avx2_shift_variable (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                          MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *count = argument (emitter, 1);
+		bool wide64 =
+			llvm::cast<llvm::FixedVectorType> (value->getType ())->getElementType ()->getIntegerBitWidth ()
+			== 64;
+		bool wide256 = is_256 (value);
+		llvm::Intrinsic::ID id =
+			wide64 ? (wide256 ? q256 : q128) : (wide256 ? d256 : d128);
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { value, count }));
+		return llvm::Error::success ();
+	}
+
+	template <llvm::Intrinsic::ID d128, llvm::Intrinsic::ID d256>
+	static BuiltinResult avx2_shift_variable_arith (MethodLLVMEmitter &emitter,
+	                                                llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *count = argument (emitter, 1);
+
+		builder.CreateRet (
+			builder.CreateIntrinsic (is_256 (value) ? d256 : d128, {}, { value, count }));
+		return llvm::Error::success ();
+	}
+
+	/// PSHUFD applies its control byte independently to each 128-bit half.
+	static BuiltinResult avx2_shuffle_epi32 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *control = builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ());
+		llvm::Type *vector_type = value->getType ();
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (vector_type)->getNumElements ();
+		llvm::Value *result = llvm::Constant::getNullValue (vector_type);
+
+		for (unsigned i = 0; i < lanes; i++) {
+			unsigned h = i / 4;
+			unsigned j = i % 4;
+			llvm::Value *select = builder.CreateAnd (builder.CreateLShr (control, 2 * j), 3);
+			llvm::Value *source_lane = builder.CreateAdd (builder.getInt32 (h * 4), select);
+
+			result = builder.CreateInsertElement (
+				result, builder.CreateExtractElement (value, source_lane), i);
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	/// Shuffle four words in each half while preserving the other four.
+	template <bool high>
+	static BuiltinResult avx2_shuffle_words (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *control = builder.CreateZExt (argument (emitter, 1), builder.getInt32Ty ());
+		llvm::Type *vector_type = value->getType ();
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (vector_type)->getNumElements ();
+		unsigned base_offset = high ? 4 : 0;
+		llvm::Value *result = value;
+
+		for (unsigned h = 0; h < lanes / 8; h++) {
+			for (unsigned j = 0; j < 4; j++) {
+				unsigned i = h * 8 + base_offset + j;
+				llvm::Value *select = builder.CreateAnd (builder.CreateLShr (control, 2 * j), 3);
+				llvm::Value *source_lane =
+					builder.CreateAdd (builder.getInt32 (h * 8 + base_offset), select);
+
+				result = builder.CreateInsertElement (
+					result, builder.CreateExtractElement (value, source_lane), i);
+			}
+		}
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
+	/// LLVM returns four 64-bit sums; the managed API exposes the same bits as ushort lanes.
+	static BuiltinResult avx2_sum_abs_diff (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                        MonoMethod *)
+	{
+		llvm::Value *result = builder.CreateIntrinsic (
+			llvm::Intrinsic::x86_avx2_psad_bw, {}, { argument (emitter, 0), argument (emitter, 1) });
+
+		builder.CreateRet (builder.CreateBitCast (result, return_type (emitter)));
+		return llvm::Error::success ();
+	}
+
+	/// Dispatch the runtime control byte to the immediate-only LLVM intrinsic.
+	static BuiltinResult avx2_multiple_sum_abs_diff (MethodLLVMEmitter &emitter,
+	                                                 llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *control = builder.CreateAnd (argument (emitter, 2), builder.getInt8 (7));
+		llvm::Value *result =
+			dispatch_control (builder, control, 8, return_type (emitter), [&] (unsigned c) {
+				return builder.CreateIntrinsic (llvm::Intrinsic::x86_avx2_mpsadbw, {},
+				                                { left, right, builder.getInt8 (c) });
+			});
+
+		builder.CreateRet (result);
+		return llvm::Error::success ();
+	}
+
 	/// Leaves methods with managed implementations alone and rejects unmatched intrinsics.
 	static BuiltinResult unimplemented (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &,
 	                                    MonoMethod *method)
@@ -1686,6 +2292,7 @@ const ClassKey ssse3 = { nullptr, "System.Runtime.Intrinsics.X86", "Ssse3" };
 const ClassKey sse41 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse41" };
 const ClassKey sse42 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse42" };
 const ClassKey avx = { nullptr, "System.Runtime.Intrinsics.X86", "Avx" };
+const ClassKey avx2 = { nullptr, "System.Runtime.Intrinsics.X86", "Avx2" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -2080,6 +2687,150 @@ const BuiltinBody avx_table[] = {
 	{ avx, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
 };
 
+const BuiltinBody avx2_table[] = {
+	{ avx2, "get_IsSupported", "", false, nullptr, SseEmitters::avx2_is_supported },
+
+	{ avx2, "Abs", "V", false, avx2_lowering, SseEmitters::abs },
+
+	{ avx2, "Add", "VV", false, avx2_lowering, SseEmitters::binary<SseEmitters::add> },
+	{ avx2, "AddSaturate", "VV", false, avx2_lowering, SseEmitters::saturating<true> },
+	{ avx2, "Subtract", "VV", false, avx2_lowering, SseEmitters::binary<SseEmitters::sub> },
+	{ avx2, "SubtractSaturate", "VV", false, avx2_lowering, SseEmitters::saturating<false> },
+
+	{ avx2, "AlignRight", "VVS", false, avx2_lowering, SseEmitters::avx2_align_right },
+
+	{ avx2, "And", "VV", false, avx2_lowering, SseEmitters::bitwise<Ops::And> },
+	{ avx2, "AndNot", "VV", false, avx2_lowering, SseEmitters::and_not },
+	{ avx2, "Or", "VV", false, avx2_lowering, SseEmitters::bitwise<Ops::Or> },
+	{ avx2, "Xor", "VV", false, avx2_lowering, SseEmitters::bitwise<Ops::Xor> },
+
+	{ avx2, "Average", "VV", false, avx2_lowering, SseEmitters::avx2_average },
+
+	{ avx2, "Blend", "VVS", false, avx2_lowering, SseEmitters::avx2_blend },
+	{ avx2, "BlendVariable", "VVV", false, avx2_lowering, SseEmitters::avx2_blend_variable },
+
+	{ avx2, "BroadcastScalarToVector128", "V", false, avx2_lowering,
+	  SseEmitters::avx2_broadcast_scalar_reg },
+	{ avx2, "BroadcastScalarToVector256", "V", false, avx2_lowering,
+	  SseEmitters::avx2_broadcast_scalar_reg },
+	{ avx2, "BroadcastVector128ToVector256", "S", false, avx2_lowering,
+	  SseEmitters::broadcast_vector128 },
+
+	{ avx2, "CompareEqual", "VV", false, avx2_lowering,
+	  SseEmitters::compare2<0, llvm::CmpInst::ICMP_EQ> },
+	{ avx2, "CompareGreaterThan", "VV", false, avx2_lowering,
+	  SseEmitters::compare2<6, llvm::CmpInst::ICMP_SGT> },
+
+	{ avx2, "ConvertToDouble", "V", false, avx2_lowering, SseEmitters::to_single },
+	{ avx2, "ConvertToInt32", "V", false, avx2_lowering, SseEmitters::to_single },
+	{ avx2, "ConvertToUInt32", "V", false, avx2_lowering, SseEmitters::to_single },
+
+	{ avx2, "ConvertToVector256Int16", "V", false, avx2_lowering, SseEmitters::convert_widen },
+	{ avx2, "ConvertToVector256UInt16", "V", false, avx2_lowering, SseEmitters::convert_widen },
+	{ avx2, "ConvertToVector256Int32", "V", false, avx2_lowering, SseEmitters::convert_widen },
+	{ avx2, "ConvertToVector256UInt32", "V", false, avx2_lowering, SseEmitters::convert_widen },
+	{ avx2, "ConvertToVector256Int64", "V", false, avx2_lowering, SseEmitters::convert_widen },
+	{ avx2, "ConvertToVector256UInt64", "V", false, avx2_lowering, SseEmitters::convert_widen },
+
+	{ avx2, "ExtractVector128", "VS", false, avx2_lowering, SseEmitters::extract_vector128 },
+	{ avx2, "ExtractVector128", "SVS", false, avx2_lowering, SseEmitters::extract_vector128_store },
+	{ avx2, "InsertVector128", "VVS", false, avx2_lowering, SseEmitters::insert_vector128 },
+	{ avx2, "InsertVector128", "VSS", false, avx2_lowering, SseEmitters::insert_vector128_load },
+
+	{ avx2, "GatherVector128", "SVS", false, avx2_lowering, SseEmitters::avx2_gather<false> },
+	{ avx2, "GatherVector256", "SVS", false, avx2_lowering, SseEmitters::avx2_gather<false> },
+	{ avx2, "GatherMaskVector128", "VSVVS", false, avx2_lowering, SseEmitters::avx2_gather<true> },
+	{ avx2, "GatherMaskVector256", "VSVVS", false, avx2_lowering, SseEmitters::avx2_gather<true> },
+
+	{ avx2, "HorizontalAdd", "VV", false, avx2_lowering,
+	  SseEmitters::horizontal_int<Intr::x86_avx2_phadd_w, Intr::x86_avx2_phadd_d> },
+	{ avx2, "HorizontalAddSaturate", "VV", false, avx2_lowering,
+	  SseEmitters::binary_intrinsic<Intr::x86_avx2_phadd_sw> },
+	{ avx2, "HorizontalSubtract", "VV", false, avx2_lowering,
+	  SseEmitters::horizontal_int<Intr::x86_avx2_phsub_w, Intr::x86_avx2_phsub_d> },
+	{ avx2, "HorizontalSubtractSaturate", "VV", false, avx2_lowering,
+	  SseEmitters::binary_intrinsic<Intr::x86_avx2_phsub_sw> },
+
+	{ avx2, "LoadAlignedVector256NonTemporal", "S", false, avx2_lowering,
+	  SseEmitters::load_aligned256 },
+
+	{ avx2, "MaskLoad", "SV", false, avx2_lowering, SseEmitters::avx2_mask_load },
+	{ avx2, "MaskStore", "SVV", false, avx2_lowering, SseEmitters::avx2_mask_store },
+
+	{ avx2, "Max", "VV", false, avx2_lowering, SseEmitters::extremum<true> },
+	{ avx2, "Min", "VV", false, avx2_lowering, SseEmitters::extremum<false> },
+
+	{ avx2, "MoveMask", "V", false, avx2_lowering,
+	  SseEmitters::unary_intrinsic<Intr::x86_avx2_pmovmskb> },
+
+	{ avx2, "MultipleSumAbsoluteDifferences", "VVS", false, avx2_lowering,
+	  SseEmitters::avx2_multiple_sum_abs_diff },
+
+	{ avx2, "Multiply", "VV", false, avx2_lowering, SseEmitters::avx2_multiply_widen },
+	{ avx2, "MultiplyHigh", "VV", false, avx2_lowering, SseEmitters::avx2_multiply_high },
+	{ avx2, "MultiplyHighRoundScale", "VV", false, avx2_lowering,
+	  SseEmitters::binary_intrinsic<Intr::x86_avx2_pmul_hr_sw> },
+	{ avx2, "MultiplyLow", "VV", false, avx2_lowering, SseEmitters::multiply_low },
+	{ avx2, "MultiplyAddAdjacent", "VV", false, avx2_lowering,
+	  SseEmitters::avx2_multiply_add_adjacent },
+
+	{ avx2, "PackSignedSaturate", "VV", false, avx2_lowering, SseEmitters::avx2_pack_signed_saturate },
+	{ avx2, "PackUnsignedSaturate", "VV", false, avx2_lowering,
+	  SseEmitters::avx2_pack_unsigned_saturate },
+
+	{ avx2, "Permute2x128", "VVS", false, avx2_lowering, SseEmitters::permute2x128 },
+	{ avx2, "Permute4x64", "VS", false, avx2_lowering, SseEmitters::permute4x64 },
+	{ avx2, "PermuteVar8x32", "VV", false, avx2_lowering, SseEmitters::avx2_permute_var8x32 },
+
+	{ avx2, "ShiftLeftLogical", "VV", false, avx2_lowering,
+	  SseEmitters::avx2_shift_count<Intr::x86_avx2_psll_w, Intr::x86_avx2_psll_d,
+	                                Intr::x86_avx2_psll_q> },
+	{ avx2, "ShiftLeftLogical", "VS", false, avx2_lowering,
+	  SseEmitters::avx2_shift_immediate<Intr::x86_avx2_pslli_w, Intr::x86_avx2_pslli_d,
+	                                    Intr::x86_avx2_pslli_q> },
+	{ avx2, "ShiftRightLogical", "VV", false, avx2_lowering,
+	  SseEmitters::avx2_shift_count<Intr::x86_avx2_psrl_w, Intr::x86_avx2_psrl_d,
+	                                Intr::x86_avx2_psrl_q> },
+	{ avx2, "ShiftRightLogical", "VS", false, avx2_lowering,
+	  SseEmitters::avx2_shift_immediate<Intr::x86_avx2_psrli_w, Intr::x86_avx2_psrli_d,
+	                                    Intr::x86_avx2_psrli_q> },
+	{ avx2, "ShiftRightArithmetic", "VV", false, avx2_lowering,
+	  SseEmitters::avx2_shift_count_arith<Intr::x86_avx2_psra_w, Intr::x86_avx2_psra_d> },
+	{ avx2, "ShiftRightArithmetic", "VS", false, avx2_lowering,
+	  SseEmitters::avx2_shift_immediate_arith<Intr::x86_avx2_psrai_w, Intr::x86_avx2_psrai_d> },
+
+	{ avx2, "ShiftLeftLogical128BitLane", "VS", false, avx2_lowering,
+	  SseEmitters::shift_128_bit_lane<true> },
+	{ avx2, "ShiftRightLogical128BitLane", "VS", false, avx2_lowering,
+	  SseEmitters::shift_128_bit_lane<false> },
+
+	{ avx2, "ShiftLeftLogicalVariable", "VV", false, avx2_lowering,
+	  SseEmitters::avx2_shift_variable<Intr::x86_avx2_psllv_d, Intr::x86_avx2_psllv_d_256,
+	                                   Intr::x86_avx2_psllv_q, Intr::x86_avx2_psllv_q_256> },
+	{ avx2, "ShiftRightLogicalVariable", "VV", false, avx2_lowering,
+	  SseEmitters::avx2_shift_variable<Intr::x86_avx2_psrlv_d, Intr::x86_avx2_psrlv_d_256,
+	                                   Intr::x86_avx2_psrlv_q, Intr::x86_avx2_psrlv_q_256> },
+	{ avx2, "ShiftRightArithmeticVariable", "VV", false, avx2_lowering,
+	  SseEmitters::avx2_shift_variable_arith<Intr::x86_avx2_psrav_d, Intr::x86_avx2_psrav_d_256> },
+
+	{ avx2, "Shuffle", "VV", false, avx2_lowering,
+	  SseEmitters::binary_intrinsic<Intr::x86_avx2_pshuf_b> },
+	{ avx2, "Shuffle", "VS", false, avx2_lowering, SseEmitters::avx2_shuffle_epi32 },
+	{ avx2, "ShuffleHigh", "VS", false, avx2_lowering, SseEmitters::avx2_shuffle_words<true> },
+	{ avx2, "ShuffleLow", "VS", false, avx2_lowering, SseEmitters::avx2_shuffle_words<false> },
+
+	{ avx2, "Sign", "VV", false, avx2_lowering,
+	  SseEmitters::sign<Intr::x86_avx2_psign_b, Intr::x86_avx2_psign_w, Intr::x86_avx2_psign_d> },
+
+	{ avx2, "SumAbsoluteDifferences", "VV", false, avx2_lowering,
+	  SseEmitters::avx2_sum_abs_diff },
+
+	{ avx2, "UnpackHigh", "VV", false, avx2_lowering, SseEmitters::unpack<true> },
+	{ avx2, "UnpackLow", "VV", false, avx2_lowering, SseEmitters::unpack<false> },
+
+	{ avx2, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
@@ -2093,6 +2844,7 @@ simd_x86_bodies ()
 		made.insert (made.end (), std::begin (sse41_table), std::end (sse41_table));
 		made.insert (made.end (), std::begin (sse42_table), std::end (sse42_table));
 		made.insert (made.end (), std::begin (avx_table), std::end (avx_table));
+		made.insert (made.end (), std::begin (avx2_table), std::end (avx2_table));
 		return made;
 	} ();
 
