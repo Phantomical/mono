@@ -69,9 +69,11 @@ std::string dump_name (MonoMethod *method);
  * Where one dump goes: stdout, or a file under MONO_JIT_DUMP_DIR.
  *
  * With no directory set this hands back stdout. With one set it creates
- * `<dir>/<point>/` and opens `<method>.<extension>` inside it. A name already
- * taken gets a counted suffix, so two threads dumping at once, and a method
- * compiled more than once, each get a file of their own.
+ * `<dir>/<point>/` and opens `<method>.<extension>` inside it. The first
+ * dump of a name in a run overwrites whatever an earlier run left under it.
+ * A second dump under that name inside the same run - two threads dumping
+ * at once, or a method recompiled - takes a counted suffix instead. Each
+ * still gets a file of its own.
  *
  * `stream ()` is null when the file did not open. The reason goes to stderr and
  * the caller prints nothing.

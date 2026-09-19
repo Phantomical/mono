@@ -281,8 +281,9 @@ declares, the same shape `runtime.h` gives the backend:
   that selects a method at one point selects it at all of them. Unset takes every method.
 - `MONO_JIT_DUMP_DIR=<dir>` — write each dump to `<dir>/<point>/<method>.<ext>` instead
   of to stdout, which is what to reach for under a player whose stdout is a shared log.
-  A name already taken gets a counted suffix, so a method compiled more than once keeps
-  each dump.
+  A name's first dump in a run overwrites whatever an earlier run left there. A second
+  dump under that name inside the same run - two threads racing, or a method recompiled
+  - takes a counted suffix instead, so each still keeps a dump of its own.
 
 What each point prints:
 - `il` — the method's CIL, inside the class and signature it is declared with. It prints
