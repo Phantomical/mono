@@ -140,6 +140,9 @@ mono_hwcap_arch_init (void)
 		if (ecx & (1 << 20))
 			mono_hwcap_x86_has_sse42 = TRUE;
 
+		if (ecx & (1 << 12))
+			mono_hwcap_x86_has_fma = TRUE;
+
 		if (ecx & (1 << 23))
 			mono_hwcap_x86_has_popcnt = TRUE;
 

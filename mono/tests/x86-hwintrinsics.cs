@@ -439,11 +439,9 @@ class Tests
 		Check (what, ok);
 	}
 
-	// Ports Intel's published AES-NI 128-bit key-schedule routine: broadcast the
-	// keygen-assist result's top word, then fold it into a running XOR of the
-	// previous round key shifted left by four bytes three times. Both the
-	// broadcast and the byte shift are built from PSHUFB rather than the
-	// dedicated shuffle/shift intrinsics, which this backend does not lower yet.
+	// Ports Intel's published AES-NI key-schedule routine. Uses PSHUFB for the
+	// broadcast and byte shift because this backend does not yet lower
+	// Sse2.Shuffle(Vector128<int>, byte) or ShiftLeftLogical128BitLane.
 	static Vector128<byte> Aes128KeyExpandRound (Vector128<byte> temp1, Vector128<byte> temp2)
 	{
 		Vector128<byte> broadcastTopWordMask =
@@ -2008,6 +2006,73 @@ class Tests
 				ToArrayU64 (Pclmulqdq.CarrylessMultiply (clmulULeft, clmulURight, 0x00));
 
 			Check ("Pclmulqdq.CarrylessMultiply(ulong)", clmulU [0] == 0b11110 && clmulU [1] == 0);
+		}
+
+		Check ("Fma.IsSupported", Fma.IsSupported);
+
+		if (Fma.IsSupported) {
+			// Small integer operands so every product and sum is exact in floating point.
+			Vector128<float> fmaA = Load (2f, 2f, 2f, 2f);
+			Vector128<float> fmaB = Load (3f, 3f, 3f, 3f);
+			Vector128<float> fmaC = Load (4f, 4f, 4f, 4f);
+
+			CheckLanes ("Fma.MultiplyAdd(float)", Fma.MultiplyAdd (fmaA, fmaB, fmaC), 10f, 10f, 10f,
+			           10f);
+			CheckLanes ("Fma.MultiplySubtract(float)", Fma.MultiplySubtract (fmaA, fmaB, fmaC), 2f,
+			           2f, 2f, 2f);
+			CheckLanes ("Fma.MultiplyAddNegated(float)",
+			           Fma.MultiplyAddNegated (fmaA, fmaB, fmaC), -2f, -2f, -2f, -2f);
+			CheckLanes ("Fma.MultiplySubtractNegated(float)",
+			           Fma.MultiplySubtractNegated (fmaA, fmaB, fmaC), -10f, -10f, -10f, -10f);
+
+			CheckLanes ("Fma.MultiplyAddSubtract(float)",
+			           Fma.MultiplyAddSubtract (fmaA, fmaB, fmaC), 2f, 10f, 2f, 10f);
+			CheckLanes ("Fma.MultiplySubtractAdd(float)",
+			           Fma.MultiplySubtractAdd (fmaA, fmaB, fmaC), 10f, 2f, 10f, 2f);
+
+			Vector128<double> fmaAD = LoadF64 (2.0, 2.0);
+			Vector128<double> fmaBD = LoadF64 (3.0, 3.0);
+			Vector128<double> fmaCD = LoadF64 (4.0, 4.0);
+
+			CheckLanesF64 ("Fma.MultiplyAdd(double)", Fma.MultiplyAdd (fmaAD, fmaBD, fmaCD), 10.0,
+			              10.0);
+			CheckLanesF64 ("Fma.MultiplyAddSubtract(double)",
+			              Fma.MultiplyAddSubtract (fmaAD, fmaBD, fmaCD), 2.0, 10.0);
+			CheckLanesF64 ("Fma.MultiplySubtractAdd(double)",
+			              Fma.MultiplySubtractAdd (fmaAD, fmaBD, fmaCD), 10.0, 2.0);
+
+			Vector256<float> fmaA256 = LoadF256 (2f, 2f, 2f, 2f, 2f, 2f, 2f, 2f);
+			Vector256<float> fmaB256 = LoadF256 (3f, 3f, 3f, 3f, 3f, 3f, 3f, 3f);
+			Vector256<float> fmaC256 = LoadF256 (4f, 4f, 4f, 4f, 4f, 4f, 4f, 4f);
+
+			CheckLanesF256 ("Fma.MultiplyAdd(Vector256<float>)",
+			               Fma.MultiplyAdd (fmaA256, fmaB256, fmaC256), 10f, 10f, 10f, 10f, 10f, 10f,
+			               10f, 10f);
+
+			Vector256<double> fmaA256D = LoadD256 (2.0, 2.0, 2.0, 2.0);
+			Vector256<double> fmaB256D = LoadD256 (3.0, 3.0, 3.0, 3.0);
+			Vector256<double> fmaC256D = LoadD256 (4.0, 4.0, 4.0, 4.0);
+
+			CheckLanesD256 ("Fma.MultiplyAdd(Vector256<double>)",
+			               Fma.MultiplyAdd (fmaA256D, fmaB256D, fmaC256D), 10.0, 10.0, 10.0, 10.0);
+
+			// Lanes 1-3 come from the first operand, not from the fused multiply-add.
+			Vector128<float> fmaScalarA = Load (2f, 11f, 12f, 13f);
+			Vector128<float> fmaScalarB = Load (3f, 0f, 0f, 0f);
+			Vector128<float> fmaScalarC = Load (4f, 0f, 0f, 0f);
+
+			CheckLanes ("Fma.MultiplyAddScalar(float)",
+			           Fma.MultiplyAddScalar (fmaScalarA, fmaScalarB, fmaScalarC), 10f, 11f, 12f,
+			           13f);
+			CheckLanes ("Fma.MultiplySubtractScalar(float)",
+			           Fma.MultiplySubtractScalar (fmaScalarA, fmaScalarB, fmaScalarC), 2f, 11f, 12f,
+			           13f);
+			CheckLanes ("Fma.MultiplyAddNegatedScalar(float)",
+			           Fma.MultiplyAddNegatedScalar (fmaScalarA, fmaScalarB, fmaScalarC), -2f, 11f,
+			           12f, 13f);
+			CheckLanes ("Fma.MultiplySubtractNegatedScalar(float)",
+			           Fma.MultiplySubtractNegatedScalar (fmaScalarA, fmaScalarB, fmaScalarC), -10f,
+			           11f, 12f, 13f);
 		}
 
 		if (failures == 0)
