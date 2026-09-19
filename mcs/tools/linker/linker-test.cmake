@@ -6,7 +6,7 @@
 # `return 1` and an unhandled exception both do. Most of the programs check
 # nothing and only have to run.
 #
-#   RUNTIME     mono-wrapper
+#   RUNTIME     CMake command list used to launch mono
 #   TOOLS_PATH  the bootstrap profile, which is where monolinker runs
 #   LINKER      monolinker.exe
 #   PROFILE_DIR the class libraries to link against
@@ -21,7 +21,7 @@ get_filename_component(_name "${TEST_EXE}" NAME)
 
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${TOOLS_PATH}"
-          "${RUNTIME}" "${LINKER}" -c link -o "${OUT_DIR}" -b true
+          ${RUNTIME} "${LINKER}" -c link -o "${OUT_DIR}" -b true
           -d "${PROFILE_DIR}" -l "${ROOTS}" -a "${TEST_EXE}"
   RESULT_VARIABLE _rc)
 if(NOT _rc EQUAL 0)
@@ -30,7 +30,7 @@ endif()
 
 execute_process(
   COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${OUT_DIR}"
-          "${RUNTIME}" --debug -O=-aot "${OUT_DIR}/${_name}"
+          ${RUNTIME} --debug -O=-aot "${OUT_DIR}/${_name}"
   RESULT_VARIABLE _rc)
 if(NOT _rc EQUAL 0)
   message(FATAL_ERROR "${_name} failed (${_rc}) after linking; "
