@@ -118,11 +118,11 @@ if(MONO_HOST_WINDOWS)
     # initializers, which the icall tables and the interpreter's opcode
     # descriptions are written with.
     $<$<COMPILE_LANGUAGE:C>:/std:c11>
-    # The runtime's macros are written against a conforming preprocessor.
-    # MSVC's traditional one rescans a parenthesised argument differently, and
-    # mono/metadata/icall-def.h -- where an icall's parameter list is one such
-    # argument -- comes apart under it.
-    $<$<COMPILE_LANGUAGE:C,CXX>:/Zc:preprocessor>)
+    # MSVC needs its conforming preprocessor for parenthesized macro arguments
+    # such as icall parameter lists. clang-cl already behaves correctly and
+    # warns that this option is unused.
+    $<$<COMPILE_LANG_AND_ID:C,MSVC>:/Zc:preprocessor>
+    $<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/Zc:preprocessor>)
 else()
   target_compile_definitions(mono_common INTERFACE
     HAVE_CONFIG_H
