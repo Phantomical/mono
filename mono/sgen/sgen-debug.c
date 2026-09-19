@@ -24,6 +24,8 @@
 #include "mono/sgen/sgen-protocol.h"
 #include "mono/sgen/sgen-memory-governor.h"
 #include "mono/sgen/sgen-pinning.h"
+#include "mono/sgen/sgen-pointer-queue.h"
+#include "mono/sgen/sgen-workers.h"
 #include "mono/sgen/sgen-client.h"
 
 #if _MSC_VER
@@ -432,6 +434,21 @@ is_major_or_los_object_marked (GCObject *obj)
 	}
 }
 
+static SgenPointerQueue gray_objects = SGEN_POINTER_QUEUE_INIT (INTERNAL_MEM_TEMPORARY);
+
+static void
+add_gray_object (GCObject *obj, void *data)
+{
+	sgen_pointer_queue_add ((SgenPointerQueue *) data, obj);
+}
+
+static gboolean
+object_is_gray (GCObject *obj)
+{
+	size_t index = sgen_pointer_queue_search (&gray_objects, obj);
+	return index < gray_objects.next_slot && gray_objects.data [index] == obj;
+}
+
 #undef HANDLE_PTR
 #define HANDLE_PTR(ptr,obj)	do {	\
 	if (*(ptr) && !sgen_ptr_in_nursery ((char*)*(ptr)) && !is_major_or_los_object_marked ((GCObject*)*(ptr))) { \
@@ -457,7 +474,8 @@ check_mod_union_callback (GCObject *obj, size_t size, void *dummy)
 	guint8 *cards;
 	SGEN_LOG (8, "Scanning object %p, vtable: %p (%s)", obj, vt, sgen_client_vtable_get_name (vt));
 
-	if (!is_major_or_los_object_marked (obj))
+	/* A forced finish can leave marked objects queued but not yet scanned. */
+	if (!is_major_or_los_object_marked (obj) || object_is_gray (obj))
 		return;
 
 	if (in_los)
@@ -473,9 +491,14 @@ sgen_check_mod_union_consistency (void)
 {
 	missing_remsets = FALSE;
 
+	sgen_pointer_queue_clear (&gray_objects);
+	sgen_workers_foreach_gray_object (GENERATION_OLD, add_gray_object, &gray_objects);
+	sgen_pointer_queue_sort_uniq (&gray_objects);
 	sgen_major_collector.iterate_objects (ITERATE_OBJECTS_SWEEP_ALL, (IterateObjectCallbackFunc)check_mod_union_callback, (void*)FALSE);
 
 	sgen_los_iterate_objects ((IterateObjectCallbackFunc)check_mod_union_callback, (void*)TRUE);
+
+	sgen_pointer_queue_clear (&gray_objects);
 
 	if (!sgen_binary_protocol_is_enabled ())
 		g_assert (!missing_remsets);
