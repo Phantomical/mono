@@ -140,6 +140,9 @@ mono_hwcap_arch_init (void)
 		if (ecx & (1 << 23))
 			mono_hwcap_x86_has_popcnt = TRUE;
 
+		if (ecx & (1 << 25))
+			mono_hwcap_x86_has_aes = TRUE;
+
 		if (ecx & (1 << 28))
 			mono_hwcap_x86_has_avx = TRUE;
 	}

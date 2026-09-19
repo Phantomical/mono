@@ -425,6 +425,62 @@ class Tests
 		Check (what, ok);
 	}
 
+	// Ports Intel's published AES-NI 128-bit key-schedule routine: broadcast the
+	// keygen-assist result's top word, then fold it into a running XOR of the
+	// previous round key shifted left by four bytes three times. Both the
+	// broadcast and the byte shift are built from PSHUFB rather than the
+	// dedicated shuffle/shift intrinsics, which this backend does not lower yet.
+	static Vector128<byte> Aes128KeyExpandRound (Vector128<byte> temp1, Vector128<byte> temp2)
+	{
+		Vector128<byte> broadcastTopWordMask =
+			LoadU8 (12, 13, 14, 15, 12, 13, 14, 15, 12, 13, 14, 15, 12, 13, 14, 15);
+		Vector128<byte> shiftLeft4Mask =
+			LoadU8 (0x80, 0x80, 0x80, 0x80, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+		Vector128<byte> broadcast = Ssse3.Shuffle (temp2, broadcastTopWordMask);
+		Vector128<byte> t1 = temp1;
+		Vector128<byte> t3 = Ssse3.Shuffle (temp1, shiftLeft4Mask);
+
+		t1 = Sse2.Xor (t1, t3);
+		t3 = Ssse3.Shuffle (t3, shiftLeft4Mask);
+		t1 = Sse2.Xor (t1, t3);
+		t3 = Ssse3.Shuffle (t3, shiftLeft4Mask);
+		t1 = Sse2.Xor (t1, t3);
+		return Sse2.Xor (t1, broadcast);
+	}
+
+	static Vector128<byte>[] Aes128KeyExpansion (Vector128<byte> key)
+	{
+		byte[] rcon = { 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36 };
+		Vector128<byte>[] schedule = new Vector128<byte>[11];
+		Vector128<byte> temp1 = key;
+
+		schedule [0] = temp1;
+		for (int i = 0; i < rcon.Length; i++) {
+			Vector128<byte> temp2 = Aes.KeygenAssist (temp1, rcon [i]);
+			temp1 = Aes128KeyExpandRound (temp1, temp2);
+			schedule [i + 1] = temp1;
+		}
+		return schedule;
+	}
+
+	static Vector128<byte> Aes128Encrypt (Vector128<byte> plaintext, Vector128<byte>[] schedule)
+	{
+		Vector128<byte> state = Sse2.Xor (plaintext, schedule [0]);
+
+		for (int round = 1; round < 10; round++)
+			state = Aes.Encrypt (state, schedule [round]);
+		return Aes.EncryptLast (state, schedule [10]);
+	}
+
+	static Vector128<byte> Aes128Decrypt (Vector128<byte> ciphertext, Vector128<byte>[] schedule)
+	{
+		Vector128<byte> state = Sse2.Xor (ciphertext, schedule [10]);
+
+		for (int round = 9; round > 0; round--)
+			state = Aes.Decrypt (state, Aes.InverseMixColumns (schedule [round]));
+		return Aes.DecryptLast (state, schedule [0]);
+	}
+
 	static unsafe int Main ()
 	{
 		Check ("Sse.IsSupported", Sse.IsSupported);
@@ -1888,6 +1944,28 @@ class Tests
 			      Bmi2.ParallelBitExtract (0b10010u, 0b10110u) == 0b101u);
 			Check ("Bmi2.ParallelBitExtract(ulong)",
 			      Bmi2.ParallelBitExtract (0b10010ul, 0b10110ul) == 0b101ul);
+		}
+
+		Check ("Aes.IsSupported", Aes.IsSupported);
+
+		if (Aes.IsSupported) {
+			// FIPS-197 Appendix B's worked AES-128 example.
+			Vector128<byte> aesKey = LoadU8 (0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab,
+			                                 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c);
+			Vector128<byte> aesPlaintext = LoadU8 (0x32, 0x43, 0xf6, 0xa8, 0x88, 0x5a, 0x30, 0x8d,
+			                                       0x31, 0x31, 0x98, 0xa2, 0xe0, 0x37, 0x07, 0x34);
+			byte[] aesExpectedCiphertext = { 0x39, 0x25, 0x84, 0x1d, 0x02, 0xdc, 0x09, 0xfb, 0xdc,
+				                             0x11, 0x85, 0x97, 0x19, 0x6a, 0x0b, 0x32 };
+			Vector128<byte>[] aesSchedule = Aes128KeyExpansion (aesKey);
+			Vector128<byte> aesCiphertext = Aes128Encrypt (aesPlaintext, aesSchedule);
+
+			CheckArrayU8 ("Aes 128-bit encrypt matches FIPS-197", ToArrayU8 (aesCiphertext),
+			             aesExpectedCiphertext);
+
+			Vector128<byte> aesRoundTrip = Aes128Decrypt (aesCiphertext, aesSchedule);
+
+			CheckArrayU8 ("Aes 128-bit decrypt round-trip", ToArrayU8 (aesRoundTrip),
+			             ToArrayU8 (aesPlaintext));
 		}
 
 		if (failures == 0)

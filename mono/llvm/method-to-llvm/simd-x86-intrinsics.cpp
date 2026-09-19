@@ -90,6 +90,11 @@ bool bmi2_lowering ()
 	return mono_hwcap_x86_has_bmi2;
 }
 
+bool aes_lowering ()
+{
+	return mono_hwcap_x86_has_aes;
+}
+
 /// Return whether the Vector128<T> parameter at index has an unsigned element type.
 /// LLVM vector types do not encode signedness, so some lowerings must recover it
 /// from the managed signature.
@@ -275,6 +280,13 @@ llvm::Value *as_v16i8 (llvm::IRBuilder<> &builder, llvm::Value *value)
 		value, llvm::FixedVectorType::get (builder.getInt8Ty (), 16));
 }
 
+/// Cast an operand to the <2 x i64> type required by LLVM's AES-NI intrinsics.
+llvm::Value *as_v2i64 (llvm::IRBuilder<> &builder, llvm::Value *value)
+{
+	return builder.CreateBitCast (
+		value, llvm::FixedVectorType::get (builder.getInt64Ty (), 2));
+}
+
 /// Return the PCMPxSTR flag intrinsic for a ResultsFlag value.
 std::optional<llvm::Intrinsic::ID> string_flag_intrinsic (bool explicit_length, uint8_t flag)
 {
@@ -377,6 +389,12 @@ struct SseEmitters : SimdEmit {
 	                                        MonoMethod *)
 	{
 		return is_supported (mono_hwcap_x86_has_bmi2, builder);
+	}
+
+	static BuiltinResult aes_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                       MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_aes, builder);
 	}
 
 	static bool is_double_vector (llvm::Value *value)
@@ -1200,6 +1218,43 @@ struct SseEmitters : SimdEmit {
 
 		builder.CreateRet (
 			builder.CreateIntrinsic (llvm::Intrinsic::pext, { value->getType () }, { value, mask }));
+		return llvm::Error::success ();
+	}
+
+	template <llvm::Intrinsic::ID id>
+	static BuiltinResult aes_binary (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                 MonoMethod *)
+	{
+		llvm::Value *value = as_v2i64 (builder, argument (emitter, 0));
+		llvm::Value *round_key = as_v2i64 (builder, argument (emitter, 1));
+		llvm::Value *result = builder.CreateIntrinsic (id, {}, { value, round_key });
+
+		builder.CreateRet (as_v16i8 (builder, result));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult aes_inverse_mix_columns (MethodLLVMEmitter &emitter,
+	                                              llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = as_v2i64 (builder, argument (emitter, 0));
+		llvm::Value *result =
+			builder.CreateIntrinsic (llvm::Intrinsic::x86_aesni_aesimc, {}, { value });
+
+		builder.CreateRet (as_v16i8 (builder, result));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult aes_keygen_assist (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                        MonoMethod *)
+	{
+		llvm::Value *value = as_v2i64 (builder, argument (emitter, 0));
+		llvm::Value *control = argument (emitter, 1);
+		llvm::Value *result = dispatch_control (builder, control, 256, value->getType (), [&] (unsigned c) {
+			return builder.CreateIntrinsic (llvm::Intrinsic::x86_aesni_aeskeygenassist, {},
+			                                { value, builder.getInt8 (c) });
+		});
+
+		builder.CreateRet (as_v16i8 (builder, result));
 		return llvm::Error::success ();
 	}
 
@@ -2497,6 +2552,7 @@ const ClassKey popcnt = { nullptr, "System.Runtime.Intrinsics.X86", "Popcnt" };
 const ClassKey lzcnt = { nullptr, "System.Runtime.Intrinsics.X86", "Lzcnt" };
 const ClassKey bmi1 = { nullptr, "System.Runtime.Intrinsics.X86", "Bmi1" };
 const ClassKey bmi2 = { nullptr, "System.Runtime.Intrinsics.X86", "Bmi2" };
+const ClassKey aes = { nullptr, "System.Runtime.Intrinsics.X86", "Aes" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -3070,6 +3126,21 @@ const BuiltinBody bmi2_table[] = {
 	{ bmi2, "ParallelBitExtract", "SS", false, bmi2_lowering, SseEmitters::parallel_bit_extract },
 };
 
+const BuiltinBody aes_table[] = {
+	{ aes, "get_IsSupported", "", false, nullptr, SseEmitters::aes_is_supported },
+
+	{ aes, "Decrypt", "VV", false, aes_lowering,
+	  SseEmitters::aes_binary<Intr::x86_aesni_aesdec> },
+	{ aes, "DecryptLast", "VV", false, aes_lowering,
+	  SseEmitters::aes_binary<Intr::x86_aesni_aesdeclast> },
+	{ aes, "Encrypt", "VV", false, aes_lowering,
+	  SseEmitters::aes_binary<Intr::x86_aesni_aesenc> },
+	{ aes, "EncryptLast", "VV", false, aes_lowering,
+	  SseEmitters::aes_binary<Intr::x86_aesni_aesenclast> },
+	{ aes, "InverseMixColumns", "V", false, aes_lowering, SseEmitters::aes_inverse_mix_columns },
+	{ aes, "KeygenAssist", "VS", false, aes_lowering, SseEmitters::aes_keygen_assist },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
@@ -3088,6 +3159,7 @@ simd_x86_bodies ()
 		made.insert (made.end (), std::begin (lzcnt_table), std::end (lzcnt_table));
 		made.insert (made.end (), std::begin (bmi1_table), std::end (bmi1_table));
 		made.insert (made.end (), std::begin (bmi2_table), std::end (bmi2_table));
+		made.insert (made.end (), std::begin (aes_table), std::end (aes_table));
 		return made;
 	} ();
 
