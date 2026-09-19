@@ -221,6 +221,20 @@ class Tests
 		return r;
 	}
 
+	static unsafe Vector128<ulong> LoadU64 (ulong e0, ulong e1)
+	{
+		ulong* e = stackalloc ulong[2] { e0, e1 };
+		return Sse2.LoadVector128 (e);
+	}
+
+	static unsafe ulong[] ToArrayU64 (Vector128<ulong> v)
+	{
+		ulong[] r = new ulong[2];
+		fixed (ulong* p = r)
+			Sse2.Store (p, v);
+		return r;
+	}
+
 	static void CheckLanesI64 (string what, Vector128<long> v, long e0, long e1)
 	{
 		long[] r = ToArrayI64 (v);
@@ -1966,6 +1980,34 @@ class Tests
 
 			CheckArrayU8 ("Aes 128-bit decrypt round-trip", ToArrayU8 (aesRoundTrip),
 			             ToArrayU8 (aesPlaintext));
+		}
+
+		Check ("Pclmulqdq.IsSupported", Pclmulqdq.IsSupported);
+
+		if (Pclmulqdq.IsSupported) {
+			// Carryless (GF(2)) multiplication: 0b101 * 0b110 == 0b11110, with no carries
+			// to fold into a higher bit the way ordinary multiplication would.
+			Vector128<long> clmulLeft = LoadI64 (0b101, 0);
+			Vector128<long> clmulRight = LoadI64 (0b110, 0);
+			long[] clmulLowLow = ToArrayI64 (Pclmulqdq.CarrylessMultiply (clmulLeft, clmulRight, 0x00));
+
+			Check ("Pclmulqdq.CarrylessMultiply(long) low*low", clmulLowLow [0] == 0b11110
+			      && clmulLowLow [1] == 0);
+
+			// control 0x01 selects the left operand's high qword instead of its low one.
+			Vector128<long> clmulLeftHigh = LoadI64 (0, 0b101);
+			long[] clmulHighLow =
+				ToArrayI64 (Pclmulqdq.CarrylessMultiply (clmulLeftHigh, clmulRight, 0x01));
+
+			Check ("Pclmulqdq.CarrylessMultiply(long) high*low", clmulHighLow [0] == 0b11110
+			      && clmulHighLow [1] == 0);
+
+			Vector128<ulong> clmulULeft = LoadU64 (0b101, 0);
+			Vector128<ulong> clmulURight = LoadU64 (0b110, 0);
+			ulong[] clmulU =
+				ToArrayU64 (Pclmulqdq.CarrylessMultiply (clmulULeft, clmulURight, 0x00));
+
+			Check ("Pclmulqdq.CarrylessMultiply(ulong)", clmulU [0] == 0b11110 && clmulU [1] == 0);
 		}
 
 		if (failures == 0)

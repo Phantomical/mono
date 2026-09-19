@@ -128,6 +128,9 @@ mono_hwcap_arch_init (void)
 		if (ecx & (1 << 0))
 			mono_hwcap_x86_has_sse3 = TRUE;
 
+		if (ecx & (1 << 1))
+			mono_hwcap_x86_has_pclmulqdq = TRUE;
+
 		if (ecx & (1 << 9))
 			mono_hwcap_x86_has_ssse3 = TRUE;
 

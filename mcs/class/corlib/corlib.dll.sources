@@ -1669,7 +1669,7 @@ System.Runtime.Intrinsics/X86/Avx.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Bmi2.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Fma.PlatformNotSupported.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Lzcnt.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Pclmulqdq.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Pclmulqdq.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Popcnt.cs
 
 ../../../external/corert/src/Common/src/System/Collections/Generic/LowLevelList.cs
