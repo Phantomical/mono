@@ -67,7 +67,7 @@ endfunction()
 
 function(mdoc)
   run("${CMAKE_COMMAND}" -E env "MONO_PATH=${PROFILE_DIR}"
-      "${RUNTIME}" "${MDOC}" ${ARGN})
+      ${RUNTIME} "${MDOC}" ${ARGN})
 endfunction()
 
 # The trees have to match exactly, in both directions.
@@ -248,7 +248,7 @@ elseif(CASE STREQUAL "mdoc-export-html-with-version")
 elseif(CASE STREQUAL "mdoc-export-msxdoc")
   execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${PROFILE_DIR}"
-            "${RUNTIME}" "${MDOC}" export-msxdoc -o -
+            ${RUNTIME} "${MDOC}" export-msxdoc -o -
             Test/en.expected.importslashdoc
     WORKING_DIRECTORY "${WORKDIR}"
     OUTPUT_VARIABLE _out RESULT_VARIABLE _rc)
@@ -267,7 +267,7 @@ elseif(CASE STREQUAL "mdoc-validate")
     string(REPLACE "en.expected" "validate.check.monodocer" _expected "${_tree}")
     execute_process(
       COMMAND "${CMAKE_COMMAND}" -E env "MONO_PATH=${PROFILE_DIR}"
-              "${RUNTIME}" "${MDOC}" validate -f ecma "Test/${_tree}"
+              ${RUNTIME} "${MDOC}" validate -f ecma "Test/${_tree}"
       WORKING_DIRECTORY "${WORKDIR}"
       OUTPUT_VARIABLE _out ERROR_VARIABLE _err)
     string(REPLACE "file://${WORKDIR}/" "" _got "${_out}${_err}")

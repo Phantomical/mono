@@ -27,7 +27,6 @@ set(_src      "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_bin      "${CMAKE_CURRENT_BINARY_DIR}")
 set(_class    "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
 set(_buildcls "${MONO_MCS_LIBDIR}/build")
-set(_wrapper  "${MONO_RUNTIME_WRAPPER}")
 
 mono_tools_runtime(_host MONO_PATH "${_buildcls}" AOT_PATH "${_buildcls}")
 set(_csc ${_host} "${MONO_CSC}" -debug:portable -noconfig -nologo)
@@ -35,7 +34,7 @@ set(_csc ${_host} "${MONO_CSC}" -debug:portable -noconfig -nologo)
 # mdoc runs on the built runtime against the built class libraries: it is one
 # of them, so only that runtime can load it.
 set(_mdoc ${CMAKE_COMMAND} -E env "MONO_PATH=${_class}"
-          "${_wrapper}" "${_class}/mdoc.exe")
+          ${MONO_RUNTIME_COMMAND} "${_class}/mdoc.exe")
 
 # The HTML converter used to turn the in-source API comments into monodoc XML
 file(GLOB _agility_sources CONFIGURE_DEPENDS "${_src}/HtmlAgilityPack/*.cs")

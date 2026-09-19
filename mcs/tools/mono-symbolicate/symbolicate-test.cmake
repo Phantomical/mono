@@ -4,7 +4,7 @@
 # symbolicator is then asked to put the line numbers back from the .msym store,
 # and the result is diffed against Test/symbolicate.expected.
 #
-#   RUNTIME    mono-wrapper
+#   RUNTIME    CMake command list used to launch mono
 #   LIB_PATH   the profile directory, which is also MONO_PATH
 #   PROGRAM    mono-symbolicate.exe
 #   TEST_EXE   the built StackTraceDumper.exe (its .pdb sits beside it)
@@ -12,7 +12,7 @@
 #   EXPECTED   Test/symbolicate.expected
 #   AOT        empty, `plain`, or `msym`
 
-set(_mono "${RUNTIME}" -O=-inline)
+set(_mono ${RUNTIME} -O=-inline)
 set(_env "MONO_PATH=${LIB_PATH}")
 set(_msym "${OUT_DIR}/msymdir")
 

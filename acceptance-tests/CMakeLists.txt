@@ -84,13 +84,13 @@ set(_src      "${CMAKE_CURRENT_SOURCE_DIR}")
 set(_bin      "${CMAKE_CURRENT_BINARY_DIR}")
 set(_class    "${MONO_MCS_LIBDIR}/${MONO_DEFAULT_PROFILE}")
 set(_buildcls "${MONO_MCS_LIBDIR}/build")
-set(_wrapper  "${MONO_RUNTIME_WRAPPER}")
 
 # RUNTIME / TOOLS_RUNTIME.  RUNTIME is what the suites are *testing*, so it is
 # always the one this build produced.  TOOLS_RUNTIME only hosts the compiler and
 # follows MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS -- see MonoToolsRuntime.cmake.
 # These compiles do not pass -nostdlib.
-set(_runtime "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class}" "${_wrapper}" --debug)
+set(_runtime "${CMAKE_COMMAND}" -E env "MONO_PATH=${_class}"
+             ${MONO_RUNTIME_COMMAND} --debug)
 mono_tools_runtime(_tools_runtime MONO_PATH "${_buildcls}" ARGS --debug)
 
 # MCS and ILASM.  Note the -lib:/bare -r: spelling: acceptance-tests resolves

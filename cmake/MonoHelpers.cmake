@@ -26,9 +26,8 @@ set(MONO_RUNTIME_WRAPPER
 # in front costs nothing and puts an unquoted word first, which is the whole of
 # the condition, so every quote on the line survives.
 #
-# Use this wherever a CMake script runs the wrapper. MONO_RUNTIME_WRAPPER stays
-# the spelling for a path handed on to something else -- a test's MONO_RUNTIME,
-# a script's -D RUNTIME= -- which is a value rather than a launch.
+# Use this wherever a CMake script runs the wrapper. Use MONO_RUNTIME_WRAPPER
+# when another program needs the wrapper path rather than a command list.
 if(WIN32)
   set(MONO_RUNTIME_COMMAND cmd /c call "${MONO_RUNTIME_WRAPPER}")
 else()
