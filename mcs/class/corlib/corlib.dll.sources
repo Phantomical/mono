@@ -1656,21 +1656,21 @@ System.Runtime.Intrinsics/Vector64.cs
 System.Runtime.Intrinsics/Vector128.cs
 System.Runtime.Intrinsics/Vector256.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Enums.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse2.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse3.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Ssse3.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse41.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Sse42.cs
+System.Runtime.Intrinsics/X86/Sse.cs
+System.Runtime.Intrinsics/X86/Sse2.cs
+System.Runtime.Intrinsics/X86/Sse3.cs
+System.Runtime.Intrinsics/X86/Ssse3.cs
+System.Runtime.Intrinsics/X86/Sse41.cs
+System.Runtime.Intrinsics/X86/Sse42.cs
 System.Runtime.Intrinsics/X86/Avx.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Avx2.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Aes.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Bmi1.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Bmi2.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Fma.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Lzcnt.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Pclmulqdq.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Popcnt.cs
+System.Runtime.Intrinsics/X86/Avx2.cs
+System.Runtime.Intrinsics/X86/Aes.cs
+System.Runtime.Intrinsics/X86/Bmi1.cs
+System.Runtime.Intrinsics/X86/Bmi2.cs
+System.Runtime.Intrinsics/X86/Fma.cs
+System.Runtime.Intrinsics/X86/Lzcnt.cs
+System.Runtime.Intrinsics/X86/Pclmulqdq.cs
+System.Runtime.Intrinsics/X86/Popcnt.cs
 
 ../../../external/corert/src/Common/src/System/Collections/Generic/LowLevelList.cs
 

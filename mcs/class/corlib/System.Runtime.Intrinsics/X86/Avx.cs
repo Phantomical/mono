@@ -12,6 +12,7 @@ namespace System.Runtime.Intrinsics.X86
     /// This class provides access to Intel AVX hardware instructions via intrinsics
     /// </summary>
     [CLSCompliant(false)]
+    [Intrinsic]
     public abstract class Avx : Sse42
     {
         internal Avx() { }
