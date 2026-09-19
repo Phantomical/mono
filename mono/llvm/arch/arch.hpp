@@ -62,6 +62,17 @@ void *lazy_frame_leave (void *frame);
 /// before the runtime installs the trampoline.
 void **rethrow_trampoline_slot ();
 
+/// Returns and clears the resolver block most recently registered by
+/// writeResolverCode () on this thread. Returns null if none was registered.
+///
+/// Call immediately after constructing the pool, before constructing another
+/// pool on the same thread.
+llvm::orc::ExecutorAddr take_published_resolver ();
+
+/// Unregisters \p resolver from the host unwinder before its mapping is
+/// released. A null address is ignored.
+void unregister_resolver_unwind_info (llvm::orc::ExecutorAddr resolver);
+
 /// Whether a stack walk can rebuild \p hw_reg for the frame it is looking at.
 ///
 /// True for the stack pointer and for the callee-saved registers the unwind

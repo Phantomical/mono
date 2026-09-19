@@ -57,6 +57,12 @@ typedef struct {
 DynamicFunctionTableEntry*
 mono_arch_unwindinfo_insert_range_in_table(const gpointer code_block, gsize block_size);
 
+/// Removes the dynamic function table containing \p code. Does nothing if no
+/// table contains the address. Code-manager ranges are normally removed by the
+/// chunk_destroy callback instead.
+void
+mono_arch_unwindinfo_remove_pc_range_in_table(const gpointer code);
+
 PRUNTIME_FUNCTION
 mono_arch_unwindinfo_insert_rt_func_in_table(const gpointer code, gsize code_size, const gpointer unwinddata);
 

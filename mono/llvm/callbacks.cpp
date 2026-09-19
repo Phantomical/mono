@@ -39,6 +39,7 @@ LazyCallbacks::create (void *on_error)
 		return pool.takeError ();
 
 	self->pool_ = std::move (*pool);
+	self->resolver_ = arch::take_published_resolver ();
 
 	/* The AVX resolver executes VMOVUPS before entering managed code. */
 	if (mono_hwcap_x86_has_avx) {
@@ -52,12 +53,22 @@ LazyCallbacks::create (void *on_error)
 			return avx_pool.takeError ();
 
 		self->pool_avx_ = std::move (*avx_pool);
+		self->resolver_avx_ = arch::take_published_resolver ();
 	}
 
 	return std::move (self);
 }
 
-LazyCallbacks::~LazyCallbacks () = default;
+/*
+ * Unregister each resolver while its pool still owns the backing mapping.
+ * Otherwise, the host unwinder can retain stale unwind data after ORC releases
+ * the mapping and reuses its address.
+ */
+LazyCallbacks::~LazyCallbacks ()
+{
+	arch::unregister_resolver_unwind_info (resolver_);
+	arch::unregister_resolver_unwind_info (resolver_avx_);
+}
 
 TrampolinePool &
 LazyCallbacks::pool_for (ResolverKind kind)

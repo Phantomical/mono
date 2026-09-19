@@ -165,6 +165,13 @@ lazy_resolver_frame_avx ()
 
 namespace {
 
+/*
+ * Pool construction calls the resolver publisher synchronously but does not
+ * expose the resolver address. Pass it back through per-thread state so
+ * concurrent domain creation remains independent.
+ */
+thread_local ExecutorAddr published_resolver;
+
 /// One UNWIND_CODE: the offset of the instruction after the one it describes,
 /// the operation, and the operation's four-bit operand.
 constexpr uint16_t
@@ -270,6 +277,8 @@ publish_resolver_unwind_info (char *resolver_mem, ExecutorAddr resolver_addr)
 	mono_arch_unwindinfo_insert_range_in_table (code, resolver_published_size);
 	mono_arch_unwindinfo_insert_rt_func_in_table (code, resolver_described_size,
 	                                              code + resolver_unwind_offset);
+
+	published_resolver = resolver_addr;
 }
 
 /* Windows unwind codes for the AVX resolver's fixed-size stack frame. */
@@ -338,11 +347,38 @@ publish_resolver_unwind_info_avx (char *resolver_mem, ExecutorAddr resolver_addr
 	mono_arch_unwindinfo_insert_range_in_table (code, resolver_avx_published_size);
 	mono_arch_unwindinfo_insert_rt_func_in_table (code, resolver_avx_described_size,
 	                                              code + resolver_avx_unwind_offset);
+
+	published_resolver = resolver_addr;
 }
 
 } // namespace
 
 #endif /* HOST_WIN32 */
+
+ExecutorAddr
+take_published_resolver ()
+{
+#ifdef HOST_WIN32
+	ExecutorAddr resolver = published_resolver;
+	published_resolver = ExecutorAddr ();
+	return resolver;
+#else
+	return ExecutorAddr ();
+#endif
+}
+
+void
+unregister_resolver_unwind_info (ExecutorAddr resolver)
+{
+#ifdef HOST_WIN32
+	if (!resolver)
+		return;
+
+	mono_arch_unwindinfo_remove_pc_range_in_table (resolver.toPtr<void *> ());
+#else
+	(void) resolver;
+#endif
+}
 
 /*
  * ORC's OrcX86_64_SysV::writeResolverCode () with the lazy-entry frame added:
