@@ -506,6 +506,33 @@ mono_arch_unwind_frame (MonoDomain *domain, MonoJitTlsData *jit_tls,
 		else
 			frame->type = FRAME_TYPE_MANAGED;
 
+		/*
+		 * LLVM save_lmf wrappers have JIT info, but their caller context is
+		 * recorded in the LMF rather than described by their unwind info.
+		 * Restore it as the ji == NULL path does for classic transitions.
+		 */
+		if (!ji->is_trampoline && !ji->async) {
+			MonoMethod *method = jinfo_get_method (ji);
+
+			if (method && method->save_lmf && *lmf &&
+				(((guint64) (*lmf)->previous_lmf) & 4) == 0 && (*lmf)->rsp != 0) {
+				guint64 rip = *(guint64*)((*lmf)->rsp - sizeof (host_mgreg_t));
+
+				for (i = 0; i < AMD64_NREG; ++i) {
+					if (AMD64_IS_CALLEE_SAVED_REG (i) && i != AMD64_RBP)
+						new_ctx->gregs [i] = 0;
+				}
+				new_ctx->gregs [AMD64_RSP] = (*lmf)->rsp;
+				new_ctx->gregs [AMD64_RBP] = (*lmf)->rbp;
+				new_ctx->gregs [AMD64_RIP] = rip;
+				new_ctx->gregs [AMD64_RIP]--;
+
+				*lmf = (MonoLMF *)(((guint64) (*lmf)->previous_lmf) & ~7);
+
+				return TRUE;
+			}
+		}
+
 		unwind_info = mono_jinfo_get_unwind_info (ji, &unwind_info_len);
 
 		frame->unwind_info = unwind_info;
