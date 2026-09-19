@@ -23,14 +23,9 @@ struct SimdEmit {
 	/// The two operands of a binary operator, combined into its answer.
 	using BinaryOp = llvm::Value *(*) (llvm::IRBuilder<> &, llvm::Value *, llvm::Value *);
 
-	/// Returns the value of parameter i.
-	///
-	/// A SIMD class converts to a vector rather than a struct, so
-	/// held_in_memory () leaves it in a register with nothing to load.
 	static llvm::Value *argument (MethodLLVMEmitter &emitter, unsigned i)
 	{
-		return emitter.function->getArg (
-			natural_parameter_index (i, emitter.function));
+		return emitter.written_body_parameter (i);
 	}
 
 	static llvm::Type *return_type (MethodLLVMEmitter &emitter)

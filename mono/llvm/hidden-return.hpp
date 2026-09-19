@@ -165,6 +165,25 @@ win64_indirect (llvm::Type *type)
 	return size != 1 && size != 2 && size != 4 && size != 8;
 }
 
+// A vector wider than one XMM register travels through a pointer either way:
+// left to itself, LLVM's argument lowering passes one indirectly too. They
+// differ in the load. LLVM reads the pointee with an aligned move, since a
+// vector's ABI alignment is its width, while the classic tier-0 compiler aligns
+// its frame to 16 and never realigns it, so the copy it hands over faults.
+// Declaring the pointer here puts the load in this backend's hands, which
+// accesses a vector unaligned.
+//
+// Returns keep the rule above: a vector comes back in XMM0 or YMM0, the register
+// the classic compiler picks for one too.
+inline bool
+win64_indirect_argument (llvm::Type *type)
+{
+	if (auto *vector = llvm::dyn_cast<llvm::FixedVectorType> (type))
+		return vector->getPrimitiveSizeInBits ().getFixedValue () > 128;
+
+	return win64_indirect (type);
+}
+
 /// The type a Windows return or by-value argument travels as, given that
 /// win64_indirect (type) says it fits in one register.
 ///

@@ -182,7 +182,7 @@ MethodLLVMEmitter::build_sig_cookie (MonoIrBuilder &builder, MonoMethodSignature
 		bool copied = false;
 
 #ifdef HOST_WIN32
-		copied = win64_indirect (*declared);
+		copied = win64_indirect_argument (*declared);
 #endif
 
 		llvm::Type *stored = copied ? *declared : args[i + sig->hasthis]->getType ();
@@ -262,18 +262,28 @@ MethodLLVMEmitter::coerce_to_argument (MonoIrBuilder &builder, StackValue value,
 		return coerced.takeError ();
 
 #ifdef HOST_WIN32
-	if (!native && win64_indirect (*type)) {
-		// convert_method_signature () declared this parameter as a pointer,
-		// the convention mono_arch_get_call_info () also chose for the
-		// classic tier-0 compiler (win64_indirect (), hidden-return.hpp).
-		// This call makes the private copy that convention promises the
-		// callee and passes its address.
+	if (!native && win64_indirect_argument (*type)) {
+		// This parameter was declared as a pointer, the convention the classic
+		// tier-0 compiler uses for one too. The callee is promised a private
+		// copy, so make it here and pass its address.
 		llvm::Expected<llvm::Value *> slot = vtype_slot (destination, native);
 
 		if (!slot)
 			return slot.takeError ();
 
-		copy_vtype (builder, *slot, *coerced, destination, native);
+		if (held_in_memory (destination)) {
+			copy_vtype (builder, *slot, *coerced, destination, native);
+		} else {
+			llvm::Expected<llvm::Value *> held =
+				materialize (builder, *coerced, destination, native);
+
+			if (!held)
+				return held.takeError ();
+
+			builder.CreateAlignedStore (*held, *slot,
+			                            type_alignment (destination, native));
+		}
+
 		return *slot;
 	}
 
@@ -911,7 +921,7 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 			llvm::consumeError (declared.takeError ());
 			return llvm::CallInst::TCK_None;
 		}
-		if (win64_indirect (*declared))
+		if (win64_indirect_argument (*declared))
 			return llvm::CallInst::TCK_None;
 #endif
 	}

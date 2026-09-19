@@ -2098,6 +2098,44 @@ MethodLLVMEmitter::declared_class (MonoType *type)
 	return klass;
 }
 
+llvm::Value *
+MethodLLVMEmitter::written_body_parameter (unsigned i)
+{
+	llvm::Argument *arg = function->getArg (natural_parameter_index (i, function));
+
+#ifdef HOST_WIN32
+	bool native = native_signature ();
+	MonoType *declared = mono_arg_type (method, i);
+	llvm::Expected<llvm::Type *> natural = convert_type (declared, native);
+
+	if (!natural) {
+		// The same conversion already ran to build this function, so nothing
+		// that reaches here can fail now.
+		llvm::consumeError (natural.takeError ());
+		return arg;
+	}
+
+	if (native || !win64_indirect_argument (*natural))
+		return arg;
+
+	auto cached = written_body_args.find (i);
+
+	if (cached != written_body_args.end ())
+		return cached->second;
+
+	// Loaded at the entry so the value dominates every block the body goes on
+	// to write.
+	llvm::IRBuilder<> entry (entry_block, entry_block->begin ());
+	llvm::Value *value =
+		entry.CreateAlignedLoad (*natural, arg, type_alignment (declared, native));
+
+	written_body_args[i] = value;
+	return value;
+#else
+	return arg;
+#endif
+}
+
 llvm::Error
 MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 {
@@ -2126,11 +2164,10 @@ MethodLLVMEmitter::emit_arg_allocas (MonoIrBuilder &builder)
 		unsigned at = natural_parameter_index (i, function);
 
 #ifdef HOST_WIN32
-		if (!native && win64_indirect (ltype)) {
-			// convert_method_signature () declared this parameter as a
-			// pointer to the caller's own copy, per win64_indirect ()
-			// (hidden-return.hpp). This function reads and writes through
-			// it directly.
+		if (!native && win64_indirect_argument (ltype)) {
+			// This parameter was declared as a pointer to the caller's own
+			// copy, so it needs no slot: the body reads and writes through
+			// the pointer directly.
 			args.push_back ({
 				.alloca = function->getArg (at),
 				.type = mtype,
