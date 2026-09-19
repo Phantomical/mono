@@ -268,6 +268,7 @@ set(MONO_TESTS_CS_SRC
   math-intrinsics.cs
   buffer-copy-intrinsics.cs
   implicit-null-checks.cs
+  segv-wild-pointer.cs
   monitor-fast-path.cs
   array-shape-intrinsics.cs
   override-basic.cs
