@@ -132,6 +132,9 @@ get_runtime_builtins (std::vector<MonoBuiltin> &builtins)
 		 */
 		{"memcmp", (void *) &memcmp},
 
+		/* LoopIdiomRecognize can replace byte-scanning loops with strlen. */
+		{"strlen", (void *) &strlen},
+
 		/*
 		 * The inverse hyperbolic functions, for the same reason. LLVM has no
 		 * intrinsic for any of them. RuntimeLibcalls.td declares ASINH, ACOSH

@@ -19,6 +19,7 @@
 #include <llvm/Support/MathExtras.h>
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -149,6 +150,53 @@ marshals_unchanged (MonoClass *klass)
 {
 	return mono_class_is_explicit_layout (klass) || m_class_is_blittable (klass)
 	       || m_class_is_enumtype (klass);
+}
+
+/// Returns the minimum number of bytes accessible through a non-null value of type t.
+std::optional<uint64_t>
+known_dereferenceable_bytes (MonoType *t)
+{
+	if (t->byref) {
+		MonoClass *klass = mono_class_from_mono_type_internal (t);
+		if (klass == nullptr)
+			return std::nullopt;
+
+		return m_class_is_valuetype (klass) ? mono_class_value_size (klass, NULL)
+		                                    : (uint64_t) TARGET_SIZEOF_VOID_P;
+	}
+
+	switch (mini_get_underlying_type (t)->type) {
+	case MONO_TYPE_STRING:
+	case MONO_TYPE_CLASS:
+	case MONO_TYPE_OBJECT:
+	case MONO_TYPE_ARRAY:
+	case MONO_TYPE_SZARRAY:
+		return (uint64_t) m_class_get_instance_size (mono_class_from_mono_type_internal (t));
+	case MONO_TYPE_GENERICINST:
+		return mono_type_generic_inst_is_valuetype (t)
+			       ? std::nullopt
+			       : std::optional<uint64_t> ((uint64_t) m_class_get_instance_size (
+					 mono_class_from_mono_type_internal (t)));
+	case MONO_TYPE_VAR:
+	case MONO_TYPE_MVAR:
+		// Generic sharing only handles reference-type instantiations here, and
+		// every object contains at least a MonoObject header.
+		return (uint64_t) MONO_ABI_SIZEOF (MonoObject);
+	default:
+		return std::nullopt;
+	}
+}
+
+/// Returns a dereferenceable_or_null attribute when the size of t is known.
+std::optional<llvm::Attribute>
+dereferenceable_attr (llvm::LLVMContext &context, MonoType *t)
+{
+	std::optional<uint64_t> bytes = known_dereferenceable_bytes (t);
+
+	if (!bytes || *bytes == 0)
+		return std::nullopt;
+
+	return llvm::Attribute::getWithDereferenceableOrNullBytes (context, *bytes);
 }
 
 /// Whether method is entered with sig's value types already marshalled.
@@ -1136,6 +1184,9 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 	    ext != llvm::Attribute::None)
 		function->addRetAttr (ext);
 
+	if (std::optional<llvm::Attribute> deref = dereferenceable_attr (context (), sig->ret))
+		function->addRetAttr (*deref);
+
 	// A string constructor returns the string it creates, and that string is new.
 	if (method->string_ctor)
 		function->addRetAttr (llvm::Attribute::NoAlias);
@@ -1155,8 +1206,15 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 		function->getArg (at)->setName ("ret");
 	}
 
-	if (sig->hasthis)
-		function->getArg (natural_parameter_index (0, function))->setName ("this");
+	if (sig->hasthis) {
+		unsigned at = natural_parameter_index (0, function);
+
+		function->getArg (at)->setName ("this");
+
+		if (std::optional<llvm::Attribute> deref =
+			    dereferenceable_attr (context (), m_class_get_this_arg (method->klass)))
+			function->addParamAttr (at, *deref);
+	}
 
 	std::vector<const char *> names (sig->param_count);
 	if (sig->param_count > 0)
@@ -1173,6 +1231,10 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 		if (llvm::Attribute::AttrKind ext = integer_extension (sig->params[i]);
 		    ext != llvm::Attribute::None)
 			function->addParamAttr (pindex, ext);
+
+		if (std::optional<llvm::Attribute> deref =
+			    dereferenceable_attr (context (), sig->params[i]))
+			function->addParamAttr (pindex, *deref);
 	}
 
 	declarations[method] = function;

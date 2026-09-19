@@ -17,10 +17,15 @@ MethodLLVMEmitter::indirect_address (MonoIrBuilder &builder, StackValue address)
 
 	llvm::Value *pointer = address.value;
 
-	if (!pointer->getType ()->isPointerTy ())
+	// Preserve implicit null checks for native integers converted to pointers at
+	// the point of dereference. Pointer-typed values retain their existing origin.
+	bool was_integer = !pointer->getType ()->isPointerTy ();
+
+	if (was_integer)
 		pointer = builder.CreateIntToPtr (pointer, llvm::PointerType::get (context (), 0));
 
-	emit_null_check (builder, pointer);
+	if (type == NativeInt && was_integer)
+		emit_null_check (builder, pointer);
 	return pointer;
 }
 

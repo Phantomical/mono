@@ -632,7 +632,9 @@ MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
 	if (!base->getType ()->isPointerTy ())
 		base = builder.CreateIntToPtr (base, llvm::PointerType::get (context (), 0));
 
-	if (null_check)
+	// Managed pointers already identify storage, while native pointers follow
+	// unsafe-code semantics. Only object references need a managed null check here.
+	if (null_check && type == ObjectRef)
 		emit_null_check (builder, base);
 
 	/*
