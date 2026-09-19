@@ -101,6 +101,9 @@ set_current_thread_info (MonoThreadInfo *info)
 static MonoSemType suspend_semaphore;
 static size_t pending_suspends;
 
+static MonoSemType critical_region_wait_semaphore;
+gint32 mono_threads_critical_region_wait_requested;
+
 static mono_mutex_t join_mutex;
 
 #define mono_thread_info_run_state(info) (((MonoThreadInfo*)info)->thread_state.state)
@@ -1008,6 +1011,7 @@ mono_thread_info_init (size_t info_size)
 
 	mono_os_sem_init (&global_suspend_semaphore, 1);
 	mono_os_sem_init (&suspend_semaphore, 0);
+	mono_os_sem_init (&critical_region_wait_semaphore, 0);
 	mono_os_mutex_init (&join_mutex);
 
 	mono_lls_init (&thread_list, NULL);
@@ -1291,6 +1295,30 @@ mono_thread_info_in_critical_location (MonoThreadInfo *info)
 	return is_thread_in_critical_region (info);
 }
 
+void
+mono_threads_critical_region_wait_begin (void)
+{
+	mono_atomic_store_i32 (&mono_threads_critical_region_wait_requested, 1);
+}
+
+void
+mono_threads_critical_region_wait_end (void)
+{
+	mono_atomic_store_i32 (&mono_threads_critical_region_wait_requested, 0);
+}
+
+gboolean
+mono_threads_wait_critical_region_exit (guint32 timeout_ms)
+{
+	return mono_os_sem_timedwait (&critical_region_wait_semaphore, timeout_ms, MONO_SEM_FLAGS_NONE) == MONO_SEM_TIMEDWAIT_RET_SUCCESS;
+}
+
+void
+mono_threads_wake_critical_region_waiter (void)
+{
+	mono_os_sem_post (&critical_region_wait_semaphore);
+}
+
 /*
 The return value is only valid until a matching mono_thread_info_resume is called
 */
@@ -1376,33 +1404,50 @@ static MonoThreadInfo*
 suspend_sync_nolock (MonoNativeThreadId id, gboolean interrupt_kernel)
 {
 	MonoThreadInfo *info = NULL;
-	int sleep_duration = 0;
+	guint32 timeout_ms = 0;
+	gboolean waiting = FALSE;
+
 	for (;;) {
 		if (!(info = suspend_sync (id, interrupt_kernel))) {
 			mono_hazard_pointer_clear (mono_hazard_pointer_get (), 1);
-			return NULL;
+			info = NULL;
+			goto done;
 		}
 
 		/*WARNING: We now are in interrupt context until we resume the thread. */
 		if (!is_thread_in_critical_region (info))
 			break;
 
+		if (!waiting) {
+			mono_threads_critical_region_wait_begin ();
+			waiting = TRUE;
+		}
+
 		if (!mono_thread_info_core_resume (info)) {
 			mono_hazard_pointer_clear (mono_hazard_pointer_get (), 1);
-			return NULL;
+			info = NULL;
+			goto done;
 		}
 		THREADS_SUSPEND_DEBUG ("RESTARTED thread tid %p\n", (void*)id);
 
 		/* Wait for the pending resume to finish */
 		mono_threads_wait_pending_operations ();
 
-		if (sleep_duration == 0)
+		/*
+		 * The managed allocator wakes this wait when it leaves its critical
+		 * region. Keep the timeout for other critical locations.
+		 */
+		if (timeout_ms == 0)
 			mono_thread_info_yield ();
 		else
-			g_usleep (sleep_duration);
+			mono_threads_wait_critical_region_exit (timeout_ms);
 
-		sleep_duration += 10;
+		timeout_ms += 10;
 	}
+
+done:
+	if (waiting)
+		mono_threads_critical_region_wait_end ();
 	return info;
 }
 
@@ -2193,4 +2238,3 @@ mono_thread_info_get_tools_data (void)
 
 	return info ? info->tools_data : NULL;
 }
-

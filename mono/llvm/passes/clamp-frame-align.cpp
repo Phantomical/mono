@@ -6,17 +6,45 @@
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/IntrinsicInst.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Module.h>
 
 using namespace llvm;
 
 namespace mono {
+namespace {
+
+/// Returns whether f contains an intrinsic that requires stable
+/// frame-relative offsets. This also detects intrinsics introduced by inlining.
+bool
+escapes_a_frame_offset (const Function &f)
+{
+	for (const Instruction &i : instructions (f)) {
+		const auto *call = dyn_cast<IntrinsicInst> (&i);
+
+		if (call == nullptr)
+			continue;
+
+		Intrinsic::ID id = call->getIntrinsicID ();
+
+		if (id == Intrinsic::localescape || id == Intrinsic::experimental_stackmap)
+			return true;
+	}
+
+	return false;
+}
+
+} // namespace
 
 PreservedAnalyses
 ClampFrameAlignPass::run (Function &f, FunctionAnalysisManager &)
 {
-	if (!f.hasFnAttribute ("no-realign-stack"))
-		return PreservedAnalyses::all ();
+	if (!f.hasFnAttribute ("no-realign-stack")) {
+		if (!escapes_a_frame_offset (f))
+			return PreservedAnalyses::all ();
+
+		f.addFnAttr ("no-realign-stack");
+	}
 
 	MaybeAlign stack = f.getParent ()->getDataLayout ().getStackAlignment ();
 

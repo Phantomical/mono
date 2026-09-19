@@ -262,6 +262,7 @@ static void
 sgen_unified_suspend_stop_world (void)
 {
 	int sleep_duration = -1;
+	gboolean waiting = FALSE;
 
 	// we can't lead STW if we promised not to safepoint.
 	g_assert (!mono_thread_info_will_not_safepoint (mono_thread_info_current ()));
@@ -354,11 +355,20 @@ sgen_unified_suspend_stop_world (void)
 		if (restart_counter == 0)
 			break;
 
+		if (!waiting) {
+			mono_threads_critical_region_wait_begin ();
+			waiting = TRUE;
+		}
+
+		/*
+		 * The managed allocator wakes this wait when it leaves its critical
+		 * region. Keep the timeout for other critical locations.
+		 */
 		if (sleep_duration < 0) {
 			mono_thread_info_yield ();
 			sleep_duration = 0;
 		} else {
-			g_usleep (sleep_duration);
+			mono_threads_wait_critical_region_exit (sleep_duration);
 			sleep_duration += 10;
 		}
 
@@ -392,6 +402,9 @@ sgen_unified_suspend_stop_world (void)
 
 		mono_threads_wait_pending_operations ();
 	}
+
+	if (waiting)
+		mono_threads_critical_region_wait_end ();
 
 	FOREACH_THREAD_EXCLUDE (info, MONO_THREAD_INFO_FLAGS_NO_GC) {
 		gpointer stopped_ip;

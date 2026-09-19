@@ -444,6 +444,7 @@ parse_debug_var_slots (object::ObjectFile &obj,
 
 				std::vector<VarSlot> slots;
 				bool complete = true;
+				int32_t native_offset = (int32_t) marker.getInstructionOffset ();
 
 				for (const auto &location : marker.locations ()) {
 					// An alloca operand lowers to Direct - register
@@ -461,7 +462,8 @@ parse_debug_var_slots (object::ObjectFile &obj,
 
 					slots.push_back (
 						{ (int32_t) location.getDwarfRegNum (),
-					          (int32_t) location.getOffset () });
+					          (int32_t) location.getOffset (),
+					          native_offset });
 				}
 
 				if (!complete || slots.empty ())

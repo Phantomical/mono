@@ -318,6 +318,7 @@ MONO_JIT_ICALL (mono_threads_enter_gc_unsafe_region_unbalanced) \
 MONO_JIT_ICALL (mono_threads_exit_gc_safe_region_unbalanced) \
 MONO_JIT_ICALL (mono_threads_exit_gc_unsafe_region_unbalanced) \
 MONO_JIT_ICALL (mono_threads_state_poll) \
+MONO_JIT_ICALL (mono_threads_wake_critical_region_waiter) \
 MONO_JIT_ICALL (mono_throw_exception) \
 MONO_JIT_ICALL (mono_throw_method_access) \
 MONO_JIT_ICALL (mono_throw_unmanaged_callers_only) \
