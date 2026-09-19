@@ -165,6 +165,21 @@ win64_indirect (llvm::Type *type)
 	return size != 1 && size != 2 && size != 4 && size != 8;
 }
 
+// LLVM also passes vectors wider than one XMM register indirectly, but assumes
+// that the pointee has the vector's natural alignment. The classic compiler
+// guarantees only 16-byte stack alignment, so make the pointer explicit and
+// load the argument with Mono's alignment instead.
+//
+// Wide vector returns remain in vector registers and use win64_indirect ().
+inline bool
+win64_indirect_argument (llvm::Type *type)
+{
+	if (auto *vector = llvm::dyn_cast<llvm::FixedVectorType> (type))
+		return vector->getPrimitiveSizeInBits ().getFixedValue () > 128;
+
+	return win64_indirect (type);
+}
+
 /// The type a Windows return or by-value argument travels as, given that
 /// win64_indirect (type) says it fits in one register.
 ///

@@ -831,7 +831,7 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig, bool nati
 		 * would hand that pass a parameter it did not declare.
 		 */
 #ifdef HOST_WIN32
-		if (!native && win64_indirect (*converted))
+		if (!native && win64_indirect_argument (*converted))
 			params.push_back (pointer_type (context ()));
 		else if (!native)
 			// LLVM sizes a register argument by scalar leaves, the same as
