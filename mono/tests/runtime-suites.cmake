@@ -261,27 +261,16 @@ set(_tailcall ${_tailcall_all})
 list(REMOVE_ITEM _tailcall
      ${MONO_TESTS_TAILCALL_DISABLED_COMPILE} ${MONO_TESTS_TAILCALL_DISABLED_RUN})
 
-# Win64 makes no sibling call once an argument is stack-passed, so a tail site
-# carrying more than four becomes an ordinary call and these programs recurse
-# until the stack runs out. Cases 1-15 end in a generic-cast helper, reach no
-# tail site at all, and pass, which is where the range starts.
-#
-# The two compiled arms overflow for reasons that are not the same, so closing
-# one leaves the other red. With tier 0 off the dropped jump is the backend's.
-# At the default tier the recursing methods are still classic tier-0 bodies
-# that never promote, so that arm is the classic compiler's own, and case 22 is
-# the one it gets through.
-#
-# The interpreter arms pass all 53 and are left alone: a tail site there hands
-# the frame to the callee instead of calling it.
+# The LLVM backend cannot tail-call these Win64 cases once an argument is
+# passed on the stack. In the mixed-tier suite, promotion during recursion
+# makes the outcome timing-dependent. Run them separately with promotion
+# disabled and keep the expected failures in the backend-only suite.
 set(_conservestack_xfail "")
-set(_conservestack_xfail_tier0 "")
+set(_conservestack_pinned "")
 if(WIN32)
   foreach(_n RANGE 16 52)
     list(APPEND _conservestack_xfail "tailcall/interface-conservestack/${_n}.exe")
-    if(NOT _n EQUAL 22)
-      list(APPEND _conservestack_xfail_tier0 "tailcall/interface-conservestack/${_n}.exe")
-    endif()
+    list(APPEND _conservestack_pinned "tailcall/interface-conservestack/${_n}.exe")
   endforeach()
 endif()
 
@@ -384,14 +373,22 @@ mono_runtime_suite(runtime-shutdown-background-abort
 # corrupting some later collection.
 set(_tier0 ${_regular})
 list(REMOVE_ITEM _tier0 ${MONO_TESTS_CLASSIC_TIER0_DISABLED})
+if(_conservestack_pinned)
+  list(REMOVE_ITEM _tier0 ${_conservestack_pinned})
+endif()
 mono_runtime_suite(runtime-tier0 LABEL tier0 TESTS ${_tier0}
                    ENV "MONO_GC_DEBUG=check-remset-consistency"
                    SKIP_BOEHM ${MONO_TESTS_BOEHM_DISABLED}
-                   XFAIL ${_conservestack_xfail_tier0}
                    LONG appdomain-threadpool-unload.exe
                         dynamic-method-churn.exe
                         appdomain-unload.exe
                         bug-18026.exe)
+
+# Run the excluded cases without tier promotion.
+mono_runtime_suite(runtime-conservestack-tier0 LABEL tier0
+                   TESTS ${_conservestack_pinned}
+                   ENV "MONO_GC_DEBUG=check-remset-consistency"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0")
 
 # The tailcall corpus at the default tier, where a tail site is the classic
 # compiler's rather than the backend's. Both engines have to honour the same
