@@ -1861,6 +1861,35 @@ class Tests
 			Check ("Bmi1.TrailingZeroCount(ulong)", Bmi1.TrailingZeroCount (0b1000ul) == 3);
 		}
 
+		Check ("Bmi2.IsSupported", Bmi2.IsSupported);
+
+		if (Bmi2.IsSupported) {
+			Check ("Bmi2.ZeroHighBits(uint)", Bmi2.ZeroHighBits (0xFFu, 4) == 0x0Fu);
+			Check ("Bmi2.ZeroHighBits(ulong)", Bmi2.ZeroHighBits (0xFFul, 4) == 0x0Ful);
+
+			uint high32;
+			uint low32 = Bmi2.MultiplyNoFlags (0x100000u, 0x100000u, &high32);
+			Check ("Bmi2.MultiplyNoFlags(uint) low", low32 == 0);
+			Check ("Bmi2.MultiplyNoFlags(uint) high", high32 == 0x100u);
+
+			// 2^32 * 2^32 == 2^64, which is 1 followed by 64 zero bits.
+			ulong high64;
+			ulong low64 = Bmi2.MultiplyNoFlags (0x100000000ul, 0x100000000ul, &high64);
+			Check ("Bmi2.MultiplyNoFlags(ulong) low", low64 == 0);
+			Check ("Bmi2.MultiplyNoFlags(ulong) high", high64 == 1ul);
+
+			// Mask 0b10110 has its set bits at positions 1, 2, and 4.
+			Check ("Bmi2.ParallelBitDeposit(uint)",
+			      Bmi2.ParallelBitDeposit (0b101u, 0b10110u) == 0b10010u);
+			Check ("Bmi2.ParallelBitDeposit(ulong)",
+			      Bmi2.ParallelBitDeposit (0b101ul, 0b10110ul) == 0b10010ul);
+
+			Check ("Bmi2.ParallelBitExtract(uint)",
+			      Bmi2.ParallelBitExtract (0b10010u, 0b10110u) == 0b101u);
+			Check ("Bmi2.ParallelBitExtract(ulong)",
+			      Bmi2.ParallelBitExtract (0b10010ul, 0b10110ul) == 0b101ul);
+		}
+
 		if (failures == 0)
 			Console.WriteLine ("OK");
 		return failures;

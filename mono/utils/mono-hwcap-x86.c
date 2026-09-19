@@ -148,6 +148,9 @@ mono_hwcap_arch_init (void)
 		if (ebx & (1 << 3))
 			mono_hwcap_x86_has_bmi1 = TRUE;
 
+		if (ebx & (1 << 8))
+			mono_hwcap_x86_has_bmi2 = TRUE;
+
 		if (ebx & (1 << 5))
 			mono_hwcap_x86_has_avx2 = TRUE;
 	}

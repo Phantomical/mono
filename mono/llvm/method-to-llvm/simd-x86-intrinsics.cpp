@@ -85,6 +85,11 @@ bool bmi1_lowering ()
 	return mono_hwcap_x86_has_bmi1;
 }
 
+bool bmi2_lowering ()
+{
+	return mono_hwcap_x86_has_bmi2;
+}
+
 /// Return whether the Vector128<T> parameter at index has an unsigned element type.
 /// LLVM vector types do not encode signedness, so some lowerings must recover it
 /// from the managed signature.
@@ -366,6 +371,12 @@ struct SseEmitters : SimdEmit {
 	                                        MonoMethod *)
 	{
 		return is_supported (mono_hwcap_x86_has_bmi1, builder);
+	}
+
+	static BuiltinResult bmi2_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                        MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_bmi2, builder);
 	}
 
 	static bool is_double_vector (llvm::Value *value)
@@ -1134,6 +1145,61 @@ struct SseEmitters : SimdEmit {
 
 		builder.CreateRet (builder.CreateIntrinsic (
 			llvm::Intrinsic::cttz, { value->getType () }, { value, builder.getFalse () }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult zero_high_bits (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                     MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *index = argument (emitter, 1);
+		llvm::Intrinsic::ID id = value->getType ()->getIntegerBitWidth () == 64
+			? llvm::Intrinsic::x86_bmi_bzhi_64
+			: llvm::Intrinsic::x86_bmi_bzhi_32;
+
+		builder.CreateRet (builder.CreateIntrinsic (id, {}, { value, index }));
+		return llvm::Error::success ();
+	}
+
+	/// LLVM has no MULX intrinsic; widen, multiply, and split the result instead.
+	static BuiltinResult multiply_no_flags (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                        MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *high_out = argument (emitter, 2);
+		llvm::Type *narrow = left->getType ();
+		unsigned bits = narrow->getIntegerBitWidth ();
+		llvm::Type *wide = builder.getIntNTy (bits * 2);
+		llvm::Value *product =
+			builder.CreateMul (builder.CreateZExt (left, wide), builder.CreateZExt (right, wide));
+		llvm::Value *high = builder.CreateTrunc (
+			builder.CreateLShr (product, llvm::ConstantInt::get (wide, bits)), narrow);
+
+		builder.CreateStore (high, high_out);
+		builder.CreateRet (builder.CreateTrunc (product, narrow));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult parallel_bit_deposit (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                           MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *mask = argument (emitter, 1);
+
+		builder.CreateRet (
+			builder.CreateIntrinsic (llvm::Intrinsic::pdep, { value->getType () }, { value, mask }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult parallel_bit_extract (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                           MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *mask = argument (emitter, 1);
+
+		builder.CreateRet (
+			builder.CreateIntrinsic (llvm::Intrinsic::pext, { value->getType () }, { value, mask }));
 		return llvm::Error::success ();
 	}
 
@@ -2430,6 +2496,7 @@ const ClassKey avx2 = { nullptr, "System.Runtime.Intrinsics.X86", "Avx2" };
 const ClassKey popcnt = { nullptr, "System.Runtime.Intrinsics.X86", "Popcnt" };
 const ClassKey lzcnt = { nullptr, "System.Runtime.Intrinsics.X86", "Lzcnt" };
 const ClassKey bmi1 = { nullptr, "System.Runtime.Intrinsics.X86", "Bmi1" };
+const ClassKey bmi2 = { nullptr, "System.Runtime.Intrinsics.X86", "Bmi2" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -2994,6 +3061,15 @@ const BuiltinBody bmi1_table[] = {
 	{ bmi1, "TrailingZeroCount", "S", false, bmi1_lowering, SseEmitters::trailing_zero_count },
 };
 
+const BuiltinBody bmi2_table[] = {
+	{ bmi2, "get_IsSupported", "", false, nullptr, SseEmitters::bmi2_is_supported },
+
+	{ bmi2, "ZeroHighBits", "SS", false, bmi2_lowering, SseEmitters::zero_high_bits },
+	{ bmi2, "MultiplyNoFlags", "SSS", false, bmi2_lowering, SseEmitters::multiply_no_flags },
+	{ bmi2, "ParallelBitDeposit", "SS", false, bmi2_lowering, SseEmitters::parallel_bit_deposit },
+	{ bmi2, "ParallelBitExtract", "SS", false, bmi2_lowering, SseEmitters::parallel_bit_extract },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
@@ -3011,6 +3087,7 @@ simd_x86_bodies ()
 		made.insert (made.end (), std::begin (popcnt_table), std::end (popcnt_table));
 		made.insert (made.end (), std::begin (lzcnt_table), std::end (lzcnt_table));
 		made.insert (made.end (), std::begin (bmi1_table), std::end (bmi1_table));
+		made.insert (made.end (), std::begin (bmi2_table), std::end (bmi2_table));
 		return made;
 	} ();
 
