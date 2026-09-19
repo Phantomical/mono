@@ -452,23 +452,54 @@ builtin_assemblies ()
 	return names;
 }
 
-/// Whether any entry can name a method in image.
-///
-/// A call this registry might answer asks it first, before any name is
-/// compared, which is why corlib is a pointer compare.
-bool
-carries_builtins (MonoImage *image)
+/// Treat classes from `name` as belonging to `canonical` during builtin lookup.
+struct AssemblyAlias {
+	std::string_view name;
+	/// Null for corlib.
+	const char *canonical;
+};
+
+constexpr AssemblyAlias assembly_aliases[] = {
+	// Older versions define Vector and Vector<T> instead of forwarding them to corlib.
+	{ "System.Numerics.Vectors", nullptr },
+};
+
+/// Return the assembly identity used to match an image against a ClassKey.
+/// Corlib and its aliases use a null identity.
+std::optional<const char *>
+assembly_identity (MonoImage *image)
 {
 	if (image == mono_defaults.corlib)
-		return true;
+		return nullptr;
 
 	const char *from = mono_image_get_name (image);
 
 	if (from == nullptr)
+		return std::nullopt;
+
+	for (const AssemblyAlias &alias : assembly_aliases)
+		if (alias.name == from)
+			return alias.canonical;
+
+	return from;
+}
+
+/// Whether any entry can name a method in image.
+///
+/// A call this registry might answer asks it first, before any name is
+/// compared.
+bool
+carries_builtins (MonoImage *image)
+{
+	std::optional<const char *> identity = assembly_identity (image);
+
+	if (!identity)
 		return false;
+	if (*identity == nullptr)
+		return true;
 
 	for (std::string_view assembly : builtin_assemblies ())
-		if (assembly == from)
+		if (assembly == *identity)
 			return true;
 
 	return false;
@@ -482,14 +513,17 @@ names_class (const ClassKey &key, MonoClass *klass)
 		return false;
 	if (std::string_view (m_class_get_name_space (klass)) != key.name_space)
 		return false;
-	if (key.assembly == nullptr)
-		return m_class_get_image (klass) == mono_defaults.corlib;
-	if (std::string_view (key.assembly) == any_assembly)
+	if (key.assembly != nullptr && std::string_view (key.assembly) == any_assembly)
 		return true;
 
-	const char *from = mono_image_get_name (m_class_get_image (klass));
+	std::optional<const char *> identity = assembly_identity (m_class_get_image (klass));
 
-	return from != nullptr && std::string_view (from) == key.assembly;
+	if (!identity)
+		return false;
+	if (key.assembly == nullptr)
+		return *identity == nullptr;
+
+	return *identity != nullptr && std::string_view (*identity) == key.assembly;
 }
 
 /// The entries under klass, empty for a class the registry has none for.
