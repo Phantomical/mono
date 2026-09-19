@@ -1100,7 +1100,7 @@ MonoObject* mono_unity_delegate_get_target(MonoDelegate *delegate)
 
 gchar* mono_unity_get_runtime_build_info(const char *date, const char *time)
 {
-	return g_strdup_printf("Unity IL2CPP(%s %s)", date, time);
+	return g_strdup_printf ("Mono JIT, llvm18-tiered-jit backend (%s %s)", date, time);
 }
 
 void* mono_unity_get_field_address(MonoObject *obj, MonoVTable *vt, MonoClassField *field)
