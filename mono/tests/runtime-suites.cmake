@@ -741,6 +741,10 @@ mono_runtime_suite(runtime-class-guard TESTS class-devirt.exe
 mono_runtime_suite(runtime-class-guard-off TESTS class-devirt.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-classes=0")
 
+# Exercise invariant element_class loads after Sum () reaches tier 2.
+mono_runtime_suite(runtime-unbox-element-class TESTS unbox-element-class.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000")
+
 # gshared-boehm-alloc-shape.cs's shared bodies have to reach the backend on
 # their first call, which the default tier never does: classic tier 0 builds
 # a vtable through mono_class_vtable () instead of asking either allocation
