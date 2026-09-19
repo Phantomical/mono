@@ -145,6 +145,9 @@ mono_hwcap_arch_init (void)
 	}
 
 	if (mono_hwcap_x86_call_cpuidex (7, 0, &eax, &ebx, &ecx, &edx)) {
+		if (ebx & (1 << 3))
+			mono_hwcap_x86_has_bmi1 = TRUE;
+
 		if (ebx & (1 << 5))
 			mono_hwcap_x86_has_avx2 = TRUE;
 	}
