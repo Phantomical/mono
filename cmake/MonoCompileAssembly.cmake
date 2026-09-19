@@ -143,8 +143,8 @@ _mono_run("csc"
   ENVIRONMENT ${MCS_CSC_ENV})
 
 # The unchanged mtime this leaves behind is what keeps a consumer clean.  The
-# REFERENCE_ASSEMBLY block in MonoManaged.cmake has the rest of the mechanism
-# and what the file describes.
+# Reference assemblies section in MonoManaged.cmake has the rest of the
+# mechanism and describes what the file contains.
 if(MCS_REFOUT)
   file(COPY_FILE "${MCS_REFOUT}.tmp" "${MCS_REFOUT}" ONLY_IF_DIFFERENT)
 endif()

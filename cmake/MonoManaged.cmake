@@ -455,11 +455,10 @@ endfunction()
 
 # Reference assemblies
 #
-# A declaration marked REFERENCE_ASSEMBLY makes csc write one under deps/ref/
-# beside the real assembly, and everything that references it takes its build
-# dependency on that file instead.  Nothing passes it to -r:, so assembly
-# identity and signing are what they always were: the file exists to decide
-# whether a consumer recompiles.
+# Managed libraries produce a reference assembly under deps/ref/ beside the
+# real assembly. Programs can opt in with REFERENCE_ASSEMBLY. Consumers take
+# their build dependency on that file, but still pass the real assembly to
+# -r:, so assembly identity and signing are unchanged.
 #
 # csc writes it from the metadata surface alone, so an edit to a method body
 # leaves it identical and no consumer recompiles.  Everything a caller can
@@ -467,9 +466,6 @@ endfunction()
 # argument, an attribute argument, a struct field, and an internal that
 # InternalsVisibleTo exposes.  cil-stringreplacer runs after csc and rewrites
 # bodies, so what it splices in is outside that surface.
-#
-# corlib carries the mark because every other compile in the tree references it,
-# so its one file edge decides whether the whole class library recompiles.
 #
 # Returns the file a reference contributes as a build dependency: the reference
 # assembly where the referenced one has one, and `fallback` for the rest.
@@ -536,6 +532,12 @@ function(mono_managed_materialize)
     get_property(_subdir  GLOBAL PROPERTY ${_id}_SUBDIR)
     get_property(_profs   GLOBAL PROPERTY ${_id}_PROFILES)
     get_property(_refasm  GLOBAL PROPERTY ${_id}_REFERENCE_ASSEMBLY)
+    get_property(_program GLOBAL PROPERTY ${_id}_PROGRAM)
+    # Generate reference assemblies for libraries so implementation-only
+    # changes do not rebuild their consumers. Programs must opt in explicitly.
+    if(NOT _program)
+      set(_refasm TRUE)
+    endif()
     # Keyed on the file that lands in the profile directory, not on the
     # declaration's name: LIB_REFS spells the output, and Microsoft.Build.Tasks
     # ships as Microsoft.Build.Tasks.v4.0.dll.
@@ -632,8 +634,8 @@ macro(_mono_materialize_profile _profile)
   _mono_target_name(_target ${_profile} "${A_SUBDIR}" "${A_NAME}")
   _mono_stem(_stem "${A_NAME}")
 
-  # Empty unless this declaration is marked REFERENCE_ASSEMBLY.  Read back under
-  # the key pass 1 registered it with, so the two spellings cannot drift.
+  # Empty for programs unless they opt in with REFERENCE_ASSEMBLY. Read back
+  # under the key pass 1 registered it with, so the two spellings cannot drift.
   _mono_stem(_outstem "${_outname}")
   if(A_SUBDIR)
     get_property(_refout GLOBAL PROPERTY
