@@ -17,17 +17,25 @@ namespace Mono.Tiering {
 }
 
 static class Program {
+	// Keep LLVM from folding these addresses into pointer constants before the
+	// backend inserts the implicit null check.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static unsafe void *NullValue () => (void *) 0;
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static unsafe void *WildValue () => (void *) 0x123456789000L;
+
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static unsafe void DerefNull ()
 	{
-		int *p = (int *) 0;
+		int *p = (int *) NullValue ();
 		*p = 42;
 	}
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
 	static unsafe void DerefWild ()
 	{
-		int *p = (int *) 0x123456789000L;
+		int *p = (int *) WildValue ();
 		*p = 42;
 	}
 
