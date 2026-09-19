@@ -8,7 +8,10 @@ rem pick one without the caller knowing where the build put it.
 setlocal EnableExtensions
 
 set "MONO_CFG_DIR=@MONO_BUILD_CFG_DIR@"
-set "PATH=@MONO_BUILD_ROOT@\runtime\_tmpinst\bin;%PATH%"
+
+rem Windows excludes the dllmap entries for these libraries. Add their build
+rem directories to PATH so the OS loader can find them.
+set "PATH=@MONO_BUILD_ROOT@\runtime\_tmpinst\bin;@MONO_BUILD_ROOT@\support;@MONO_BUILD_ROOT@\mono\btls;%PATH%"
 
 if not defined MONO_EXECUTABLE set "MONO_EXECUTABLE=@MONO_RUNTIME_BINARY@"
 if not defined MONO_EXECUTABLE_WRAPPER set "MONO_EXECUTABLE_WRAPPER=%MONO_EXECUTABLE%"
