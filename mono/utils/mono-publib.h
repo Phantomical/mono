@@ -79,6 +79,10 @@ typedef unsigned __int64	uint64_t;
 #define MONO_API_DATA MONO_API_NO_EXTERN_C extern
 #define UNITY_MONO_API MONO_API
 
+// Profiler initializers are resolved by name and must also be exported from
+// C++ translation units.
+#define MONO_PROFILE_INIT_API MONO_EXTERN_C MONO_API_EXPORT
+
 typedef int32_t		mono_bool;
 typedef uint8_t		mono_byte;
 typedef mono_byte       MonoBoolean;

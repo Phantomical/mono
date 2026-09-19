@@ -79,6 +79,15 @@ list(APPEND mini_sources ${icall_sources})
 if(MONO_ENABLE_LLVM)
   list(APPEND mini_sources llvm-runtime.cpp domain-method.cpp method-override.cpp thunk.cpp
               etw-profiler.cpp)
+  if(MONO_ENABLE_ITTAPI)
+    list(APPEND mini_sources ittapi-profiler.cpp)
+  endif()
+endif()
+
+if(MONO_ENABLE_ITTAPI)
+  set(_mono_ittapi_libs jitprofiling)
+else()
+  set(_mono_ittapi_libs "")
 endif()
 
 # Only a player build defines these: the operator new family and the
@@ -98,7 +107,7 @@ mono_add_object_library(mini
     "${CMAKE_CURRENT_SOURCE_DIR}/../llvm"
     "${CMAKE_SOURCE_DIR}/external/bdwgc/include"
     "${CMAKE_SOURCE_DIR}/external/bdwgc/libatomic_ops/src"
-  DEPENDS mono::hidden mono::eglib_headers mono::llvm)
+  DEPENDS mono::hidden mono::eglib_headers mono::llvm ${_mono_ittapi_libs})
 add_dependencies(mini mono-version)
 
 # Adds its sources to the mini object library, so it comes after that target.
@@ -170,7 +179,7 @@ function(_mono_add_runtime_library name)
   foreach(_o IN LISTS ARG_OBJECTS)
     target_link_libraries(${name} PRIVATE ${_o})
   endforeach()
-  target_link_libraries(${name} PRIVATE ${ARG_EXTRA} mono::llvm ${_mono_zlib} mono::platform)
+  target_link_libraries(${name} PRIVATE ${ARG_EXTRA} mono::llvm ${_mono_zlib} ${_mono_ittapi_libs} mono::platform)
   set_target_properties(${name} PROPERTIES
     VERSION 1.0.0
     SOVERSION 1
@@ -215,7 +224,7 @@ function(_mono_add_runtime_archive name)
   foreach(_o IN LISTS ARG_OBJECTS)
     target_link_libraries(${name} PUBLIC ${_o})
   endforeach()
-  target_link_libraries(${name} PUBLIC ${ARG_EXTRA} mono::llvm ${_mono_zlib} mono::platform)
+  target_link_libraries(${name} PUBLIC ${ARG_EXTRA} mono::llvm ${_mono_zlib} ${_mono_ittapi_libs} mono::platform)
   mono_static_twin_name(${name} "${ARG_OUTPUT_NAME}")
   install(TARGETS ${name} ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 endfunction()
@@ -258,7 +267,7 @@ function(_mono_add_runtime_executable name main suffix)
     foreach(_o IN LISTS ARG_OBJECTS)
       target_link_libraries(${name} PRIVATE ${_o})
     endforeach()
-    target_link_libraries(${name} PRIVATE ${ARG_EXTRA} mono::llvm ${_mono_zlib} mono::platform)
+    target_link_libraries(${name} PRIVATE ${ARG_EXTRA} mono::llvm ${_mono_zlib} ${_mono_ittapi_libs} mono::platform)
   else()
     target_link_libraries(${name} PRIVATE mono${suffix}-2.0)
   endif()

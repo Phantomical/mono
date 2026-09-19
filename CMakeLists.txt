@@ -226,6 +226,16 @@ if(MONO_ENABLE_BOEHM)
   # links the collector.
   add_subdirectory(cmake/bdwgc)
 endif()
+if(MONO_ENABLE_ITTAPI)
+  if(NOT EXISTS "${CMAKE_SOURCE_DIR}/external/ittapi/CMakeLists.txt")
+    message(FATAL_ERROR
+      "external/ittapi is empty -- run `git submodule update --init external/ittapi`, "
+      "or configure with -DMONO_ENABLE_ITTAPI=OFF")
+  endif()
+  # Avoid installing ittapi alongside Mono.
+  set(ITT_API_INSTALL OFF CACHE BOOL "Disable ittapi's own install rules" FORCE)
+  add_subdirectory(external/ittapi)
+endif()
 add_subdirectory(mono)
 if(MONO_ENABLE_SUPPORT)
   add_subdirectory(support)
