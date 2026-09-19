@@ -334,6 +334,7 @@ domain_method_intern (MonoDomain *domain, MonoMethod *method)
 	mono_method_signature_internal (method);
 	std::string name = method_stub_symbol (method);
 	int32_t tier0_budget = method_tier0_budget (method);
+	bool needs_wide_vector_register = method_needs_wide_vector_register (method);
 
 	/*
 	 * The domain lock is the outermost of the three. A mutator can arrive here
@@ -352,6 +353,7 @@ domain_method_intern (MonoDomain *domain, MonoMethod *method)
 
 	record->name = std::move (name);
 	record->tier_budget.store (tier0_budget, std::memory_order_relaxed);
+	record->needs_wide_vector_register = needs_wide_vector_register;
 
 	if (llvm::Error err = attach_method_entries (*record))
 		return std::move (err);

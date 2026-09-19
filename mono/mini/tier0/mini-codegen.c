@@ -315,10 +315,13 @@ resize_spill_info (MonoCompile *cfg, int bank)
 
 /*
  * returns the offset used by spillvar. It allocates a new
- * spill variable if necessary. 
+ * spill variable if necessary.
+ *
+ * simd_size is a non-default SIMD width in bytes, or 0 for the 16-byte
+ * default.
  */
 static int
-mono_spillvar_offset (MonoCompile *cfg, int spillvar, int bank)
+mono_spillvar_offset (MonoCompile *cfg, int spillvar, int bank, int simd_size)
 {
 	MonoSpillInfo *info;
 	int size;
@@ -337,9 +340,18 @@ mono_spillvar_offset (MonoCompile *cfg, int spillvar, int bank)
 		cfg->stack_offset &= ~(sizeof (target_mgreg_t) - 1);
 
 		g_assert (bank < MONO_NUM_REGBANKS);
-		if (G_UNLIKELY (bank))
+		if (G_UNLIKELY (bank)) {
 			size = regbank_spill_var_size [bank];
-		else
+			if (bank == MONO_REG_SIMD && simd_size) {
+				switch (simd_size) {
+				case 32:
+					size = simd_size;
+					break;
+				default:
+					g_assert_not_reached ();
+				}
+			}
+		} else
 			size = sizeof (target_mgreg_t);
 
 		if (cfg->flags & MONO_CFG_HAS_SPILLUP) {
@@ -832,7 +844,9 @@ spill_vreg (MonoCompile *cfg, MonoBasicBlock *bb, MonoInst **last, MonoInst *ins
 	MONO_INST_NEW (cfg, load, regbank_load_ops [bank]);
 	load->dreg = sel;
 	load->inst_basereg = cfg->frame_reg;
-	load->inst_offset = mono_spillvar_offset (cfg, spill, get_vreg_bank (cfg, reg, bank));
+	if (bank == MONO_REG_SIMD)
+		load->backend.size = vreg_simd_size (cfg, reg);
+	load->inst_offset = mono_spillvar_offset (cfg, spill, get_vreg_bank (cfg, reg, bank), load->backend.size);
 	insert_after_ins (bb, ins, last, load);
 	DEBUG (printf ("SPILLED LOAD (%d at 0x%08lx(%%ebp)) R%d (freed %s)\n", spill, (long)load->inst_offset, i, mono_regname_full (sel, bank)));
 	if (G_UNLIKELY (bank))
@@ -915,7 +929,9 @@ get_register_spilling (MonoCompile *cfg, MonoBasicBlock *bb, MonoInst **last, Mo
 	MONO_INST_NEW (cfg, load, regbank_load_ops [bank]);
 	load->dreg = sel;
 	load->inst_basereg = cfg->frame_reg;
-	load->inst_offset = mono_spillvar_offset (cfg, spill, get_vreg_bank (cfg, i, bank));
+	if (bank == MONO_REG_SIMD)
+		load->backend.size = vreg_simd_size (cfg, i);
+	load->inst_offset = mono_spillvar_offset (cfg, spill, get_vreg_bank (cfg, i, bank), load->backend.size);
 	insert_after_ins (bb, ins, last, load);
 	DEBUG (printf ("\tSPILLED LOAD (%d at 0x%08lx(%%ebp)) R%d (freed %s)\n", spill, (long)load->inst_offset, i, mono_regname_full (sel, bank)));
 	if (G_UNLIKELY (bank))
@@ -989,7 +1005,9 @@ create_spilled_store (MonoCompile *cfg, MonoBasicBlock *bb, int spill, int reg, 
 	MONO_INST_NEW (cfg, store, regbank_store_ops [bank]);
 	store->sreg1 = reg;
 	store->inst_destbasereg = cfg->frame_reg;
-	store->inst_offset = mono_spillvar_offset (cfg, spill, bank);
+	if (bank == MONO_REG_SIMD)
+		store->backend.size = vreg_simd_size (cfg, prev_reg);
+	store->inst_offset = mono_spillvar_offset (cfg, spill, bank, store->backend.size);
 	if (ins) {
 		mono_bblock_insert_after_ins (bb, ins, store);
 		*last = store;
@@ -2784,4 +2802,3 @@ mono_regstate_free (MonoRegState *rs) {
 }
 
 #endif /* DISABLE_JIT */
-

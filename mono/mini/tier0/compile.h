@@ -826,6 +826,7 @@ typedef enum {
 #define vreg_is_volatile(cfg, vreg) (G_UNLIKELY (get_vreg_to_inst ((cfg), (vreg)) && (get_vreg_to_inst ((cfg), (vreg))->flags & (MONO_INST_VOLATILE|MONO_INST_INDIRECT))))
 #define vreg_is_ref(cfg, vreg) ((vreg) < (cfg)->vreg_is_ref_len ? (cfg)->vreg_is_ref [(vreg)] : 0)
 #define vreg_is_mp(cfg, vreg) ((vreg) < (cfg)->vreg_is_mp_len ? (cfg)->vreg_is_mp [(vreg)] : 0)
+#define vreg_simd_size(cfg, vreg) ((vreg) < (cfg)->vreg_simd_size_len ? (cfg)->vreg_simd_size [(vreg)] : 0)
 /*
  * Control Flow Graph and compilation unit information
  */
@@ -1055,6 +1056,10 @@ typedef struct MonoCompile {
 	gboolean *vreg_is_mp;
 	/* Size of above array */
 	guint32 vreg_is_mp_len;
+	/* Non-default SIMD vreg widths in bytes; 0 means the 16-byte default. */
+	guint8 *vreg_simd_size;
+	/* Number of entries in vreg_simd_size. */
+	guint32 vreg_simd_size_len;
 	/* 
 	 * The original method to compile, differs from 'method' when doing generic
 	 * sharing.
@@ -1467,6 +1472,7 @@ guint32 mono_alloc_ireg_mp (MonoCompile *cfg);
 guint32 mono_alloc_ireg_copy (MonoCompile *cfg, guint32 vreg);
 void      mono_mark_vreg_as_ref             (MonoCompile *cfg, int vreg);
 void      mono_mark_vreg_as_mp              (MonoCompile *cfg, int vreg);
+void      mono_mark_vreg_simd_size          (MonoCompile *cfg, int vreg, int size);
 void      mono_link_bblock                  (MonoCompile *cfg, MonoBasicBlock *from, MonoBasicBlock* to);
 void      mono_unlink_bblock                (MonoCompile *cfg, MonoBasicBlock *from, MonoBasicBlock* to);
 gboolean  mono_bblocks_linked               (MonoBasicBlock *bb1, MonoBasicBlock *bb2);

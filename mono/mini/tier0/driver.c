@@ -829,7 +829,23 @@ mono_mark_vreg_as_mp (MonoCompile *cfg, int vreg)
 			memcpy (cfg->vreg_is_mp, tmp, size * sizeof (gboolean));
 	}
 	cfg->vreg_is_mp [vreg] = TRUE;
-}	
+}
+
+void
+mono_mark_vreg_simd_size (MonoCompile *cfg, int vreg, int size)
+{
+	if (vreg >= cfg->vreg_simd_size_len) {
+		guint8 *tmp = cfg->vreg_simd_size;
+		int old_len = cfg->vreg_simd_size_len;
+
+		while (vreg >= cfg->vreg_simd_size_len)
+			cfg->vreg_simd_size_len = cfg->vreg_simd_size_len ? cfg->vreg_simd_size_len * 2 : 32;
+		cfg->vreg_simd_size = (guint8 *)mono_mempool_alloc0 (cfg->mempool, sizeof (guint8) * cfg->vreg_simd_size_len);
+		if (old_len)
+			memcpy (cfg->vreg_simd_size, tmp, old_len * sizeof (guint8));
+	}
+	cfg->vreg_simd_size [vreg] = size;
+}
 
 static MonoType*
 type_from_stack_type (MonoInst *ins)

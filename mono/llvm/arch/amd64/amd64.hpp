@@ -145,13 +145,38 @@ struct LazyEntryABI : public llvm::orc::OrcX86_64_SysV {
 	                                 llvm::orc::ExecutorAddr reentry_ctx);
 };
 
-/// Builds the frame the re-entry resolver runs on, as a CFI program.
+/// Re-entry ABI for methods that pass Vector256<T> values in YMM registers.
+/// FXSAVE/FXRSTOR preserve only the low 128 bits, so this resolver also saves
+/// and restores the full YMM register file with VMOVUPS.
+#ifdef HOST_WIN32
+struct LazyEntryAvxABI : public llvm::orc::OrcX86_64_Win32 {
+	static constexpr unsigned ResolverCodeSize = 0x1dd;
+#else
+struct LazyEntryAvxABI : public llvm::orc::OrcX86_64_SysV {
+	static constexpr unsigned ResolverCodeSize = 0x1d9;
+#endif
+
+	static void writeResolverCode (char *resolver_mem,
+	                               llvm::orc::ExecutorAddr resolver_addr,
+	                               llvm::orc::ExecutorAddr reentry_fn,
+	                               llvm::orc::ExecutorAddr reentry_ctx);
+
+	static void write_resolver_body (char *resolver_mem,
+	                                 llvm::orc::ExecutorAddr reentry_fn,
+	                                 llvm::orc::ExecutorAddr reentry_ctx);
+};
+
+/// Builds the frame LazyEntryABI's re-entry resolver runs on, as a CFI
+/// program.
 ///
 /// The frame it declares is the managed caller's rather than the resolver's
 /// own. A walk that arrives during a compile therefore goes on to the code
 /// that made the call. The rules are tied to the instruction offsets in the
 /// resolver, so the two only stay true together.
 std::vector<UnwindRecord> lazy_resolver_frame ();
+
+/// Builds the CFI program for the AVX re-entry resolver.
+std::vector<UnwindRecord> lazy_resolver_frame_avx ();
 
 } // namespace mono::arch
 
