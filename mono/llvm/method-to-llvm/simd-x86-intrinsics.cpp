@@ -70,6 +70,11 @@ bool avx2_lowering ()
 	return mono_hwcap_x86_has_avx2;
 }
 
+bool popcnt_lowering ()
+{
+	return mono_hwcap_x86_has_popcnt;
+}
+
 /// Return whether the Vector128<T> parameter at index has an unsigned element type.
 /// LLVM vector types do not encode signedness, so some lowerings must recover it
 /// from the managed signature.
@@ -333,6 +338,12 @@ struct SseEmitters : SimdEmit {
 	                                        MonoMethod *)
 	{
 		return is_supported (mono_hwcap_x86_has_avx2, builder);
+	}
+
+	static BuiltinResult popcnt_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                          MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_popcnt, builder);
 	}
 
 	static bool is_double_vector (llvm::Value *value)
@@ -1000,6 +1011,15 @@ struct SseEmitters : SimdEmit {
 		                                            : llvm::Intrinsic::x86_sse42_crc32_32_8;
 
 		builder.CreateRet (builder.CreateIntrinsic (id, {}, { crc, data }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult popcount (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+
+		builder.CreateRet (
+			builder.CreateIntrinsic (llvm::Intrinsic::ctpop, { value->getType () }, { value }));
 		return llvm::Error::success ();
 	}
 
@@ -2293,6 +2313,7 @@ const ClassKey sse41 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse41" };
 const ClassKey sse42 = { nullptr, "System.Runtime.Intrinsics.X86", "Sse42" };
 const ClassKey avx = { nullptr, "System.Runtime.Intrinsics.X86", "Avx" };
 const ClassKey avx2 = { nullptr, "System.Runtime.Intrinsics.X86", "Avx2" };
+const ClassKey popcnt = { nullptr, "System.Runtime.Intrinsics.X86", "Popcnt" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -2831,6 +2852,12 @@ const BuiltinBody avx2_table[] = {
 	{ avx2, {}, any_signature, false, nullptr, SseEmitters::unimplemented },
 };
 
+const BuiltinBody popcnt_table[] = {
+	{ popcnt, "get_IsSupported", "", false, nullptr, SseEmitters::popcnt_is_supported },
+
+	{ popcnt, "PopCount", "S", false, popcnt_lowering, SseEmitters::popcount },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
@@ -2845,6 +2872,7 @@ simd_x86_bodies ()
 		made.insert (made.end (), std::begin (sse42_table), std::end (sse42_table));
 		made.insert (made.end (), std::begin (avx_table), std::end (avx_table));
 		made.insert (made.end (), std::begin (avx2_table), std::end (avx2_table));
+		made.insert (made.end (), std::begin (popcnt_table), std::end (popcnt_table));
 		return made;
 	} ();
 
