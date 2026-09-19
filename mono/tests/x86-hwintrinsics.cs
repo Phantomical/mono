@@ -1806,6 +1806,17 @@ class Tests
 			               70, 8, 80);
 		}
 
+		Check ("Popcnt.IsSupported", Popcnt.IsSupported);
+
+		if (Popcnt.IsSupported) {
+			Check ("Popcnt.PopCount(uint) zero", Popcnt.PopCount (0u) == 0);
+			Check ("Popcnt.PopCount(uint) all ones", Popcnt.PopCount (0xFFFFFFFFu) == 32);
+			Check ("Popcnt.PopCount(uint)", Popcnt.PopCount (0b1011u) == 3);
+			Check ("Popcnt.PopCount(ulong) zero", Popcnt.PopCount (0ul) == 0);
+			Check ("Popcnt.PopCount(ulong) all ones", Popcnt.PopCount (0xFFFFFFFFFFFFFFFFul) == 64);
+			Check ("Popcnt.PopCount(ulong)", Popcnt.PopCount (0x8000000000000001ul) == 2);
+		}
+
 		if (failures == 0)
 			Console.WriteLine ("OK");
 		return failures;
