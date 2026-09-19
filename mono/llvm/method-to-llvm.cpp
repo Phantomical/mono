@@ -15,6 +15,7 @@
 #include "mono/metadata/opcodes.h"
 #include "mono/metadata/profiler-private.h"
 #include "mono/metadata/tokentype.h"
+#include "mono/utils/mono-threads.h"
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Intrinsics.h>
@@ -1886,6 +1887,7 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_MONO_RETOBJ:
 	case MONO_CEE_MONO_LDPTR_INT_REQ_FLAG:
 	case MONO_CEE_MONO_LDPTR_PROFILER_ALLOCATION_COUNT:
+	case MONO_CEE_MONO_LDPTR_CRITICAL_REGION_WAIT_FLAG:
 	case MONO_CEE_MONO_JIT_ICALL_ADDR:
 	case MONO_CEE_MONO_ICALL_ADDR:
 	case MONO_CEE_MONO_TLS:
@@ -1971,6 +1973,14 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 					    "mono_profiler_gc_allocation_count",
 					    const_cast<gint32 *> (
 						    &mono_profiler_state.gc_allocation_count)),
+			            m_class_get_byval_arg (mono_defaults.int_class));
+			return llvm::Error::success ();
+
+		// Push the address of the flag used to avoid unnecessary wakeups.
+		case MONO_CEE_MONO_LDPTR_CRITICAL_REGION_WAIT_FLAG:
+			push_stack (address_symbol (
+					    "mono_threads_critical_region_wait_requested",
+					    &mono_threads_critical_region_wait_requested),
 			            m_class_get_byval_arg (mono_defaults.int_class));
 			return llvm::Error::success ();
 

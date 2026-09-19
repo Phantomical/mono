@@ -867,6 +867,24 @@ gboolean mono_threads_wait_pending_operations (void);
 void mono_threads_begin_global_suspend (void);
 void mono_threads_end_global_suspend (void);
 
+/*
+ * Set while a suspend initiator is waiting for a thread to leave a critical
+ * region. mono_thread_info_suspend_lock () serializes suspend initiators, so
+ * one flag is sufficient.
+ *
+ * Use C linkage because the LLVM backend references this C symbol directly.
+ */
+G_EXTERN_C_VAR gint32 mono_threads_critical_region_wait_requested;
+
+void mono_threads_critical_region_wait_begin (void);
+void mono_threads_critical_region_wait_end (void);
+
+/* Returns TRUE when woken and FALSE on timeout. */
+gboolean mono_threads_wait_critical_region_exit (guint32 timeout_ms);
+
+/* Called by the managed allocator after it leaves its critical region. */
+void mono_threads_wake_critical_region_waiter (void);
+
 gboolean
 mono_thread_info_is_current (THREAD_INFO_TYPE *info);
 

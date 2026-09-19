@@ -64,6 +64,19 @@ enum {
 		mono_mb_emit_byte ((mb), CEE_ADD); \
 	} while (0)
 
+// Wake a suspend initiator after leaving the allocator's critical region.
+#define EMIT_CRITICAL_REGION_WAIT_NOTIFY(mb) \
+	do { \
+		mono_mb_emit_byte ((mb), MONO_CUSTOM_PREFIX); \
+		mono_mb_emit_byte ((mb), CEE_MONO_LDPTR_CRITICAL_REGION_WAIT_FLAG); \
+		mono_mb_emit_byte ((mb), CEE_LDIND_U4); \
+		int wait_notify_br = mono_mb_emit_short_branch ((mb), CEE_BRFALSE_S); \
+		mono_mb_emit_byte ((mb), MONO_CUSTOM_PREFIX); \
+		mono_mb_emit_byte ((mb), CEE_MONO_NOT_TAKEN); \
+		mono_mb_emit_icall ((mb), mono_threads_wake_critical_region_waiter); \
+		mono_mb_patch_short_branch ((mb), wait_notify_br); \
+	} while (0)
+
 #define EMIT_TLS_ACCESS_NEXT_ADDR(mb, var)	do {	\
 	mono_mb_emit_ldloc ((mb), (var));		\
 	mono_mb_emit_icon ((mb), MONO_STRUCT_OFFSET (SgenThreadInfo, tlab_next));	\
@@ -428,6 +441,7 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 	mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
 	mono_mb_emit_byte (mb, CEE_MONO_ATOMIC_STORE_I4);
 	mono_mb_emit_i4 (mb, MONO_MEMORY_BARRIER_NONE);
+	EMIT_CRITICAL_REGION_WAIT_NOTIFY (mb);
 #endif
 
 	/* FIXME: mono_gc_alloc_obj takes a 'size_t' as an argument, not an int32 */
@@ -560,4 +574,3 @@ mono_sgen_mono_ilgen_init (void)
 	mono_install_sgen_mono_callbacks (&cb);
 }
 #endif
-

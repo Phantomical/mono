@@ -3258,6 +3258,7 @@ mono_gc_init_icalls (void)
 	mono_register_jit_icall (mono_gc_alloc_vector, mono_icall_sig_object_ptr_sizet_ptr, FALSE);
 	mono_register_jit_icall (mono_gc_alloc_string, mono_icall_sig_object_ptr_sizet_int32, FALSE);
 	mono_register_jit_icall (mono_profiler_raise_gc_allocation, mono_icall_sig_void_object, FALSE);
+	mono_register_jit_icall (mono_threads_wake_critical_region_waiter, mono_icall_sig_void, FALSE);
 }
 
 gboolean
