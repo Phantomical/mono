@@ -2,12 +2,9 @@
  * \file
  * \brief The bodies the backend writes for System.Numerics.Vector<T>.
  *
- * Every row reproduces the managed body lane for lane, for the reason
- * method-to-llvm/simd.cpp gives. `Vector.IsHardwareAccelerated` answers false
- * unconditionally, so a body that tests it always runs the arm behind `else`. A
- * body with no such test has only one arm to run in the first place. That
- * covers an unconditional conversion, a reinterpret cast, and a forward into a
- * method that does test it.
+ * Each row preserves the managed implementation selected when
+ * `Vector.IsHardwareAccelerated` is true. Unguarded conversions and forwarding
+ * methods have only one implementation to preserve.
  *
  * One row covers every instantiation. The lane type comes off the class's own
  * type argument, and a T no row lowers keeps its managed body.

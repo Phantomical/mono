@@ -383,6 +383,11 @@ endforeach()
 mono_test_assembly(override-copy-a.dll LIBRARY SOURCES override-copy.cs)
 mono_test_assembly(override-copy-b.dll LIBRARY SOURCES override-copy.cs)
 
+# Load these libraries through reflection because they and corlib all define
+# System.Numerics.Vector.
+mono_test_assembly(vector-hwaccel-lib.dll LIBRARY SOURCES vector-hwaccel-lib.cs)
+mono_test_assembly(vector-hwaccel-unmarked-lib.dll LIBRARY SOURCES vector-hwaccel-unmarked-lib.cs)
+
 # Outside the generic loop above because that loop passes no REFS, and this
 # source needs Mono.Simd and System.Numerics.Vectors.
 mono_test_assembly(simd-semantics.exe SOURCES simd-semantics.cs
