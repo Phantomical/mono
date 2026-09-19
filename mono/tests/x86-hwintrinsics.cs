@@ -44,6 +44,19 @@ class Tests
 		            && r [1] == 0f && r [2] == 0f && r [3] == 0f);
 	}
 
+	// A *Scalar compare's lane 0 is all-one or all-zero. Lanes 1-3 pass through
+	// from left unchanged.
+	static void CheckScalarCompare (string what, Vector128<float> result, Vector128<float> left,
+	                                bool expected)
+	{
+		float[] r = ToArray (result);
+		float[] l = ToArray (left);
+
+		Check (what + " lane 0", BitConverter.SingleToInt32Bits (r [0]) == (expected ? -1 : 0));
+		Check (what + " passes through left's upper lanes",
+		      r [1] == l [1] && r [2] == l [2] && r [3] == l [3]);
+	}
+
 	// Packed comparisons produce either all-one or all-zero lanes.
 	static unsafe void CheckCompare (string what, Vector128<float> v, bool e0, bool e1,
 	                                 bool e2, bool e3)
@@ -555,6 +568,141 @@ class Tests
 			                                            Sse.SetZeroVector128 ()),
 			           5f, 6f, 7f, 8f);
 		}
+
+		CheckLanes ("SetScalarVector128", Sse.SetScalarVector128 (7f), 7f, 0f, 0f, 0f);
+
+		CheckScalarCompare ("CompareEqualScalar", Sse.CompareEqualScalar (a, b), a, false);
+		CheckScalarCompare ("CompareLessThanScalar", Sse.CompareLessThanScalar (a, b), a, true);
+		CheckScalarCompare ("CompareLessThanOrEqualScalar", Sse.CompareLessThanOrEqualScalar (a, b),
+		                   a, true);
+		CheckScalarCompare ("CompareUnorderedScalar", Sse.CompareUnorderedScalar (a, b), a, false);
+		CheckScalarCompare ("CompareNotEqualScalar", Sse.CompareNotEqualScalar (a, b), a, true);
+		CheckScalarCompare ("CompareNotLessThanScalar", Sse.CompareNotLessThanScalar (a, b), a, false);
+		CheckScalarCompare ("CompareGreaterThanOrEqualScalar",
+		                   Sse.CompareGreaterThanOrEqualScalar (a, b), a, false);
+		CheckScalarCompare ("CompareNotLessThanOrEqualScalar",
+		                   Sse.CompareNotLessThanOrEqualScalar (a, b), a, false);
+		CheckScalarCompare ("CompareGreaterThanScalar", Sse.CompareGreaterThanScalar (a, b), a, false);
+		CheckScalarCompare ("CompareOrderedScalar", Sse.CompareOrderedScalar (a, b), a, true);
+		CheckScalarCompare ("CompareNotGreaterThanScalar", Sse.CompareNotGreaterThanScalar (a, b), a,
+		                   true);
+		CheckScalarCompare ("CompareNotGreaterThanOrEqualScalar",
+		                   Sse.CompareNotGreaterThanOrEqualScalar (a, b), a, true);
+
+		Check ("CompareEqualOrderedScalar", Sse.CompareEqualOrderedScalar (a, b) == false);
+		Check ("CompareEqualUnorderedScalar", Sse.CompareEqualUnorderedScalar (a, b) == false);
+		Check ("CompareLessThanOrderedScalar", Sse.CompareLessThanOrderedScalar (a, b) == true);
+		Check ("CompareLessThanUnorderedScalar", Sse.CompareLessThanUnorderedScalar (a, b) == true);
+		Check ("CompareLessThanOrEqualOrderedScalar",
+		      Sse.CompareLessThanOrEqualOrderedScalar (a, b) == true);
+		Check ("CompareLessThanOrEqualUnorderedScalar",
+		      Sse.CompareLessThanOrEqualUnorderedScalar (a, b) == true);
+		Check ("CompareGreaterThanOrderedScalar", Sse.CompareGreaterThanOrderedScalar (a, b) == false);
+		Check ("CompareGreaterThanUnorderedScalar",
+		      Sse.CompareGreaterThanUnorderedScalar (a, b) == false);
+		Check ("CompareGreaterThanOrEqualOrderedScalar",
+		      Sse.CompareGreaterThanOrEqualOrderedScalar (a, b) == false);
+		Check ("CompareGreaterThanOrEqualUnorderedScalar",
+		      Sse.CompareGreaterThanOrEqualUnorderedScalar (a, b) == false);
+		Check ("CompareNotEqualOrderedScalar", Sse.CompareNotEqualOrderedScalar (a, b) == true);
+		Check ("CompareNotEqualUnorderedScalar", Sse.CompareNotEqualUnorderedScalar (a, b) == true);
+
+		Check ("ConvertToInt32", Sse.ConvertToInt32 (Load (3.7f, 0f, 0f, 0f)) == 4);
+		Check ("ConvertToInt32WithTruncation",
+		      Sse.ConvertToInt32WithTruncation (Load (3.7f, 0f, 0f, 0f)) == 3);
+		Check ("ConvertToInt64", Sse.ConvertToInt64 (Load (3.7f, 0f, 0f, 0f)) == 4L);
+		Check ("ConvertToInt64WithTruncation",
+		      Sse.ConvertToInt64WithTruncation (Load (3.7f, 0f, 0f, 0f)) == 3L);
+		CheckLanes ("ConvertScalarToVector128Single(int)",
+		           Sse.ConvertScalarToVector128Single (Load (9f, 9f, 9f, 9f), 5), 5f, 9f, 9f, 9f);
+		CheckLanes ("ConvertScalarToVector128Single(long)",
+		           Sse.ConvertScalarToVector128Single (Load (9f, 9f, 9f, 9f), 7L), 7f, 9f, 9f, 9f);
+		Check ("ConvertToSingle", Sse.ConvertToSingle (Load (2.5f, 1f, 1f, 1f)) == 2.5f);
+
+		Vector128<float> moveA = Load (1f, 2f, 3f, 4f);
+		Vector128<float> moveB = Load (5f, 6f, 7f, 8f);
+
+		CheckLanes ("MoveHighToLow", Sse.MoveHighToLow (moveA, moveB), 7f, 8f, 3f, 4f);
+		CheckLanes ("MoveLowToHigh", Sse.MoveLowToHigh (moveA, moveB), 1f, 2f, 5f, 6f);
+		CheckLanes ("MoveScalar", Sse.MoveScalar (moveA, moveB), 5f, 2f, 3f, 4f);
+
+		Check ("MoveMask", Sse.MoveMask (Load (0x80000000u.ToSingle (), 0f,
+		                                      0x80000000u.ToSingle (), 0f)) == 0b0101);
+
+		float[] recipScalar1 = ToArray (Sse.ReciprocalScalar (Load (4f, 4f, 4f, 4f)));
+		Check ("ReciprocalScalar(value) lane 0 is approximately 1/4",
+		      Math.Abs (recipScalar1 [0] - 0.25f) < 0.01f);
+		Check ("ReciprocalScalar(value) upper lanes",
+		      recipScalar1 [1] == 4f && recipScalar1 [2] == 4f && recipScalar1 [3] == 4f);
+
+		float[] recipScalar2 = ToArray (Sse.ReciprocalScalar (Load (9f, 8f, 7f, 6f),
+		                                                      Load (4f, 4f, 4f, 4f)));
+		Check ("ReciprocalScalar(upper, value) lane 0 is approximately 1/4",
+		      Math.Abs (recipScalar2 [0] - 0.25f) < 0.01f);
+		Check ("ReciprocalScalar(upper, value) upper lanes",
+		      recipScalar2 [1] == 8f && recipScalar2 [2] == 7f && recipScalar2 [3] == 6f);
+
+		float[] rsqrtPacked = ToArray (Sse.ReciprocalSqrt (Load (4f, 4f, 4f, 4f)));
+		bool rsqrtOk = true;
+		for (int i = 0; i < 4; i++)
+			rsqrtOk &= Math.Abs (rsqrtPacked [i] - 0.5f) < 0.01f;
+		Check ("ReciprocalSqrt is approximately 1/2", rsqrtOk);
+
+		float[] rsqrtScalar1 = ToArray (Sse.ReciprocalSqrtScalar (Load (4f, 4f, 4f, 4f)));
+		Check ("ReciprocalSqrtScalar(value) lane 0 is approximately 1/2",
+		      Math.Abs (rsqrtScalar1 [0] - 0.5f) < 0.01f);
+		Check ("ReciprocalSqrtScalar(value) upper lanes",
+		      rsqrtScalar1 [1] == 4f && rsqrtScalar1 [2] == 4f && rsqrtScalar1 [3] == 4f);
+
+		float[] rsqrtScalar2 = ToArray (Sse.ReciprocalSqrtScalar (Load (9f, 8f, 7f, 6f),
+		                                                          Load (4f, 4f, 4f, 4f)));
+		Check ("ReciprocalSqrtScalar(upper, value) lane 0 is approximately 1/2",
+		      Math.Abs (rsqrtScalar2 [0] - 0.5f) < 0.01f);
+		Check ("ReciprocalSqrtScalar(upper, value) upper lanes",
+		      rsqrtScalar2 [1] == 8f && rsqrtScalar2 [2] == 7f && rsqrtScalar2 [3] == 6f);
+
+		CheckLanes ("SqrtScalar(value)", Sse.SqrtScalar (Load (9f, 16f, 25f, 36f)), 3f, 16f, 25f, 36f);
+		CheckLanes ("SqrtScalar(upper, value)",
+		           Sse.SqrtScalar (Load (1f, 2f, 3f, 4f), Load (9f, 0f, 0f, 0f)), 3f, 2f, 3f, 4f);
+
+		CheckLanes ("Shuffle", Sse.Shuffle (moveA, moveB, 0x4E), 3f, 4f, 5f, 6f);
+
+		CheckLanes ("UnpackHigh", Sse.UnpackHigh (Load (1f, 2f, 3f, 4f), Load (10f, 20f, 30f, 40f)),
+		           3f, 30f, 4f, 40f);
+		CheckLanes ("UnpackLow", Sse.UnpackLow (Load (1f, 2f, 3f, 4f), Load (10f, 20f, 30f, 40f)),
+		           1f, 10f, 2f, 20f);
+
+		Sse.StoreFence ();
+		Check ("StoreFence executes", true);
+
+		float* sseScratch = stackalloc float[4] { 100f, 200f, 300f, 400f };
+
+		CheckLanes ("LoadScalarVector128", Sse.LoadScalarVector128 (sseScratch), 100f, 0f, 0f, 0f);
+		CheckLanes ("LoadLow", Sse.LoadLow (Load (1f, 2f, 3f, 4f), sseScratch), 100f, 200f, 3f, 4f);
+		CheckLanes ("LoadHigh", Sse.LoadHigh (Load (1f, 2f, 3f, 4f), sseScratch), 1f, 2f, 100f, 200f);
+
+		float* storeScalarOut = stackalloc float[4] { -1f, -1f, -1f, -1f };
+		Sse.StoreScalar (storeScalarOut, Load (42f, 1f, 2f, 3f));
+		Check ("StoreScalar", storeScalarOut [0] == 42f && storeScalarOut [1] == -1f);
+
+		float* storeLowOut = stackalloc float[2];
+		Sse.StoreLow (storeLowOut, Load (11f, 22f, 33f, 44f));
+		Check ("StoreLow", storeLowOut [0] == 11f && storeLowOut [1] == 22f);
+
+		float* storeHighOut = stackalloc float[2];
+		Sse.StoreHigh (storeHighOut, Load (11f, 22f, 33f, 44f));
+		Check ("StoreHigh", storeHighOut [0] == 33f && storeHighOut [1] == 44f);
+
+		float* ntRaw = stackalloc float[8];
+		float* ntAligned = (float *) (((long) ntRaw + 15) & ~15L);
+		Sse.StoreAlignedNonTemporal (ntAligned, Load (1f, 2f, 3f, 4f));
+		CheckLanes ("StoreAlignedNonTemporal", Sse.LoadAlignedVector128 (ntAligned), 1f, 2f, 3f, 4f);
+
+		Sse.Prefetch0 (sseScratch);
+		Sse.Prefetch1 (sseScratch);
+		Sse.Prefetch2 (sseScratch);
+		Sse.PrefetchNonTemporal (sseScratch);
+		Check ("Prefetch executes", true);
 
 		Check ("Sse2.IsSupported", Sse2.IsSupported);
 
