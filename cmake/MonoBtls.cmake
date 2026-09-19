@@ -46,6 +46,17 @@ if(MSVC AND CMAKE_MSVC_RUNTIME_LIBRARY)
       "-DCMAKE_MSVC_RUNTIME_LIBRARY:STRING=${CMAKE_MSVC_RUNTIME_LIBRARY}")
 endif()
 
+# Neither tool is on PATH on a stock Windows host, so the sub-build does not
+# find them on its own.
+set(MONO_BTLS_TOOL_ARGS "")
+if(CMAKE_RC_COMPILER)
+  list(APPEND MONO_BTLS_TOOL_ARGS
+       "-DCMAKE_RC_COMPILER:FILEPATH=${CMAKE_RC_COMPILER}")
+endif()
+if(MONO_PERL)
+  list(APPEND MONO_BTLS_TOOL_ARGS "-DPERL_EXECUTABLE:FILEPATH=${MONO_PERL}")
+endif()
+
 ExternalProject_Add(mono-btls
   SOURCE_DIR      "${CMAKE_SOURCE_DIR}/mono/btls"
   BINARY_DIR      "${MONO_BTLS_BINARY_DIR}"
@@ -58,6 +69,7 @@ ExternalProject_Add(mono-btls
     # configure so it does not mask a real floor violation there too.
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5
     ${MONO_BTLS_CRT_ARGS}
+    ${MONO_BTLS_TOOL_ARGS}
     -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}
     -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
     -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
