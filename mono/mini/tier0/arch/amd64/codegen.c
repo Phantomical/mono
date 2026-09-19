@@ -787,6 +787,9 @@ add_outarg_xreg (MonoCompile *cfg, MonoCallInst *call, int reg, MonoInst *tree)
 	ins->sreg1 = tree->dreg;
 	MONO_ADD_INS (cfg->cbb, ins);
 
+	if (tree->backend.size)
+		mono_mark_vreg_simd_size (cfg, ins->dreg, tree->backend.size);
+
 	mono_call_inst_add_outarg_reg (cfg, call, ins->dreg, reg, MONO_REG_SIMD);
 }
 
@@ -851,6 +854,58 @@ leaf_load_opcode (const ArgLeaf *leaf)
 		return OP_LOAD_MEMBASE;
 	}
 }
+
+/* Emit a SIMD move matching the value width. */
+static guint8*
+emit_simd_membase_store (guint8 *code, int basereg, int offset, int reg, int size)
+{
+	switch (size) {
+	case 16:
+		amd64_sse_movups_membase_reg (code, basereg, offset, reg);
+		break;
+	case 32:
+		amd64_vex_movups_ymm_membase_reg (code, basereg, offset, reg);
+		break;
+	default:
+		g_assert_not_reached ();
+	}
+	return code;
+}
+
+static guint8*
+emit_simd_membase_load (guint8 *code, int dreg, int basereg, int offset, int size)
+{
+	switch (size) {
+	case 16:
+		amd64_sse_movups_reg_membase (code, dreg, basereg, offset);
+		break;
+	case 32:
+		amd64_vex_movups_ymm_reg_membase (code, dreg, basereg, offset);
+		break;
+	default:
+		g_assert_not_reached ();
+	}
+	return code;
+}
+
+static guint8*
+emit_simd_reg_move (guint8 *code, int dreg, int reg, int size)
+{
+	switch (size) {
+	case 16:
+		amd64_sse_movaps_reg_reg (code, dreg, reg);
+		break;
+	case 32:
+		amd64_vex_movups_ymm_reg_reg (code, dreg, reg);
+		break;
+	default:
+		g_assert_not_reached ();
+	}
+	return code;
+}
+
+/* Use the producer's width, or the 16-byte SIMD-bank default. */
+#define simd_ins_size(ins) ((ins)->backend.size ? (ins)->backend.size : 16)
 
 /*
  * Finishes the buffer a vararg call passes its variable arguments in. Those
@@ -1259,6 +1314,11 @@ mono_arch_emit_outarg_vt (MonoCompile *cfg, MonoInst *ins, MonoInst *src)
 				case ArgInFloatSSEReg:
 					load->dreg = leaf_is_vector (leaf) ? alloc_xreg (cfg)
 					                                   : mono_alloc_freg (cfg);
+					if (leaf_is_vector (leaf)) {
+						load->backend.size = leaf->size;
+						if (leaf->size != 16)
+							mono_mark_vreg_simd_size (cfg, load->dreg, leaf->size);
+					}
 					break;
 				default:
 					g_assert_not_reached ();
@@ -2499,7 +2559,7 @@ emit_store_leaf (guint8 *code, const ArgLeaf *leaf, int basereg, int offset)
 		break;
 	case ArgInDoubleSSEReg:
 		if (leaf_is_vector (leaf))
-			amd64_sse_movups_membase_reg (code, basereg, at, leaf->reg);
+			code = emit_simd_membase_store (code, basereg, at, leaf->reg, leaf->size);
 		else
 			amd64_movsd_membase_reg (code, basereg, at, leaf->reg);
 		break;
@@ -2528,7 +2588,7 @@ emit_load_leaf (guint8 *code, const ArgLeaf *leaf, int basereg, int offset)
 		break;
 	case ArgInDoubleSSEReg:
 		if (leaf_is_vector (leaf))
-			amd64_sse_movups_reg_membase (code, leaf->reg, basereg, at);
+			code = emit_simd_membase_load (code, leaf->reg, basereg, at, leaf->size);
 		else
 			amd64_movsd_reg_membase (code, leaf->reg, basereg, at);
 		break;
@@ -4951,19 +5011,19 @@ mono_arch_output_basic_block (MonoCompile *cfg, MonoBasicBlock *bb)
 				x86_patch (br, code);
 			break;
 		}
-		/* A whole SSE register moves, spills and reloads through these,
-		 * which the SIMD register bank needs whether or not the intrinsics
-		 * below are compiled in. */
+		/* Move, spill and reload values in the SIMD register bank. On AVX hosts,
+		 * register moves preserve all 256 bits; memory moves use the recorded
+		 * value width. */
 		case OP_XMOVE:
 			if (ins->dreg != ins->sreg1)
-				amd64_sse_movaps_reg_reg (code, ins->dreg, ins->sreg1);
+				code = emit_simd_reg_move (code, ins->dreg, ins->sreg1, mono_hwcap_x86_has_avx ? 32 : 16);
 			break;
 		case OP_STOREX_MEMBASE_REG:
 		case OP_STOREX_MEMBASE:
-			amd64_sse_movups_membase_reg (code, ins->dreg, ins->inst_offset, ins->sreg1);
+			code = emit_simd_membase_store (code, ins->dreg, ins->inst_offset, ins->sreg1, simd_ins_size (ins));
 			break;
 		case OP_LOADX_MEMBASE:
-			amd64_sse_movups_reg_membase (code, ins->dreg, ins->sreg1, ins->inst_offset);
+			code = emit_simd_membase_load (code, ins->dreg, ins->sreg1, ins->inst_offset, simd_ins_size (ins));
 			break;
 #ifdef MONO_ARCH_SIMD_INTRINSICS
 		/* TODO: Some of these IR opcodes are marked as no clobber when they indeed do. */

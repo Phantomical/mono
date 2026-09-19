@@ -1158,6 +1158,37 @@ typedef union {
 
 #define amd64_sse_movups_reg_membase(inst, dreg, basereg, disp) emit_sse_reg_membase_op2((inst), (dreg), (basereg), (disp), 0x0f, 0x10)
 
+/* Encode VMOVUPS with a three-byte VEX prefix for full-width YMM moves. */
+#define amd64_vex3_0f_wig(inst,reg_field,rm_or_base) do { \
+	*(inst)++ = (unsigned char) 0xc4; \
+	*(inst)++ = (unsigned char) ((((reg_field) > 7) ? 0x00 : 0x80) | (((rm_or_base) > 7) ? 0x00 : 0x20) | 0x41); \
+	*(inst)++ = (unsigned char) 0x7c; \
+} while (0)
+
+#define amd64_vex_movups_ymm_reg_reg(inst,dreg,reg) do { \
+	amd64_codegen_pre (inst); \
+	amd64_vex3_0f_wig ((inst), (dreg), (reg)); \
+	*(inst)++ = (unsigned char) 0x10; \
+	x86_reg_emit ((inst), (dreg), (reg)); \
+	amd64_codegen_post (inst); \
+} while (0)
+
+#define amd64_vex_movups_ymm_membase_reg(inst, basereg, disp, reg) do { \
+	amd64_codegen_pre (inst); \
+	amd64_vex3_0f_wig ((inst), (reg), (basereg) == AMD64_RIP ? 0 : (basereg)); \
+	*(inst)++ = (unsigned char) 0x11; \
+	amd64_membase_emit ((inst), (reg), (basereg), (disp)); \
+	amd64_codegen_post (inst); \
+} while (0)
+
+#define amd64_vex_movups_ymm_reg_membase(inst, dreg, basereg, disp) do { \
+	amd64_codegen_pre (inst); \
+	amd64_vex3_0f_wig ((inst), (dreg), (basereg) == AMD64_RIP ? 0 : (basereg)); \
+	*(inst)++ = (unsigned char) 0x10; \
+	amd64_membase_emit ((inst), (dreg), (basereg), (disp)); \
+	amd64_codegen_post (inst); \
+} while (0)
+
 #define amd64_sse_movaps_membase_reg(inst, basereg, disp, reg) emit_sse_membase_reg_op2((inst), (basereg), (disp), (reg), 0x0f, 0x29)
 
 #define amd64_sse_movaps_reg_membase(inst, dreg, basereg, disp) emit_sse_reg_membase_op2((inst), (dreg), (basereg), (disp), 0x0f, 0x28)
