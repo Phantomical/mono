@@ -212,6 +212,14 @@ struct Value {
 
 	bool is (Kind k) const { return kind == k; }
 
+	/// Whether lowering can replace this value with a constant. Unlike
+	/// non_null, these kinds identify the exact value.
+	bool is_constant () const
+	{
+		return kind == Kind::integer || kind == Kind::type_handle
+		       || kind == Kind::type_object || kind == Kind::null;
+	}
+
 	bool operator== (const Value &other) const
 	{
 		if (kind != other.kind)
@@ -782,6 +790,13 @@ private:
 	/// Whether each block terminator resolved to one successor.
 	std::vector<bool> decided_;
 
+	/// Instructions expected to disappear during constant folding.
+	std::vector<bool> skip_bytes_;
+
+	/// Whether the current call pushes a result. Call opcodes use VarPush, so
+	/// visit_call () determines this from the resolved signature.
+	bool pushed_call_result_ = false;
+
 	/// Address-taken slots, whose contents must remain unknown.
 	std::vector<bool> pinned_locals_;
 	std::vector<bool> pinned_args_;
@@ -882,6 +897,7 @@ ILAnalyzer::build_blocks ()
 	}
 
 	decided_.assign (blocks_.size (), false);
+	skip_bytes_.assign (instrs_.size (), false);
 	handler_reached_.assign (header_->num_clauses, false);
 	return true;
 }
@@ -1078,7 +1094,8 @@ ILAnalyzer::visit_call (const Instr &instr, State &state)
 
 	state.stack.pop_back_n (count);
 
-	if (constructing || sig->ret->type != MONO_TYPE_VOID)
+	pushed_call_result_ = constructing || sig->ret->type != MONO_TYPE_VOID;
+	if (pushed_call_result_)
 		state.stack.push_back (result);
 
 	return true;
@@ -1392,12 +1409,26 @@ ILAnalyzer::evaluate (uint32_t index)
 	for (uint32_t i = block.first; i < block.end; ++i) {
 		const Instr &instr = instrs_[i];
 
-		if (is_branch (instr))
-			return terminate (instr, state, index);
+		if (is_branch (instr)) {
+			bool ok = terminate (instr, state, index);
+
+			// Do not charge conditional branches that become unconditional.
+			skip_bytes_[i] = ok && decided_[index];
+			return ok;
+		}
 		if (!falls_through (instr))
 			return true;
+
+		pushed_call_result_ = false;
+
 		if (!visit (instr, state))
 			return false;
+
+		bool is_call = instr.op == MONO_CEE_CALL || instr.op == MONO_CEE_CALLVIRT
+		               || instr.op == MONO_CEE_NEWOBJ;
+		bool pushed = is_call ? pushed_call_result_ : stack_effects[instr.op].pushes == 1;
+
+		skip_bytes_[i] = pushed && !state.stack.empty () && state.stack.back ().is_constant ();
 	}
 
 	// Fall through to the next block, if one exists.
@@ -1439,9 +1470,12 @@ ILAnalyzer::run ()
 		if (!blocks_[i].in)
 			continue;
 
-		result.live_bytes += blocks_[i].next_offset - blocks_[i].offset;
 		if (decided_[i])
 			++result.decided_branches;
+
+		for (uint32_t k = blocks_[i].first; k < blocks_[i].end; ++k)
+			if (!skip_bytes_[k])
+				result.live_bytes += instrs_[k].next - instrs_[k].offset;
 	}
 
 	return result;

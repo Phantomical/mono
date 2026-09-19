@@ -21,7 +21,7 @@ public class Analyzed
 
 	public static int Straight (int x)
 	{
-		return x + 1;
+		return x + x;
 	}
 
 	public static int Guard<T> ()
