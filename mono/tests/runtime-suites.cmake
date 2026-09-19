@@ -837,6 +837,13 @@ _mono_exe_list(_tier2_inline_generic_scope ${MONO_TESTS_TIER2_INLINE_GENERIC_SCO
 mono_runtime_suite(runtime-tier2-inline-generic-scope TESTS ${_tier2_inline_generic_scope}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0")
 
+# Disable the pre-pass and use a 128-byte cost limit at every call-site
+# temperature. Each guarded body exceeds the limit before dead blocks are
+# removed and fits after its condition is resolved.
+_mono_exe_list(_tier2_inline_typeof_guard ${MONO_TESTS_TIER2_INLINE_TYPEOF_GUARD_SRC})
+mono_runtime_suite(runtime-tier2-inline-typeof-guard TESTS ${_tier2_inline_typeof_guard}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-inline-il-limit=0 --llvm-opt=-mono-inline-cost-il-limit=128 --llvm-opt=-mono-inline-cost-il-limit-hot=0 --llvm-opt=-mono-inline-cost-il-limit-cold=0")
+
 # A filter-bearing callee can never inline -- getInlineCost refuses its
 # llvm.localescape outright -- so both arms expect the same refusal.
 # PromoteNow drives the compiles the same way runtime-tier2-inline-clause does.

@@ -1346,6 +1346,10 @@ void carry_parameter_extensions (llvm::CallBase *call, MonoMethodSignature *sig,
 /// with this one the first time an operand kind is added.
 std::optional<size_t> il_operand_size (MonoOpcodeEnum opcode);
 
+/// Whether a body compiled with sharing reaches klass through its runtime
+/// generic context.
+bool class_depends_on_context (MonoClass *klass, bool sharing);
+
 /// The method a direct call to method enters, which for an internal call is
 /// the marshalling wrapper the runtime publishes in its place.
 ///

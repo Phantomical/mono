@@ -3,6 +3,7 @@
 #include "inline-scope.hpp"
 
 #include "domain-method.hpp"
+#include "il-analyzer.hpp"
 #include "method-override.hpp"
 #include "method-to-llvm/intrinsics.hpp"
 #include "naming.hpp"
@@ -114,9 +115,38 @@ il_call_target (MonoMethod *method, uint32_t token)
 }
 
 bool
-is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_limit)
+is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_size, uint32_t il_limit)
 {
-	return header->num_clauses == 0 && header->code_size <= il_limit;
+	return header->num_clauses == 0 && il_size <= il_limit;
+}
+
+uint32_t
+effective_inline_il_size (MonoMethod *callee, MonoMethodHeader *header, uint32_t il_limit)
+{
+	uint32_t size = header->code_size;
+
+	if (size <= il_limit || size > il_size_walk_limit)
+		return size;
+
+	std::optional<ILReachability> reach = analyze_il_reachability (callee, header);
+
+	if (!reach || reach->live_bytes == size)
+		return size;
+
+	if (is_jit_trace_enabled ()) {
+		char *name = mono_method_full_name (callee, TRUE);
+
+		MONO_LOCK (jit_trace_mutex ())
+		{
+			fprintf (stderr,
+			         "[llvm-jit] %s: %u of %u IL bytes live for this instantiation,"
+			         " %u branches decided\n",
+			         name, reach->live_bytes, size, reach->decided_branches);
+		}
+		g_free (name);
+	}
+
+	return reach->live_bytes;
 }
 
 bool
@@ -126,9 +156,9 @@ is_builtin (MonoMethod *method)
 }
 
 bool
-is_small_enough (MonoMethodHeader *header, uint32_t il_limit)
+is_small_enough (uint32_t il_size, uint32_t il_limit)
 {
-	return header->code_size <= il_limit;
+	return il_size <= il_limit;
 }
 
 bool

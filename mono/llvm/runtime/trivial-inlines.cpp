@@ -311,7 +311,8 @@ TrivialInlineAdvisor::fits_the_shape (MonoMethod *callee, MonoMethodHeader *head
 	if (is_builtin (callee))
 		return true;
 
-	return is_small_and_clause_free (header, il_limit_)
+	// Trivial shapes contain no branches, so raw and reachable sizes agree.
+	return is_small_and_clause_free (header, header->code_size, il_limit_)
 	       && match_trivial_shape (callee, header) && !forwards_into_a_cycle (callee);
 }
 

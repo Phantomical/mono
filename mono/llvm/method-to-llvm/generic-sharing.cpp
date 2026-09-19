@@ -40,7 +40,7 @@ MethodLLVMEmitter::cannot_share (const llvm::Twine &what)
 }
 
 bool
-MethodLLVMEmitter::depends_on_context (MonoClass *klass)
+class_depends_on_context (MonoClass *klass, bool sharing)
 {
 	/*
 	 * A generic type definition carries its own type parameters, which are not
@@ -53,7 +53,13 @@ MethodLLVMEmitter::depends_on_context (MonoClass *klass)
 	if (mono_class_is_gtd (klass))
 		return false;
 
-	return sharing () && mono_class_check_context_used (klass) != 0;
+	return sharing && mono_class_check_context_used (klass) != 0;
+}
+
+bool
+MethodLLVMEmitter::depends_on_context (MonoClass *klass)
+{
+	return class_depends_on_context (klass, sharing ());
 }
 
 bool
