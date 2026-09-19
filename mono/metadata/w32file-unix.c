@@ -2752,6 +2752,57 @@ _wapi_stdhandle_create (gint fd, const gchar *name)
 	return GINT_TO_POINTER(((MonoFDHandle*) filehandle)->fd);
 }
 
+/* A raw fd wrapped in a SafeFileHandle may not be registered in the fd table.
+ * Register it on first use, as is done for the standard handles above. */
+static gboolean
+filehandle_lookup_and_ref (gint fd, MonoFDHandle **fdhandle)
+{
+	gint flags;
+	struct stat statbuf;
+	MonoFDType type;
+	FileHandle *adopted;
+
+	if (mono_fdhandle_lookup_and_ref (fd, fdhandle))
+		return TRUE;
+
+	do {
+		flags = fcntl (fd, F_GETFL);
+	} while (flags == -1 && errno == EINTR);
+	if (flags == -1)
+		return FALSE;
+
+	gint ret;
+	MONO_ENTER_GC_SAFE;
+	ret = fstat (fd, &statbuf);
+	MONO_EXIT_GC_SAFE;
+	if (ret == -1)
+		return FALSE;
+
+	if (S_ISFIFO (statbuf.st_mode))
+		type = MONO_FDTYPE_PIPE;
+	else if (S_ISCHR (statbuf.st_mode))
+		type = MONO_FDTYPE_CONSOLE;
+	else if (S_ISREG (statbuf.st_mode))
+		type = MONO_FDTYPE_FILE;
+	else
+		return FALSE;
+
+	adopted = file_data_create (type, fd);
+	switch (flags & (O_RDONLY|O_WRONLY|O_RDWR)) {
+	case O_RDONLY: adopted->fileaccess = GENERIC_READ; break;
+	case O_WRONLY: adopted->fileaccess = GENERIC_WRITE; break;
+	case O_RDWR: adopted->fileaccess = GENERIC_READ | GENERIC_WRITE; break;
+	default: adopted->fileaccess = 0; break;
+	}
+	adopted->sharemode = 0;
+	adopted->attrs = 0;
+
+	if (!mono_fdhandle_try_insert ((MonoFDHandle*) adopted))
+		mono_fdhandle_unref ((MonoFDHandle*) adopted);
+
+	return mono_fdhandle_lookup_and_ref (fd, fdhandle);
+}
+
 enum {
 	STD_INPUT_HANDLE  = -10,
 	STD_OUTPUT_HANDLE = -11,
@@ -2806,7 +2857,7 @@ mono_w32file_read_or_write (gboolean read, gpointer handle, gpointer buffer, gui
 	FileHandle *filehandle;
 	gboolean ret = FALSE;
 
-	gboolean const ref = mono_fdhandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle);
+	gboolean const ref = filehandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle);
 	if (!ref) {
 		mono_w32error_set_last (ERROR_INVALID_HANDLE);
 		goto exit;
@@ -2853,7 +2904,7 @@ mono_w32file_flush (gpointer handle)
 	FileHandle *filehandle;
 	gboolean ret;
 
-	if (!mono_fdhandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
+	if (!filehandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
 		mono_w32error_set_last (ERROR_INVALID_HANDLE);
 		return FALSE;
 	}
@@ -2878,7 +2929,7 @@ mono_w32file_truncate (gpointer handle)
 	FileHandle *filehandle;
 	gboolean ret;
 
-	if (!mono_fdhandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
+	if (!filehandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
 		mono_w32error_set_last (ERROR_INVALID_HANDLE);
 		return FALSE;
 	}
@@ -2903,7 +2954,7 @@ mono_w32file_seek (gpointer handle, gint32 movedistance, gint32 *highmovedistanc
 	FileHandle *filehandle;
 	guint32 ret;
 
-	if (!mono_fdhandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
+	if (!filehandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
 		mono_w32error_set_last (ERROR_INVALID_HANDLE);
 		return INVALID_SET_FILE_POINTER;
 	}
@@ -2928,7 +2979,7 @@ mono_w32file_get_type(gpointer handle)
 	FileHandle *filehandle;
 	gint ret;
 
-	if (!mono_fdhandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
+	if (!filehandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
 		mono_w32error_set_last (ERROR_INVALID_HANDLE);
 		return FILE_TYPE_UNKNOWN;
 	}
@@ -2959,7 +3010,7 @@ GetFileSize(gpointer handle, guint32 *highsize)
 	FileHandle *filehandle;
 	guint32 ret;
 
-	if (!mono_fdhandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
+	if (!filehandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
 		mono_w32error_set_last (ERROR_INVALID_HANDLE);
 		return INVALID_FILE_SIZE;
 	}
@@ -2984,7 +3035,7 @@ mono_w32file_set_times(gpointer handle, const FILETIME *create_time, const FILET
 	FileHandle *filehandle;
 	gboolean ret;
 
-	if (!mono_fdhandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
+	if (!filehandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
 		mono_w32error_set_last (ERROR_INVALID_HANDLE);
 		return FALSE;
 	}
@@ -4859,7 +4910,7 @@ LockFile (gpointer handle, guint32 offset_low, guint32 offset_high, guint32 leng
 	gboolean ret;
 	off_t offset, length;
 
-	if (!mono_fdhandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
+	if (!filehandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
 		mono_w32error_set_last (ERROR_INVALID_HANDLE);
 		return FALSE;
 	}
@@ -4908,7 +4959,7 @@ UnlockFile (gpointer handle, guint32 offset_low, guint32 offset_high, guint32 le
 	gboolean ret;
 	off_t offset, length;
 
-	if (!mono_fdhandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
+	if (!filehandle_lookup_and_ref(GPOINTER_TO_INT(handle), (MonoFDHandle**) &filehandle)) {
 		mono_w32error_set_last (ERROR_INVALID_HANDLE);
 		return FALSE;
 	}
