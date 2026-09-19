@@ -68,7 +68,7 @@ string(REGEX REPLACE "\\) [^\n]* in [^\n]*/external/" ") in external/"
 set(_resultfile "${OUT_DIR}/symbolicate.result")
 file(WRITE "${_resultfile}" "${_result}")
 
-execute_process(COMMAND diff -up "${EXPECTED}" "${_resultfile}"
+execute_process(COMMAND diff -up --strip-trailing-cr "${EXPECTED}" "${_resultfile}"
                 OUTPUT_VARIABLE _diff RESULT_VARIABLE _rc)
 if(NOT _rc EQUAL 0)
   message(FATAL_ERROR
