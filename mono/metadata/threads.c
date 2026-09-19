@@ -3883,10 +3883,17 @@ static void build_wait_tids (gpointer key, gpointer value, gpointer user)
 	}
 }
 
+struct thread_abort_data {
+	struct wait_data *wait;
+	MonoInternalThread *to_suspend [MONO_W32HANDLE_MAXIMUM_WAIT_OBJECTS];
+	guint32 to_suspend_num;
+};
+
 static void
 abort_threads (gpointer key, gpointer value, gpointer user)
 {
-	struct wait_data *wait=(struct wait_data *)user;
+	struct thread_abort_data *data = (struct thread_abort_data *)user;
+	struct wait_data *wait = data->wait;
 	MonoNativeThreadId self = mono_native_thread_id_get ();
 	MonoInternalThread *thread = (MonoInternalThread *)value;
 
@@ -3921,18 +3928,19 @@ abort_threads (gpointer key, gpointer value, gpointer user)
 	}
 
 	THREAD_DEBUG (g_print ("%s: Aborting id: %" G_GSIZE_FORMAT "\n", __func__, (gsize)thread->tid));
-	if (!mono_thread_internal_abort (thread, FALSE)) {
+	if (!request_thread_abort (thread, NULL, FALSE)) {
 		g_warning ("%s: Failed aborting id: %p, mono_thread_manage will ignore it\n", __func__, (void*)(intptr_t)(gsize)thread->tid);
 		/* close the handle, we're not going to wait for the thread to be aborted */
 		mono_threads_close_thread_handle (handle);
-	} else {
-		/* commit to waiting for the thread to be aborted */
-		wait->handles[wait->num] = handle;
-		wait->threads[wait->num] = thread;
-		wait->num++;
+		return;
 	}
 
+	/* commit to waiting for the thread to be aborted */
+	wait->handles [wait->num] = handle;
+	wait->threads [wait->num] = thread;
+	wait->num++;
 
+	data->to_suspend [data->to_suspend_num++] = thread;
 }
 
 /** 
@@ -4053,14 +4061,23 @@ mono_thread_manage_internal (void)
 	while (TRUE) {
 		THREAD_DEBUG (g_message ("%s: abort phase", __func__));
 
+		struct thread_abort_data abort_data;
+		abort_data.wait = wait;
+		abort_data.to_suspend_num = 0;
+		memset (abort_data.to_suspend, 0, sizeof (abort_data.to_suspend));
+
 		mono_threads_lock ();
 
 		wait->num = 0;
 		/*We must zero all InternalThread pointers to avoid making the GC unhappy.*/
 		memset (wait->threads, 0, sizeof (wait->threads));
-		mono_g_hash_table_foreach (threads, abort_threads, wait);
+		mono_g_hash_table_foreach (threads, abort_threads, &abort_data);
 
 		mono_threads_unlock ();
+
+		/* Stack walks can be slow, so let threads detach while they run. */
+		for (guint32 i = 0; i < abort_data.to_suspend_num; i++)
+			async_abort_internal (abort_data.to_suspend [i], TRUE);
 
 		THREAD_DEBUG (g_message ("%s: wait->num is now %d", __func__, wait->num));
 		if (wait->num == 0)
