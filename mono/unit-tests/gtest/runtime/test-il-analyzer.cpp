@@ -186,7 +186,8 @@ TEST_F (ILAnalyzer, IsValueTypeDecidesForSharedForm)
 
 /*
  * Boxing int produces a non-null object, so its branch is known. The shared
- * form depends on the runtime context and remains unknown.
+ * form depends on the runtime context and remains unknown. Folded arithmetic
+ * can still reduce live_bytes when both arms are reachable.
  */
 TEST_F (ILAnalyzer, BoxOfValueTypeIsNonNull)
 {
@@ -199,7 +200,7 @@ TEST_F (ILAnalyzer, BoxOfValueTypeIsNonNull)
 	EXPECT_LT (over_int->reach.live_bytes, over_int->code_size);
 
 	EXPECT_EQ (0u, over_reference->reach.decided_branches);
-	EXPECT_EQ (over_reference->code_size, over_reference->reach.live_bytes);
+	EXPECT_LT (over_reference->reach.live_bytes, over_reference->code_size);
 }
 
 /*
@@ -236,21 +237,28 @@ TEST_F (ILAnalyzer, GuardInsideTryIsDecided)
 	EXPECT_LT (over_double->reach.live_bytes, over_double->code_size);
 }
 
-/* A local a loop writes is unknown where the loop meets the code after it. */
+/*
+ * A local written in a loop is unknown after the loop, so the guard remains
+ * undecided. Folded arithmetic can still reduce live_bytes.
+ */
 TEST_F (ILAnalyzer, LocalWrittenInLoopIsUnknown)
 {
 	std::optional<Walked> walked = walk (method_named ("Looped", 1));
 
 	ASSERT_TRUE (walked.has_value ());
-	EXPECT_EQ (walked->code_size, walked->reach.live_bytes);
+	EXPECT_EQ (0u, walked->reach.decided_branches);
+	EXPECT_LT (walked->reach.live_bytes, walked->code_size);
 }
 
-/* A local whose address is taken is unknown, whatever was stored in it. */
+/*
+ * A local whose address is taken remains unknown, so the guard is undecided.
+ * Folded arithmetic can still reduce live_bytes.
+ */
 TEST_F (ILAnalyzer, LocalWithAddressTakenIsUnknown)
 {
 	std::optional<Walked> walked = walk (method_named ("AddressTaken", 0));
 
 	ASSERT_TRUE (walked.has_value ());
-	EXPECT_EQ (walked->code_size, walked->reach.live_bytes);
 	EXPECT_EQ (0u, walked->reach.decided_branches);
+	EXPECT_LT (walked->reach.live_bytes, walked->code_size);
 }
