@@ -1829,6 +1829,38 @@ class Tests
 			      Lzcnt.LeadingZeroCount (0x8000000000000000ul) == 0);
 		}
 
+		Check ("Bmi1.IsSupported", Bmi1.IsSupported);
+
+		if (Bmi1.IsSupported) {
+			Check ("Bmi1.AndNot(uint)", Bmi1.AndNot (0b1100u, 0b1010u) == 0b0010u);
+			Check ("Bmi1.AndNot(ulong)", Bmi1.AndNot (0xFul, 0x3ul) == 0x0ul);
+
+			Check ("Bmi1.BitFieldExtract(uint, start, length)",
+			      Bmi1.BitFieldExtract (0xABCDu, (byte) 4, (byte) 8) == 0xBCu);
+			Check ("Bmi1.BitFieldExtract(ulong, start, length)",
+			      Bmi1.BitFieldExtract (0xABCDul, (byte) 4, (byte) 8) == 0xBCul);
+			Check ("Bmi1.BitFieldExtract(uint, control)",
+			      Bmi1.BitFieldExtract (0xABCDu, (ushort) 0x0804) == 0xBCu);
+			Check ("Bmi1.BitFieldExtract(ulong, control)",
+			      Bmi1.BitFieldExtract (0xABCDul, (ushort) 0x0804) == 0xBCul);
+
+			Check ("Bmi1.ExtractLowestSetBit(uint)", Bmi1.ExtractLowestSetBit (0b1100u) == 0b0100u);
+			Check ("Bmi1.ExtractLowestSetBit(ulong)", Bmi1.ExtractLowestSetBit (0b1100ul) == 0b0100ul);
+
+			Check ("Bmi1.GetMaskUpToLowestSetBit(uint)",
+			      Bmi1.GetMaskUpToLowestSetBit (0b1100u) == 0b0111u);
+			Check ("Bmi1.GetMaskUpToLowestSetBit(ulong)",
+			      Bmi1.GetMaskUpToLowestSetBit (0b1100ul) == 0b0111ul);
+
+			Check ("Bmi1.ResetLowestSetBit(uint)", Bmi1.ResetLowestSetBit (0b1100u) == 0b1000u);
+			Check ("Bmi1.ResetLowestSetBit(ulong)", Bmi1.ResetLowestSetBit (0b1100ul) == 0b1000ul);
+
+			Check ("Bmi1.TrailingZeroCount(uint) zero", Bmi1.TrailingZeroCount (0u) == 32);
+			Check ("Bmi1.TrailingZeroCount(uint)", Bmi1.TrailingZeroCount (0b1000u) == 3);
+			Check ("Bmi1.TrailingZeroCount(ulong) zero", Bmi1.TrailingZeroCount (0ul) == 64);
+			Check ("Bmi1.TrailingZeroCount(ulong)", Bmi1.TrailingZeroCount (0b1000ul) == 3);
+		}
+
 		if (failures == 0)
 			Console.WriteLine ("OK");
 		return failures;

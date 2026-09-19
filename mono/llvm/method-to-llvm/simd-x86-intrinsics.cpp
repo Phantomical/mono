@@ -80,6 +80,11 @@ bool lzcnt_lowering ()
 	return mono_hwcap_x86_has_lzcnt;
 }
 
+bool bmi1_lowering ()
+{
+	return mono_hwcap_x86_has_bmi1;
+}
+
 /// Return whether the Vector128<T> parameter at index has an unsigned element type.
 /// LLVM vector types do not encode signedness, so some lowerings must recover it
 /// from the managed signature.
@@ -355,6 +360,12 @@ struct SseEmitters : SimdEmit {
 	                                         MonoMethod *)
 	{
 		return is_supported (mono_hwcap_x86_has_lzcnt, builder);
+	}
+
+	static BuiltinResult bmi1_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                        MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_bmi1, builder);
 	}
 
 	static bool is_double_vector (llvm::Value *value)
@@ -1042,6 +1053,87 @@ struct SseEmitters : SimdEmit {
 
 		builder.CreateRet (builder.CreateIntrinsic (
 			llvm::Intrinsic::ctlz, { value->getType () }, { value, builder.getFalse () }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult and_not_scalar (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                     MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+
+		builder.CreateRet (builder.CreateAnd (builder.CreateNot (left), right));
+		return llvm::Error::success ();
+	}
+
+	static llvm::Intrinsic::ID bextr_id (unsigned width)
+	{
+		return width == 64 ? llvm::Intrinsic::x86_bmi_bextr_64 : llvm::Intrinsic::x86_bmi_bextr_32;
+	}
+
+	static BuiltinResult bit_field_extract_start_length (MethodLLVMEmitter &emitter,
+	                                                     llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Type *width = value->getType ();
+		llvm::Value *start = builder.CreateZExt (argument (emitter, 1), width);
+		llvm::Value *length = builder.CreateZExt (argument (emitter, 2), width);
+		llvm::Value *control =
+			builder.CreateOr (start, builder.CreateShl (length, llvm::ConstantInt::get (width, 8)));
+
+		builder.CreateRet (builder.CreateIntrinsic (bextr_id (width->getIntegerBitWidth ()), {},
+		                                            { value, control }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult bit_field_extract_control (MethodLLVMEmitter &emitter,
+	                                                llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Type *width = value->getType ();
+		llvm::Value *control = builder.CreateZExt (argument (emitter, 1), width);
+
+		builder.CreateRet (builder.CreateIntrinsic (bextr_id (width->getIntegerBitWidth ()), {},
+		                                            { value, control }));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult extract_lowest_set_bit (MethodLLVMEmitter &emitter,
+	                                             llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+
+		builder.CreateRet (builder.CreateAnd (value, builder.CreateNeg (value)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult get_mask_up_to_lowest_set_bit (MethodLLVMEmitter &emitter,
+	                                                    llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *one = llvm::ConstantInt::get (value->getType (), 1);
+
+		builder.CreateRet (builder.CreateXor (value, builder.CreateSub (value, one)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult reset_lowest_set_bit (MethodLLVMEmitter &emitter,
+	                                           llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+		llvm::Value *one = llvm::ConstantInt::get (value->getType (), 1);
+
+		builder.CreateRet (builder.CreateAnd (value, builder.CreateSub (value, one)));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult trailing_zero_count (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                          MonoMethod *)
+	{
+		llvm::Value *value = argument (emitter, 0);
+
+		builder.CreateRet (builder.CreateIntrinsic (
+			llvm::Intrinsic::cttz, { value->getType () }, { value, builder.getFalse () }));
 		return llvm::Error::success ();
 	}
 
@@ -2337,6 +2429,7 @@ const ClassKey avx = { nullptr, "System.Runtime.Intrinsics.X86", "Avx" };
 const ClassKey avx2 = { nullptr, "System.Runtime.Intrinsics.X86", "Avx2" };
 const ClassKey popcnt = { nullptr, "System.Runtime.Intrinsics.X86", "Popcnt" };
 const ClassKey lzcnt = { nullptr, "System.Runtime.Intrinsics.X86", "Lzcnt" };
+const ClassKey bmi1 = { nullptr, "System.Runtime.Intrinsics.X86", "Bmi1" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -2887,6 +2980,20 @@ const BuiltinBody lzcnt_table[] = {
 	{ lzcnt, "LeadingZeroCount", "S", false, lzcnt_lowering, SseEmitters::leading_zero_count },
 };
 
+const BuiltinBody bmi1_table[] = {
+	{ bmi1, "get_IsSupported", "", false, nullptr, SseEmitters::bmi1_is_supported },
+
+	{ bmi1, "AndNot", "SS", false, bmi1_lowering, SseEmitters::and_not_scalar },
+	{ bmi1, "BitFieldExtract", "SSS", false, bmi1_lowering,
+	  SseEmitters::bit_field_extract_start_length },
+	{ bmi1, "BitFieldExtract", "SS", false, bmi1_lowering, SseEmitters::bit_field_extract_control },
+	{ bmi1, "ExtractLowestSetBit", "S", false, bmi1_lowering, SseEmitters::extract_lowest_set_bit },
+	{ bmi1, "GetMaskUpToLowestSetBit", "S", false, bmi1_lowering,
+	  SseEmitters::get_mask_up_to_lowest_set_bit },
+	{ bmi1, "ResetLowestSetBit", "S", false, bmi1_lowering, SseEmitters::reset_lowest_set_bit },
+	{ bmi1, "TrailingZeroCount", "S", false, bmi1_lowering, SseEmitters::trailing_zero_count },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
@@ -2903,6 +3010,7 @@ simd_x86_bodies ()
 		made.insert (made.end (), std::begin (avx2_table), std::end (avx2_table));
 		made.insert (made.end (), std::begin (popcnt_table), std::end (popcnt_table));
 		made.insert (made.end (), std::begin (lzcnt_table), std::end (lzcnt_table));
+		made.insert (made.end (), std::begin (bmi1_table), std::end (bmi1_table));
 		return made;
 	} ();
 
