@@ -329,7 +329,33 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		return symbol;
 	};
 
-	CompileScope compiling ({ target.domain, publish_declaration, name_vtable });
+	// A class symbol can resolve even when its vtable cannot, so cache failures
+	// separately.
+	std::unordered_set<MonoClass *> refused_classes;
+	auto name_class = [&] (llvm::Module &holder, MonoClass *klass) -> Constant * {
+		if (refused_classes.count (klass) != 0)
+			return nullptr;
+
+		MethodLLVMEmitter namer (&holder, cfg->get (), method, &externals);
+		size_t from = externals.size ();
+		Constant *symbol = namer.class_for (klass);
+		Error named = symbol != nullptr
+		                      ? resolve (ArrayRef (externals).slice (
+					      from, externals.size () - from))
+		                      : Error::success ();
+
+		if (symbol == nullptr || named) {
+			consumeError (std::move (named));
+			externals.resize (from);
+			refused_classes.insert (klass);
+			return nullptr;
+		}
+
+		return symbol;
+	};
+
+	CompileScope compiling (
+		{ target.domain, publish_declaration, name_vtable, name_class });
 
 	std::vector<ProfileCounters> layout = MonoJit::optimize (
 		*module, target.tier, target.profile,
@@ -710,13 +736,38 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 		return symbol;
 	};
 
+	std::unordered_set<MonoClass *> refused_classes;
+	auto name_class = [&] (llvm::Module &holder, MonoClass *klass) -> Constant * {
+		if (refused_classes.count (klass) != 0)
+			return nullptr;
+
+		MethodLLVMEmitter namer (&holder, members.front ()->cfg->get (),
+		                         members.front ()->method, &late_externals);
+		size_t from = late_externals.size ();
+		Constant *symbol = namer.class_for (klass);
+		Error named = symbol != nullptr
+		                      ? resolve (ArrayRef (late_externals).slice (
+					      from, late_externals.size () - from))
+		                      : Error::success ();
+
+		if (symbol == nullptr || named) {
+			consumeError (std::move (named));
+			late_externals.resize (from);
+			refused_classes.insert (klass);
+			return nullptr;
+		}
+
+		return symbol;
+	};
+
 	std::vector<ProfileCounters> layout;
 
 	{
 		// Scoped to the call the closures above are for. give_up () below
 		// can run a single-method compile of its own, which takes this same
 		// thread's current_compile () for that compile in turn.
-		CompileScope compiling ({ shared.domain, publish_declaration, name_vtable });
+		CompileScope compiling (
+			{ shared.domain, publish_declaration, name_vtable, name_class });
 
 		layout = MonoJit::optimize (*module, shared.tier, shared.profile);
 	}

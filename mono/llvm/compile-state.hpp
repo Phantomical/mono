@@ -56,6 +56,10 @@ struct CompileState {
 	/// caller then has to leave its site as it was.
 	llvm::function_ref<llvm::Constant *(llvm::Module &m, MonoClass *klass)> vtable_of;
 
+	/// Resolves the symbol for \p klass's `MonoClass` in \p m, or returns null
+	/// if the class cannot be named.
+	llvm::function_ref<llvm::Constant *(llvm::Module &m, MonoClass *klass)> class_of;
+
 	/// Whether this compile's pipeline is past the point where
 	/// PGOInstrumentationGen or PGOInstrumentationUse took the module's CFG
 	/// hash.

@@ -672,6 +672,10 @@ public:
 	/// itself never mentioned.
 	llvm::Constant *vtable_for (MonoClass *klass);
 
+	/// Returns the symbol for \p klass's `MonoClass`, or null if it depends on
+	/// the method's generic context. Records an external for the caller to resolve.
+	llvm::Constant *class_for (MonoClass *klass);
+
 private:
 	typedef llvm::IRBuilder<> MonoIrBuilder;
 
