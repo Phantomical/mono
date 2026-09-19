@@ -588,6 +588,44 @@ names_params (std::string_view params, MonoMethodSignature *sig)
 	return true;
 }
 
+constexpr std::string_view x86_intrinsics_name_space = "System.Runtime.Intrinsics.X86";
+
+/// Return the IntrinsicAttribute class from corlib.
+MonoClass *
+intrinsic_attribute_class ()
+{
+	static MonoClass *cached;
+
+	if (cached)
+		return cached;
+
+	cached = mono_class_from_name (mono_defaults.corlib, "System.Runtime.CompilerServices",
+	                                "IntrinsicAttribute");
+	return cached;
+}
+
+/// Whether klass has IntrinsicAttribute.
+bool
+class_has_intrinsic_attribute (MonoClass *klass)
+{
+	MonoClass *attr_klass = intrinsic_attribute_class ();
+
+	if (attr_klass == nullptr)
+		return false;
+
+	MonoCustomAttrInfo *cinfo = mono_custom_attrs_from_class (klass);
+
+	if (cinfo == nullptr)
+		return false;
+
+	bool result = mono_custom_attrs_has_attr (cinfo, attr_klass);
+
+	if (!cinfo->cached)
+		mono_custom_attrs_free (cinfo);
+
+	return result;
+}
+
 /// Whether entry is the row for method.
 bool
 names_body (const BuiltinBody &entry, MonoMethod *method)
@@ -596,14 +634,19 @@ names_body (const BuiltinBody &entry, MonoMethod *method)
 		return false;
 	if (!entry.name.empty () && entry.name != std::string_view (method->name))
 		return false;
-	if (entry.params == any_signature)
+	if (entry.params != any_signature) {
+		MonoMethodSignature *sig = mono_method_signature_internal (method);
+
+		if (sig == nullptr || !names_params (entry.params, sig))
+			return false;
+	}
+
+	// Only the x86 intrinsic tables require IntrinsicAttribute. The other
+	// builtin tables contain classes that do not carry the attribute.
+	if (std::string_view (entry.klass.name_space) != x86_intrinsics_name_space)
 		return true;
 
-	// Asked last, because it parses the signature and the questions above it
-	// are string compares.
-	MonoMethodSignature *sig = mono_method_signature_internal (method);
-
-	return sig != nullptr && names_params (entry.params, sig);
+	return class_has_intrinsic_attribute (method->klass);
 }
 
 /// Whether method has System.Runtime.CompilerServices.IntrinsicAttribute.

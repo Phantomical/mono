@@ -44,8 +44,8 @@ class Tests
 		            && r [1] == 0f && r [2] == 0f && r [3] == 0f);
 	}
 
-	// A *Scalar compare's lane 0 is all-one or all-zero. Lanes 1-3 pass through
-	// from left unchanged.
+	// Scalar comparisons replace lane 0 with all ones or zero and preserve the
+	// remaining lanes from the left operand.
 	static void CheckScalarCompare (string what, Vector128<float> result, Vector128<float> left,
 	                                bool expected)
 	{
@@ -67,7 +67,7 @@ class Tests
 		Check (what + " passes through left's upper lane", r [1] == l [1]);
 	}
 
-	// A packed double compare's lane is all-one or all-zero.
+	// Packed double comparisons produce either all-one or all-zero lanes.
 	static void CheckCompareD (string what, Vector128<double> result, bool e0, bool e1)
 	{
 		double[] r = ToArray (result);
@@ -471,9 +471,8 @@ class Tests
 		Check (what, ok);
 	}
 
-	// Ports Intel's published AES-NI key-schedule routine. Uses PSHUFB for the
-	// broadcast and byte shift because this backend does not yet lower
-	// Sse2.Shuffle(Vector128<int>, byte) or ShiftLeftLogical128BitLane.
+	// Implement Intel's AES-NI key expansion with PSHUFB masks for the word
+	// broadcast and four-byte shifts.
 	static Vector128<byte> Aes128KeyExpandRound (Vector128<byte> temp1, Vector128<byte> temp2)
 	{
 		Vector128<byte> broadcastTopWordMask =
@@ -2435,7 +2434,7 @@ class Tests
 			Check ("Pclmulqdq.CarrylessMultiply(long) low*low", clmulLowLow [0] == 0b11110
 			      && clmulLowLow [1] == 0);
 
-			// control 0x01 selects the left operand's high qword instead of its low one.
+			// Control 0x01 selects the left operand's high qword instead of its low one.
 			Vector128<long> clmulLeftHigh = LoadI64 (0, 0b101);
 			long[] clmulHighLow =
 				ToArrayI64 (Pclmulqdq.CarrylessMultiply (clmulLeftHigh, clmulRight, 0x01));

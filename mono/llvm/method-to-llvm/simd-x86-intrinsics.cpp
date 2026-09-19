@@ -524,7 +524,7 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// CMPSS/CMPSD already carry the correct lane-preserving shape in hardware.
+	/// CMPSS and CMPSD preserve the upper lanes of the left operand.
 	template <llvm::Intrinsic::ID id, int predicate>
 	static BuiltinResult compare_scalar (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                     MonoMethod *)
@@ -534,7 +534,7 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// COMISS/UCOMISS/COMISD/UCOMISD return an i32 0 or 1.
+	/// COMISS, UCOMISS, COMISD, and UCOMISD return i32 values of 0 or 1.
 	template <llvm::Intrinsic::ID id>
 	static BuiltinResult compare_scalar_bool (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                          MonoMethod *)
@@ -1113,8 +1113,7 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// Sse2.MoveMask overloads on Vector128<double> (MOVMSKPD) and on the byte
-	/// vectors (PMOVMSKB); both share one row because both take a single vector.
+	/// Select MOVMSKPD for double vectors and PMOVMSKB for byte vectors.
 	static BuiltinResult move_mask_sse2 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                     MonoMethod *)
 	{
@@ -1126,8 +1125,7 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// RCPSS/RSQRTSS already carry value's own upper lanes when used as both
-	/// operands, which is what the one-operand overload asks for.
+	/// RCPSS and RSQRTSS preserve value's upper lanes in the one-operand form.
 	template <llvm::Intrinsic::ID id>
 	static BuiltinResult reciprocal_scalar1 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                         MonoMethod *)
@@ -1149,8 +1147,7 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// SQRTSS/SQRTSD have no one-operand x86 intrinsic. llvm.sqrt on the
-	/// extracted lane is the same operation.
+	/// Implement the one-operand SQRTSS and SQRTSD forms with llvm.sqrt on lane 0.
 	static BuiltinResult sqrt_scalar1 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                   MonoMethod *)
 	{
@@ -1176,7 +1173,7 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// CVT(T)SS2SI/CVT(T)SD2SI take the whole vector and read lane zero themselves.
+	/// Scalar-to-integer conversion intrinsics read lane 0 from the input vector.
 	template <llvm::Intrinsic::ID id>
 	static BuiltinResult scalar_to_int (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                    MonoMethod *)
@@ -1185,9 +1182,7 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// One row for both managed overloads, which take a single vector argument
-	/// each: Vector128<double> rounds through CVTSD2SI, Vector128<int/long> is
-	/// a bare MOVD/MOVQ lane read.
+	/// Convert double vectors with CVTSD2SI; integer vectors only need lane 0.
 	template <llvm::Intrinsic::ID id>
 	static BuiltinResult convert_to_int_sse2 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                          MonoMethod *)
@@ -1218,8 +1213,7 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// PSHUFPS: lanes 0-1 come from left, lanes 2-3 from right, each independently
-	/// selected by a 2-bit field of control.
+	/// Select lanes 0-1 from left and lanes 2-3 from right using the control byte.
 	static BuiltinResult shuffle_ps (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                 MonoMethod *)
 	{
@@ -1401,7 +1395,7 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// locality follows llvm.prefetch: 0 is _MM_HINT_NTA, 3 is the strongest hint.
+	/// LLVM prefetch locality ranges from 0 for _MM_HINT_NTA to 3 for the strongest hint.
 	template <int locality>
 	static BuiltinResult prefetch (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                               MonoMethod *)
@@ -3003,8 +2997,7 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// CVT(T)PS2DQ/CVT(T)PD2DQ share a row across their two managed overloads,
-	/// which differ only in value's element type.
+	/// Select the single- or double-precision conversion from the input element type.
 	template <llvm::Intrinsic::ID float_id, llvm::Intrinsic::ID double_id>
 	static BuiltinResult convert_to_vector_int_sse2 (MethodLLVMEmitter &emitter,
 	                                                 llvm::IRBuilder<> &builder, MonoMethod *)
@@ -3016,9 +3009,8 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// CVTDQ2PS has no rounding ambiguity to resolve, unlike the int-producing
-	/// conversions above, so plain IR is exact. CVTPD2PS does need the real
-	/// instruction: it also halves the lane count, which plain IR cannot.
+	/// CVTDQ2PS maps directly to signed integer-to-float conversion. Use the
+	/// CVTPD2PS intrinsic because it also reduces the lane count.
 	static BuiltinResult convert_to_vector_single_sse2 (MethodLLVMEmitter &emitter,
 	                                                    llvm::IRBuilder<> &builder, MonoMethod *)
 	{
@@ -3051,7 +3043,7 @@ struct SseEmitters : SimdEmit {
 		return llvm::Error::success ();
 	}
 
-	/// PAVGB or PAVGW, selected by the element width.
+	/// Select PAVGB or PAVGW from the element width.
 	static BuiltinResult average_sse2 (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                   MonoMethod *)
 	{
