@@ -20,7 +20,19 @@
 #include <llvm/Support/Error.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <cstring>
+
+#include "version.h"
+
 namespace {
+
+/// Returns the revision component of FULL_VERSION when present.
+const char *
+build_shorthash ()
+{
+	const char *slash = std::strrchr (FULL_VERSION, '/');
+	return slash ? slash + 1 : FULL_VERSION;
+}
 
 /// Sets the error from a refusal the way the runtime expects it.
 ///
@@ -61,6 +73,9 @@ finish (llvm::Expected<void *> code, MonoError *error)
 void
 mono_llvm_jit_init (void)
 {
+	// Identify the backend and revision without requiring tracing to be enabled.
+	llvm::errs () << "Mono LLVM JIT -- Phantomical/mono#" << build_shorthash () << "\n";
+
 	// mini_init () reads mono_llvm_jit_tier0_enabled () right after this
 	// call, before any method has asked to compile - before MonoJit::create ()
 	// would otherwise have settled these options.
