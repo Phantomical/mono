@@ -1666,7 +1666,7 @@ System.Runtime.Intrinsics/X86/Avx.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Avx2.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Aes.PlatformNotSupported.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Bmi1.cs
-../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Bmi2.PlatformNotSupported.cs
+../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Bmi2.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Fma.PlatformNotSupported.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Lzcnt.cs
 ../../../external/corert/src/System.Private.CoreLib/shared/System/Runtime/Intrinsics/X86/Pclmulqdq.PlatformNotSupported.cs
