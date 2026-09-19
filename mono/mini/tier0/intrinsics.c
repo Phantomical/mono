@@ -23,6 +23,7 @@
 #include <mono/metadata/monitor.h>
 #include <mono/metadata/mono-basic-block.h>
 #include <mono/metadata/mono-endian.h>
+#include <mono/metadata/reflection-internals.h>
 #include <mono/utils/mono-memory-model.h>
 
 static GENERATE_GET_CLASS_WITH_CACHE (runtime_helpers, "System.Runtime.CompilerServices", "RuntimeHelpers")
@@ -793,6 +794,41 @@ byref_arg_is_reference (MonoType *t)
 	g_assert (t->byref);
 
 	return mini_type_is_reference (m_class_get_byval_arg (mono_class_from_mono_type_internal (t)));
+}
+
+/*
+ * Whether cmethod has System.Runtime.CompilerServices.IntrinsicAttribute.
+ * Standalone assemblies define their own attribute because corlib's type is
+ * internal, so compare its qualified name rather than its type identity.
+ */
+static gboolean
+cmethod_has_intrinsic_attribute (MonoMethod *cmethod)
+{
+	ERROR_DECL (error);
+	MonoCustomAttrInfo *cinfo = mono_custom_attrs_from_method_checked (cmethod, error);
+
+	if (!is_ok (error) || cinfo == NULL) {
+		mono_error_cleanup (error);
+		return FALSE;
+	}
+
+	gboolean found = FALSE;
+
+	for (int i = 0; i < cinfo->num_attrs; ++i) {
+		MonoClass *attr_klass = cinfo->attrs [i].ctor != NULL ? cinfo->attrs [i].ctor->klass : NULL;
+
+		if (attr_klass != NULL
+		    && !strcmp (m_class_get_name_space (attr_klass), "System.Runtime.CompilerServices")
+		    && !strcmp (m_class_get_name (attr_klass), "IntrinsicAttribute")) {
+			found = TRUE;
+			break;
+		}
+	}
+
+	if (!cinfo->cached)
+		mono_custom_attrs_free (cinfo);
+
+	return found;
 }
 
 MonoInst*
@@ -2100,10 +2136,14 @@ mini_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSign
 	}
 #endif
 
-	/* Fallback if SIMD is disabled */
-	if (in_corlib && !strcmp ("System.Numerics", cmethod_klass_name_space) && !strcmp ("Vector", cmethod_klass_name)) {
-		if (!strcmp (cmethod->name, "get_IsHardwareAccelerated")) {
-			EMIT_NEW_ICONST (cfg, ins, 0);
+	/*
+	 * Standalone System.Numerics.Vectors assemblies define their own Vector and
+	 * IntrinsicAttribute types, so match both by name.
+	 */
+	if (!strcmp ("System.Numerics", cmethod_klass_name_space) && !strcmp ("Vector", cmethod_klass_name)) {
+		if (!strcmp (cmethod->name, "get_IsHardwareAccelerated")
+		    && cmethod_has_intrinsic_attribute (cmethod)) {
+			EMIT_NEW_ICONST (cfg, ins, 1);
 			ins->type = STACK_I4;
 			return ins;
 		}

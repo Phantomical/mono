@@ -11,6 +11,7 @@
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/image.h"
 #include "mono/metadata/metadata.h"
+#include "mono/metadata/reflection-internals.h"
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/ADT/StringMap.h>
@@ -241,6 +242,15 @@ struct BuiltinEmitters {
 
 		return emitter.unsupported_il ("an unrecognized ByReference member");
 	}
+
+	/// Implements System.Numerics.Vector.get_IsHardwareAccelerated.
+	static BuiltinResult vector_is_hardware_accelerated (MethodLLVMEmitter &,
+	                                                     llvm::IRBuilder<> &builder,
+	                                                     MonoMethod *)
+	{
+		builder.CreateRet (builder.getInt8 (1));
+		return llvm::Error::success ();
+	}
 };
 
 namespace {
@@ -334,6 +344,17 @@ const BuiltinMethod debugger_methods[] = {
 const BuiltinBody core_bodies[] = {
 	{ { nullptr, "System", "ByReference`1" }, {}, any_signature, false, nullptr,
 	  BuiltinEmitters::byreference },
+};
+
+/// System.Numerics.Vector.get_IsHardwareAccelerated, whichever assembly
+/// declares the class - corlib's own managed getter still returns false, the
+/// same as a standalone System.Numerics.Vectors package's would. The
+/// attribute check prevents an unrelated type with the same qualified name
+/// from matching. This entry bypasses carries_builtins () because an
+/// assembly outside corlib is not known in advance.
+const BuiltinBody vector_hwaccel_body = {
+	{ any_assembly, "System.Numerics", "Vector" }, "get_IsHardwareAccelerated",
+	"", false, nullptr, BuiltinEmitters::vector_is_hardware_accelerated,
 };
 
 /// The entries System.Math and System.MathF share, one for each name
@@ -463,6 +484,8 @@ names_class (const ClassKey &key, MonoClass *klass)
 		return false;
 	if (key.assembly == nullptr)
 		return m_class_get_image (klass) == mono_defaults.corlib;
+	if (std::string_view (key.assembly) == any_assembly)
+		return true;
 
 	const char *from = mono_image_get_name (m_class_get_image (klass));
 
@@ -549,11 +572,49 @@ names_body (const BuiltinBody &entry, MonoMethod *method)
 	return sig != nullptr && names_params (entry.params, sig);
 }
 
+/// Whether method has System.Runtime.CompilerServices.IntrinsicAttribute.
+/// Standalone assemblies define their own attribute because corlib's type is
+/// internal, so compare its qualified name rather than its type identity.
+bool
+method_has_intrinsic_attribute (MonoMethod *method)
+{
+	ERROR_DECL (error);
+	MonoCustomAttrInfo *cinfo = mono_custom_attrs_from_method_checked (method, error);
+
+	if (!is_ok (error) || cinfo == nullptr) {
+		mono_error_cleanup (error);
+		return false;
+	}
+
+	bool found = false;
+
+	for (int i = 0; i < cinfo->num_attrs; ++i) {
+		MonoClass *attr_klass = cinfo->attrs [i].ctor != nullptr ? cinfo->attrs [i].ctor->klass : nullptr;
+
+		if (attr_klass != nullptr
+		    && std::string_view (m_class_get_name_space (attr_klass)) == "System.Runtime.CompilerServices"
+		    && std::string_view (m_class_get_name (attr_klass)) == "IntrinsicAttribute") {
+			found = true;
+			break;
+		}
+	}
+
+	if (!cinfo->cached)
+		mono_custom_attrs_free (cinfo);
+
+	return found;
+}
+
 } // namespace
 
 const BuiltinBody *
 builtin_body_for (MonoMethod *method)
 {
+	// Check the method name first because reading custom attributes requires a
+	// metadata lookup.
+	if (names_body (vector_hwaccel_body, method) && method_has_intrinsic_attribute (method))
+		return &vector_hwaccel_body;
+
 	if (!carries_builtins (m_class_get_image (method->klass)))
 		return nullptr;
 

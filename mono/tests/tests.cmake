@@ -253,6 +253,8 @@ set(MONO_TESTS_CS_SRC
   tier2-loop-unswitch.cs
   managed-thread-id.cs
   thread-static-fast-path.cs
+  vector-hwaccel.cs
+  vector-hwaccel-elsewhere.cs
   pinvoke-narrow-arg.cs
   eh-stack-args.cs
   tier0-classic-struct-abi.cs

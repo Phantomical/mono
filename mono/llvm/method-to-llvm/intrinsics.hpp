@@ -64,9 +64,12 @@ constexpr int any_params = -1;
 /// about.
 constexpr std::string_view any_signature = "*";
 
+/// The assembly of a class key that matches any assembly by name alone.
+constexpr const char *any_assembly = "*";
+
 /// The name an entry's class is matched by.
 struct ClassKey {
-	/// The assembly's name, or null for corlib.
+	/// The assembly's name, null for corlib, or any_assembly.
 	const char *assembly;
 	const char *name_space;
 	const char *name;
