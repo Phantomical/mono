@@ -95,6 +95,11 @@ bool aes_lowering ()
 	return mono_hwcap_x86_has_aes;
 }
 
+bool pclmulqdq_lowering ()
+{
+	return mono_hwcap_x86_has_pclmulqdq;
+}
+
 /// Return whether the Vector128<T> parameter at index has an unsigned element type.
 /// LLVM vector types do not encode signedness, so some lowerings must recover it
 /// from the managed signature.
@@ -395,6 +400,12 @@ struct SseEmitters : SimdEmit {
 	                                       MonoMethod *)
 	{
 		return is_supported (mono_hwcap_x86_has_aes, builder);
+	}
+
+	static BuiltinResult pclmulqdq_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                             MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_pclmulqdq, builder);
 	}
 
 	static bool is_double_vector (llvm::Value *value)
@@ -1255,6 +1266,20 @@ struct SseEmitters : SimdEmit {
 		});
 
 		builder.CreateRet (as_v16i8 (builder, result));
+		return llvm::Error::success ();
+	}
+
+	static BuiltinResult carryless_multiply (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                         MonoMethod *)
+	{
+		llvm::Value *left = argument (emitter, 0);
+		llvm::Value *right = argument (emitter, 1);
+		llvm::Value *control = argument (emitter, 2);
+
+		builder.CreateRet (dispatch_control (builder, control, 256, left->getType (), [&] (unsigned c) {
+			return builder.CreateIntrinsic (llvm::Intrinsic::x86_pclmulqdq, {},
+			                                { left, right, builder.getInt8 (c) });
+		}));
 		return llvm::Error::success ();
 	}
 
@@ -2553,6 +2578,7 @@ const ClassKey lzcnt = { nullptr, "System.Runtime.Intrinsics.X86", "Lzcnt" };
 const ClassKey bmi1 = { nullptr, "System.Runtime.Intrinsics.X86", "Bmi1" };
 const ClassKey bmi2 = { nullptr, "System.Runtime.Intrinsics.X86", "Bmi2" };
 const ClassKey aes = { nullptr, "System.Runtime.Intrinsics.X86", "Aes" };
+const ClassKey pclmulqdq = { nullptr, "System.Runtime.Intrinsics.X86", "Pclmulqdq" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -3141,6 +3167,13 @@ const BuiltinBody aes_table[] = {
 	{ aes, "KeygenAssist", "VS", false, aes_lowering, SseEmitters::aes_keygen_assist },
 };
 
+const BuiltinBody pclmulqdq_table[] = {
+	{ pclmulqdq, "get_IsSupported", "", false, nullptr, SseEmitters::pclmulqdq_is_supported },
+
+	{ pclmulqdq, "CarrylessMultiply", "VVS", false, pclmulqdq_lowering,
+	  SseEmitters::carryless_multiply },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
@@ -3160,6 +3193,7 @@ simd_x86_bodies ()
 		made.insert (made.end (), std::begin (bmi1_table), std::end (bmi1_table));
 		made.insert (made.end (), std::begin (bmi2_table), std::end (bmi2_table));
 		made.insert (made.end (), std::begin (aes_table), std::end (aes_table));
+		made.insert (made.end (), std::begin (pclmulqdq_table), std::end (pclmulqdq_table));
 		return made;
 	} ();
 
