@@ -163,9 +163,11 @@ bool tier2_pipeline_enabled ();
 
 /// One frame slot, as a register number and a displacement whose sum is the
 /// slot's address - the shape MonoDebugVarInfo names a variable's home in.
+/// native_offset identifies where the stack-map marker made the slot live.
 struct VarSlot {
 	int32_t dwarf_reg;
 	int32_t offset;
+	int32_t native_offset = 0;
 };
 
 /// Where a compiled method's pieces landed: the code itself, and the side

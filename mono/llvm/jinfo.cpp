@@ -782,10 +782,25 @@ register_jit_info (MonoDomain *domain, MonoMethod *method,
 
 		gi->generic_sharing_context = &shared_context;
 		gi->has_this = 1;
-		gi->this_in_reg = 0;
-		gi->this_reg =
-			(guint8) mono_dwarf_reg_to_hw_reg (compiled.rgctx_slot.dwarf_reg);
-		gi->this_offset = compiled.rgctx_slot.offset;
+
+		/*
+		 * The stack-map marker follows the store into this slot, so the slot
+		 * is not valid earlier in the prologue. Record its live range instead
+		 * of treating it as valid for the entire method.
+		 */
+		MonoDwarfLocListEntry *loc =
+			method->dynamic
+				? (MonoDwarfLocListEntry *) g_malloc0 (sizeof (MonoDwarfLocListEntry))
+				: (MonoDwarfLocListEntry *) mono_domain_alloc0 (domain, sizeof (MonoDwarfLocListEntry));
+
+		loc->is_reg = FALSE;
+		loc->reg = mono_dwarf_reg_to_hw_reg (compiled.rgctx_slot.dwarf_reg);
+		loc->offset = compiled.rgctx_slot.offset;
+		loc->from = compiled.rgctx_slot.native_offset;
+		loc->to = 0;
+
+		gi->nlocs = 1;
+		gi->locations = loc;
 	}
 
 	jinfo->llvm_side_body = header == nullptr;

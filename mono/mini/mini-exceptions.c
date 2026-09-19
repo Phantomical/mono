@@ -884,9 +884,8 @@ get_generic_info_from_stack_frame (MonoJitInfo *ji, MonoContext *ctx)
 
 	info = NULL;
 	/*
-	 * Search location list if available, it contains the precise location of the
-	 * argument for every pc offset, even if the method was interrupted while it was in
-	 * its prolog.
+	 * Search the location list if available. Early prologue PCs may precede the
+	 * store that makes the argument slot valid, in which case info remains NULL.
 	 */
 	if (gi->nlocs) {
 		int offset = (gsize)MONO_CONTEXT_GET_IP (ctx) - (gsize)ji->code_start;
@@ -903,7 +902,6 @@ get_generic_info_from_stack_frame (MonoJitInfo *ji, MonoContext *ctx)
 				break;
 			}
 		}
-		g_assert (i < gi->nlocs);
 	} else {
 		if (gi->this_in_reg)
 			info = (gpointer)mono_arch_context_get_int_reg (ctx, gi->this_reg);
