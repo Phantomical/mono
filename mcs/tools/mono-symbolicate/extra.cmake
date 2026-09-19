@@ -26,7 +26,7 @@ add_dependencies(mcs-symbolicate-tests mcs-net_4_x-mono-symbolicate)
 
 add_test(NAME symbolicate-without_aot
          COMMAND "${CMAKE_COMMAND}"
-                 -D "RUNTIME=${MONO_RUNTIME_WRAPPER}"
+                 -D "RUNTIME=${MONO_RUNTIME_COMMAND}"
                  -D "LIB_PATH=${_pdir}"
                  -D "PROGRAM=${_pdir}/mono-symbolicate.exe"
                  -D "TEST_EXE=${_exe}"

@@ -1,7 +1,7 @@
 # Runs one standalone configuration test and diffs its output.
 #
 # Inputs, all -D:
-#   RUNTIME     the mono wrapper
+#   RUNTIME     CMake command list used to launch mono
 #   PROFILE_DIR the assemblies to run against
 #   RUN_DIR     the staged directory holding the exe and its config files
 #   EXE         the program to run
@@ -10,7 +10,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 execute_process(
-  COMMAND "${RUNTIME}" "${EXE}"
+  COMMAND ${RUNTIME} "${EXE}"
   WORKING_DIRECTORY "${RUN_DIR}"
   OUTPUT_VARIABLE _out
   ERROR_VARIABLE _err
