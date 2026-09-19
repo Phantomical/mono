@@ -270,6 +270,9 @@ elseif(CASE STREQUAL "mdoc-validate")
               ${RUNTIME} "${MDOC}" validate -f ecma "Test/${_tree}"
       WORKING_DIRECTORY "${WORKDIR}"
       OUTPUT_VARIABLE _out ERROR_VARIABLE _err)
+    # The LLVM JIT writes its startup banner to stderr before mdoc runs. It is
+    # not part of validate's output, so exclude it from the comparison.
+    string(REGEX REPLACE "Mono LLVM JIT -- [^\n]*\n" "" _err "${_err}")
     string(REPLACE "file://${WORKDIR}/" "" _got "${_out}${_err}")
     file(READ "${WORKDIR}/Test/${_expected}" _want)
     if(NOT _got STREQUAL _want)
