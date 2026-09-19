@@ -69,6 +69,11 @@ MonoString* mono_unity_get_embeddinghostname()
 	return mono_string_new_wrapper(gEmbeddingHostName->str);
 }
 
+gboolean mono_unity_is_embedded(void)
+{
+	return gEmbeddingHostName != 0;
+}
+
 static gboolean socket_security_enabled = FALSE;
 
 gboolean
