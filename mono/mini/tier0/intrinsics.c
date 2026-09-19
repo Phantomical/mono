@@ -899,20 +899,30 @@ mini_emit_inst_for_method (MonoCompile *cfg, MonoMethod *cmethod, MonoMethodSign
 		return ins;
 	}
 
+	/* Ordinary GetType () calls must bypass remoting dispatch even when
+	 * MONO_OPT_INTRINS is disabled. Preserve dispatch within the wrappers
+	 * that implement proxy and reflection behavior. */
+#ifndef DISABLE_REMOTING
+	if (cmethod->klass == mono_defaults.object_class &&
+	    strcmp (cmethod->name, "GetType") == 0 && fsig->param_count + fsig->hasthis == 1 &&
+	    cfg->method->wrapper_type != MONO_WRAPPER_RUNTIME_INVOKE &&
+	    cfg->method->wrapper_type != MONO_WRAPPER_REMOTING_INVOKE_WITH_CHECK) {
+		int dreg = alloc_ireg_ref (cfg);
+		int vt_reg = alloc_preg (cfg);
+
+		MONO_EMIT_NEW_LOAD_MEMBASE_FAULT (cfg, vt_reg, args [0]->dreg, MONO_STRUCT_OFFSET (MonoObject, vtable));
+		EMIT_NEW_LOAD_MEMBASE (cfg, ins, OP_LOAD_MEMBASE, dreg, vt_reg, MONO_STRUCT_OFFSET (MonoVTable, type));
+		mini_type_from_op (cfg, ins, NULL, NULL);
+
+		return ins;
+	}
+#endif
+
 	if (!(cfg->opt & MONO_OPT_INTRINS))
 		return NULL;
 
 	if (cmethod->klass == mono_defaults.object_class) {
-		if (strcmp (cmethod->name, "GetType") == 0 && fsig->param_count + fsig->hasthis == 1) {
-			int dreg = alloc_ireg_ref (cfg);
-			int vt_reg = alloc_preg (cfg);
-
-			MONO_EMIT_NEW_LOAD_MEMBASE_FAULT (cfg, vt_reg, args [0]->dreg, MONO_STRUCT_OFFSET (MonoObject, vtable));
-			EMIT_NEW_LOAD_MEMBASE (cfg, ins, OP_LOAD_MEMBASE, dreg, vt_reg, MONO_STRUCT_OFFSET (MonoVTable, type));
-			mini_type_from_op (cfg, ins, NULL, NULL);
-
-			return ins;
-		} else if (!cfg->backend->emulate_mul_div && strcmp (cmethod->name, "InternalGetHashCode") == 0 && fsig->param_count == 1 && !mono_gc_is_moving ()) {
+		if (!cfg->backend->emulate_mul_div && strcmp (cmethod->name, "InternalGetHashCode") == 0 && fsig->param_count == 1 && !mono_gc_is_moving ()) {
 			int dreg = alloc_ireg (cfg);
 			int t1 = alloc_ireg (cfg);
 	

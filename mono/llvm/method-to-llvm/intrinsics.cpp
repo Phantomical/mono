@@ -194,12 +194,18 @@ struct BuiltinEmitters {
 	 *
 	 * Reflection on a proxy gives GetType () a meaning of its own, and the
 	 * runtime-invoke wrapper is how it gets there.
+	 *
+	 * Remoting wrappers retain the wrapped method's class and name. Do not
+	 * expand calls inside the with-check wrapper itself because they must
+	 * preserve its proxy dispatch.
 	 */
 	static BuiltinResult get_type (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                               const BuiltinCall &call)
 	{
 #ifndef DISABLE_REMOTING
 		if (call.caller->wrapper_type == MONO_WRAPPER_RUNTIME_INVOKE)
+			return std::nullopt;
+		if (call.caller->wrapper_type == MONO_WRAPPER_REMOTING_INVOKE_WITH_CHECK)
 			return std::nullopt;
 #endif
 
