@@ -100,6 +100,11 @@ bool pclmulqdq_lowering ()
 	return mono_hwcap_x86_has_pclmulqdq;
 }
 
+bool fma_lowering ()
+{
+	return mono_hwcap_x86_has_fma;
+}
+
 /// Return whether the Vector128<T> parameter at index has an unsigned element type.
 /// LLVM vector types do not encode signedness, so some lowerings must recover it
 /// from the managed signature.
@@ -406,6 +411,12 @@ struct SseEmitters : SimdEmit {
 	                                             MonoMethod *)
 	{
 		return is_supported (mono_hwcap_x86_has_pclmulqdq, builder);
+	}
+
+	static BuiltinResult fma_is_supported (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                       MonoMethod *)
+	{
+		return is_supported (mono_hwcap_x86_has_fma, builder);
 	}
 
 	static bool is_double_vector (llvm::Value *value)
@@ -1280,6 +1291,74 @@ struct SseEmitters : SimdEmit {
 			return builder.CreateIntrinsic (llvm::Intrinsic::x86_pclmulqdq, {},
 			                                { left, right, builder.getInt8 (c) });
 		}));
+		return llvm::Error::success ();
+	}
+
+	/// fma is generic over every float vector width, so this needs no
+	/// x86-specific intrinsic.
+	static llvm::Value *fma3 (llvm::IRBuilder<> &builder, llvm::Value *a, llvm::Value *b,
+	                          llvm::Value *c)
+	{
+		return builder.CreateIntrinsic (llvm::Intrinsic::fma, { a->getType () }, { a, b, c });
+	}
+
+	template <bool negate_a, bool negate_c>
+	static BuiltinResult fma_multiply_add (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                       MonoMethod *)
+	{
+		llvm::Value *a = argument (emitter, 0);
+		llvm::Value *b = argument (emitter, 1);
+		llvm::Value *c = argument (emitter, 2);
+
+		if (negate_a)
+			a = builder.CreateFNeg (a);
+		if (negate_c)
+			c = builder.CreateFNeg (c);
+
+		builder.CreateRet (fma3 (builder, a, b, c));
+		return llvm::Error::success ();
+	}
+
+	template <bool negate_a, bool negate_c>
+	static BuiltinResult fma_multiply_add_scalar (MethodLLVMEmitter &emitter,
+	                                              llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *a = argument (emitter, 0);
+		llvm::Value *b = argument (emitter, 1);
+		llvm::Value *c = argument (emitter, 2);
+		llvm::Value *a0 = builder.CreateExtractElement (a, (uint64_t) 0);
+		llvm::Value *b0 = builder.CreateExtractElement (b, (uint64_t) 0);
+		llvm::Value *c0 = builder.CreateExtractElement (c, (uint64_t) 0);
+
+		if (negate_a)
+			a0 = builder.CreateFNeg (a0);
+		if (negate_c)
+			c0 = builder.CreateFNeg (c0);
+
+		llvm::Value *lane = fma3 (builder, a0, b0, c0);
+
+		builder.CreateRet (builder.CreateInsertElement (a, lane, (uint64_t) 0));
+		return llvm::Error::success ();
+	}
+
+	/// FMADDSUB subtracts on even lanes and adds on odd ones. FMSUBADD
+	/// reverses that pairing.
+	template <bool subtract_on_even>
+	static BuiltinResult fma_multiply_add_subtract (MethodLLVMEmitter &emitter,
+	                                                llvm::IRBuilder<> &builder, MonoMethod *)
+	{
+		llvm::Value *a = argument (emitter, 0);
+		llvm::Value *b = argument (emitter, 1);
+		llvm::Value *c = argument (emitter, 2);
+		llvm::Value *add = fma3 (builder, a, b, c);
+		llvm::Value *sub = fma3 (builder, a, b, builder.CreateFNeg (c));
+		unsigned lanes = llvm::cast<llvm::FixedVectorType> (a->getType ())->getNumElements ();
+		std::vector<int> mask (lanes);
+
+		for (unsigned i = 0; i < lanes; i++)
+			mask[i] = (int) ((i % 2 == 0) == subtract_on_even ? lanes + i : i);
+
+		builder.CreateRet (builder.CreateShuffleVector (add, sub, mask));
 		return llvm::Error::success ();
 	}
 
@@ -2579,6 +2658,7 @@ const ClassKey bmi1 = { nullptr, "System.Runtime.Intrinsics.X86", "Bmi1" };
 const ClassKey bmi2 = { nullptr, "System.Runtime.Intrinsics.X86", "Bmi2" };
 const ClassKey aes = { nullptr, "System.Runtime.Intrinsics.X86", "Aes" };
 const ClassKey pclmulqdq = { nullptr, "System.Runtime.Intrinsics.X86", "Pclmulqdq" };
+const ClassKey fma = { nullptr, "System.Runtime.Intrinsics.X86", "Fma" };
 
 using Ops = llvm::BinaryOperator;
 namespace Intr = llvm::Intrinsic;
@@ -3174,6 +3254,33 @@ const BuiltinBody pclmulqdq_table[] = {
 	  SseEmitters::carryless_multiply },
 };
 
+const BuiltinBody fma_table[] = {
+	{ fma, "get_IsSupported", "", false, nullptr, SseEmitters::fma_is_supported },
+
+	{ fma, "MultiplyAdd", "VVV", false, fma_lowering,
+	  SseEmitters::fma_multiply_add<false, false> },
+	{ fma, "MultiplySubtract", "VVV", false, fma_lowering,
+	  SseEmitters::fma_multiply_add<false, true> },
+	{ fma, "MultiplyAddNegated", "VVV", false, fma_lowering,
+	  SseEmitters::fma_multiply_add<true, false> },
+	{ fma, "MultiplySubtractNegated", "VVV", false, fma_lowering,
+	  SseEmitters::fma_multiply_add<true, true> },
+
+	{ fma, "MultiplyAddScalar", "VVV", false, fma_lowering,
+	  SseEmitters::fma_multiply_add_scalar<false, false> },
+	{ fma, "MultiplySubtractScalar", "VVV", false, fma_lowering,
+	  SseEmitters::fma_multiply_add_scalar<false, true> },
+	{ fma, "MultiplyAddNegatedScalar", "VVV", false, fma_lowering,
+	  SseEmitters::fma_multiply_add_scalar<true, false> },
+	{ fma, "MultiplySubtractNegatedScalar", "VVV", false, fma_lowering,
+	  SseEmitters::fma_multiply_add_scalar<true, true> },
+
+	{ fma, "MultiplyAddSubtract", "VVV", false, fma_lowering,
+	  SseEmitters::fma_multiply_add_subtract<true> },
+	{ fma, "MultiplySubtractAdd", "VVV", false, fma_lowering,
+	  SseEmitters::fma_multiply_add_subtract<false> },
+};
+
 } // namespace
 
 llvm::ArrayRef<BuiltinBody>
@@ -3194,6 +3301,7 @@ simd_x86_bodies ()
 		made.insert (made.end (), std::begin (bmi2_table), std::end (bmi2_table));
 		made.insert (made.end (), std::begin (aes_table), std::end (aes_table));
 		made.insert (made.end (), std::begin (pclmulqdq_table), std::end (pclmulqdq_table));
+		made.insert (made.end (), std::begin (fma_table), std::end (fma_table));
 		return made;
 	} ();
 
