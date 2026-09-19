@@ -246,9 +246,11 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 		return nullptr;
 	}
 
+	// Exclude blocks made unreachable by constants in this instantiation.
+	uint32_t size = effective_inline_il_size (callee, header, limit);
 	bool fits = is_builtin (callee)
-	            || (inline_clause_bearing_callees () ? is_small_enough (header, limit)
-	                                                : is_small_and_clause_free (header, limit));
+	            || (inline_clause_bearing_callees () ? is_small_enough (size, limit)
+	                                                : is_small_and_clause_free (header, size, limit));
 
 	if (!fits) {
 		if (is_jit_trace_enabled ()) {
@@ -259,8 +261,7 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 			                                          : "unranked";
 
 			snprintf (why, sizeof why, "%u IL bytes%s over the limit of %u at a %s site",
-			          header->code_size, header->num_clauses != 0 ? " with clauses" : "",
-			          limit, at);
+			          size, header->num_clauses != 0 ? " with clauses" : "", limit, at);
 			trace_refusal (scope_, callee, why);
 		}
 		return nullptr;

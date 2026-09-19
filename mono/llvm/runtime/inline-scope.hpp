@@ -136,14 +136,23 @@ bool is_builtin (MonoMethod *method);
 ///
 /// The clause half is correctness. Inlining a clause-bearing body would need
 /// its clauses merged into the caller's table, which neither inliner does. The
-/// size half is cost, and each inliner passes its own limit, so that half of the
-/// answer is about the caller that asked rather than about the callee alone.
-bool is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_limit);
+/// size half is cost. Each inliner passes its own limit and its own measure of
+/// the body's size, so that half of the answer is about the caller that asked
+/// rather than about the callee alone.
+bool is_small_and_clause_free (MonoMethodHeader *header, uint32_t il_size, uint32_t il_limit);
 
 /// Whether a body of this shape is small enough for the cost model to
 /// translate and weigh it, clauses included. clause_survives_inline ()
 /// (passes/top-down-inline.cpp) is what keeps a clause-bearing inline safe.
-bool is_small_enough (MonoMethodHeader *header, uint32_t il_limit);
+bool is_small_enough (uint32_t il_size, uint32_t il_limit);
+
+/// Returns the IL bytes reachable in callee's instantiation. Bodies that
+/// already fit il_limit or exceed il_size_walk_limit retain their raw size.
+uint32_t effective_inline_il_size (MonoMethod *callee, MonoMethodHeader *header,
+                                   uint32_t il_limit);
+
+/// Largest body analyzed for effective inline size.
+constexpr uint32_t il_size_walk_limit = 4096;
 
 /// Whether any of header's clauses is a filter.
 bool has_filter_clause (MonoMethodHeader *header);

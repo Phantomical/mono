@@ -1097,6 +1097,11 @@ set(MONO_TESTS_TIER2_INLINE_GENERIC_SCOPE_SRC
   tier2-inline-generic-scope.cs
 )
 
+# Test inline sizing for folded typeof guards.
+set(MONO_TESTS_TIER2_INLINE_TYPEOF_GUARD_SRC
+  tier2-inline-typeof-guard.cs
+)
+
 # The delegate-arg-bonus, on a callee that invokes a parameter the site fills
 # with a delegate whose target the compile can name. It runs twice, on the
 # default and with the bonus zeroed, and reads the variable to know which arm
