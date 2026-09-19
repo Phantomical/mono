@@ -112,3 +112,7 @@
 	url = https://github.com/mono/jemalloc.git
 	branch = master
 	update = none
+
+[submodule "external/ittapi"]
+	path = external/ittapi
+	url = https://github.com/intel/ittapi.git
