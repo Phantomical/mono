@@ -238,6 +238,16 @@ MethodLLVMEmitter::vtable_for (MonoClass *klass)
 	return class_symbol (klass, "mono_vtable_");
 }
 
+llvm::Constant *
+MethodLLVMEmitter::class_for (MonoClass *klass)
+{
+	// A class supplied by the method's generic context has no single symbol.
+	if (depends_on_context (klass))
+		return nullptr;
+
+	return class_symbol (klass, "mono_class_");
+}
+
 /// The global a class's vtable is named by, carrying what the class alone
 /// settles about it.
 llvm::Constant *

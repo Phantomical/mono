@@ -95,6 +95,10 @@ bool eliminate_object_vtables (llvm::Function &f, llvm::FunctionAnalysisManager 
 /// the value that symbol carries. Says whether it changed anything.
 bool eliminate_vtable_fields (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
+/// Replaces `MonoClass::element_class` loads from known class symbols with the
+/// corresponding class symbol. Says whether it changed anything.
+bool eliminate_element_class_reads (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+
 /// Erases each write barrier in \p f whose destination the IR settles to an
 /// alloca. Says whether it changed anything.
 ///

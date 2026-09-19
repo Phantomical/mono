@@ -371,6 +371,75 @@ eliminate_vtable_fields (Function &f, FunctionAnalysisManager &fam)
 	return eliminate_field (f, vtable_rank_name, fam) || changed;
 }
 
+namespace {
+
+/// Returns the base of a `MonoClass::element_class` load, or null if the load
+/// does not have that shape.
+Value *
+class_element_class_read (LoadInst *load)
+{
+	APInt at (64, 0);
+	Value *base = load->getPointerOperand ()->stripAndAccumulateConstantOffsets (
+		load->getModule ()->getDataLayout (), at, /*AllowNonInbounds=*/true);
+
+	return at == MONO_STRUCT_OFFSET (MonoClass, element_class) ? base : nullptr;
+}
+
+} // namespace
+
+bool
+eliminate_element_class_reads (Function &f, FunctionAnalysisManager &fam)
+{
+	const CompileState &compile = current_compile ();
+
+	if (compile.domain == nullptr || !compile.class_of)
+		return false;
+
+	SmallVector<LoadInst *, 8> reads;
+
+	for (Instruction &i : instructions (f))
+		if (auto *load = dyn_cast<LoadInst> (&i))
+			if (class_element_class_read (load) != nullptr)
+				reads.push_back (load);
+
+	if (reads.empty ())
+		return false;
+
+	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
+	SmallVector<std::pair<LoadInst *, Constant *>, 8> replacements;
+
+	for (LoadInst *load : reads) {
+		auto *global = values.global (class_element_class_read (load));
+
+		// Other globals, including vtables, can carry class metadata without
+		// using the MonoClass layout.
+		if (global == nullptr || !global->getName ().starts_with ("mono_class_"))
+			continue;
+
+		MonoClass *klass = get_class (*global);
+
+		if (klass == nullptr)
+			continue;
+
+		// Most classes refer to themselves. Arrays and enums require a symbol
+		// for a class the function may not otherwise reference.
+		MonoClass *element = m_class_get_element_class (klass);
+		Constant *answer = element == klass ? global : compile.class_of (*f.getParent (), element);
+
+		if (answer == nullptr)
+			continue;
+
+		replacements.emplace_back (load, answer);
+	}
+
+	for (auto [load, answer] : replacements) {
+		load->replaceAllUsesWith (answer);
+		load->eraseFromParent ();
+	}
+
+	return !replacements.empty ();
+}
+
 bool
 eliminate_stack_barriers (Function &f)
 {
@@ -1011,6 +1080,7 @@ MonoBuiltinConstProp::run (Function &f, FunctionAnalysisManager &fam)
 
 		again |= eliminate_object_vtables (f, fam);
 		again |= eliminate_vtable_fields (f, fam);
+		again |= eliminate_element_class_reads (f, fam);
 		again |= eliminate_dispatch_sites (f, fam);
 		again |= eliminate_array_shapes (f, fam);
 
