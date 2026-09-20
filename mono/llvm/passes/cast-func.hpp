@@ -35,10 +35,10 @@ namespace mono {
  * because a slot for an open class comes from the context and only the
  * translator can ask for one.
  *
- * remote_icall is the uncached fallback used after an inline subtype test
- * fails. isinst calls it only for a transparent proxy; castclass calls it
- * for every failure so it can report InvalidCastException. proxy_class is
- * the marked TransparentProxy class used to distinguish those isinst cases.
+ * remote_icall is the uncached fallback after a conclusive inline test fails.
+ * isinst calls it only for a transparent proxy; castclass calls it for every
+ * failure to report InvalidCastException. proxy_class is the marked
+ * TransparentProxy class used to identify those isinst cases.
  *
  * Neither declaration is nounwind. The wrapper raises the class's own load
  * failure, and castclass raises InvalidCastException, so a site inside a clause

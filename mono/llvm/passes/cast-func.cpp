@@ -96,6 +96,18 @@ interface_test_applies (MonoClass *klass)
 #endif
 }
 
+/**
+ * Whether a failed interface bitmap test is conclusive for klass.
+ *
+ * Variant and array-special interfaces can match through covariance even when
+ * their exact interface id is absent from the bitmap.
+ */
+bool
+interface_test_is_conclusive (MonoClass *klass)
+{
+	return !mono_class_has_variant_generic_params (klass) && !m_class_is_array_special_interface (klass);
+}
+
 /// The class the test names, or null where an rgctx fetch answered for it.
 MonoClass *
 tested_class (const CallBase *site)
@@ -268,6 +280,9 @@ lower (CallBase *site, bool throw_on_fail)
 	MonoClass *klass = tested_class (site);
 	bool to_interface = klass != nullptr && mono_class_is_interface (klass);
 	bool via_subtype_chain = klass != nullptr && !to_interface && subtype_test_applies (klass);
+	bool via_interface_bitmap = klass != nullptr && to_interface && interface_test_applies (klass)
+	                             && interface_test_is_conclusive (klass);
+	bool via_conclusive_test = via_subtype_chain || via_interface_bitmap;
 
 	BasicBlock *told_yes = nullptr;
 	BasicBlock *first;
@@ -282,24 +297,23 @@ lower (CallBase *site, bool throw_on_fail)
 	b.SetCurrentDebugLocation (site->getDebugLoc ());
 
 	/*
-	 * For the target classes accepted by subtype_test_applies (), the runtime
-	 * reaches the same superclass-chain test emitted here. A successful test
-	 * can therefore return the object immediately, without consulting the
-	 * per-site cache.
+	 * The inline subtype and conclusive interface tests produce the same answer
+	 * as the runtime helper, so they can bypass the per-site cache.
 	 *
-	 * On failure, isinst can return null directly for an ordinary object and
-	 * uses the uncached helper only for a transparent proxy. castclass always
-	 * uses the helper because it must report an InvalidCastException. Targets
-	 * with other casting rules, including interfaces, retain the cache and the
-	 * general wrapper.
+	 * A failed isinst only needs the uncached helper for a transparent proxy.
+	 * castclass always needs it to report InvalidCastException.
 	 */
-	if (via_subtype_chain) {
+	if (via_conclusive_test) {
 		told_yes = BasicBlock::Create (c, "cast_inline_yes", f);
-		first = BasicBlock::Create (c, "cast_subtype", f);
+		first = BasicBlock::Create (c, via_subtype_chain ? "cast_subtype" : "cast_interface", f);
 		remote = BasicBlock::Create (c, "cast_remote", f);
 
 		b.SetInsertPoint (first);
-		emit_subtype_test (b, f, klass, obj, target, told_yes, remote);
+
+		if (via_subtype_chain)
+			emit_subtype_test (b, f, klass, obj, target, told_yes, remote);
+		else
+			emit_interface_test (b, f, klass, obj, told_yes, remote);
 
 		b.SetInsertPoint (told_yes);
 		b.CreateBr (done);
@@ -383,7 +397,7 @@ lower (CallBase *site, bool throw_on_fail)
 	if (told_yes != nullptr)
 		result->addIncoming (obj, told_yes);
 
-	if (via_subtype_chain) {
+	if (via_conclusive_test) {
 		b.SetInsertPoint (remote);
 
 		SmallVector<Value *, 2> remote_args = adapt_to_callee (b, remote_icall, { obj, target });
