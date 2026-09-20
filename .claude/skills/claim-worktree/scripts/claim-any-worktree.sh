@@ -85,12 +85,18 @@ if [ -z "$POOL" ]; then
 fi
 [ -d "$POOL" ] || { echo "claim-any-worktree: no such directory: $POOL" >&2; exit 2; }
 POOL=$(cd "$POOL" && pwd) || exit 2
+# `git worktree list` prints drive-letter paths (E:/...) on Windows, while the
+# `cd && pwd` above answers in Git Bash's own POSIX spelling (/e/...) - so the
+# candidate filter below needs POOL in the drive-letter spelling to match.
+if command -v cygpath >/dev/null 2>&1; then
+	POOL=$(cygpath -m "$POOL") || exit 2
+fi
 
 # Every worktree path `git worktree list` knows about, restricted to the ones
 # actually inside $POOL - which excludes the main tree, since main never
 # lives inside its own .claude/worktrees.
 mapfile -t CANDIDATES < <(
-	git worktree list --porcelain | awk '/^worktree /{print $2}' \
+	git worktree list --porcelain | sed -n 's/^worktree //p' \
 		| while read -r p; do
 			case "$p/" in
 				"$POOL"/*) echo "$p" ;;
