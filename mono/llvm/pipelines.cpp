@@ -191,6 +191,30 @@ public:
 	}
 };
 
+/// Gives functions with profile metadata a minimum entry count of one.
+///
+/// Tier-2 promotion uses separate counters, so compilation can occur before
+/// PGO records an entry. BFI scales block counts by the entry count; leaving it
+/// at zero collapses every block count and loses useful relative frequencies.
+class RaiseZeroEntryCountPass : public llvm::PassInfoMixin<RaiseZeroEntryCountPass> {
+public:
+	llvm::PreservedAnalyses run (llvm::Module &m, llvm::ModuleAnalysisManager &)
+	{
+		bool changed = false;
+
+		for (llvm::Function &f : m) {
+			std::optional<uint64_t> entry = f.getEntryCount ();
+
+			if (entry.has_value () && *entry == 0) {
+				f.setEntryCount (1);
+				changed = true;
+			}
+		}
+
+		return changed ? llvm::PreservedAnalyses::none () : llvm::PreservedAnalyses::all ();
+	}
+};
+
 /// Sets CompileState::past_pgo_hash. Placed unconditionally, right after
 /// where PGOInstrumentationGen or PGOInstrumentationUse would run: with
 /// PTO.EnablePGO off there was never a hash for an elimination behind this to move.
@@ -464,6 +488,7 @@ MonoPassBuilder::buildPgoUsePipeline ()
 	// not the case with us, so we instead use a fake one-file FS that contains
 	// the counter data.
 	MPM.addPass (llvm::PGOInstrumentationUse (profile_file, "", /*IsCS=*/false, ProfileFS));
+	MPM.addPass (RaiseZeroEntryCountPass ());
 
 	if (uint64_t entry = profile_entry_count ())
 		MPM.addPass (NormalizeProfilePass (entry));
