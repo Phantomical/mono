@@ -423,14 +423,20 @@ jobs:
 
     steps:
       # The build tree's CTestTestfile.cmake names 5332 paths under mono/ and
-      # 5274 under cmake/, and one `tools` test runs csi.exe out of the
-      # roslyn-binaries submodule, so a shard needs the source tree as checked
-      # out for the build. The runner puts it at the same GITHUB_WORKSPACE in
-      # every job, which is what makes those absolute paths resolve here.
+      # 5274 under cmake/, so a shard needs the source tree as checked out for
+      # the build. The runner puts it at the same GITHUB_WORKSPACE in every job,
+      # which is what makes those absolute paths resolve here.
+      #
+      # Submodules are the exception. A shard runs binaries and never builds, so
+      # the build inputs are not its business, and `recursive` cloned 27 of them
+      # -- 108s of a 144s checkout on Windows, 30s of that libatomic_ops, which
+      # exists so that bdwgc can compile. One submodule is named by a test
+      # command: the `csi` test runs csi.exe out of roslyn-binaries.
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          submodules: recursive
+
+      - name: Check out the submodule a test needs
+        run: git submodule update --init --depth 1 external/roslyn-binaries
 
       - name: Install dependencies
         uses: ./.github/actions/deps
@@ -442,6 +448,28 @@ jobs:
 
       - name: Unpack the build tree
         run: tar --zstd -xf build.tzst
+
+      # The step above is a claim about the generated test commands, and this is
+      # what stops it going stale in silence: every source path under external/
+      # that a test names has to be one that is checked out. A new one fails
+      # here, naming itself, rather than as a puzzling missing file in one shard.
+      #
+      # Comment lines carry the source directory CMake generated each file for,
+      # and subdirs () names a directory under build/, so neither is a
+      # dependency on the source tree.
+      - name: Every submodule a test names is checked out
+        run: |
+          named=$(grep -rh --include=CTestTestfile.cmake \
+                    -vE '^[[:space:]]*(#|subdirs\()' build \
+                  | grep -oE 'external/[A-Za-z0-9._-]+' | sort -u || true)
+          missing=
+          for path in $named; do
+            test -e "$path" || missing="$missing $path"
+          done
+          test -z "$missing" || {
+            echo "::error::a test names$missing, which this job does not check out"
+            exit 1
+          }
 
       # Cheap and immediate: a tree that did not survive the round trip, or an
       # LLVM the shard cannot load, fails here rather than as 1494 red tests.
@@ -833,10 +861,14 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
 
     steps:
+      # Submodules trimmed to the one a test names, for the reason the Linux
+      # shard's own Checkout gives. This is the job the 144s was measured on.
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          submodules: recursive
+
+      - name: Check out the submodule a test needs
+        shell: bash
+        run: git submodule update --init --depth 1 external/roslyn-binaries
 
       - name: Exclude the workspace from Windows Defender
         shell: pwsh
@@ -855,6 +887,21 @@ jobs:
       - name: Unpack the build tree
         shell: bash
         run: tar --zstd -xf build.tzst
+
+      - name: Every submodule a test names is checked out
+        shell: bash
+        run: |
+          named=$(grep -rh --include=CTestTestfile.cmake \
+                    -vE '^[[:space:]]*(#|subdirs\()' build \
+                  | grep -oE 'external/[A-Za-z0-9._-]+' | sort -u || true)
+          missing=
+          for path in $named; do
+            test -e "$path" || missing="$missing $path"
+          done
+          test -z "$missing" || {
+            echo "::error::a test names$missing, which this job does not check out"
+            exit 1
+          }
 
       - name: Runtime identifies itself
         shell: bash
