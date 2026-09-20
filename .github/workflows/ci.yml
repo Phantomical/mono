@@ -560,7 +560,7 @@ jobs:
         run: >
           ctest --test-dir build -j "$(nproc)" --output-on-failure
           --output-junit junit-shard-${{ matrix.shard }}.xml
-          --tests-from-file build/shards/${{ matrix.shard }}.txt
+          --tests-from-file shards/${{ matrix.shard }}.txt
 
       - name: Upload test results
         if: ${{ !cancelled() }}
@@ -1006,7 +1006,7 @@ jobs:
         run: >
           ctest --test-dir build -j "$NUMBER_OF_PROCESSORS" --output-on-failure
           --output-junit junit-shard-${{ matrix.shard }}.xml
-          --tests-from-file build/shards/${{ matrix.shard }}.txt
+          --tests-from-file shards/${{ matrix.shard }}.txt
 
       - name: Upload test results
         if: ${{ !cancelled() }}
