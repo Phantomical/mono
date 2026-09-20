@@ -286,16 +286,17 @@ jobs:
           path: ksp-package-linux
           if-no-files-found: error
 
-      # The whole tree rather than a selection of it. 1.6G goes to 410M in 18s,
-      # which is far below what any pruning could be worth, and a prune that
-      # dropped a data file some corpus reads would surface as one red test in
-      # one shard rather than as a missing file.
+      # The whole tree bar the objects, which are 205 MB that the shards pay to
+      # unpack and never read -- they run binaries and never relink. Everything
+      # else goes, because a prune that dropped a data file some corpus reads
+      # would surface as one red test in one shard rather than as a missing
+      # file.
       #
       # zstd rather than the artifact's own zip, which single-threads deflate
       # over the whole tree. The upload then compresses a compressed file, so
       # compression-level 0 keeps it from paying for that twice.
       - name: Pack the build tree
-        run: tar -I 'zstd -3 -T0' -cf build.tzst build
+        run: tar --exclude='*.o' -I 'zstd -3 -T0' -cf build.tzst build
 
       - name: Upload the build tree
         uses: actions/upload-artifact@v7
