@@ -169,7 +169,7 @@ get_work (int worker_index, int *work_context, int *do_idle, SgenThreadPoolJob *
 }
 
 static mono_native_thread_return_t
-thread_func (void *data)
+sgen_thread_func (void *data)
 {
 	int worker_index = (int)(gsize)data;
 	int current_context;
@@ -292,7 +292,7 @@ sgen_thread_pool_start (void)
 	threadpool_shutdown = FALSE;
 
 	for (i = 0; i < threads_num; i++) {
-		mono_native_thread_create (&threads [i], (gpointer)thread_func, (void*)(gsize)i);
+		mono_native_thread_create (&threads [i], (gpointer)sgen_thread_func, (void*)(gsize)i);
 	}
 }
 
