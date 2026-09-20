@@ -706,6 +706,11 @@ mono_runtime_suite(runtime-static-const-move-tier1 TESTS ${_static_const_move} G
                    ENV "MONO_STATIC_CONST_TIER=1"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0")
 
+# Exercise readonly static reference loads and null checks at tier 2.
+_mono_exe_list(_initonly_nullness ${MONO_TESTS_INITONLY_NULLNESS_SRC})
+mono_runtime_suite(runtime-initonly-nullness TESTS ${_initonly_nullness}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0")
+
 # Each SIMD operation is computed at tier 0 and at both compiled tiers, where
 # the backend's written body runs instead of tier 0's IL. The tier-1 and tier-2
 # thresholds are zero so the test's own PromoteNow calls decide which tier ran,

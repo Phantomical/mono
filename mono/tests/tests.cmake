@@ -1143,6 +1143,11 @@ set(MONO_TESTS_STATIC_CONST_MOVE_SRC
   static-const-move.cs
 )
 
+# Exercise readonly static reference loads and null checks at tier 2.
+set(MONO_TESTS_INITONLY_NULLNESS_SRC
+  initonly-nullness.cs
+)
+
 # What the cost model answers about a receiver the call site allocated. Two
 # arms the same way, and the file says why it names a threshold of its own.
 set(MONO_TESTS_TIER2_INLINE_DISPATCH_SRC

@@ -12,6 +12,7 @@
 #include "passes/dump-ir.hpp"
 #include "passes/eliminate-delegate-and-guard-dispatch.hpp"
 #include "passes/eliminate-empty-finally.hpp"
+#include "passes/initonly-nullness.hpp"
 #include "passes/inline-copies.hpp"
 #include "passes/lower-keepalive.hpp"
 #include "passes/profile-counter-promoter.hpp"
@@ -568,6 +569,7 @@ MonoPassBuilder::buildTier2SimplificationPipeline ()
 	// act on the answer.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitCompleteElisionPass ()));
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::EliminateStaticConstPass ()));
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::InitonlyNullnessPass ()));
 
 	// Behind the counts for the same reason, and in front of the pipeline
 	// below, which then optimizes one fetch rather than several. It also
@@ -721,6 +723,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 	FPM.addPass (mono::ClassInitDominatedElisionPass ());
 	FPM.addPass (mono::ClassInitCompleteElisionPass ());
 	FPM.addPass (mono::EliminateStaticConstPass ());
+	FPM.addPass (mono::InitonlyNullnessPass ());
 	FPM.addPass (mono::RgctxDedupPass ());
 
 	// Last, because what it repairs is the pipeline's own doing.
