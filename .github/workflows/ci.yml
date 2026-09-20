@@ -373,6 +373,7 @@ jobs:
     env:
       LLVM_VERSION: 23.1.1
       LLVM_PREFIX: C:\llvm
+      MONO_CCACHE_VERSION: "4.14"
 
     steps:
       - name: Checkout
@@ -419,10 +420,32 @@ jobs:
           path: build/vcpkg_installed
           key: vcpkg-x64-windows-${{ hashFiles('vcpkg.json', 'vcpkg-triplets/**') }}
 
+      # The image ships ccache 4.9.1, which caches almost nothing here.
+      # CCACHE_BASEDIR (cmake/MonoCompilerFlags.cmake) turns the build
+      # directory's -I into `-I.`, and clang then names the generated config.h
+      # through it in a spelling ccache cannot stat back. 4.9.1 treats an
+      # include it cannot stat as fatal: it reports `bad_input_file` and
+      # compiles uncached. Nearly every translation unit includes config.h.
+      # 4.10 allows one again, which its own NEWS calls a 4.9.1 regression.
+      #
+      # This goes in front of the action below, which takes whichever ccache is
+      # on PATH.
+      - name: Install ccache
+        shell: pwsh
+        run: |
+          $name = "ccache-$env:MONO_CCACHE_VERSION-windows-x86_64"
+          $url = "https://github.com/ccache/ccache/releases/download/v$env:MONO_CCACHE_VERSION/$name.zip"
+          curl.exe -fsSL --retry 3 -o ccache.zip $url
+          Expand-Archive -Path ccache.zip -DestinationPath C:\ccache-dl
+          Remove-Item -Force ccache.zip
+          "C:\ccache-dl\$name" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      # v2 because 4.14 reads none of the entries 4.9.1 wrote, so the old key
+      # is a download nothing reads.
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@v1
         with:
-          key: ccache-windows-x64
+          key: ccache-windows-x64-v2
           max-size: 3G
 
       # _mono_csc_command () hands csc.exe to the host here, so the class
@@ -485,23 +508,89 @@ jobs:
         with:
           arch: x64
 
+      # 173 of the 232 seconds a cold configure takes here are try_compile, and
+      # every one of them writes its answer to CMakeCache.txt, where the next
+      # configure reads it instead of probing again. A warm cache configures in
+      # about 20 seconds.
+      #
+      # So the key has to name everything a probe answer can turn on, and each
+      # one has to be present: an empty component would not fail anything, it
+      # would quietly widen the key. The four that decide an answer are the
+      # compiler, the headers it reads, CMake's own check modules, and the
+      # runtime the build compiles C# on. This runs after vcvars, which is what
+      # sets the first two.
+      - name: CMake configure cache key
+        id: cmake-key
+        shell: bash
+        run: |
+          : "${VCToolsVersion:?vcvars did not run}"
+          : "${WindowsSDKVersion:?vcvars did not run}"
+          : "${LLVM_VERSION:?}"
+          printf '%s\n' \
+            "$(git rev-parse HEAD:cmake)" \
+            "$(git ls-files -s '*CMakeLists.txt' vcpkg.json 'vcpkg-triplets/*' | sha256sum)" \
+            "$VCToolsVersion" "$WindowsSDKVersion" "$LLVM_VERSION" \
+            "$(cmake --version | head -1)" \
+            "$(mono --version | head -1)" \
+            | sha256sum | cut -c1-40 \
+            | sed 's/^/key=cmake-windows-x64-v1-/' >> "$GITHUB_OUTPUT"
+
+      # No restore-keys, for the reason the managed build cache gives: an
+      # inexact hit here is a probe answer from another toolchain, and nothing
+      # downstream would notice.
+      #
+      # CMakeConfigureLog.yaml is 22 of the 24 MB and is only a log of the
+      # probes. CMake appends to it, or writes a new one.
+      - name: Restore the CMake configure cache
+        id: cmake-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/CMakeCache.txt
+            build/CMakeFiles
+            !build/CMakeFiles/CMakeConfigureLog.yaml
+          key: ${{ steps.cmake-key.outputs.key }}
+
       - name: Configure
+        id: configure
         shell: pwsh
         run: |
           # ccache refuses /Zi, CMAKE_MSVC_DEBUG_INFORMATION_FORMAT's default:
           # that debug info goes to a PDB shared across the target, so the object
           # is not the whole output. Embedded is /Z7, which puts it in the object.
+          #
+          # The LLVM release tarball is built with libxml2, so LLVMConfig.cmake
+          # looks for one. This image has none, and FindLibXml2 spends 16
+          # seconds establishing that on every configure -- a find_ that lands
+          # on NOTFOUND searches again next time rather than reading the cache.
+          # Nothing here links it, which is what the miss already proves.
           cmake -S . -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DCMAKE_C_COMPILER="$env:LLVM_PREFIX/bin/clang-cl.exe" `
             -DCMAKE_CXX_COMPILER="$env:LLVM_PREFIX/bin/clang-cl.exe" `
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded `
+            -DCMAKE_DISABLE_FIND_PACKAGE_LibXml2=ON `
             -DMONO_LLVM_PREFIX="$env:LLVM_PREFIX" `
             -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/tmp" `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON `
             -DCMAKE_C_COMPILER_LAUNCHER=ccache `
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      # Saved here rather than after the build, because a build that fails
+      # leaves the probe answers as good as one that succeeds, and because
+      # CMakeFiles/ collects per-target directories once the build starts.
+      - name: Save the CMake configure cache
+        if: >-
+          steps.configure.outcome == 'success' &&
+          steps.cmake-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            build/CMakeCache.txt
+            build/CMakeFiles
+            !build/CMakeFiles/CMakeConfigureLog.yaml
+          key: ${{ steps.cmake-key.outputs.key }}
 
       - name: Build
         id: build
