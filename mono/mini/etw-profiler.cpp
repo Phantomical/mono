@@ -52,6 +52,13 @@ constexpr uint32_t kMethodFlagsJitHelper = 0x10;
 constexpr uint64_t kRundownStartKeyword = 0x40;
 constexpr uint64_t kRundownEndKeyword = 0x100;
 
+// The runtime provider uses 0x40 for CLR_STARTENUMERATION_KEYWORD.
+constexpr uint64_t kStartEnumerationKeyword = 0x40;
+
+// The runtime and rundown providers share the loader and JIT keyword bits.
+constexpr uint64_t kLoaderKeyword = 0x8;
+constexpr uint64_t kJitKeyword = 0x10;
+
 // evntrace.h's EVENT_CONTROL_CODE_ENABLE_PROVIDER and
 // EVENT_CONTROL_CODE_CAPTURE_STATE, same reason.
 constexpr uint32_t kEventControlCodeEnableProvider = 1;
@@ -152,14 +159,23 @@ etw_rundown_pass (uint32_t control_code, uint64_t match_any_keyword, bool is_run
 {
 	EtwRundownPass pass;
 
-	if (!is_rundown_provider)
-		return pass;
 	if (control_code != kEventControlCodeEnableProvider
 	    && control_code != kEventControlCodeCaptureState)
 		return pass;
 
-	pass.start = (match_any_keyword & kRundownStartKeyword) != 0;
-	pass.end = (match_any_keyword & kRundownEndKeyword) != 0;
+	if (is_rundown_provider) {
+		pass.start = (match_any_keyword & kRundownStartKeyword) != 0;
+		pass.end = (match_any_keyword & kRundownEndKeyword) != 0;
+	} else {
+		// Runtime-provider enumeration emits MethodLoad events.
+		pass.load = (match_any_keyword & kStartEnumerationKeyword) != 0;
+	}
+
+	if (!pass.start && !pass.end && !pass.load)
+		return pass;
+
+	pass.images = (match_any_keyword & kLoaderKeyword) != 0;
+	pass.methods = (match_any_keyword & kJitKeyword) != 0;
 	return pass;
 }
 
@@ -193,6 +209,11 @@ DECLSPEC_NOINLINE __inline VOID __stdcall Private_EventControlCallback (_In_ LPC
 
 static_assert (mono::kRundownStartKeyword == CLR_RUNDOWNSTART_KEYWORD, "mirrors CLR-ETW-Generated.h");
 static_assert (mono::kRundownEndKeyword == CLR_RUNDOWNEND_KEYWORD, "mirrors CLR-ETW-Generated.h");
+static_assert (mono::kStartEnumerationKeyword == CLR_STARTENUMERATION_KEYWORD, "mirrors CLR-ETW-Generated.h");
+static_assert (mono::kLoaderKeyword == CLR_RUNDOWNLOADER_KEYWORD, "mirrors CLR-ETW-Generated.h");
+static_assert (mono::kJitKeyword == CLR_RUNDOWNJIT_KEYWORD, "mirrors CLR-ETW-Generated.h");
+static_assert (mono::kLoaderKeyword == CLR_LOADER_KEYWORD, "the two providers agree on this bit");
+static_assert (mono::kJitKeyword == CLR_JIT_KEYWORD, "the two providers agree on this bit");
 static_assert (mono::kEventControlCodeEnableProvider == EVENT_CONTROL_CODE_ENABLE_PROVIDER, "mirrors evntrace.h");
 static_assert (mono::kEventControlCodeCaptureState == EVENT_CONTROL_CODE_CAPTURE_STATE, "mirrors evntrace.h");
 
@@ -446,6 +467,8 @@ on_enumerate_assembly (MonoAssembly *assembly, void *user_data)
 		image_event (image, EventKind::dc_start);
 	if (enumerationData->pass.end)
 		image_event (image, EventKind::dc_end);
+	if (enumerationData->pass.load)
+		image_event (image, EventKind::load);
 }
 
 static void
@@ -458,6 +481,8 @@ on_enumerate_jit_method (MonoDomain *domain, MonoMethod *method, MonoJitInfo *ji
 		method_load (method, jinfo, EventKind::dc_start);
 	if (enumerationData->pass.end)
 		method_load (method, jinfo, EventKind::dc_end);
+	if (enumerationData->pass.load)
+		method_load (method, jinfo, EventKind::load);
 }
 
 static void
@@ -466,11 +491,10 @@ on_enumerate_domain (MonoDomain *domain, void *user_data)
 	struct JITEnumerationData *enumerationData = (struct JITEnumerationData *)user_data;
 	enumerationData->mNumDomains++;
 
-	// Iterate through each assembly
-	mono_domain_assembly_foreach (domain, on_enumerate_assembly, enumerationData);
-
-	// Iterate through each JIT'ed method
-	mono_domain_jit_foreach (domain, on_enumerate_jit_method, enumerationData);
+	if (enumerationData->pass.images)
+		mono_domain_assembly_foreach (domain, on_enumerate_assembly, enumerationData);
+	if (enumerationData->pass.methods)
+		mono_domain_jit_foreach (domain, on_enumerate_jit_method, enumerationData);
 }
 
 static void
@@ -534,11 +558,12 @@ DECLSPEC_NOINLINE __inline VOID __stdcall Private_EventControlCallback (_In_ LPC
 	mono::EtwRundownPass pass =
 		mono::etw_rundown_pass ((uint32_t) ControlCode, (uint64_t) MatchAnyKeyword, isRundown);
 
-	ETW_PROFILER_LOG_ARGS ("EventControlCallback -- IsRundown: %s, StartPass: %s, EndPass: %s",
+	ETW_PROFILER_LOG_ARGS ("EventControlCallback -- IsRundown: %s, StartPass: %s, EndPass: %s, LoadPass: %s, Images: %s, Methods: %s",
 	                       isRundown ? "true" : "false", pass.start ? "true" : "false",
-	                       pass.end ? "true" : "false");
+	                       pass.end ? "true" : "false", pass.load ? "true" : "false",
+	                       pass.images ? "true" : "false", pass.methods ? "true" : "false");
 
-	if (pass.start || pass.end)
+	if (pass.images || pass.methods)
 		on_attach (pass);
 }
 
