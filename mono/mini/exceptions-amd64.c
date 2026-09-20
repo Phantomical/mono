@@ -518,7 +518,7 @@ mono_arch_unwind_frame (MonoDomain *domain, MonoJitTlsData *jit_tls,
 		/* LLVM compiled code doesn't have this info */
 		if (ji->has_arch_eh_info)
 			epilog = (guint8*)ji->code_start + ji->code_size - mono_jinfo_get_epilog_size (ji);
- 
+
 		for (i = 0; i < AMD64_NREG; ++i)
 			regs [i] = new_ctx->gregs [i];
 
@@ -527,12 +527,41 @@ mono_arch_unwind_frame (MonoDomain *domain, MonoJitTlsData *jit_tls,
 						   (guint8 *)ip, epilog ? &epilog : NULL, regs, MONO_MAX_IREGS + 1,
 						   save_locations, MONO_MAX_IREGS, &cfa);
 
+		/*
+		 * A save_lmf wrapper's own CFI can fail, or return a CFA that does
+		 * not clear the current SP, stalling the walk on the spot. The LMF
+		 * is a fallback for that case only: it names where a call from this
+		 * wrapper resumes, not this wrapper's own caller.
+		 */
+		if ((!success || (gsize) cfa <= (gsize) MONO_CONTEXT_GET_SP (ctx)) &&
+			!ji->is_trampoline && !ji->async) {
+			MonoMethod *method = jinfo_get_method (ji);
+
+			if (method && method->save_lmf && *lmf &&
+				(((guint64) (*lmf)->previous_lmf) & 4) == 0 && (*lmf)->rsp != 0) {
+				guint64 rip = *(guint64*)((*lmf)->rsp - sizeof (host_mgreg_t));
+
+				for (i = 0; i < AMD64_NREG; ++i) {
+					if (AMD64_IS_CALLEE_SAVED_REG (i) && i != AMD64_RBP)
+						new_ctx->gregs [i] = 0;
+				}
+				new_ctx->gregs [AMD64_RSP] = (*lmf)->rsp;
+				new_ctx->gregs [AMD64_RBP] = (*lmf)->rbp;
+				new_ctx->gregs [AMD64_RIP] = rip;
+				new_ctx->gregs [AMD64_RIP]--;
+
+				*lmf = (MonoLMF *)(((guint64) (*lmf)->previous_lmf) & ~7);
+
+				return TRUE;
+			}
+		}
+
 		if (!success)
 			return FALSE;
 
 		for (i = 0; i < AMD64_NREG; ++i)
 			new_ctx->gregs [i] = regs [i];
- 
+
 		/* The CFA becomes the new SP value */
 		new_ctx->gregs [AMD64_RSP] = (host_mgreg_t)(gsize)cfa;
 
