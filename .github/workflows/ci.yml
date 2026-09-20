@@ -37,6 +37,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
 
+    # actions: write is what lets the prune step below delete this branch's
+    # superseded ccache entries.
+    permissions:
+      contents: read
+      actions: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -55,7 +61,8 @@ jobs:
       # Branch isolation comes from Actions' own cache scoping, not from the key.
       #
       # `clang` is in the prefix so this fallback cannot reach the GCC job's
-      # entries, which ccache answers nothing out of -- it hashes the compiler.
+      # entries, which ccache answers nothing out of -- it hashes the compiler --
+      # and which the prune step below must not delete either.
       #
       # Restore and save are separate steps because the combined action saves in
       # a post step, and a post step does not run for a cancelled job and is
@@ -232,6 +239,26 @@ jobs:
           path: ~/.ccache
           key: ccache-linux-x64-clang-${{ github.sha }}
 
+      # Every run writes an entry under a key nothing writes twice, and nothing
+      # bounded how many a branch left behind: the two Linux ccache families
+      # reached 18 entries and 8.1 GB of the repo's 10 GB budget, which turns
+      # the whole budget over in 82 minutes and evicts the managed caches every
+      # other branch reads through the default branch's scope.  Only the newest
+      # is reachable, because the restore-key above takes the newest match.
+      #
+      # Scoped to this family's prefix and this ref, so it reaches neither the
+      # GCC job's entries nor another branch's.  Never fatal: a run that cannot
+      # delete has still built.
+      - name: Prune superseded ccache entries
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --ref "$GITHUB_REF" --key ccache-linux-x64-clang- \
+            --sort created_at --order desc --limit 100 --json id \
+            --jq '.[1:][].id' | xargs -r -n1 gh cache delete
+
       - name: ccache statistics
         run: ccache --show-stats --verbose
 
@@ -296,6 +323,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
+    permissions:
+      contents: read
+      actions: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -346,6 +377,17 @@ jobs:
         with:
           path: ~/.ccache
           key: ccache-linux-x64-gcc-${{ github.sha }}
+
+      # See the clang job's own prune step for what this bounds.
+      - name: Prune superseded ccache entries
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --ref "$GITHUB_REF" --key ccache-linux-x64-gcc- \
+            --sort created_at --order desc --limit 100 --json id \
+            --jq '.[1:][].id' | xargs -r -n1 gh cache delete
 
       - name: ccache statistics
         run: ccache --show-stats --verbose
