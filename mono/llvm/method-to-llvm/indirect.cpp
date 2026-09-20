@@ -17,14 +17,12 @@ MethodLLVMEmitter::indirect_address (MonoIrBuilder &builder, StackValue address)
 
 	llvm::Value *pointer = address.value;
 
-	// Preserve implicit null checks for native integers converted to pointers at
-	// the point of dereference. Pointer-typed values retain their existing origin.
-	bool was_integer = !pointer->getType ()->isPointerTy ();
-
-	if (was_integer)
+	if (!pointer->getType ()->isPointerTy ())
 		pointer = builder.CreateIntToPtr (pointer, llvm::PointerType::get (context (), 0));
 
-	if (type == NativeInt && was_integer)
+	// Managed pointers already refer to established storage. Native pointers
+	// require a null check regardless of their LLVM representation.
+	if (type == NativeInt)
 		emit_null_check (builder, pointer);
 	return pointer;
 }
