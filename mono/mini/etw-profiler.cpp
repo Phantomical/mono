@@ -193,6 +193,7 @@ etw_rundown_pass (uint32_t control_code, uint64_t match_any_keyword, bool is_run
 #include <mono/metadata/tabledefs.h>
 #include <mono/metadata/tokentype.h>
 #include <mono/metadata/unity-utils.h>
+#include <mono/utils/mono-threads.h>
 
 #include <string.h>
 
@@ -588,6 +589,32 @@ on_attach (mono::EtwRundownPass pass)
 	ETW_PROFILER_LOG_ARGS ("Finished enumerating JIT data. Found %d domains, %d assemblies, %d methods", enumerationData.mNumDomains, enumerationData.mNumAssemblies, enumerationData.mNumMethods);
 }
 
+/*
+ * ETW can invoke the control callback on an external worker thread. Attach it
+ * while walking the JIT info table so the walk's hazard pointers are tracked.
+ */
+class ScopedThreadAttach {
+public:
+	ScopedThreadAttach ()
+		: attached_here_ (mono_thread_info_current_unchecked () == NULL)
+	{
+		if (attached_here_)
+			mono_thread_info_attach ();
+	}
+
+	~ScopedThreadAttach ()
+	{
+		if (attached_here_)
+			mono_thread_info_detach ();
+	}
+
+	ScopedThreadAttach (const ScopedThreadAttach &) = delete;
+	ScopedThreadAttach &operator= (const ScopedThreadAttach &) = delete;
+
+private:
+	bool attached_here_;
+};
+
 // This callback is called by the ETW system when tracing is started / stopped. We use it to enumerate & output information about JIT compilation that happened *before* tracing started.
 DECLSPEC_NOINLINE __inline VOID __stdcall Private_EventControlCallback (_In_ LPCGUID SourceId, _In_ ULONG ControlCode, _In_ UCHAR Level, _In_ ULONGLONG MatchAnyKeyword, _In_ ULONGLONG MatchAllKeyword, _In_opt_ PEVENT_FILTER_DESCRIPTOR FilterData, _Inout_opt_ PVOID CallbackContext)
 {
@@ -608,8 +635,11 @@ DECLSPEC_NOINLINE __inline VOID __stdcall Private_EventControlCallback (_In_ LPC
 	                       pass.end ? "true" : "false", pass.load ? "true" : "false",
 	                       pass.images ? "true" : "false", pass.methods ? "true" : "false");
 
-	if (pass.images || pass.methods)
+	if (pass.images || pass.methods) {
+		ScopedThreadAttach attached;
+
 		on_attach (pass);
+	}
 }
 
 void
