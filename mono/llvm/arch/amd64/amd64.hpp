@@ -132,6 +132,9 @@ struct LazyEntryABI : public llvm::orc::OrcX86_64_SysV {
 	static constexpr unsigned ResolverCodeSize = 0xbe;
 #endif
 
+	/// Name reported to profilers.
+	static constexpr const char *DisplayName = "mono_lazy_entry_resolver";
+
 	static void writeResolverCode (char *resolver_mem,
 	                               llvm::orc::ExecutorAddr resolver_addr,
 	                               llvm::orc::ExecutorAddr reentry_fn,
@@ -155,6 +158,8 @@ struct LazyEntryAvxABI : public llvm::orc::OrcX86_64_Win32 {
 struct LazyEntryAvxABI : public llvm::orc::OrcX86_64_SysV {
 	static constexpr unsigned ResolverCodeSize = 0x1d9;
 #endif
+
+	static constexpr const char *DisplayName = "mono_lazy_entry_resolver_avx";
 
 	static void writeResolverCode (char *resolver_mem,
 	                               llvm::orc::ExecutorAddr resolver_addr,

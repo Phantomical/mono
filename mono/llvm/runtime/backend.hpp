@@ -13,6 +13,7 @@
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Error.h>
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -71,6 +72,12 @@ public:
 	/// Makes the next call through \p trampoline run its compile again, on the
 	/// terms LazyCallbacks::rearm () states.
 	static void rearm_trampoline (MonoDomain *domain, void *trampoline);
+
+	/// Visits each code stub published for domain that has no MonoJitInfo.
+	static void foreach_stub (MonoDomain *domain,
+	                         void (*visit) (const void *code, uint32_t size,
+	                                       const char *name, void *user_data),
+	                         void *user_data);
 
 	/// Returns the profile counters \p dm's tier-1 body counts into.
 	///

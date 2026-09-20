@@ -652,7 +652,7 @@ LazyEntryABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_addr,
 	std::vector<perf::FrameFunction> functions;
 	functions.push_back (std::move (fn));
 
-	const char *name = "mono_lazy_entry_resolver";
+	const char *name = DisplayName;
 
 	/* The pool gives the resolver a mapping of its own, so the room behind it
 	 * is the rest of a page. */
@@ -1044,7 +1044,7 @@ LazyEntryAvxABI::writeResolverCode (char *resolver_mem, ExecutorAddr resolver_ad
 	std::vector<perf::FrameFunction> functions;
 	functions.push_back (std::move (fn));
 
-	const char *name = "mono_lazy_entry_resolver_avx";
+	const char *name = DisplayName;
 
 	perf::publish (name,
 	               { resolver_addr.toPtr<const uint8_t *> (), ResolverCodeSize,

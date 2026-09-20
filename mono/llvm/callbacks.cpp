@@ -70,6 +70,18 @@ LazyCallbacks::~LazyCallbacks ()
 	arch::unregister_resolver_unwind_info (resolver_avx_);
 }
 
+void
+LazyCallbacks::foreach_resolver (void (*visit) (const void *, uint32_t, const char *, void *),
+                                 void *user_data) const
+{
+	if (resolver_)
+		visit (resolver_.toPtr<const void *> (), arch::LazyEntryABI::ResolverCodeSize,
+		      arch::LazyEntryABI::DisplayName, user_data);
+	if (resolver_avx_)
+		visit (resolver_avx_.toPtr<const void *> (), arch::LazyEntryAvxABI::ResolverCodeSize,
+		      arch::LazyEntryAvxABI::DisplayName, user_data);
+}
+
 TrampolinePool &
 LazyCallbacks::pool_for (ResolverKind kind)
 {

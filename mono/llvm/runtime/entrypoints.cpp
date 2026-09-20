@@ -224,6 +224,14 @@ mono_llvm_jit_rearm_trampoline (MonoDomain *domain, void *trampoline)
 	mono::MonoBackend::rearm_trampoline (domain, trampoline);
 }
 
+void
+mono_llvm_jit_foreach_stub (MonoDomain *domain,
+                            void (*visit) (const void *, uint32_t, const char *, void *),
+                            void *user_data)
+{
+	mono::MonoBackend::foreach_stub (domain, visit, user_data);
+}
+
 
 mono_bool
 mono_llvm_jit_verify_method (MonoMethod *method, MonoError *error)

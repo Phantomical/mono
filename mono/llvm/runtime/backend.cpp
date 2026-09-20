@@ -1699,6 +1699,23 @@ MonoBackend::rearm_trampoline (MonoDomain *domain, void *trampoline)
 }
 
 void
+MonoBackend::foreach_stub (MonoDomain *domain,
+                          void (*visit) (const void *, uint32_t, const char *, void *),
+                          void *user_data)
+{
+	if (!instance)
+		return;
+
+	MONO_LOCK (instance->mutex_)
+	{
+		auto it = instance->domains_.find (domain);
+
+		if (it != instance->domains_.end ())
+			it->second->callbacks->foreach_resolver (visit, user_data);
+	}
+}
+
+void
 MonoBackend::stop_compilation (MonoDomain *domain)
 {
 	if (!instance)
