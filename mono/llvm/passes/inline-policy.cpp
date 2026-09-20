@@ -133,6 +133,11 @@ cl::opt<unsigned> PromotedColdPercent (
 	cl::desc ("Share of the entry count, as a percentage, a block must run to be "
 	          "more than cold in a promoted body"));
 
+cl::opt<bool> TrustZeroSiteCount (
+	"mono-inline-tier2-trust-zero-count", cl::Hidden, cl::init (false),
+	cl::desc ("Treat zero call-site counts in promoted bodies as measured rather "
+	          "than rounded"));
+
 /// Whether \p v is an object this compile allocated under a class it names, or
 /// a merge whose every arm independently is.
 ///
@@ -933,7 +938,26 @@ tier2_site_heat (const CallBase &call, BlockFrequencyInfo *caller_bfi)
 		caller_bfi->getBlockProfileCount (&caller->getEntryBlock ());
 
 	// Without counts there is nothing to rank the site against, so LLVM decides.
-	if (!site || !entry || *entry == 0)
+	if (!site || !entry)
+		return std::nullopt;
+
+	/*
+	 * BFI derives absolute block counts from the function entry count. With a
+	 * small entry count, an active site can still round down to zero. Do not
+	 * classify that loss of precision as cold unless explicitly requested.
+	 * Preserve the hot budget for a callee carrying an inline hint.
+	 */
+	if (*site == 0 && !TrustZeroSiteCount
+	    && *entry * std::min<unsigned> (PromotedColdPercent, 100) < 100) {
+		const Function *callee = call.getCalledFunction ();
+
+		if (callee != nullptr && callee->hasFnAttribute (Attribute::InlineHint))
+			return SiteHeat::hot;
+
+		return SiteHeat::ordinary;
+	}
+
+	if (*entry == 0)
 		return std::nullopt;
 
 	/*
