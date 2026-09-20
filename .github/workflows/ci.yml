@@ -18,6 +18,14 @@ env:
   # cmake/MonoGenBuildVer.cmake honours SOURCE_DATE_EPOCH, so pinning it keeps
   # main.c and main-sgen.c cacheable too.
   SOURCE_DATE_EPOCH: "1700000000"
+  # The build job splits the test list, so it needs the shard count, and a
+  # strategy: block cannot read env to get it. Each shard checks this number
+  # against its own matrix, because a matrix smaller than the split would drop
+  # tests with nothing going red.
+  TEST_SHARDS: "8"
+  # Applied where the list is split, so the shards run the names they are given
+  # and no step downstream filters again.
+  CTEST_EXCLUDE_LABELS: "bcl|slow|stress|acceptance|interp-mixed"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -37,6 +45,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
 
+    # actions: write is what lets the prune step below delete this branch's
+    # superseded ccache entries.
+    permissions:
+      contents: read
+      actions: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -54,6 +68,10 @@ jobs:
       # so a fixed key would freeze at whatever the very first run compiled.
       # Branch isolation comes from Actions' own cache scoping, not from the key.
       #
+      # `clang` is in the prefix so this fallback cannot reach the GCC job's
+      # entries, which ccache answers nothing out of -- it hashes the compiler --
+      # and which the prune step below must not delete either.
+      #
       # Restore and save are separate steps because the combined action saves in
       # a post step, and a post step does not run for a cancelled job and is
       # skipped for a failed one. With cancel-in-progress on and the suite
@@ -62,44 +80,86 @@ jobs:
       # against sources it had already built once. Saving as soon as the build
       # succeeds is what makes the next run's hit rate a property of the
       # sources rather than of how the suite ended.
+      # Where the eviction below cuts.  A restore preserves the mtimes tar
+      # recorded, so anything ccache touches after this point is what this
+      # build used and everything else still carries the age it arrived with.
+      - name: Note when this job started using ccache
+        id: ccache-epoch
+        run: echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Restore ccache
         uses: actions/cache/restore@v6
         with:
           path: ~/.ccache
-          key: ccache-linux-x64-${{ github.sha }}
-          restore-keys: ccache-linux-x64-
+          key: ccache-linux-x64-clang-${{ github.sha }}
+          restore-keys: ccache-linux-x64-clang-
 
-      # Everything the managed outputs are compiled from, as one exact key.  A
-      # tree SHA is instant and covers the whole subtree, where hashFiles () over
-      # mcs/ alone would read 51233 files.  The distro mono is in it because
+      # Everything the managed outputs are compiled from.  A tree SHA is instant
+      # and covers the whole subtree, where hashFiles () over mcs/ alone would
+      # read 51233 files.  The distro mono is in it because
       # MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS makes it the compiler these assemblies
       # come out of.
-      - name: Managed build cache key
+      #
+      # Two keys rather than one, because the halves move at different rates:
+      # over the last 59 commits on the default branch mono/tests changed 24
+      # times and mcs 19, so one key over both missed 59% of the transitions
+      # against 42% for the class libraries alone.  The corpora are built
+      # against the class libraries, so the corpora key is a superset of the
+      # other and the reachable states are both-hit, class-libraries-hit and
+      # both-miss.
+      - name: Managed build cache keys
         id: managed-key
         run: |
-          printf '%s\n' \
-            "$(git rev-parse HEAD:mcs)" \
-            "$(git rev-parse HEAD:cmake)" \
-            "$(git rev-parse HEAD:mono/tests)" \
-            "$(git rev-parse HEAD:external)" \
-            "$(dpkg-query -W -f='${Version}' mono-devel)" \
-            | sha256sum | cut -c1-40 \
-            | sed 's/^/key=managed-linux-x64-v1-/' >> "$GITHUB_OUTPUT"
+          mcs=$(git rev-parse HEAD:mcs)
+          cmakedir=$(git rev-parse HEAD:cmake)
+          tests=$(git rev-parse HEAD:mono/tests)
+          external=$(git rev-parse HEAD:external)
+          host=$(dpkg-query -W -f='${Version}' mono-devel)
+          digest () { printf '%s\n' "$@" | sha256sum | cut -c1-40; }
+          {
+            echo "mcs=managed-linux-x64-mcs-v1-$(digest "$mcs" "$cmakedir" "$external" "$host")"
+            echo "tests=managed-linux-x64-tests-v1-$(digest "$mcs" "$cmakedir" "$tests" "$external" "$host")"
+          } >> "$GITHUB_OUTPUT"
 
-      # No restore-keys, deliberately.  The backdating below makes ninja trust
-      # the restored outputs, so an inexact hit would serve assemblies compiled
-      # from other sources and nothing downstream would notice.  A key that does
-      # not match exactly has to miss and rebuild.
-      - name: Restore managed build
-        id: managed-cache
+      # No restore-keys on either, deliberately.  The backdating below makes
+      # ninja trust the restored outputs, so an inexact hit would serve
+      # assemblies compiled from other sources and nothing downstream would
+      # notice.  A key that does not match exactly has to miss and rebuild.
+      - name: Restore the class libraries
+        id: mcs-cache
         uses: actions/cache/restore@v6
         with:
           path: |
             build/mcs
-            build/mono/tests
             build/.ninja_log
             build/.ninja_deps
-          key: ${{ steps.managed-key.outputs.key }}
+          key: ${{ steps.managed-key.outputs.mcs }}
+
+      # Both caches carry the ninja state, so this one keeps its copy outside
+      # the build tree: restored at build/ it would overwrite the other's.
+      - name: Restore the test corpora
+        id: tests-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/mono/tests
+            ninja-state
+          key: ${{ steps.managed-key.outputs.tests }}
+
+      # Prefer this copy, because this key is a superset: a run that saved it
+      # compiled both halves from the sources this run has, so its log and deps
+      # describe both.
+      #
+      # Pairing it with class libraries another run saved is safe either way it
+      # skews.  .ninja_deps records each output's mtime and refuses itself when
+      # the file on disk is newer ("stored deps info out of date"), and an
+      # output that is absent is dirty whatever the log says.  So a mismatched
+      # pair costs a rebuild; it cannot leave a stale output standing.
+      - name: Take the ninja state from the corpora cache
+        if: steps.tests-cache.outputs.cache-hit == 'true'
+        run: |
+          mkdir -p build
+          mv ninja-state/.ninja_log ninja-state/.ninja_deps build/
 
       # Ninja decides an edge is stale from the output mtime recorded in
       # .ninja_log, not from the file on disk, so touching the restored outputs
@@ -107,7 +167,9 @@ jobs:
       # output mtimes on the way in, and SOURCE_DATE_EPOCH is already older than
       # any of them.
       - name: Backdate sources behind the restored outputs
-        if: steps.managed-cache.outputs.cache-hit == 'true'
+        if: >-
+          steps.mcs-cache.outputs.cache-hit == 'true' ||
+          steps.tests-cache.outputs.cache-hit == 'true'
         run: |
           find . -name .git -prune -o -path ./build -prune -o -print0 \
             | xargs -0r touch -h -d "@$SOURCE_DATE_EPOCH"
@@ -125,9 +187,20 @@ jobs:
       # MONO_UNITY_BUILD statically links LLVM the way a Unity player does,
       # instead of the libLLVM.so apt.llvm.org ships otherwise, so CI covers
       # that link shape too.
+      #
+      # -Os -g1 restates cmake/MonoCompilerFlags.cmake's own default for this
+      # build type with the debug info cut down.  Full DWARF is 82% of every
+      # object here, 146 MB of 179, and -g1 measured 31% of -g over the whole
+      # compile database -- 27% over mono/llvm, which is the third of the bytes
+      # LLVM's own headers put there.  Naming CMAKE_BUILD_TYPE is what stops
+      # that file FORCE-ing -g back over these: it only sets the flags when no
+      # build type was asked for.
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=MinSizeRel \
+            -DCMAKE_C_FLAGS_MINSIZEREL="-Os -g1" \
+            -DCMAKE_CXX_FLAGS_MINSIZEREL="-Os -g1" \
             -DCMAKE_C_COMPILER=clang-18 \
             -DCMAKE_CXX_COMPILER=clang++-18 \
             -DMONO_LLVM_PREFIX=/usr/lib/llvm-23 \
@@ -141,27 +214,86 @@ jobs:
         id: build
         run: cmake --build build -j "$(nproc)"
 
-      # A hit restored exactly what this key describes, so there is nothing new
-      # to write back.
-      - name: Save managed build
+      # A hit restored exactly what its key describes, so there is nothing new
+      # to write back for that half.
+      - name: Save the class libraries
         if: >-
           steps.build.outcome == 'success' &&
-          steps.managed-cache.outputs.cache-hit != 'true'
+          steps.mcs-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: |
             build/mcs
-            build/mono/tests
             build/.ninja_log
             build/.ninja_deps
-          key: ${{ steps.managed-key.outputs.key }}
+          key: ${{ steps.managed-key.outputs.mcs }}
+
+      - name: Stage the ninja state beside the corpora
+        if: >-
+          steps.build.outcome == 'success' &&
+          steps.tests-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ninja-state
+          cp build/.ninja_log build/.ninja_deps ninja-state/
+
+      - name: Save the test corpora
+        if: >-
+          steps.build.outcome == 'success' &&
+          steps.tests-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            build/mono/tests
+            ninja-state
+          key: ${{ steps.managed-key.outputs.tests }}
+
+      # A compile flag that changes every object's hash leaves the whole
+      # previous generation in the cache, restored and re-saved for good: -g1
+      # left the GCC job's entry at 507 MB, 475 of which was the -g objects it
+      # inherited through the restore-key and will never hit again.  Nothing
+      # collects those, because CCACHE_MAXSIZE is 3G and the cache is a sixth
+      # of that, so the ceiling never binds.
+      #
+      # ccache touches a file's mtime when it hits, the manifest as well as the
+      # result, so cutting at this job's own start keeps direct mode whole and
+      # drops exactly what the build did not read.  The age is computed rather
+      # than named so that it stays above the build's own duration as that
+      # moves.
+      - name: Drop the ccache entries this build did not use
+        if: steps.build.outcome == 'success'
+        run: |
+          before=$(ccache --show-stats | grep -i 'cache size' || true)
+          ccache --evict-older-than \
+            "$(( $(date +%s) - ${{ steps.ccache-epoch.outputs.at }} + 60 ))s"
+          echo "$before"
+          ccache --show-stats | grep -i 'cache size' || true
 
       - name: Save ccache
         if: steps.build.outcome == 'success'
         uses: actions/cache/save@v6
         with:
           path: ~/.ccache
-          key: ccache-linux-x64-${{ github.sha }}
+          key: ccache-linux-x64-clang-${{ github.sha }}
+
+      # Every run writes an entry under a key nothing writes twice, and nothing
+      # bounded how many a branch left behind: the two Linux ccache families
+      # reached 18 entries and 8.1 GB of the repo's 10 GB budget, which turns
+      # the whole budget over in 82 minutes and evicts the managed caches every
+      # other branch reads through the default branch's scope.  Only the newest
+      # is reachable, because the restore-key above takes the newest match.
+      #
+      # Scoped to this family's prefix and this ref, so it reaches neither the
+      # GCC job's entries nor another branch's.  Never fatal: a run that cannot
+      # delete has still built.
+      - name: Prune superseded ccache entries
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --ref "$GITHUB_REF" --key ccache-linux-x64-clang- \
+            --sort created_at --order desc --limit 100 --json id \
+            --jq '.[1:][].id' | xargs -r -n1 gh cache delete
 
       - name: ccache statistics
         run: ccache --show-stats --verbose
@@ -170,6 +302,24 @@ jobs:
         run: |
           ./build/mono/mini/mono-sgen --version
           ./build/mono/mini/mono-sgen --version | grep -q 'LLVM:.*yes'
+
+      # A miss is not a failure: with no durations every test takes the same
+      # fallback, which splits them evenly by count.
+      - name: Restore the test durations
+        uses: actions/cache/restore@v6
+        with:
+          path: ctest-costs.txt
+          key: ctest-costs-linux-x64-${{ github.sha }}
+          restore-keys: ctest-costs-linux-x64-
+
+      # Cut once here rather than in each shard: shards cutting their own lists
+      # would have to agree, and a durations entry that landed between two of
+      # them would leave tests run twice or not at all.
+      - name: Balance the test shards
+        run: >
+          python3 .github/scripts/shard-tests.py
+          --build build --shards "$TEST_SHARDS" --costs ctest-costs.txt
+          --exclude-labels "$CTEST_EXCLUDE_LABELS" --out build/shards
 
       - name: Package the KSP zip
         run: cmake --build build --target package-ksp -j "$(nproc)"
@@ -190,16 +340,17 @@ jobs:
           path: ksp-package-linux
           if-no-files-found: error
 
-      # The whole tree rather than a selection of it. 1.6G goes to 410M in 18s,
-      # which is far below what any pruning could be worth, and a prune that
-      # dropped a data file some corpus reads would surface as one red test in
-      # one shard rather than as a missing file.
+      # The whole tree bar the objects, which are 205 MB that the shards pay to
+      # unpack and never read -- they run binaries and never relink. Everything
+      # else goes, because a prune that dropped a data file some corpus reads
+      # would surface as one red test in one shard rather than as a missing
+      # file.
       #
       # zstd rather than the artifact's own zip, which single-threads deflate
       # over the whole tree. The upload then compresses a compressed file, so
       # compression-level 0 keeps it from paying for that twice.
       - name: Pack the build tree
-        run: tar -I 'zstd -3 -T0' -cf build.tzst build
+        run: tar --exclude='*.o' -I 'zstd -3 -T0' -cf build.tzst build
 
       - name: Upload the build tree
         uses: actions/upload-artifact@v7
@@ -227,6 +378,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
+    permissions:
+      contents: read
+      actions: write
+
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -235,6 +390,11 @@ jobs:
 
       - name: Install dependencies
         uses: ./.github/actions/deps
+
+      # See the clang job for what this cut is.
+      - name: Note when this job started using ccache
+        id: ccache-epoch
+        run: echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
 
       # A key of its own. A cache entry is immutable once written, so two jobs
       # saving one key means the second save is refused and its objects are
@@ -250,9 +410,14 @@ jobs:
       # MONO_ENABLE_MCS_BUILD=OFF is what makes this the native half. The class
       # libraries are Roslyn's output and no C++ compiler reaches them, so
       # building them again here would report on nothing this job is about.
+      #
+      # -Os -g1 for the reason the clang job gives.
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=MinSizeRel \
+            -DCMAKE_C_FLAGS_MINSIZEREL="-Os -g1" \
+            -DCMAKE_CXX_FLAGS_MINSIZEREL="-Os -g1" \
             -DCMAKE_C_COMPILER=gcc \
             -DCMAKE_CXX_COMPILER=g++ \
             -DMONO_LLVM_PREFIX=/usr/lib/llvm-23 \
@@ -266,6 +431,16 @@ jobs:
         id: build
         run: cmake --build build -j "$(nproc)"
 
+      # See the clang job for why, and for what -g1 left behind here.
+      - name: Drop the ccache entries this build did not use
+        if: steps.build.outcome == 'success'
+        run: |
+          before=$(ccache --show-stats | grep -i 'cache size' || true)
+          ccache --evict-older-than \
+            "$(( $(date +%s) - ${{ steps.ccache-epoch.outputs.at }} + 60 ))s"
+          echo "$before"
+          ccache --show-stats | grep -i 'cache size' || true
+
       - name: Save ccache
         if: steps.build.outcome == 'success'
         uses: actions/cache/save@v6
@@ -273,23 +448,24 @@ jobs:
           path: ~/.ccache
           key: ccache-linux-x64-gcc-${{ github.sha }}
 
+      # See the clang job's own prune step for what this bounds.
+      - name: Prune superseded ccache entries
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --ref "$GITHUB_REF" --key ccache-linux-x64-gcc- \
+            --sort created_at --order desc --limit 100 --json id \
+            --jq '.[1:][].id' | xargs -r -n1 gh cache delete
+
       - name: ccache statistics
         run: ccache --show-stats --verbose
 
   # ---------------------------------------------------------------------------
-  # ctest's own index filter is the shard: `-I <n>,,<count>` takes every count'th
-  # test from the filtered list, so the shards partition it with no overlap and
-  # no gaps, and nothing has to be checked in and kept current. Order comes from
-  # the generated CTestTestfile.cmake, which is the build job's own file here,
-  # so every shard indexes the same list.
-  #
-  # `strategy.job-total` is the count, so changing the shard list below is the
-  # whole edit.
-  #
-  # The selection is what the six per-suite steps this replaces added up to, and
-  # it is exactly that: the union was 11948 tests and this is the same 11948.
-  # `slow` is disjoint from all of them -- it is entirely bcl -- so excluding it
-  # here drops nothing the suites were running.
+  # Each shard runs the test names the build job wrote for it. The split is by
+  # measured duration rather than by test index, because balancing how many
+  # tests a shard runs is not what the job waits for.
   # ---------------------------------------------------------------------------
   test:
     name: Test ${{ matrix.shard }}/${{ strategy.job-total }}
@@ -306,14 +482,20 @@ jobs:
 
     steps:
       # The build tree's CTestTestfile.cmake names 5332 paths under mono/ and
-      # 5274 under cmake/, and one `tools` test runs csi.exe out of the
-      # roslyn-binaries submodule, so a shard needs the source tree as checked
-      # out for the build. The runner puts it at the same GITHUB_WORKSPACE in
-      # every job, which is what makes those absolute paths resolve here.
+      # 5274 under cmake/, so a shard needs the source tree as checked out for
+      # the build. The runner puts it at the same GITHUB_WORKSPACE in every job,
+      # which is what makes those absolute paths resolve here.
+      #
+      # Submodules are the exception. A shard runs binaries and never builds, so
+      # the build inputs are not its business, and `recursive` cloned 27 of them
+      # -- 108s of a 144s checkout on Windows, 30s of that libatomic_ops, which
+      # exists so that bdwgc can compile. One submodule is named by a test
+      # command: the `csi` test runs csi.exe out of roslyn-binaries.
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          submodules: recursive
+
+      - name: Check out the submodule a test needs
+        run: git submodule update --init --depth 1 external/roslyn-binaries
 
       - name: Install dependencies
         uses: ./.github/actions/deps
@@ -326,12 +508,42 @@ jobs:
       - name: Unpack the build tree
         run: tar --zstd -xf build.tzst
 
+      # The step above is a claim about the generated test commands, and this is
+      # what stops it going stale in silence: every source path under external/
+      # that a test names has to be one that is checked out. A new one fails
+      # here, naming itself, rather than as a puzzling missing file in one shard.
+      #
+      # Comment lines carry the source directory CMake generated each file for,
+      # and subdirs () names a directory under build/, so neither is a
+      # dependency on the source tree.
+      - name: Every submodule a test names is checked out
+        run: |
+          named=$(grep -rh --include=CTestTestfile.cmake \
+                    -vE '^[[:space:]]*(#|subdirs\()' build \
+                  | grep -oE 'external/[A-Za-z0-9._-]+' | sort -u || true)
+          missing=
+          for path in $named; do
+            test -e "$path" || missing="$missing $path"
+          done
+          test -z "$missing" || {
+            echo "::error::a test names$missing, which this job does not check out"
+            exit 1
+          }
+
       # Cheap and immediate: a tree that did not survive the round trip, or an
       # LLVM the shard cannot load, fails here rather than as 1494 red tests.
       - name: Runtime identifies itself
         run: |
           ./build/mono/mini/mono-sgen --version
           ./build/mono/mini/mono-sgen --version | grep -q 'LLVM:.*yes'
+
+      - name: The build tree was split for this matrix
+        run: |
+          got=$(cat build/shards/count)
+          test "$got" = "${{ strategy.job-total }}" || {
+            echo "::error::the build tree was split $got ways, this matrix has ${{ strategy.job-total }}"
+            exit 1
+          }
 
       # apt.llvm.org builds LLVM with LLVM_ENABLE_ASSERTIONS OFF, so nothing
       # here catches the API misuse an assertions build would. What an
@@ -348,8 +560,7 @@ jobs:
         run: >
           ctest --test-dir build -j "$(nproc)" --output-on-failure
           --output-junit junit-shard-${{ matrix.shard }}.xml
-          -LE "bcl|slow|stress|acceptance|interp-mixed"
-          -I ${{ matrix.shard }},,${{ strategy.job-total }}
+          --tests-from-file shards/${{ matrix.shard }}.txt
 
       - name: Upload test results
         if: ${{ !cancelled() }}
@@ -469,33 +680,53 @@ jobs:
           "$env:ProgramFiles\NASM" `
             | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
-      - name: Managed build cache key
+      # Two keys, for the reason the Linux job's own step gives.
+      - name: Managed build cache keys
         id: managed-key
         shell: bash
         run: |
           mono --version | head -1
-          printf '%s\n' \
-            "$(git rev-parse HEAD:mcs)" \
-            "$(git rev-parse HEAD:cmake)" \
-            "$(git rev-parse HEAD:mono/tests)" \
-            "$(git rev-parse HEAD:external)" \
-            "$(mono --version | head -1)" \
-            | sha256sum | cut -c1-40 \
-            | sed 's/^/key=managed-windows-x64-v1-/' >> "$GITHUB_OUTPUT"
+          mcs=$(git rev-parse HEAD:mcs)
+          cmakedir=$(git rev-parse HEAD:cmake)
+          tests=$(git rev-parse HEAD:mono/tests)
+          external=$(git rev-parse HEAD:external)
+          host=$(mono --version | head -1)
+          digest () { printf '%s\n' "$@" | sha256sum | cut -c1-40; }
+          {
+            echo "mcs=managed-windows-x64-mcs-v1-$(digest "$mcs" "$cmakedir" "$external" "$host")"
+            echo "tests=managed-windows-x64-tests-v1-$(digest "$mcs" "$cmakedir" "$tests" "$external" "$host")"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Restore managed build
-        id: managed-cache
+      - name: Restore the class libraries
+        id: mcs-cache
         uses: actions/cache/restore@v6
         with:
           path: |
             build/mcs
-            build/mono/tests
             build/.ninja_log
             build/.ninja_deps
-          key: ${{ steps.managed-key.outputs.key }}
+          key: ${{ steps.managed-key.outputs.mcs }}
+
+      - name: Restore the test corpora
+        id: tests-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/mono/tests
+            ninja-state
+          key: ${{ steps.managed-key.outputs.tests }}
+
+      - name: Take the ninja state from the corpora cache
+        if: steps.tests-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          mkdir -p build
+          mv ninja-state/.ninja_log ninja-state/.ninja_deps build/
 
       - name: Backdate sources behind the restored outputs
-        if: steps.managed-cache.outputs.cache-hit == 'true'
+        if: >-
+          steps.mcs-cache.outputs.cache-hit == 'true' ||
+          steps.tests-cache.outputs.cache-hit == 'true'
         shell: bash
         run: |
           find . -name .git -prune -o -path ./build -prune -o -print0 \
@@ -606,18 +837,37 @@ jobs:
           path: build/vcpkg_installed
           key: vcpkg-x64-windows-${{ hashFiles('vcpkg.json', 'vcpkg-triplets/**') }}
 
-      - name: Save managed build
+      - name: Save the class libraries
         if: >-
           steps.build.outcome == 'success' &&
-          steps.managed-cache.outputs.cache-hit != 'true'
+          steps.mcs-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: |
             build/mcs
-            build/mono/tests
             build/.ninja_log
             build/.ninja_deps
-          key: ${{ steps.managed-key.outputs.key }}
+          key: ${{ steps.managed-key.outputs.mcs }}
+
+      - name: Stage the ninja state beside the corpora
+        if: >-
+          steps.build.outcome == 'success' &&
+          steps.tests-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p ninja-state
+          cp build/.ninja_log build/.ninja_deps ninja-state/
+
+      - name: Save the test corpora
+        if: >-
+          steps.build.outcome == 'success' &&
+          steps.tests-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            build/mono/tests
+            ninja-state
+          key: ${{ steps.managed-key.outputs.tests }}
 
       - name: ccache statistics
         if: ${{ !cancelled() }}
@@ -632,6 +882,21 @@ jobs:
         run: |
           ./build/mono/mini/mono-sgen.exe --version
           ./build/mono/mini/mono-sgen.exe --version | grep -q 'LLVM:.*yes'
+
+      # Both for the reason the Linux job's own pair gives.
+      - name: Restore the test durations
+        uses: actions/cache/restore@v6
+        with:
+          path: ctest-costs.txt
+          key: ctest-costs-windows-x64-${{ github.sha }}
+          restore-keys: ctest-costs-windows-x64-
+
+      - name: Balance the test shards
+        shell: bash
+        run: >
+          python3 .github/scripts/shard-tests.py
+          --build build --shards "$TEST_SHARDS" --costs ctest-costs.txt
+          --exclude-labels "$CTEST_EXCLUDE_LABELS" --out build/shards
 
       - name: Pack the build tree
         shell: bash
@@ -677,10 +942,14 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
 
     steps:
+      # Submodules trimmed to the one a test names, for the reason the Linux
+      # shard's own Checkout gives. This is the job the 144s was measured on.
       - name: Checkout
         uses: actions/checkout@v7
-        with:
-          submodules: recursive
+
+      - name: Check out the submodule a test needs
+        shell: bash
+        run: git submodule update --init --depth 1 external/roslyn-binaries
 
       - name: Exclude the workspace from Windows Defender
         shell: pwsh
@@ -700,11 +969,35 @@ jobs:
         shell: bash
         run: tar --zstd -xf build.tzst
 
+      - name: Every submodule a test names is checked out
+        shell: bash
+        run: |
+          named=$(grep -rh --include=CTestTestfile.cmake \
+                    -vE '^[[:space:]]*(#|subdirs\()' build \
+                  | grep -oE 'external/[A-Za-z0-9._-]+' | sort -u || true)
+          missing=
+          for path in $named; do
+            test -e "$path" || missing="$missing $path"
+          done
+          test -z "$missing" || {
+            echo "::error::a test names$missing, which this job does not check out"
+            exit 1
+          }
+
       - name: Runtime identifies itself
         shell: bash
         run: |
           ./build/mono/mini/mono-sgen.exe --version
           ./build/mono/mini/mono-sgen.exe --version | grep -q 'LLVM:.*yes'
+
+      - name: The build tree was split for this matrix
+        shell: bash
+        run: |
+          got=$(cat build/shards/count)
+          test "$got" = "${{ strategy.job-total }}" || {
+            echo "::error::the build tree was split $got ways, this matrix has ${{ strategy.job-total }}"
+            exit 1
+          }
 
       - name: Test
         shell: bash
@@ -713,8 +1006,7 @@ jobs:
         run: >
           ctest --test-dir build -j "$NUMBER_OF_PROCESSORS" --output-on-failure
           --output-junit junit-shard-${{ matrix.shard }}.xml
-          -LE "bcl|slow|stress|acceptance|interp-mixed"
-          -I ${{ matrix.shard }},,${{ strategy.job-total }}
+          --tests-from-file shards/${{ matrix.shard }}.txt
 
       - name: Upload test results
         if: ${{ !cancelled() }}
@@ -726,3 +1018,54 @@ jobs:
             build/Testing/Temporary/LastTest*.log
           if-no-files-found: warn
           retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # What the next run splits on: each shard times one slice, so the union of
+  # their junit files is one run's whole corpus.
+  #
+  # Cancelled runs are left out, because a cancelled shard reports only the
+  # tests it had reached.
+  # ---------------------------------------------------------------------------
+  test-costs:
+    name: Record the test durations
+    needs: [test, test-windows]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+      actions: write
+
+    strategy:
+      matrix:
+        platform: [linux-x64, windows-x64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download the test results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: test-results-${{ matrix.platform }}-*
+          path: results
+
+      - name: Collect the durations
+        run: >
+          python3 .github/scripts/test-costs.py
+          --results results --out ctest-costs.txt
+
+      - name: Save the test durations
+        uses: actions/cache/save@v6
+        with:
+          path: ctest-costs.txt
+          key: ctest-costs-${{ matrix.platform }}-${{ github.sha }}
+
+      - name: Prune superseded duration entries
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --ref "$GITHUB_REF" --key ctest-costs-${{ matrix.platform }}- \
+            --sort created_at --order desc --limit 100 --json id \
+            --jq '.[1:][].id' | xargs -r -n1 gh cache delete
