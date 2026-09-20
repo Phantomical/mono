@@ -506,12 +506,35 @@ mono_arch_unwind_frame (MonoDomain *domain, MonoJitTlsData *jit_tls,
 		else
 			frame->type = FRAME_TYPE_MANAGED;
 
+		unwind_info = mono_jinfo_get_unwind_info (ji, &unwind_info_len);
+
+		frame->unwind_info = unwind_info;
+		frame->unwind_info_len = unwind_info_len;
+
 		/*
-		 * LLVM-generated save_lmf wrappers have jit info, so they enter this
-		 * branch instead of the LMF branch below. Recover the caller context
-		 * from the LMF rather than unwinding the wrapper's CFI.
+		printf ("%s %p %p\n", ji->d.method->name, ji->code_start, ip);
+		mono_print_unwind_info (unwind_info, unwind_info_len);
+		*/
+		/* LLVM compiled code doesn't have this info */
+		if (ji->has_arch_eh_info)
+			epilog = (guint8*)ji->code_start + ji->code_size - mono_jinfo_get_epilog_size (ji);
+
+		for (i = 0; i < AMD64_NREG; ++i)
+			regs [i] = new_ctx->gregs [i];
+
+		gboolean success = mono_unwind_frame (unwind_info, unwind_info_len, (guint8 *)ji->code_start,
+						   (guint8*)ji->code_start + ji->code_size,
+						   (guint8 *)ip, epilog ? &epilog : NULL, regs, MONO_MAX_IREGS + 1,
+						   save_locations, MONO_MAX_IREGS, &cfa);
+
+		/*
+		 * A save_lmf wrapper's own CFI can fail, or return a CFA that does
+		 * not clear the current SP, stalling the walk on the spot. The LMF
+		 * is a fallback for that case only: it names where a call from this
+		 * wrapper resumes, not this wrapper's own caller.
 		 */
-		if (!ji->is_trampoline && !ji->async) {
+		if ((!success || (gsize) cfa <= (gsize) MONO_CONTEXT_GET_SP (ctx)) &&
+			!ji->is_trampoline && !ji->async) {
 			MonoMethod *method = jinfo_get_method (ji);
 
 			if (method && method->save_lmf && *lmf &&
@@ -533,33 +556,12 @@ mono_arch_unwind_frame (MonoDomain *domain, MonoJitTlsData *jit_tls,
 			}
 		}
 
-		unwind_info = mono_jinfo_get_unwind_info (ji, &unwind_info_len);
-
-		frame->unwind_info = unwind_info;
-		frame->unwind_info_len = unwind_info_len;
-
-		/*
-		printf ("%s %p %p\n", ji->d.method->name, ji->code_start, ip);
-		mono_print_unwind_info (unwind_info, unwind_info_len);
-		*/
-		/* LLVM compiled code doesn't have this info */
-		if (ji->has_arch_eh_info)
-			epilog = (guint8*)ji->code_start + ji->code_size - mono_jinfo_get_epilog_size (ji);
- 
-		for (i = 0; i < AMD64_NREG; ++i)
-			regs [i] = new_ctx->gregs [i];
-
-		gboolean success = mono_unwind_frame (unwind_info, unwind_info_len, (guint8 *)ji->code_start,
-						   (guint8*)ji->code_start + ji->code_size,
-						   (guint8 *)ip, epilog ? &epilog : NULL, regs, MONO_MAX_IREGS + 1,
-						   save_locations, MONO_MAX_IREGS, &cfa);
-
 		if (!success)
 			return FALSE;
 
 		for (i = 0; i < AMD64_NREG; ++i)
 			new_ctx->gregs [i] = regs [i];
- 
+
 		/* The CFA becomes the new SP value */
 		new_ctx->gregs [AMD64_RSP] = (host_mgreg_t)(gsize)cfa;
 
