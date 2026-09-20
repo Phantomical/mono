@@ -47,6 +47,9 @@ void sgen_card_table_init (SgenRememberedSet *remset);
 
 #if SIZEOF_VOID_P * 8 > CARD_TABLE_BITS
 #define SGEN_HAVE_OVERLAPPING_CARDS	1
+
+/* The largest range the overlapping card table can represent without aliasing itself. */
+#define SGEN_CARD_TABLE_MAX_RANGE_SIZE ((mword)CARD_COUNT_IN_BYTES << CARD_BITS)
 #endif
 
 #if TARGET_SIZEOF_VOID_P * 8 > CARD_TABLE_BITS

@@ -430,6 +430,15 @@ sgen_los_alloc_large_inner (GCVTable vtable, size_t size)
 	if (size > SSIZE_MAX - (mono_pagesize () - 1) - sizeof (LOSObject))
 		return NULL;
 
+#ifdef SGEN_HAVE_OVERLAPPING_CARDS
+	/*
+	 * A bulk write barrier can mark an entire reference object at once. Reject
+	 * objects whose ranges would alias themselves in the overlapping card table.
+	 */
+	if (SGEN_VTABLE_HAS_REFERENCES (vtable) && size > SGEN_CARD_TABLE_MAX_RANGE_SIZE)
+		return NULL;
+#endif
+
 #ifdef LOS_DUMMY
 	if (!los_segment)
 		los_segment = sgen_alloc_os_memory (LOS_SEGMENT_SIZE, SGEN_ALLOC_HEAP | SGEN_ALLOC_ACTIVATE, NULL);
