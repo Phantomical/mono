@@ -247,14 +247,58 @@ static gboolean is_initialized = FALSE;
 // Which flavour of an image/method event to emit.
 enum class EventKind { load, unload, dc_start, dc_end };
 
+/*
+ * Check the generated per-event predicates before constructing payloads.
+ * Provider IsEnabled alone does not account for level or keyword filters.
+ */
+static bool
+method_event_enabled (EventKind kind)
+{
+	switch (kind) {
+	case EventKind::dc_start:
+		return EventEnabledMethodDCStartVerbose_V2 ();
+	case EventKind::dc_end:
+		return EventEnabledMethodDCEndVerbose_V2 ();
+	default:
+		return EventEnabledMethodLoadVerbose_V2 ();
+	}
+}
+
+static bool
+method_il_map_enabled (EventKind kind)
+{
+	switch (kind) {
+	case EventKind::dc_start:
+		return EventEnabledMethodDCStartILToNativeMap ();
+	case EventKind::dc_end:
+		return EventEnabledMethodDCEndILToNativeMap ();
+	default:
+		return EventEnabledMethodILToNativeMap ();
+	}
+}
+
+static bool
+image_event_enabled (EventKind kind)
+{
+	switch (kind) {
+	case EventKind::dc_start:
+		return EventEnabledModuleDCStart_V2 ();
+	case EventKind::dc_end:
+		return EventEnabledModuleDCEnd_V2 ();
+	case EventKind::unload:
+		return EventEnabledModuleUnload_V2 ();
+	default:
+		return EventEnabledModuleLoad_V2 ();
+	}
+}
+
 static void
 image_event (MonoImage *image, EventKind kind)
 {
-	if (!MICROSOFT_WINDOWS_DOTNETRUNTIME_PROVIDER_Context.IsEnabled && !MICROSOFT_WINDOWS_DOTNETRUNTIME_RUNDOWN_PROVIDER_Context.IsEnabled)	{
-		ETW_PROFILER_LOG ("Providers not enabled, skipping image_event");
+	if (!image_event_enabled (kind)) {
+		ETW_PROFILER_LOG ("Module event not enabled, skipping image_event");
 		return;
 	}
-
 
 	// Mono loads ppdb files as "images" marked with metadata-only. We can skip them as they
 	// won't ever have executable code.
@@ -323,8 +367,8 @@ image_unloading (MonoProfiler *prof, MonoImage *image)
 static void
 stub_event (gpointer code, uint64_t size, const char *name, EventKind kind)
 {
-	if (!MICROSOFT_WINDOWS_DOTNETRUNTIME_PROVIDER_Context.IsEnabled && !MICROSOFT_WINDOWS_DOTNETRUNTIME_RUNDOWN_PROVIDER_Context.IsEnabled) {
-		ETW_PROFILER_LOG ("Providers not enabled, skipping stub_event");
+	if (!method_event_enabled (kind)) {
+		ETW_PROFILER_LOG ("Method event not enabled, skipping stub_event");
 		return;
 	}
 
@@ -365,8 +409,8 @@ method_load (MonoMethod *method, MonoJitInfo *jinfo, EventKind kind)
 	static __declspec(thread) unsigned int il_offsets[MAX_NUM_OFFSETS] = {0};
 	static __declspec(thread) unsigned int native_offsets[MAX_NUM_OFFSETS] = {0};
 
-	if (!MICROSOFT_WINDOWS_DOTNETRUNTIME_PROVIDER_Context.IsEnabled && !MICROSOFT_WINDOWS_DOTNETRUNTIME_RUNDOWN_PROVIDER_Context.IsEnabled) {
-		ETW_PROFILER_LOG ("Providers not enabled, skipping method_load");
+	if (!method_event_enabled (kind)) {
+		ETW_PROFILER_LOG ("Method event not enabled, skipping method_load");
 		return;
 	}
 
@@ -388,8 +432,9 @@ method_load (MonoMethod *method, MonoJitInfo *jinfo, EventKind kind)
 
 	char *sourceFilePath = NULL;
 
-	int compressed_num_lines =
-		(int) mono::etw_body_il_map (jinfo, il_offsets, native_offsets, MAX_NUM_OFFSETS);
+	int compressed_num_lines = method_il_map_enabled (kind)
+		? (int) mono::etw_body_il_map (jinfo, il_offsets, native_offsets, MAX_NUM_OFFSETS)
+		: 0;
 
 	MonoClass *klass = mono_method_get_class (method);
 	char *signature = mono_signature_get_desc (mono_method_signature_internal (method), TRUE);
