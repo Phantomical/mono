@@ -4312,6 +4312,8 @@ register_icalls (void)
 
 	register_icall (mono_object_castclass_with_cache, mono_icall_sig_object_object_ptr_ptr, FALSE);
 	register_icall (mono_object_isinst_with_cache, mono_icall_sig_object_object_ptr_ptr, FALSE);
+	register_icall (mono_object_castclass_remote, mono_icall_sig_object_object_ptr, FALSE);
+	register_icall (mono_object_isinst_remote, mono_icall_sig_object_object_ptr, FALSE);
 	register_icall (mono_generic_class_init, mono_icall_sig_void_ptr, FALSE);
 	register_icall (mono_fill_class_rgctx, mono_icall_sig_ptr_ptr_int, FALSE);
 	register_icall (mono_fill_method_rgctx, mono_icall_sig_ptr_ptr_int, FALSE);

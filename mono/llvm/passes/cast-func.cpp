@@ -248,6 +248,8 @@ lower (CallBase *site, bool throw_on_fail)
 	Value *target = site->getArgOperand (1);
 	Value *cache = site->getArgOperand (2);
 	auto *icall = cast<Function> (site->getArgOperand (3)->stripPointerCasts ());
+	auto *remote_icall = cast<Function> (site->getArgOperand (4)->stripPointerCasts ());
+	Value *proxy_class = site->getArgOperand (5);
 
 	BasicBlock *tail;
 	BasicBlock *pad = nullptr;
@@ -261,95 +263,109 @@ lower (CallBase *site, bool throw_on_fail)
 		tail = head->splitBasicBlock (site->getIterator (), "cast_tail");
 	}
 
-	BasicBlock *probe = BasicBlock::Create (c, "cast_probe", f);
-	BasicBlock *hit = BasicBlock::Create (c, "cast_hit", f);
-	BasicBlock *miss = BasicBlock::Create (c, "cast_miss", f);
 	BasicBlock *done = BasicBlock::Create (c, "cast_done", f);
 
 	MonoClass *klass = tested_class (site);
 	bool to_interface = klass != nullptr && mono_class_is_interface (klass);
+	bool via_subtype_chain = klass != nullptr && !to_interface && subtype_test_applies (klass);
+
 	BasicBlock *told_yes = nullptr;
-	BasicBlock *first = probe;
+	BasicBlock *first;
+	BasicBlock *probe = nullptr, *hit = nullptr, *miss = nullptr;
+	BasicBlock *remote = nullptr;
+	Value *answer = nullptr;
+	CallBase *slow = nullptr;
+	BasicBlock *new_pad_pred = nullptr;
 
 	IRBuilder<> b (c);
 
 	b.SetCurrentDebugLocation (site->getDebugLoc ());
 
 	/*
-	 * In front of the cache, the test the runtime itself ends at. For a target
-	 * class that is not an interface and not marshal-by-ref,
-	 * mono_class_is_assignable_from_general () answers
-	 * `mono_class_has_parent (object's class, target)`. For an interface,
-	 * mono_object_handle_isinst_mbyref_raw () answers the bitmap on the
-	 * object's vtable. Either one is a bounds check and one comparison, and
-	 * either answers for every class rather than for the last one, so neither
-	 * needs a slot and neither misses.
+	 * For the target classes accepted by subtype_test_applies (), the runtime
+	 * reaches the same superclass-chain test emitted here. A successful test
+	 * can therefore return the object immediately, without consulting the
+	 * per-site cache.
 	 *
-	 * Both are one-sided. Where one says yes the runtime says yes, and where
-	 * one says no the answer can still be yes through a path they do not
-	 * model, so a no falls through to the cache and then to the wrapper.
+	 * On failure, isinst can return null directly for an ordinary object and
+	 * uses the uncached helper only for a transparent proxy. castclass always
+	 * uses the helper because it must report an InvalidCastException. Targets
+	 * with other casting rules, including interfaces, retain the cache and the
+	 * general wrapper.
 	 */
-	if (klass != nullptr
-	    && (to_interface ? interface_test_applies (klass) : subtype_test_applies (klass))) {
+	if (via_subtype_chain) {
 		told_yes = BasicBlock::Create (c, "cast_inline_yes", f);
-		first = BasicBlock::Create (c, to_interface ? "cast_interface" : "cast_subtype", f);
+		first = BasicBlock::Create (c, "cast_subtype", f);
+		remote = BasicBlock::Create (c, "cast_remote", f);
 
 		b.SetInsertPoint (first);
-
-		if (to_interface)
-			emit_interface_test (b, f, klass, obj, told_yes, probe);
-		else
-			emit_subtype_test (b, f, klass, obj, target, told_yes, probe);
+		emit_subtype_test (b, f, klass, obj, target, told_yes, remote);
 
 		b.SetInsertPoint (told_yes);
 		b.CreateBr (done);
-	}
-
-	b.SetInsertPoint (probe);
-
-	Value *cached = b.CreateAlignedLoad (ptr, cache, Align (TARGET_SIZEOF_VOID_P),
-	                                     "cached_vtable");
-	Value *vtable = load_vtable (b, obj, "obj_vtable");
-
-	// The word holds the vtable that last answered here, with bit 0 set when that
-	// answer was no. Only isinst caches a no. castclass throws instead, so its
-	// word is the pointer on its own.
-	Value *cached_word = b.CreatePtrToInt (cached, word);
-	Value *cached_vtable =
-		throw_on_fail ? cached_word
-		              : b.CreateAnd (cached_word, ConstantInt::get (word, ~(uint64_t) 1));
-
-	b.CreateCondBr (b.CreateICmpEQ (cached_vtable, b.CreatePtrToInt (vtable, word)), hit,
-	                miss);
-
-	b.SetInsertPoint (hit);
-
-	Value *answer = obj;
-
-	if (!throw_on_fail) {
-		Value *answered_no = b.CreateTrunc (cached_word, b.getInt1Ty (), "answered_no");
-
-		answer = b.CreateSelect (answered_no, null, obj);
-	}
-
-	b.CreateBr (done);
-	b.SetInsertPoint (miss);
-
-	// Castclass reports a failed cast as a pending InvalidCastException. Only
-	// the wrapper's check after the call turns that into a throw.
-	SmallVector<Value *, 3> args = adapt_to_callee (b, icall, { obj, target, cache });
-	CallBase *slow;
-
-	if (pad != nullptr) {
-		slow = b.CreateInvoke (icall, done, pad, args);
 	} else {
-		CallInst *plain = b.CreateCall (icall, args);
+		probe = BasicBlock::Create (c, "cast_probe", f);
+		hit = BasicBlock::Create (c, "cast_hit", f);
+		miss = BasicBlock::Create (c, "cast_miss", f);
+		first = probe;
 
-		// A managed frame is observable, so a call in tail position stays a
-		// call. emit_protected_call () marks the sites it writes the same way.
-		plain->setTailCallKind (CallInst::TCK_NoTail);
-		slow = plain;
+		if (klass != nullptr && to_interface && interface_test_applies (klass)) {
+			told_yes = BasicBlock::Create (c, "cast_inline_yes", f);
+			first = BasicBlock::Create (c, "cast_interface", f);
+
+			b.SetInsertPoint (first);
+			emit_interface_test (b, f, klass, obj, told_yes, probe);
+
+			b.SetInsertPoint (told_yes);
+			b.CreateBr (done);
+		}
+
+		b.SetInsertPoint (probe);
+
+		Value *cached = b.CreateAlignedLoad (ptr, cache, Align (TARGET_SIZEOF_VOID_P),
+		                                     "cached_vtable");
+		Value *vtable = load_vtable (b, obj, "obj_vtable");
+
+		// The word holds the vtable that last answered here, with bit 0 set when that
+		// answer was no. Only isinst caches a no. castclass throws instead, so its
+		// word is the pointer on its own.
+		Value *cached_word = b.CreatePtrToInt (cached, word);
+		Value *cached_vtable =
+			throw_on_fail ? cached_word
+			              : b.CreateAnd (cached_word, ConstantInt::get (word, ~(uint64_t) 1));
+
+		b.CreateCondBr (b.CreateICmpEQ (cached_vtable, b.CreatePtrToInt (vtable, word)), hit,
+		                miss);
+
+		b.SetInsertPoint (hit);
+
+		answer = obj;
+
+		if (!throw_on_fail) {
+			Value *answered_no = b.CreateTrunc (cached_word, b.getInt1Ty (), "answered_no");
+
+			answer = b.CreateSelect (answered_no, null, obj);
+		}
+
 		b.CreateBr (done);
+		b.SetInsertPoint (miss);
+
+		// Castclass reports a failed cast as a pending InvalidCastException. Only
+		// the wrapper's check after the call turns that into a throw.
+		SmallVector<Value *, 3> args = adapt_to_callee (b, icall, { obj, target, cache });
+
+		if (pad != nullptr) {
+			slow = b.CreateInvoke (icall, done, pad, args);
+			new_pad_pred = miss;
+		} else {
+			CallInst *plain = b.CreateCall (icall, args);
+
+			// A managed frame is observable, so a call in tail position stays a
+			// call. emit_protected_call () marks the sites it writes the same way.
+			plain->setTailCallKind (CallInst::TCK_NoTail);
+			slow = plain;
+			b.CreateBr (done);
+		}
 	}
 
 	b.SetInsertPoint (done);
@@ -363,21 +379,83 @@ lower (CallBase *site, bool throw_on_fail)
 	// Both forms answer null for a null reference, and neither one reads the
 	// vtable for it. The tests above do, so this one comes first.
 	result->addIncoming (null, head);
-	result->addIncoming (answer, hit);
-	result->addIncoming (slow, miss);
 
 	if (told_yes != nullptr)
 		result->addIncoming (obj, told_yes);
 
+	if (via_subtype_chain) {
+		b.SetInsertPoint (remote);
+
+		SmallVector<Value *, 2> remote_args = adapt_to_callee (b, remote_icall, { obj, target });
+
+		if (throw_on_fail) {
+			// Every failed castclass test must call the helper to report an
+			// InvalidCastException, so checking for a proxy first saves nothing.
+			CallBase *call;
+
+			if (pad != nullptr) {
+				call = b.CreateInvoke (remote_icall, done, pad, remote_args);
+				new_pad_pred = remote;
+			} else {
+				CallInst *plain = b.CreateCall (remote_icall, remote_args);
+
+				plain->setTailCallKind (CallInst::TCK_NoTail);
+				call = plain;
+				b.CreateBr (done);
+			}
+
+			result->addIncoming (call, remote);
+		} else {
+			Value *its_class = b.CreateAlignedLoad (
+				ptr,
+				b.CreateGEP (b.getInt8Ty (), load_vtable (b, obj),
+			                     b.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
+				Align (TARGET_SIZEOF_VOID_P), "remote_class");
+
+			BasicBlock *ask = BasicBlock::Create (c, "cast_remote_ask", f);
+			BasicBlock *not_remote = BasicBlock::Create (c, "cast_not_remote", f);
+
+			b.CreateCondBr (b.CreateICmpEQ (its_class, proxy_class), ask, not_remote);
+
+			b.SetInsertPoint (not_remote);
+			b.CreateBr (done);
+			result->addIncoming (null, not_remote);
+
+			b.SetInsertPoint (ask);
+
+			CallBase *call;
+
+			if (pad != nullptr) {
+				call = b.CreateInvoke (remote_icall, done, pad, remote_args);
+				new_pad_pred = ask;
+			} else {
+				CallInst *plain = b.CreateCall (remote_icall, remote_args);
+
+				plain->setTailCallKind (CallInst::TCK_NoTail);
+				call = plain;
+				b.CreateBr (done);
+			}
+
+			result->addIncoming (call, ask);
+		}
+	} else {
+		result->addIncoming (answer, hit);
+		result->addIncoming (slow, miss);
+	}
+
+	// The builder may now point at one of the fallback blocks. Finish done
+	// explicitly.
+	b.SetInsertPoint (done);
 	b.CreateBr (tail);
 
 	// The phis of the two blocks the site reached name it as their predecessor.
 	// Renaming keeps the values they take, which is what the new edges carry as
-	// well, and leaves nothing naming head once the site goes.
+	// well, and leaves nothing naming head once the site goes. At most one new
+	// block invokes into pad: the cache miss or the uncached fallback.
 	tail->replacePhiUsesWith (head, done);
 
 	if (pad != nullptr)
-		pad->replacePhiUsesWith (head, miss);
+		pad->replacePhiUsesWith (head, new_pad_pred);
 
 	site->eraseFromParent ();
 
@@ -410,7 +488,7 @@ cast_func_decl (Module &m, bool throw_on_fail)
 	Type *ptr = PointerType::get (c, 0);
 
 	return builtin_decl (m, name,
-	                     FunctionType::get (ptr, { ptr, ptr, ptr, ptr }, false));
+	                     FunctionType::get (ptr, { ptr, ptr, ptr, ptr, ptr, ptr }, false));
 }
 
 bool

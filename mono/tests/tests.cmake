@@ -504,6 +504,7 @@ set(MONO_TESTS_CS_SRC
   stackframes-async.2.cs
   transparentproxy.cs
   proxy-cast-cache.cs
+  proxy-cast-concrete-class.cs
   bug-48015.cs
   delegate9.cs
   marshal-valuetypes.cs
