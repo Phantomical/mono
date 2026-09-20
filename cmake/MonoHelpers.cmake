@@ -114,6 +114,13 @@ function(mono_gtest_tests target)
       set(_skip SKIP_REGULAR_EXPRESSION "${ARG_SKIP_REGEX}")
     endif()
 
+    set(_disc_timeout "")
+    if(WIN32)
+      # Windows Defender can delay the first launch beyond CMake's five-second
+      # default. A discovery timeout aborts CTest before it schedules any tests.
+      set(_disc_timeout DISCOVERY_TIMEOUT 60)
+    endif()
+
     # PRE_TEST runs the discovery where the cases run.  test-mono-callspec.cpp
     # opens callspec.exe by bare name, so the discovery run needs the same
     # working directory the cases get.
@@ -122,6 +129,7 @@ function(mono_gtest_tests target)
       ${_filter}
       DISCOVERY_MODE PRE_TEST
       ${_workdir}
+      ${_disc_timeout}
       PROPERTIES ${_skip} ${ARG_PROPERTIES})
     return()
   endif()
