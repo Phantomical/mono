@@ -138,6 +138,7 @@ public:
 	}
 
 	MonoJit &jit () { return *jit_; }
+	LazyCallbacks &callbacks () { return *callbacks_; }
 
 	/// Publish NAME as a thunk jumping to TARGET and return the address
 	/// callers reach it at.
@@ -901,6 +902,41 @@ TEST_F (LazyThunks, AThreadHoldingALockTheCompileNeedsIsNotBlocked)
 	first.join ();
 	holder.join ();
 	EXPECT_EQ (held, 7);
+}
+
+/* Lazy-entry resolvers have no MonoJitInfo and must be enumerated separately
+ * from the JIT info table. */
+TEST_F (LazyThunks, ForeachResolverVisitsThePublishedResolvers)
+{
+	std::unique_ptr<Engine> engine = make_engine ();
+	ASSERT_NE (engine, nullptr);
+
+	struct Seen {
+		const void *code;
+		uint32_t size;
+		std::string name;
+	};
+	std::vector<Seen> seen;
+
+	engine->callbacks ().foreach_resolver (
+		[] (const void *code, uint32_t size, const char *name, void *user_data) {
+			static_cast<std::vector<Seen> *> (user_data)
+				->push_back ({code, size, name});
+		},
+		&seen);
+
+#ifdef HOST_WIN32
+	bool found_default = false;
+	for (const Seen &s : seen) {
+		EXPECT_NE (s.code, nullptr);
+		EXPECT_GT (s.size, 0u);
+		if (s.name == arch::LazyEntryABI::DisplayName)
+			found_default = true;
+	}
+	EXPECT_TRUE (found_default);
+#else
+	EXPECT_TRUE (seen.empty ());
+#endif
 }
 
 } // namespace

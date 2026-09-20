@@ -14,6 +14,7 @@
 #include <llvm/Support/Error.h>
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -88,6 +89,11 @@ public:
 	/// Point the stub at the trampoline after this rather than before. A call
 	/// that arrives between the two gets the answer this removes.
 	void rearm (void *trampoline);
+
+	/// Visits each lazy-entry resolver published by this pool.
+	void foreach_resolver (void (*visit) (const void *code, uint32_t size,
+	                                      const char *name, void *user_data),
+	                       void *user_data) const;
 
 private:
 	LazyCallbacks (void *on_error) : on_error_ (on_error) {}

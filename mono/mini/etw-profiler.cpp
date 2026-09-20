@@ -482,6 +482,7 @@ struct JITEnumerationData {
 	int mNumDomains;
 	int mNumAssemblies;
 	int mNumMethods;
+	int mNumStubs;
 	mono::EtwRundownPass pass;
 };
 
@@ -531,6 +532,22 @@ on_enumerate_jit_method (MonoDomain *domain, MonoMethod *method, MonoJitInfo *ji
 		method_load (method, jinfo, EventKind::load);
 }
 
+/* Lazy-entry resolvers have no MonoJitInfo, so enumerate them separately for
+ * profilers that attach after the resolvers are created. */
+static void
+on_enumerate_stub (const void *code, uint32_t size, const char *name, void *user_data)
+{
+	struct JITEnumerationData *enumerationData = (struct JITEnumerationData *)user_data;
+	enumerationData->mNumStubs++;
+
+	if (enumerationData->pass.start)
+		stub_event ((gpointer) code, size, name, EventKind::dc_start);
+	if (enumerationData->pass.end)
+		stub_event ((gpointer) code, size, name, EventKind::dc_end);
+	if (enumerationData->pass.load)
+		stub_event ((gpointer) code, size, name, EventKind::load);
+}
+
 static void
 on_enumerate_domain (MonoDomain *domain, void *user_data)
 {
@@ -539,8 +556,10 @@ on_enumerate_domain (MonoDomain *domain, void *user_data)
 
 	if (enumerationData->pass.images)
 		mono_domain_assembly_foreach (domain, on_enumerate_assembly, enumerationData);
-	if (enumerationData->pass.methods)
+	if (enumerationData->pass.methods) {
 		mono_domain_jit_foreach (domain, on_enumerate_jit_method, enumerationData);
+		mono_llvm_jit_foreach_stub (domain, on_enumerate_stub, enumerationData);
+	}
 }
 
 static void
@@ -586,7 +605,7 @@ on_attach (mono::EtwRundownPass pass)
 	if (pass.end)
 		EventWriteDCEndComplete_V1 (0);
 
-	ETW_PROFILER_LOG_ARGS ("Finished enumerating JIT data. Found %d domains, %d assemblies, %d methods", enumerationData.mNumDomains, enumerationData.mNumAssemblies, enumerationData.mNumMethods);
+	ETW_PROFILER_LOG_ARGS ("Finished enumerating JIT data. Found %d domains, %d assemblies, %d methods, %d stubs", enumerationData.mNumDomains, enumerationData.mNumAssemblies, enumerationData.mNumMethods, enumerationData.mNumStubs);
 }
 
 /*
