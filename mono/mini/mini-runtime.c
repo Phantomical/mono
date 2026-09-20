@@ -3535,6 +3535,72 @@ mini_init_delegate (MonoDelegateHandle delegate, MonoObjectHandle target, gpoint
 	}
 }
 
+static void
+enable_debug_domain_unload (void)
+{
+	mono_enable_debug_domain_unload (TRUE);
+}
+
+static void
+enable_partial_sharing (void)
+{
+	mono_set_partial_sharing_supported (TRUE);
+}
+
+typedef struct {
+	const char *name;
+	gboolean *flag;
+	gboolean value;
+	gboolean enable_with_paranoid;
+} MonoDebugFlagOption;
+
+typedef struct {
+	const char *name;
+	void (*action) (void);
+} MonoDebugActionOption;
+
+static const MonoDebugFlagOption debug_flag_options[] = {
+	{ "handle-sigint", &mini_debug_options.handle_sigint, TRUE, FALSE },
+	{ "keep-delegates", &mini_debug_options.keep_delegates, TRUE, TRUE },
+	{ "reverse-pinvoke-exceptions", &mini_debug_options.reverse_pinvoke_exceptions, TRUE, FALSE },
+	{ "collect-pagefault-stats", &mini_debug_options.collect_pagefault_stats, TRUE, TRUE },
+	{ "break-on-unverified", &mini_debug_options.break_on_unverified, TRUE, TRUE },
+	{ "no-gdb-backtrace", &mini_debug_options.no_gdb_backtrace, TRUE, FALSE },
+	{ "suspend-on-native-crash", &mini_debug_options.suspend_on_native_crash, TRUE, FALSE },
+	{ "suspend-on-sigsegv", &mini_debug_options.suspend_on_native_crash, TRUE, FALSE },
+	{ "suspend-on-exception", &mini_debug_options.suspend_on_exception, TRUE, FALSE },
+	{ "suspend-on-unhandled", &mini_debug_options.suspend_on_unhandled, TRUE, FALSE },
+	{ "dont-free-domains", &mono_dont_free_domains, TRUE, TRUE },
+	{ "dyn-runtime-invoke", &mini_debug_options.dyn_runtime_invoke, TRUE, FALSE },
+	{ "lldb", &mini_debug_options.lldb, TRUE, FALSE },
+	{ "llvm-disable-inlining", &mini_debug_options.llvm_disable_inlining, TRUE, FALSE },
+	{ "llvm-disable-implicit-null-checks", &mini_debug_options.llvm_disable_implicit_null_checks, TRUE, FALSE },
+	{ "explicit-null-checks", &mini_debug_options.explicit_null_checks, TRUE, TRUE },
+	{ "gen-seq-points", &mini_debug_options.gen_sdb_seq_points, TRUE, FALSE },
+	{ "no-compact-seq-points", &mini_debug_options.no_seq_points_compact_data, TRUE, FALSE },
+	{ "force-disable-seq-points", &mini_debug_options.force_disable_seq_points, TRUE, FALSE },
+	{ "single-imm-size", &mini_debug_options.single_imm_size, TRUE, TRUE },
+	{ "init-stacks", &mini_debug_options.init_stacks, TRUE, TRUE },
+	{ "casts", &mini_debug_options.better_cast_details, TRUE, TRUE },
+	{ "soft-breakpoints", &mini_debug_options.soft_breakpoints, TRUE, FALSE },
+	{ "check-pinvoke-callconv", &mini_debug_options.check_pinvoke_callconv, TRUE, TRUE },
+	{ "use-fallback-tls", &mini_debug_options.use_fallback_tls, TRUE, FALSE },
+	{ "align-small-structs", &mono_align_small_structs, TRUE, FALSE },
+	{ "native-debugger-break", &mini_debug_options.native_debugger_break, TRUE, FALSE },
+	{ "disable_omit_fp", &mini_debug_options.disable_omit_fp, TRUE, FALSE },
+	{ "test-tailcall-require", &mini_debug_options.test_tailcall_require, TRUE, TRUE },
+	{ "verbose-gdb", &mini_debug_options.verbose_gdb, TRUE, FALSE },
+	{ "weak-memory-model", &mini_debug_options.weak_memory_model, TRUE, FALSE },
+	// FIXME: Remove this debug option.
+	{ "clr-memory-model", &mini_debug_options.weak_memory_model, FALSE, FALSE },
+	{ "top-runtime-invoke-unhandled", &mini_debug_options.top_runtime_invoke_unhandled, TRUE, FALSE },
+};
+
+static const MonoDebugActionOption debug_action_options[] = {
+	{ "debug-domain-unload", enable_debug_domain_unload },
+	{ "partial-sharing", enable_partial_sharing },
+};
+
 /**
  * mini_parse_debug_option:
  * @option: The option to parse.
@@ -3546,91 +3612,42 @@ mini_init_delegate (MonoDelegateHandle delegate, MonoObjectHandle target, gpoint
 gboolean
 mini_parse_debug_option (const char *option)
 {
+	int i;
+
 	// Empty string is ok as consequence of appending ",foo"
 	// without first checking for empty.
 	if (*option == 0)
 		return TRUE;
 
-	if (!strcmp (option, "handle-sigint"))
-		mini_debug_options.handle_sigint = TRUE;
-	else if (!strcmp (option, "keep-delegates"))
-		mini_debug_options.keep_delegates = TRUE;
-	else if (!strcmp (option, "reverse-pinvoke-exceptions"))
-		mini_debug_options.reverse_pinvoke_exceptions = TRUE;
-	else if (!strcmp (option, "collect-pagefault-stats"))
-		mini_debug_options.collect_pagefault_stats = TRUE;
-	else if (!strcmp (option, "break-on-unverified"))
-		mini_debug_options.break_on_unverified = TRUE;
-	else if (!strcmp (option, "no-gdb-backtrace"))
-		mini_debug_options.no_gdb_backtrace = TRUE;
-	else if (!strcmp (option, "suspend-on-native-crash") || !strcmp (option, "suspend-on-sigsegv"))
-		mini_debug_options.suspend_on_native_crash = TRUE;
-	else if (!strcmp (option, "suspend-on-exception"))
-		mini_debug_options.suspend_on_exception = TRUE;
-	else if (!strcmp (option, "suspend-on-unhandled"))
-		mini_debug_options.suspend_on_unhandled = TRUE;
-	else if (!strcmp (option, "dont-free-domains"))
-		mono_dont_free_domains = TRUE;
-	else if (!strcmp (option, "dyn-runtime-invoke"))
-		mini_debug_options.dyn_runtime_invoke = TRUE;
-	else if (!strcmp (option, "lldb"))
-		mini_debug_options.lldb = TRUE;
-	else if (!strcmp (option, "llvm-disable-inlining"))
-		mini_debug_options.llvm_disable_inlining = TRUE;
-	else if (!strcmp (option, "llvm-disable-implicit-null-checks"))
-		mini_debug_options.llvm_disable_implicit_null_checks = TRUE;
-	else if (!strncmp (option, "unity-mixed-callstack", strlen("unity-mixed-callstack"))) {
+	if (!strcmp (option, "paranoid")) {
+		for (i = 0; i < G_N_ELEMENTS (debug_flag_options); ++i)
+			if (debug_flag_options [i].enable_with_paranoid)
+				*debug_flag_options [i].flag = debug_flag_options [i].value;
+		return TRUE;
+	}
+
+	for (i = 0; i < G_N_ELEMENTS (debug_flag_options); ++i) {
+		if (!strcmp (option, debug_flag_options [i].name)) {
+			*debug_flag_options [i].flag = debug_flag_options [i].value;
+			return TRUE;
+		}
+	}
+
+	for (i = 0; i < G_N_ELEMENTS (debug_action_options); ++i) {
+		if (!strcmp (option, debug_action_options [i].name)) {
+			debug_action_options [i].action ();
+			return TRUE;
+		}
+	}
+
+	if (!strncmp (option, "unity-mixed-callstack", strlen("unity-mixed-callstack"))) {
 		if (!strncmp (option, "unity-mixed-callstack=", strlen("unity-mixed-callstack=")))
 			mini_debug_options.unity_mixed_callstack = atoi(option + strlen ("unity-mixed-callstack="));
 		else
 			mini_debug_options.unity_mixed_callstack = 1;
 	}
-	else if (!strcmp (option, "explicit-null-checks"))
-		mini_debug_options.explicit_null_checks = TRUE;
-	else if (!strcmp (option, "gen-seq-points"))
-		mini_debug_options.gen_sdb_seq_points = TRUE;
 	else if (!strcmp (option, "gen-compact-seq-points"))
 		fprintf (stderr, "Mono Warning: option gen-compact-seq-points is deprecated.\n");
-	else if (!strcmp (option, "no-compact-seq-points"))
-		mini_debug_options.no_seq_points_compact_data = TRUE;
-	else if (!strcmp (option, "force-disable-seq-points"))
-		mini_debug_options.force_disable_seq_points = TRUE;
-	else if (!strcmp (option, "single-imm-size"))
-		mini_debug_options.single_imm_size = TRUE;
-	else if (!strcmp (option, "init-stacks"))
-		mini_debug_options.init_stacks = TRUE;
-	else if (!strcmp (option, "casts"))
-		mini_debug_options.better_cast_details = TRUE;
-	else if (!strcmp (option, "soft-breakpoints"))
-		mini_debug_options.soft_breakpoints = TRUE;
-	else if (!strcmp (option, "check-pinvoke-callconv"))
-		mini_debug_options.check_pinvoke_callconv = TRUE;
-	else if (!strcmp (option, "use-fallback-tls"))
-		mini_debug_options.use_fallback_tls = TRUE;
-	else if (!strcmp (option, "debug-domain-unload"))
-		mono_enable_debug_domain_unload (TRUE);
-	else if (!strcmp (option, "partial-sharing"))
-		mono_set_partial_sharing_supported (TRUE);
-	else if (!strcmp (option, "align-small-structs"))
-		mono_align_small_structs = TRUE;
-	else if (!strcmp (option, "native-debugger-break"))
-		mini_debug_options.native_debugger_break = TRUE;
-	else if (!strcmp (option, "disable_omit_fp"))
-		mini_debug_options.disable_omit_fp = TRUE;
-	// This is an internal testing feature.
-	// Every tail. encountered is required to be optimized.
-	// It is asserted.
-	else if (!strcmp (option, "test-tailcall-require"))
-		mini_debug_options.test_tailcall_require = TRUE;
-	else if (!strcmp (option, "verbose-gdb"))
-		mini_debug_options.verbose_gdb = TRUE;
-	else if (!strcmp (option, "clr-memory-model"))
-		// FIXME Kill this debug flag
-		mini_debug_options.weak_memory_model = FALSE;
-	else if (!strcmp (option, "weak-memory-model"))
-		mini_debug_options.weak_memory_model = TRUE;
-	else if (!strcmp (option, "top-runtime-invoke-unhandled"))
-		mini_debug_options.top_runtime_invoke_unhandled = TRUE;
 	else if (!strncmp (option, "thread-dump-dir=", 16))
 		mono_set_thread_dump_dir(g_strdup(option + 16));
 	else if (!strncmp (option, "aot-skip=", 9)) {
@@ -3658,11 +3675,18 @@ mini_parse_debug_options (void)
 		const char *arg = *ptr;
 
 		if (!mini_parse_debug_option (arg)) {
+			int i;
+
 			fprintf (stderr, "Invalid option for the MONO_DEBUG env variable: %s\n", arg);
-			// test-tailcall-require is also accepted but not documented.
-			// empty string is also accepted and ignored as a consequence
-			// of appending ",foo" without checking for empty.
-			fprintf (stderr, "Available options: 'handle-sigint', 'keep-delegates', 'reverse-pinvoke-exceptions', 'collect-pagefault-stats', 'break-on-unverified', 'no-gdb-backtrace', 'suspend-on-native-crash', 'suspend-on-sigsegv', 'suspend-on-exception', 'suspend-on-unhandled', 'dont-free-domains', 'dyn-runtime-invoke', 'explicit-null-checks', 'gen-seq-points', 'no-compact-seq-points', 'force-disable-seq-points', 'single-imm-size', 'init-stacks', 'casts', 'soft-breakpoints', 'check-pinvoke-callconv', 'use-fallback-tls', 'debug-domain-unload', 'partial-sharing', 'align-small-structs', 'native-debugger-break', 'thread-dump-dir=DIR', 'no-verbose-gdb', 'llvm_disable_inlining', 'llvm-disable-self-init', 'llvm-disable-implicit-null-checks', 'weak-memory-model'.\n");
+			fprintf (stderr, "Available options:");
+
+			for (i = 0; i < G_N_ELEMENTS (debug_flag_options); ++i)
+				fprintf (stderr, " '%s'", debug_flag_options [i].name);
+			for (i = 0; i < G_N_ELEMENTS (debug_action_options); ++i)
+				fprintf (stderr, " '%s'", debug_action_options [i].name);
+
+			fprintf (stderr, " 'unity-mixed-callstack[=N]' 'gen-compact-seq-points' "
+			         "'thread-dump-dir=DIR' 'aot-skip=N' 'paranoid'.\n");
 			exit (1);
 		}
 	}
