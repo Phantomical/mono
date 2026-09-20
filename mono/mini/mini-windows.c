@@ -1212,7 +1212,7 @@ mono_arch_unwindinfo_remove_pc_range_in_table(const gpointer code)
 
 	GList* found_entry = find_pc_in_table_no_lock_ex(code);
 
-	g_assert_checked(found_entry != NULL || ((DynamicFunctionTableEntry*)found_entry->data)->begin_range == (gsize)code);
+	g_assert_checked(found_entry != NULL && ((DynamicFunctionTableEntry*)found_entry->data)->begin_range == (gsize)code);
 	remove_range_in_table_no_lock(found_entry);
 
 	ReleaseSRWLockExclusive(&g_dynamic_function_table_lock);
@@ -1225,7 +1225,7 @@ mono_arch_unwindinfo_remove_range_in_table(const gpointer code_block, gsize bloc
 
 	GList* found_entry = find_range_in_table_no_lock_ex(code_block, block_size);
 
-	g_assert_checked(found_entry != NULL || ((DynamicFunctionTableEntry*)found_entry->data)->begin_range == (gsize)code_block);
+	g_assert_checked(found_entry != NULL && ((DynamicFunctionTableEntry*)found_entry->data)->begin_range == (gsize)code_block);
 	remove_range_in_table_no_lock(found_entry);
 
 	ReleaseSRWLockExclusive(&g_dynamic_function_table_lock);
