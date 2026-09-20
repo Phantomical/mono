@@ -18,6 +18,14 @@ env:
   # cmake/MonoGenBuildVer.cmake honours SOURCE_DATE_EPOCH, so pinning it keeps
   # main.c and main-sgen.c cacheable too.
   SOURCE_DATE_EPOCH: "1700000000"
+  # The build job splits the test list, so it needs the shard count, and a
+  # strategy: block cannot read env to get it. Each shard checks this number
+  # against its own matrix, because a matrix smaller than the split would drop
+  # tests with nothing going red.
+  TEST_SHARDS: "8"
+  # Applied where the list is split, so the shards run the names they are given
+  # and no step downstream filters again.
+  CTEST_EXCLUDE_LABELS: "bcl|slow|stress|acceptance|interp-mixed"
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -295,6 +303,24 @@ jobs:
           ./build/mono/mini/mono-sgen --version
           ./build/mono/mini/mono-sgen --version | grep -q 'LLVM:.*yes'
 
+      # A miss is not a failure: with no durations every test takes the same
+      # fallback, which splits them evenly by count.
+      - name: Restore the test durations
+        uses: actions/cache/restore@v6
+        with:
+          path: ctest-costs.txt
+          key: ctest-costs-linux-x64-${{ github.sha }}
+          restore-keys: ctest-costs-linux-x64-
+
+      # Cut once here rather than in each shard: shards cutting their own lists
+      # would have to agree, and a durations entry that landed between two of
+      # them would leave tests run twice or not at all.
+      - name: Balance the test shards
+        run: >
+          python3 .github/scripts/shard-tests.py
+          --build build --shards "$TEST_SHARDS" --costs ctest-costs.txt
+          --exclude-labels "$CTEST_EXCLUDE_LABELS" --out build/shards
+
       - name: Package the KSP zip
         run: cmake --build build --target package-ksp -j "$(nproc)"
 
@@ -437,19 +463,9 @@ jobs:
         run: ccache --show-stats --verbose
 
   # ---------------------------------------------------------------------------
-  # ctest's own index filter is the shard: `-I <n>,,<count>` takes every count'th
-  # test from the filtered list, so the shards partition it with no overlap and
-  # no gaps, and nothing has to be checked in and kept current. Order comes from
-  # the generated CTestTestfile.cmake, which is the build job's own file here,
-  # so every shard indexes the same list.
-  #
-  # `strategy.job-total` is the count, so changing the shard list below is the
-  # whole edit.
-  #
-  # The selection is what the six per-suite steps this replaces added up to, and
-  # it is exactly that: the union was 11948 tests and this is the same 11948.
-  # `slow` is disjoint from all of them -- it is entirely bcl -- so excluding it
-  # here drops nothing the suites were running.
+  # Each shard runs the test names the build job wrote for it. The split is by
+  # measured duration rather than by test index, because balancing how many
+  # tests a shard runs is not what the job waits for.
   # ---------------------------------------------------------------------------
   test:
     name: Test ${{ matrix.shard }}/${{ strategy.job-total }}
@@ -521,6 +537,14 @@ jobs:
           ./build/mono/mini/mono-sgen --version
           ./build/mono/mini/mono-sgen --version | grep -q 'LLVM:.*yes'
 
+      - name: The build tree was split for this matrix
+        run: |
+          got=$(cat build/shards/count)
+          test "$got" = "${{ strategy.job-total }}" || {
+            echo "::error::the build tree was split $got ways, this matrix has ${{ strategy.job-total }}"
+            exit 1
+          }
+
       # apt.llvm.org builds LLVM with LLVM_ENABLE_ASSERTIONS OFF, so nothing
       # here catches the API misuse an assertions build would. What an
       # assertions build also turns on by itself is reachable without one:
@@ -536,8 +560,7 @@ jobs:
         run: >
           ctest --test-dir build -j "$(nproc)" --output-on-failure
           --output-junit junit-shard-${{ matrix.shard }}.xml
-          -LE "bcl|slow|stress|acceptance|interp-mixed"
-          -I ${{ matrix.shard }},,${{ strategy.job-total }}
+          --tests-from-file build/shards/${{ matrix.shard }}.txt
 
       - name: Upload test results
         if: ${{ !cancelled() }}
@@ -860,6 +883,21 @@ jobs:
           ./build/mono/mini/mono-sgen.exe --version
           ./build/mono/mini/mono-sgen.exe --version | grep -q 'LLVM:.*yes'
 
+      # Both for the reason the Linux job's own pair gives.
+      - name: Restore the test durations
+        uses: actions/cache/restore@v6
+        with:
+          path: ctest-costs.txt
+          key: ctest-costs-windows-x64-${{ github.sha }}
+          restore-keys: ctest-costs-windows-x64-
+
+      - name: Balance the test shards
+        shell: bash
+        run: >
+          python3 .github/scripts/shard-tests.py
+          --build build --shards "$TEST_SHARDS" --costs ctest-costs.txt
+          --exclude-labels "$CTEST_EXCLUDE_LABELS" --out build/shards
+
       - name: Pack the build tree
         shell: bash
         run: tar --exclude='*.obj' -I 'zstd -3 -T0' -cf build.tzst build
@@ -952,6 +990,15 @@ jobs:
           ./build/mono/mini/mono-sgen.exe --version
           ./build/mono/mini/mono-sgen.exe --version | grep -q 'LLVM:.*yes'
 
+      - name: The build tree was split for this matrix
+        shell: bash
+        run: |
+          got=$(cat build/shards/count)
+          test "$got" = "${{ strategy.job-total }}" || {
+            echo "::error::the build tree was split $got ways, this matrix has ${{ strategy.job-total }}"
+            exit 1
+          }
+
       - name: Test
         shell: bash
         env:
@@ -959,8 +1006,7 @@ jobs:
         run: >
           ctest --test-dir build -j "$NUMBER_OF_PROCESSORS" --output-on-failure
           --output-junit junit-shard-${{ matrix.shard }}.xml
-          -LE "bcl|slow|stress|acceptance|interp-mixed"
-          -I ${{ matrix.shard }},,${{ strategy.job-total }}
+          --tests-from-file build/shards/${{ matrix.shard }}.txt
 
       - name: Upload test results
         if: ${{ !cancelled() }}
@@ -972,3 +1018,54 @@ jobs:
             build/Testing/Temporary/LastTest*.log
           if-no-files-found: warn
           retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # What the next run splits on: each shard times one slice, so the union of
+  # their junit files is one run's whole corpus.
+  #
+  # Cancelled runs are left out, because a cancelled shard reports only the
+  # tests it had reached.
+  # ---------------------------------------------------------------------------
+  test-costs:
+    name: Record the test durations
+    needs: [test, test-windows]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: read
+      actions: write
+
+    strategy:
+      matrix:
+        platform: [linux-x64, windows-x64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download the test results
+        uses: actions/download-artifact@v8
+        with:
+          pattern: test-results-${{ matrix.platform }}-*
+          path: results
+
+      - name: Collect the durations
+        run: >
+          python3 .github/scripts/test-costs.py
+          --results results --out ctest-costs.txt
+
+      - name: Save the test durations
+        uses: actions/cache/save@v6
+        with:
+          path: ctest-costs.txt
+          key: ctest-costs-${{ matrix.platform }}-${{ github.sha }}
+
+      - name: Prune superseded duration entries
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh cache list --ref "$GITHUB_REF" --key ctest-costs-${{ matrix.platform }}- \
+            --sort created_at --order desc --limit 100 --json id \
+            --jq '.[1:][].id' | xargs -r -n1 gh cache delete
