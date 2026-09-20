@@ -682,6 +682,15 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Exclude the workspace from Windows Defender
+        shell: pwsh
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath "${{ github.workspace }}" -ErrorAction Stop
+          } catch {
+            Write-Warning "Add-MpPreference failed, continuing without the exclusion: $_"
+          }
+
       - name: Download the build tree
         uses: actions/download-artifact@v8
         with:
