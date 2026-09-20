@@ -24,6 +24,18 @@ namespace Mono.Tiering {
 	}
 }
 
+// Keep the padding visible to the live-byte estimate: Zero prevents constant
+// propagation, and each NoInlining Add remains a call after translation.
+static class Opaque {
+	public static int Zero = 0;
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public static int Add (int a, int b)
+	{
+		return a + b;
+	}
+}
+
 // typeof (T) == typeof (int): true for int and false for double.
 static class Picker<T> {
 	public static int Pick (T t, bool blowUp)
@@ -34,11 +46,14 @@ static class Picker<T> {
 		if (typeof (T) == typeof (int))
 			return 1;
 
-		int a = 0;
+		int a = Opaque.Zero;
 
-		a += 1; a += 2; a += 3; a += 4; a += 5; a += 6; a += 7; a += 8;
-		a += 9; a += 10; a += 11; a += 12; a += 13; a += 14; a += 15; a += 16;
-		a += 17; a += 18; a += 19; a += 20; a += 21; a += 22; a += 23; a += 24;
+		a = Opaque.Add (a, 1); a = Opaque.Add (a, 2); a = Opaque.Add (a, 3); a = Opaque.Add (a, 4);
+		a = Opaque.Add (a, 5); a = Opaque.Add (a, 6); a = Opaque.Add (a, 7); a = Opaque.Add (a, 8);
+		a = Opaque.Add (a, 9); a = Opaque.Add (a, 10); a = Opaque.Add (a, 11); a = Opaque.Add (a, 12);
+		a = Opaque.Add (a, 13); a = Opaque.Add (a, 14); a = Opaque.Add (a, 15); a = Opaque.Add (a, 16);
+		a = Opaque.Add (a, 17); a = Opaque.Add (a, 18); a = Opaque.Add (a, 19); a = Opaque.Add (a, 20);
+		a = Opaque.Add (a, 21); a = Opaque.Add (a, 22); a = Opaque.Add (a, 23); a = Opaque.Add (a, 24);
 
 		return a;
 	}
@@ -61,11 +76,14 @@ static class ValuePicker<T> {
 		if (typeof (T).IsValueType)
 			return 1;
 
-		int a = 0;
+		int a = Opaque.Zero;
 
-		a += 1; a += 2; a += 3; a += 4; a += 5; a += 6; a += 7; a += 8;
-		a += 9; a += 10; a += 11; a += 12; a += 13; a += 14; a += 15; a += 16;
-		a += 17; a += 18; a += 19; a += 20; a += 21; a += 22; a += 23; a += 24;
+		a = Opaque.Add (a, 1); a = Opaque.Add (a, 2); a = Opaque.Add (a, 3); a = Opaque.Add (a, 4);
+		a = Opaque.Add (a, 5); a = Opaque.Add (a, 6); a = Opaque.Add (a, 7); a = Opaque.Add (a, 8);
+		a = Opaque.Add (a, 9); a = Opaque.Add (a, 10); a = Opaque.Add (a, 11); a = Opaque.Add (a, 12);
+		a = Opaque.Add (a, 13); a = Opaque.Add (a, 14); a = Opaque.Add (a, 15); a = Opaque.Add (a, 16);
+		a = Opaque.Add (a, 17); a = Opaque.Add (a, 18); a = Opaque.Add (a, 19); a = Opaque.Add (a, 20);
+		a = Opaque.Add (a, 21); a = Opaque.Add (a, 22); a = Opaque.Add (a, 23); a = Opaque.Add (a, 24);
 
 		return a;
 	}
@@ -88,11 +106,14 @@ static class BoxPicker<T> {
 		if (default (T) != null)
 			return 1;
 
-		int a = 0;
+		int a = Opaque.Zero;
 
-		a += 1; a += 2; a += 3; a += 4; a += 5; a += 6; a += 7; a += 8;
-		a += 9; a += 10; a += 11; a += 12; a += 13; a += 14; a += 15; a += 16;
-		a += 17; a += 18; a += 19; a += 20; a += 21; a += 22; a += 23; a += 24;
+		a = Opaque.Add (a, 1); a = Opaque.Add (a, 2); a = Opaque.Add (a, 3); a = Opaque.Add (a, 4);
+		a = Opaque.Add (a, 5); a = Opaque.Add (a, 6); a = Opaque.Add (a, 7); a = Opaque.Add (a, 8);
+		a = Opaque.Add (a, 9); a = Opaque.Add (a, 10); a = Opaque.Add (a, 11); a = Opaque.Add (a, 12);
+		a = Opaque.Add (a, 13); a = Opaque.Add (a, 14); a = Opaque.Add (a, 15); a = Opaque.Add (a, 16);
+		a = Opaque.Add (a, 17); a = Opaque.Add (a, 18); a = Opaque.Add (a, 19); a = Opaque.Add (a, 20);
+		a = Opaque.Add (a, 21); a = Opaque.Add (a, 22); a = Opaque.Add (a, 23); a = Opaque.Add (a, 24);
 
 		return a;
 	}
@@ -125,11 +146,14 @@ static class SwitchPicker<T> {
 			return 3;
 		}
 
-		int a = 0;
+		int a = Opaque.Zero;
 
-		a += 1; a += 2; a += 3; a += 4; a += 5; a += 6; a += 7; a += 8;
-		a += 9; a += 10; a += 11; a += 12; a += 13; a += 14; a += 15; a += 16;
-		a += 17; a += 18; a += 19; a += 20; a += 21; a += 22; a += 23; a += 24;
+		a = Opaque.Add (a, 1); a = Opaque.Add (a, 2); a = Opaque.Add (a, 3); a = Opaque.Add (a, 4);
+		a = Opaque.Add (a, 5); a = Opaque.Add (a, 6); a = Opaque.Add (a, 7); a = Opaque.Add (a, 8);
+		a = Opaque.Add (a, 9); a = Opaque.Add (a, 10); a = Opaque.Add (a, 11); a = Opaque.Add (a, 12);
+		a = Opaque.Add (a, 13); a = Opaque.Add (a, 14); a = Opaque.Add (a, 15); a = Opaque.Add (a, 16);
+		a = Opaque.Add (a, 17); a = Opaque.Add (a, 18); a = Opaque.Add (a, 19); a = Opaque.Add (a, 20);
+		a = Opaque.Add (a, 21); a = Opaque.Add (a, 22); a = Opaque.Add (a, 23); a = Opaque.Add (a, 24);
 
 		return a;
 	}

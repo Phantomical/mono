@@ -408,6 +408,17 @@ fold_call (MonoMethod *target, ArrayRef<Value> args, bool sharing)
 	return Value ();
 }
 
+/// Whether method-to-llvm replaces this call with a constant.
+bool
+call_is_eliminated (MonoMethod *target, ArrayRef<Value> args)
+{
+	if (is_vector_hardware_accelerated_getter (target))
+		return true;
+
+	return target->klass == system_type () && strcmp (target->name, "GetTypeFromHandle") == 0
+	       && args[0].is (Value::Kind::type_handle);
+}
+
 /// Converts value to a branch condition when known.
 std::optional<bool>
 truth (const Value &value)
@@ -797,6 +808,9 @@ private:
 	/// visit_call () determines this from the resolved signature.
 	bool pushed_call_result_ = false;
 
+	/// Whether method-to-llvm replaces the current call with a constant.
+	bool call_is_eliminated_ = false;
+
 	/// Address-taken slots, whose contents must remain unknown.
 	std::vector<bool> pinned_locals_;
 	std::vector<bool> pinned_args_;
@@ -1091,6 +1105,8 @@ ILAnalyzer::visit_call (const Instr &instr, State &state)
 	ArrayRef<Value> args (state.stack.end () - count, count);
 	Value result = constructing ? Value::of_kind (Value::Kind::non_null)
 	                            : fold_call (target, args, sharing_);
+
+	call_is_eliminated_ = !constructing && call_is_eliminated (target, args);
 
 	state.stack.pop_back_n (count);
 
@@ -1420,6 +1436,7 @@ ILAnalyzer::evaluate (uint32_t index)
 			return true;
 
 		pushed_call_result_ = false;
+		call_is_eliminated_ = false;
 
 		if (!visit (instr, state))
 			return false;
@@ -1427,8 +1444,10 @@ ILAnalyzer::evaluate (uint32_t index)
 		bool is_call = instr.op == MONO_CEE_CALL || instr.op == MONO_CEE_CALLVIRT
 		               || instr.op == MONO_CEE_NEWOBJ;
 		bool pushed = is_call ? pushed_call_result_ : stack_effects[instr.op].pushes == 1;
+		bool foldable = !is_call || call_is_eliminated_;
 
-		skip_bytes_[i] = pushed && !state.stack.empty () && state.stack.back ().is_constant ();
+		skip_bytes_[i] = pushed && foldable && !state.stack.empty ()
+		                 && state.stack.back ().is_constant ();
 	}
 
 	// Fall through to the next block, if one exists.
