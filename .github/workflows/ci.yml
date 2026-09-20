@@ -422,10 +422,11 @@ jobs:
 
       # The image ships ccache 4.9.1, which caches almost nothing here.
       # CCACHE_BASEDIR (cmake/MonoCompilerFlags.cmake) turns the build
-      # directory's -I into `-I.`, and clang names the generated config.h
-      # through it. 4.9.1 cannot stat that name back, so it reports
-      # `bad_input_file` and compiles uncached. Nearly every translation unit
-      # includes config.h. 4.10 stats it back.
+      # directory's -I into `-I.`, and clang then names the generated config.h
+      # through it in a spelling ccache cannot stat back. 4.9.1 treats an
+      # include it cannot stat as fatal: it reports `bad_input_file` and
+      # compiles uncached. Nearly every translation unit includes config.h.
+      # 4.10 allows one again, which its own NEWS calls a 4.9.1 regression.
       #
       # This goes in front of the action below, which takes whichever ccache is
       # on PATH.
