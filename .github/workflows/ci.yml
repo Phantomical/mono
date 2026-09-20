@@ -72,6 +72,13 @@ jobs:
       # against sources it had already built once. Saving as soon as the build
       # succeeds is what makes the next run's hit rate a property of the
       # sources rather than of how the suite ended.
+      # Where the eviction below cuts.  A restore preserves the mtimes tar
+      # recorded, so anything ccache touches after this point is what this
+      # build used and everything else still carries the age it arrived with.
+      - name: Note when this job started using ccache
+        id: ccache-epoch
+        run: echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - name: Restore ccache
         uses: actions/cache/restore@v6
         with:
@@ -232,6 +239,27 @@ jobs:
             ninja-state
           key: ${{ steps.managed-key.outputs.tests }}
 
+      # A compile flag that changes every object's hash leaves the whole
+      # previous generation in the cache, restored and re-saved for good: -g1
+      # left the GCC job's entry at 507 MB, 475 of which was the -g objects it
+      # inherited through the restore-key and will never hit again.  Nothing
+      # collects those, because CCACHE_MAXSIZE is 3G and the cache is a sixth
+      # of that, so the ceiling never binds.
+      #
+      # ccache touches a file's mtime when it hits, the manifest as well as the
+      # result, so cutting at this job's own start keeps direct mode whole and
+      # drops exactly what the build did not read.  The age is computed rather
+      # than named so that it stays above the build's own duration as that
+      # moves.
+      - name: Drop the ccache entries this build did not use
+        if: steps.build.outcome == 'success'
+        run: |
+          before=$(ccache --show-stats | grep -i 'cache size' || true)
+          ccache --evict-older-than \
+            "$(( $(date +%s) - ${{ steps.ccache-epoch.outputs.at }} + 60 ))s"
+          echo "$before"
+          ccache --show-stats | grep -i 'cache size' || true
+
       - name: Save ccache
         if: steps.build.outcome == 'success'
         uses: actions/cache/save@v6
@@ -337,6 +365,11 @@ jobs:
       - name: Install dependencies
         uses: ./.github/actions/deps
 
+      # See the clang job for what this cut is.
+      - name: Note when this job started using ccache
+        id: ccache-epoch
+        run: echo "at=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       # A key of its own. A cache entry is immutable once written, so two jobs
       # saving one key means the second save is refused and its objects are
       # gone -- and ccache hashes the compiler, so neither job's objects would
@@ -371,6 +404,16 @@ jobs:
       - name: Build
         id: build
         run: cmake --build build -j "$(nproc)"
+
+      # See the clang job for why, and for what -g1 left behind here.
+      - name: Drop the ccache entries this build did not use
+        if: steps.build.outcome == 'success'
+        run: |
+          before=$(ccache --show-stats | grep -i 'cache size' || true)
+          ccache --evict-older-than \
+            "$(( $(date +%s) - ${{ steps.ccache-epoch.outputs.at }} + 60 ))s"
+          echo "$before"
+          ccache --show-stats | grep -i 'cache size' || true
 
       - name: Save ccache
         if: steps.build.outcome == 'success'
