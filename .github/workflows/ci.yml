@@ -1023,13 +1023,14 @@ jobs:
   # What the next run splits on: each shard times one slice, so the union of
   # their junit files is one run's whole corpus.
   #
-  # Cancelled runs are left out, because a cancelled shard reports only the
-  # tests it had reached.
+  # Cancelled runs contain incomplete results. Same-repo pull_request runs
+  # skip both test jobs in favor of the corresponding push run, so they have
+  # no results to record.
   # ---------------------------------------------------------------------------
   test-costs:
-    name: Record the test durations
+    name: Test costs
     needs: [test, test-windows]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && (needs.test.result != 'skipped' || needs.test-windows.result != 'skipped') }}
     runs-on: ubuntu-24.04
 
     permissions:
