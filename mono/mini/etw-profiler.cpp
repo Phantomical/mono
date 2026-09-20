@@ -52,6 +52,13 @@ constexpr uint32_t kMethodFlagsJitHelper = 0x10;
 constexpr uint64_t kRundownStartKeyword = 0x40;
 constexpr uint64_t kRundownEndKeyword = 0x100;
 
+// The runtime provider uses 0x40 for CLR_STARTENUMERATION_KEYWORD.
+constexpr uint64_t kStartEnumerationKeyword = 0x40;
+
+// The runtime and rundown providers share the loader and JIT keyword bits.
+constexpr uint64_t kLoaderKeyword = 0x8;
+constexpr uint64_t kJitKeyword = 0x10;
+
 // evntrace.h's EVENT_CONTROL_CODE_ENABLE_PROVIDER and
 // EVENT_CONTROL_CODE_CAPTURE_STATE, same reason.
 constexpr uint32_t kEventControlCodeEnableProvider = 1;
@@ -152,14 +159,23 @@ etw_rundown_pass (uint32_t control_code, uint64_t match_any_keyword, bool is_run
 {
 	EtwRundownPass pass;
 
-	if (!is_rundown_provider)
-		return pass;
 	if (control_code != kEventControlCodeEnableProvider
 	    && control_code != kEventControlCodeCaptureState)
 		return pass;
 
-	pass.start = (match_any_keyword & kRundownStartKeyword) != 0;
-	pass.end = (match_any_keyword & kRundownEndKeyword) != 0;
+	if (is_rundown_provider) {
+		pass.start = (match_any_keyword & kRundownStartKeyword) != 0;
+		pass.end = (match_any_keyword & kRundownEndKeyword) != 0;
+	} else {
+		// Runtime-provider enumeration emits MethodLoad events.
+		pass.load = (match_any_keyword & kStartEnumerationKeyword) != 0;
+	}
+
+	if (!pass.start && !pass.end && !pass.load)
+		return pass;
+
+	pass.images = (match_any_keyword & kLoaderKeyword) != 0;
+	pass.methods = (match_any_keyword & kJitKeyword) != 0;
 	return pass;
 }
 
@@ -177,6 +193,7 @@ etw_rundown_pass (uint32_t control_code, uint64_t match_any_keyword, bool is_run
 #include <mono/metadata/tabledefs.h>
 #include <mono/metadata/tokentype.h>
 #include <mono/metadata/unity-utils.h>
+#include <mono/utils/mono-threads.h>
 
 #include <string.h>
 
@@ -193,6 +210,11 @@ DECLSPEC_NOINLINE __inline VOID __stdcall Private_EventControlCallback (_In_ LPC
 
 static_assert (mono::kRundownStartKeyword == CLR_RUNDOWNSTART_KEYWORD, "mirrors CLR-ETW-Generated.h");
 static_assert (mono::kRundownEndKeyword == CLR_RUNDOWNEND_KEYWORD, "mirrors CLR-ETW-Generated.h");
+static_assert (mono::kStartEnumerationKeyword == CLR_STARTENUMERATION_KEYWORD, "mirrors CLR-ETW-Generated.h");
+static_assert (mono::kLoaderKeyword == CLR_RUNDOWNLOADER_KEYWORD, "mirrors CLR-ETW-Generated.h");
+static_assert (mono::kJitKeyword == CLR_RUNDOWNJIT_KEYWORD, "mirrors CLR-ETW-Generated.h");
+static_assert (mono::kLoaderKeyword == CLR_LOADER_KEYWORD, "the two providers agree on this bit");
+static_assert (mono::kJitKeyword == CLR_JIT_KEYWORD, "the two providers agree on this bit");
 static_assert (mono::kEventControlCodeEnableProvider == EVENT_CONTROL_CODE_ENABLE_PROVIDER, "mirrors evntrace.h");
 static_assert (mono::kEventControlCodeCaptureState == EVENT_CONTROL_CODE_CAPTURE_STATE, "mirrors evntrace.h");
 
@@ -226,14 +248,58 @@ static gboolean is_initialized = FALSE;
 // Which flavour of an image/method event to emit.
 enum class EventKind { load, unload, dc_start, dc_end };
 
+/*
+ * Check the generated per-event predicates before constructing payloads.
+ * Provider IsEnabled alone does not account for level or keyword filters.
+ */
+static bool
+method_event_enabled (EventKind kind)
+{
+	switch (kind) {
+	case EventKind::dc_start:
+		return EventEnabledMethodDCStartVerbose_V2 ();
+	case EventKind::dc_end:
+		return EventEnabledMethodDCEndVerbose_V2 ();
+	default:
+		return EventEnabledMethodLoadVerbose_V2 ();
+	}
+}
+
+static bool
+method_il_map_enabled (EventKind kind)
+{
+	switch (kind) {
+	case EventKind::dc_start:
+		return EventEnabledMethodDCStartILToNativeMap ();
+	case EventKind::dc_end:
+		return EventEnabledMethodDCEndILToNativeMap ();
+	default:
+		return EventEnabledMethodILToNativeMap ();
+	}
+}
+
+static bool
+image_event_enabled (EventKind kind)
+{
+	switch (kind) {
+	case EventKind::dc_start:
+		return EventEnabledModuleDCStart_V2 ();
+	case EventKind::dc_end:
+		return EventEnabledModuleDCEnd_V2 ();
+	case EventKind::unload:
+		return EventEnabledModuleUnload_V2 ();
+	default:
+		return EventEnabledModuleLoad_V2 ();
+	}
+}
+
 static void
 image_event (MonoImage *image, EventKind kind)
 {
-	if (!MICROSOFT_WINDOWS_DOTNETRUNTIME_PROVIDER_Context.IsEnabled && !MICROSOFT_WINDOWS_DOTNETRUNTIME_RUNDOWN_PROVIDER_Context.IsEnabled)	{
-		ETW_PROFILER_LOG ("Providers not enabled, skipping image_event");
+	if (!image_event_enabled (kind)) {
+		ETW_PROFILER_LOG ("Module event not enabled, skipping image_event");
 		return;
 	}
-
 
 	// Mono loads ppdb files as "images" marked with metadata-only. We can skip them as they
 	// won't ever have executable code.
@@ -302,8 +368,8 @@ image_unloading (MonoProfiler *prof, MonoImage *image)
 static void
 stub_event (gpointer code, uint64_t size, const char *name, EventKind kind)
 {
-	if (!MICROSOFT_WINDOWS_DOTNETRUNTIME_PROVIDER_Context.IsEnabled && !MICROSOFT_WINDOWS_DOTNETRUNTIME_RUNDOWN_PROVIDER_Context.IsEnabled) {
-		ETW_PROFILER_LOG ("Providers not enabled, skipping stub_event");
+	if (!method_event_enabled (kind)) {
+		ETW_PROFILER_LOG ("Method event not enabled, skipping stub_event");
 		return;
 	}
 
@@ -344,8 +410,8 @@ method_load (MonoMethod *method, MonoJitInfo *jinfo, EventKind kind)
 	static __declspec(thread) unsigned int il_offsets[MAX_NUM_OFFSETS] = {0};
 	static __declspec(thread) unsigned int native_offsets[MAX_NUM_OFFSETS] = {0};
 
-	if (!MICROSOFT_WINDOWS_DOTNETRUNTIME_PROVIDER_Context.IsEnabled && !MICROSOFT_WINDOWS_DOTNETRUNTIME_RUNDOWN_PROVIDER_Context.IsEnabled) {
-		ETW_PROFILER_LOG ("Providers not enabled, skipping method_load");
+	if (!method_event_enabled (kind)) {
+		ETW_PROFILER_LOG ("Method event not enabled, skipping method_load");
 		return;
 	}
 
@@ -367,8 +433,9 @@ method_load (MonoMethod *method, MonoJitInfo *jinfo, EventKind kind)
 
 	char *sourceFilePath = NULL;
 
-	int compressed_num_lines =
-		(int) mono::etw_body_il_map (jinfo, il_offsets, native_offsets, MAX_NUM_OFFSETS);
+	int compressed_num_lines = method_il_map_enabled (kind)
+		? (int) mono::etw_body_il_map (jinfo, il_offsets, native_offsets, MAX_NUM_OFFSETS)
+		: 0;
 
 	MonoClass *klass = mono_method_get_class (method);
 	char *signature = mono_signature_get_desc (mono_method_signature_internal (method), TRUE);
@@ -446,6 +513,8 @@ on_enumerate_assembly (MonoAssembly *assembly, void *user_data)
 		image_event (image, EventKind::dc_start);
 	if (enumerationData->pass.end)
 		image_event (image, EventKind::dc_end);
+	if (enumerationData->pass.load)
+		image_event (image, EventKind::load);
 }
 
 static void
@@ -458,6 +527,8 @@ on_enumerate_jit_method (MonoDomain *domain, MonoMethod *method, MonoJitInfo *ji
 		method_load (method, jinfo, EventKind::dc_start);
 	if (enumerationData->pass.end)
 		method_load (method, jinfo, EventKind::dc_end);
+	if (enumerationData->pass.load)
+		method_load (method, jinfo, EventKind::load);
 }
 
 static void
@@ -466,11 +537,10 @@ on_enumerate_domain (MonoDomain *domain, void *user_data)
 	struct JITEnumerationData *enumerationData = (struct JITEnumerationData *)user_data;
 	enumerationData->mNumDomains++;
 
-	// Iterate through each assembly
-	mono_domain_assembly_foreach (domain, on_enumerate_assembly, enumerationData);
-
-	// Iterate through each JIT'ed method
-	mono_domain_jit_foreach (domain, on_enumerate_jit_method, enumerationData);
+	if (enumerationData->pass.images)
+		mono_domain_assembly_foreach (domain, on_enumerate_assembly, enumerationData);
+	if (enumerationData->pass.methods)
+		mono_domain_jit_foreach (domain, on_enumerate_jit_method, enumerationData);
 }
 
 static void
@@ -519,6 +589,32 @@ on_attach (mono::EtwRundownPass pass)
 	ETW_PROFILER_LOG_ARGS ("Finished enumerating JIT data. Found %d domains, %d assemblies, %d methods", enumerationData.mNumDomains, enumerationData.mNumAssemblies, enumerationData.mNumMethods);
 }
 
+/*
+ * ETW can invoke the control callback on an external worker thread. Attach it
+ * while walking the JIT info table so the walk's hazard pointers are tracked.
+ */
+class ScopedThreadAttach {
+public:
+	ScopedThreadAttach ()
+		: attached_here_ (mono_thread_info_current_unchecked () == NULL)
+	{
+		if (attached_here_)
+			mono_thread_info_attach ();
+	}
+
+	~ScopedThreadAttach ()
+	{
+		if (attached_here_)
+			mono_thread_info_detach ();
+	}
+
+	ScopedThreadAttach (const ScopedThreadAttach &) = delete;
+	ScopedThreadAttach &operator= (const ScopedThreadAttach &) = delete;
+
+private:
+	bool attached_here_;
+};
+
 // This callback is called by the ETW system when tracing is started / stopped. We use it to enumerate & output information about JIT compilation that happened *before* tracing started.
 DECLSPEC_NOINLINE __inline VOID __stdcall Private_EventControlCallback (_In_ LPCGUID SourceId, _In_ ULONG ControlCode, _In_ UCHAR Level, _In_ ULONGLONG MatchAnyKeyword, _In_ ULONGLONG MatchAllKeyword, _In_opt_ PEVENT_FILTER_DESCRIPTOR FilterData, _Inout_opt_ PVOID CallbackContext)
 {
@@ -534,12 +630,16 @@ DECLSPEC_NOINLINE __inline VOID __stdcall Private_EventControlCallback (_In_ LPC
 	mono::EtwRundownPass pass =
 		mono::etw_rundown_pass ((uint32_t) ControlCode, (uint64_t) MatchAnyKeyword, isRundown);
 
-	ETW_PROFILER_LOG_ARGS ("EventControlCallback -- IsRundown: %s, StartPass: %s, EndPass: %s",
+	ETW_PROFILER_LOG_ARGS ("EventControlCallback -- IsRundown: %s, StartPass: %s, EndPass: %s, LoadPass: %s, Images: %s, Methods: %s",
 	                       isRundown ? "true" : "false", pass.start ? "true" : "false",
-	                       pass.end ? "true" : "false");
+	                       pass.end ? "true" : "false", pass.load ? "true" : "false",
+	                       pass.images ? "true" : "false", pass.methods ? "true" : "false");
 
-	if (pass.start || pass.end)
+	if (pass.images || pass.methods) {
+		ScopedThreadAttach attached;
+
 		on_attach (pass);
+	}
 }
 
 void

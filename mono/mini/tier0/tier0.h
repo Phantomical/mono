@@ -40,6 +40,10 @@ gboolean mono_tier0_compile (MonoMethod *method, MonoDomain *domain,
                              gpointer *out_code, MonoJitInfo **out_jinfo,
                              gboolean *out_needs_context, MonoError *error);
 
+/// Releases the JIT info, hash entry, and private code manager created for a
+/// tier-0 compilation of the dynamic \p method in \p domain.
+void mono_tier0_free_method (MonoDomain *domain, MonoMethod *method);
+
 G_END_DECLS
 
 #endif /* __MONO_MINI_TIER0_H__ */

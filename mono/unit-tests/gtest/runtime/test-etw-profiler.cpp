@@ -514,6 +514,13 @@ constexpr uint32_t kDisableProvider = 0;
 constexpr uint64_t kStartKeyword = 0x40;
 constexpr uint64_t kEndKeyword = 0x100;
 
+// CLR_STARTENUMERATION_KEYWORD on the runtime provider.
+constexpr uint64_t kStartEnumerationKeyword = 0x40;
+
+// CLR_RUNDOWNLOADER_KEYWORD and CLR_RUNDOWNJIT_KEYWORD.
+constexpr uint64_t kLoaderKeyword = 0x8;
+constexpr uint64_t kJitKeyword = 0x10;
+
 } // namespace
 
 TEST (EtwProfilerPure, RundownPassNoneWhenNeitherKeywordSet)
@@ -530,6 +537,7 @@ TEST (EtwProfilerPure, RundownPassStartOnly)
 
 	EXPECT_TRUE (pass.start);
 	EXPECT_FALSE (pass.end);
+	EXPECT_FALSE (pass.load);
 }
 
 TEST (EtwProfilerPure, RundownPassEndOnly)
@@ -538,6 +546,7 @@ TEST (EtwProfilerPure, RundownPassEndOnly)
 
 	EXPECT_FALSE (pass.start);
 	EXPECT_TRUE (pass.end);
+	EXPECT_FALSE (pass.load);
 }
 
 TEST (EtwProfilerPure, RundownPassBothWhenBothKeywordsSet)
@@ -547,6 +556,7 @@ TEST (EtwProfilerPure, RundownPassBothWhenBothKeywordsSet)
 
 	EXPECT_TRUE (pass.start);
 	EXPECT_TRUE (pass.end);
+	EXPECT_FALSE (pass.load);
 }
 
 /* CLR_RUNDOWNEND_KEYWORD is 0x100. 0x80 is CLR_ENDENUMERATION_KEYWORD
@@ -560,13 +570,86 @@ TEST (EtwProfilerPure, RundownPassIgnoresStaleKeyword)
 	EXPECT_FALSE (pass.end);
 }
 
-TEST (EtwProfilerPure, RundownPassNoneOnRegularProvider)
+TEST (EtwProfilerPure, RundownPassLoadOnRuntimeProvider)
 {
 	mono::EtwRundownPass pass =
-		mono::etw_rundown_pass (kEnableProvider, kStartKeyword | kEndKeyword, false);
+		mono::etw_rundown_pass (kEnableProvider, kStartEnumerationKeyword, false);
 
 	EXPECT_FALSE (pass.start);
 	EXPECT_FALSE (pass.end);
+	EXPECT_TRUE (pass.load);
+	EXPECT_FALSE (pass.images);
+	EXPECT_FALSE (pass.methods);
+}
+
+TEST (EtwProfilerPure, RundownPassLoadWalksBothOnRuntimeProvider)
+{
+	mono::EtwRundownPass pass = mono::etw_rundown_pass (
+		kEnableProvider, kStartEnumerationKeyword | kLoaderKeyword | kJitKeyword, false);
+
+	EXPECT_TRUE (pass.load);
+	EXPECT_TRUE (pass.images);
+	EXPECT_TRUE (pass.methods);
+}
+
+TEST (EtwProfilerPure, RundownPassWalksImagesForLoaderKeyword)
+{
+	mono::EtwRundownPass pass =
+		mono::etw_rundown_pass (kEnableProvider, kEndKeyword | kLoaderKeyword, true);
+
+	EXPECT_TRUE (pass.end);
+	EXPECT_TRUE (pass.images);
+	EXPECT_FALSE (pass.methods);
+}
+
+TEST (EtwProfilerPure, RundownPassWalksMethodsForJitKeyword)
+{
+	mono::EtwRundownPass pass =
+		mono::etw_rundown_pass (kEnableProvider, kEndKeyword | kJitKeyword, true);
+
+	EXPECT_TRUE (pass.end);
+	EXPECT_FALSE (pass.images);
+	EXPECT_TRUE (pass.methods);
+}
+
+TEST (EtwProfilerPure, RundownPassWalksNothingWithoutASubjectKeyword)
+{
+	mono::EtwRundownPass pass = mono::etw_rundown_pass (kEnableProvider, kEndKeyword, true);
+
+	EXPECT_TRUE (pass.end);
+	EXPECT_FALSE (pass.images);
+	EXPECT_FALSE (pass.methods);
+}
+
+TEST (EtwProfilerPure, RundownPassWalksNothingWithoutAPassKeyword)
+{
+	mono::EtwRundownPass pass =
+		mono::etw_rundown_pass (kEnableProvider, kLoaderKeyword | kJitKeyword, true);
+
+	EXPECT_FALSE (pass.start);
+	EXPECT_FALSE (pass.end);
+	EXPECT_FALSE (pass.load);
+	EXPECT_FALSE (pass.images);
+	EXPECT_FALSE (pass.methods);
+}
+
+TEST (EtwProfilerPure, RundownPassNoneOnRuntimeProviderWithoutStartEnumeration)
+{
+	mono::EtwRundownPass pass = mono::etw_rundown_pass (kEnableProvider, kEndKeyword, false);
+
+	EXPECT_FALSE (pass.start);
+	EXPECT_FALSE (pass.end);
+	EXPECT_FALSE (pass.load);
+}
+
+TEST (EtwProfilerPure, RundownPassNoneOnRuntimeProviderDisableProvider)
+{
+	mono::EtwRundownPass pass =
+		mono::etw_rundown_pass (kDisableProvider, kStartEnumerationKeyword, false);
+
+	EXPECT_FALSE (pass.start);
+	EXPECT_FALSE (pass.end);
+	EXPECT_FALSE (pass.load);
 }
 
 TEST (EtwProfilerPure, RundownPassAlsoAnsweredForCaptureState)

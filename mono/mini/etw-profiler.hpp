@@ -54,19 +54,21 @@ uint32_t etw_body_il_map (MonoJitInfo *jinfo, uint32_t *il_offsets,
 /// Allocates. The caller frees the result with g_free ().
 char *etw_method_namespace (MonoMethod *method);
 
-/// The rundown pass(es) to run: start, end, or both.
+/// Describes which ETW enumeration events to emit and which subjects to walk.
+/// \c start and \c end select rundown-provider events; \c load selects the
+/// runtime-provider event.
 struct EtwRundownPass {
 	bool start = false;
 	bool end = false;
+	bool load = false;
+	bool images = false;
+	bool methods = false;
 };
 
-/// Which rundown pass(es) \p match_any_keyword asks for, per
-/// CLR-ETW-Generated.h: start for CLR_RUNDOWNSTART_KEYWORD (0x40), end for
-/// CLR_RUNDOWNEND_KEYWORD (0x100), either or both.
+/// Decodes an ETW control notification into an enumeration pass.
 ///
-/// \p control_code has to be ENABLE_PROVIDER or CAPTURE_STATE, and
-/// \p is_rundown_provider has to be true - both carry the keyword the same
-/// way. Anything else answers with neither pass set.
+/// The provider and enumeration keyword select the event kind. The loader and
+/// JIT keyword bits select whether to enumerate images, methods, or both.
 EtwRundownPass etw_rundown_pass (uint32_t control_code, uint64_t match_any_keyword,
                                  bool is_rundown_provider);
 
