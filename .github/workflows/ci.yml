@@ -508,23 +508,89 @@ jobs:
         with:
           arch: x64
 
+      # 173 of the 232 seconds a cold configure takes here are try_compile, and
+      # every one of them writes its answer to CMakeCache.txt, where the next
+      # configure reads it instead of probing again. A warm cache configures in
+      # about 20 seconds.
+      #
+      # So the key has to name everything a probe answer can turn on, and each
+      # one has to be present: an empty component would not fail anything, it
+      # would quietly widen the key. The four that decide an answer are the
+      # compiler, the headers it reads, CMake's own check modules, and the
+      # runtime the build compiles C# on. This runs after vcvars, which is what
+      # sets the first two.
+      - name: CMake configure cache key
+        id: cmake-key
+        shell: bash
+        run: |
+          : "${VCToolsVersion:?vcvars did not run}"
+          : "${WindowsSDKVersion:?vcvars did not run}"
+          : "${LLVM_VERSION:?}"
+          printf '%s\n' \
+            "$(git rev-parse HEAD:cmake)" \
+            "$(git ls-files -s '*CMakeLists.txt' vcpkg.json 'vcpkg-triplets/*' | sha256sum)" \
+            "$VCToolsVersion" "$WindowsSDKVersion" "$LLVM_VERSION" \
+            "$(cmake --version | head -1)" \
+            "$(mono --version | head -1)" \
+            | sha256sum | cut -c1-40 \
+            | sed 's/^/key=cmake-windows-x64-v1-/' >> "$GITHUB_OUTPUT"
+
+      # No restore-keys, for the reason the managed build cache gives: an
+      # inexact hit here is a probe answer from another toolchain, and nothing
+      # downstream would notice.
+      #
+      # CMakeConfigureLog.yaml is 22 of the 24 MB and is only a log of the
+      # probes. CMake appends to it, or writes a new one.
+      - name: Restore the CMake configure cache
+        id: cmake-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/CMakeCache.txt
+            build/CMakeFiles
+            !build/CMakeFiles/CMakeConfigureLog.yaml
+          key: ${{ steps.cmake-key.outputs.key }}
+
       - name: Configure
+        id: configure
         shell: pwsh
         run: |
           # ccache refuses /Zi, CMAKE_MSVC_DEBUG_INFORMATION_FORMAT's default:
           # that debug info goes to a PDB shared across the target, so the object
           # is not the whole output. Embedded is /Z7, which puts it in the object.
+          #
+          # The LLVM release tarball is built with libxml2, so LLVMConfig.cmake
+          # looks for one. This image has none, and FindLibXml2 spends 16
+          # seconds establishing that on every configure -- a find_ that lands
+          # on NOTFOUND searches again next time rather than reading the cache.
+          # Nothing here links it, which is what the miss already proves.
           cmake -S . -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=RelWithDebInfo `
             -DCMAKE_C_COMPILER="$env:LLVM_PREFIX/bin/clang-cl.exe" `
             -DCMAKE_CXX_COMPILER="$env:LLVM_PREFIX/bin/clang-cl.exe" `
             -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded `
+            -DCMAKE_DISABLE_FIND_PACKAGE_LibXml2=ON `
             -DMONO_LLVM_PREFIX="$env:LLVM_PREFIX" `
             -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/tmp" `
             -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
             -DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON `
             -DCMAKE_C_COMPILER_LAUNCHER=ccache `
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      # Saved here rather than after the build, because a build that fails
+      # leaves the probe answers as good as one that succeeds, and because
+      # CMakeFiles/ collects per-target directories once the build starts.
+      - name: Save the CMake configure cache
+        if: >-
+          steps.configure.outcome == 'success' &&
+          steps.cmake-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            build/CMakeCache.txt
+            build/CMakeFiles
+            !build/CMakeFiles/CMakeConfigureLog.yaml
+          key: ${{ steps.cmake-key.outputs.key }}
 
       - name: Build
         id: build
