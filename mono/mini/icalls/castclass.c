@@ -120,3 +120,43 @@ mono_object_isinst_with_cache (MonoObject *obj, MonoClass *klass, gpointer *cach
 		return NULL;
 	}
 }
+
+/* Uncached isinst fallback for a transparent proxy after an inline subtype test. */
+MonoObject*
+mono_object_isinst_remote (MonoObject *obj, MonoClass *klass)
+{
+	ERROR_DECL (error);
+
+	if (mono_object_isinst_checked (obj, klass, error))
+		return obj;
+
+	mono_error_set_pending_exception (error);
+	return NULL;
+}
+
+/* Uncached castclass fallback after an inline subtype test. */
+MonoObject*
+mono_object_castclass_remote (MonoObject *obj, MonoClass *klass)
+{
+	ERROR_DECL (error);
+	MonoJitTlsData *jit_tls = NULL;
+
+	if (mini_debug_options.better_cast_details) {
+		jit_tls = mono_tls_get_jit_tls ();
+		jit_tls->class_cast_from = NULL;
+	}
+
+	if (mono_object_isinst_checked (obj, klass, error))
+		return obj;
+	if (mono_error_set_pending_exception (error))
+		return NULL;
+
+	if (mini_debug_options.better_cast_details) {
+		jit_tls->class_cast_from = obj->vtable->klass;
+		jit_tls->class_cast_to = klass;
+	}
+
+	mono_set_pending_exception (mono_exception_from_name (mono_defaults.corlib,
+					"System", "InvalidCastException"));
+	return NULL;
+}

@@ -133,6 +133,13 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	if (!test)
 		return test.takeError ();
 
+	llvm::Expected<llvm::Function *> remote_test = icall_wrapper_decl (
+		throw_on_fail ? MONO_JIT_ICALL_mono_object_castclass_remote
+	                      : MONO_JIT_ICALL_mono_object_isinst_remote);
+
+	if (!remote_test)
+		return remote_test.takeError ();
+
 	/*
 	 * Each site owns a cache slot that holds the vtable which last answered
 	 * for it, and lower_type_tests () reads it in front of the wrapper. A hit
@@ -173,6 +180,12 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	if (!tested)
 		return tested.takeError ();
 
+	llvm::Expected<llvm::Value *> proxy_class = class_operand (
+		builder, mono_defaults.transparent_proxy_class, "mono_class_");
+
+	if (!proxy_class)
+		return proxy_class.takeError ();
+
 	/*
 	 * The site is one call rather than the probe it stands for, so the class
 	 * the test names stays an operand. eliminate_type_tests () decides a site whose
@@ -181,7 +194,8 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	 */
 	llvm::Value *result =
 		emit_protected_call (builder, cast_func_decl (*module, throw_on_fail),
-	                             { obj.value, *tested, cache, *test });
+	                             { obj.value, *tested, cache, *test, *remote_test,
+	                               *proxy_class });
 
 	/*
 	 * The test answers with the operand or with null and keeps it nowhere

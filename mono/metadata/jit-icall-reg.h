@@ -268,9 +268,11 @@ MONO_JIT_ICALL (mono_monitor_enter_internal) \
 MONO_JIT_ICALL (mono_monitor_enter_v4_fast) \
 MONO_JIT_ICALL (mono_monitor_enter_v4_internal) \
 MONO_JIT_ICALL (mono_monitor_exit_fast) \
+MONO_JIT_ICALL (mono_object_castclass_remote) \
 MONO_JIT_ICALL (mono_object_castclass_unbox) \
 MONO_JIT_ICALL (mono_object_castclass_with_cache) \
 MONO_JIT_ICALL (mono_object_isinst_icall) \
+MONO_JIT_ICALL (mono_object_isinst_remote) \
 MONO_JIT_ICALL (mono_object_isinst_with_cache) \
 MONO_JIT_ICALL (mono_personality) \
 MONO_JIT_ICALL (mono_ppc_throw_exception)	\

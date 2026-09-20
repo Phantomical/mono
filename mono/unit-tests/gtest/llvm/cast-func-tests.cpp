@@ -38,6 +38,7 @@ struct CastModule {
 	std::unique_ptr<Module> module;
 	Function *caller = nullptr;
 	Function *wrapper = nullptr;
+	Function *remote_wrapper = nullptr;
 	BasicBlock *pad = nullptr;
 	CallBase *site = nullptr;
 
@@ -54,6 +55,11 @@ struct CastModule {
 		                            GlobalValue::ExternalLinkage, "isinst_wrapper",
 		                            module.get ());
 
+		// The uncached wrapper has no cache-slot argument.
+		remote_wrapper = Function::Create (
+			FunctionType::get (ptr, { ptr, i64 }, false), GlobalValue::ExternalLinkage,
+			"isinst_remote_wrapper", module.get ());
+
 		caller = Function::Create (FunctionType::get (ptr, { ptr }, false),
 		                           GlobalValue::ExternalLinkage, "caller",
 		                           module.get ());
@@ -68,11 +74,15 @@ struct CastModule {
 		auto *cache = new GlobalVariable (
 			*module, ptr, false, GlobalValue::InternalLinkage,
 			ConstantPointerNull::get (cast<PointerType> (ptr)), "cast_cache");
+		auto *proxy_class = new GlobalVariable (*module, Type::getInt8Ty (*context), false,
+		                                        GlobalValue::ExternalLinkage, nullptr,
+		                                        "mono_class_TransparentProxy");
 
 		BasicBlock *entry = BasicBlock::Create (*context, "entry", caller);
 		BasicBlock *tail = BasicBlock::Create (*context, "tail", caller);
 		IRBuilder<> b (entry);
-		Value *args[] = { caller->getArg (0), klass, cache, wrapper };
+		Value *args[] = { caller->getArg (0), klass,  cache,
+		                 wrapper,             remote_wrapper, proxy_class };
 		Function *decl = cast_func_decl (*module, throw_on_fail);
 
 		if (!protect) {
