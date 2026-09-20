@@ -72,37 +72,72 @@ jobs:
           key: ccache-linux-x64-clang-${{ github.sha }}
           restore-keys: ccache-linux-x64-clang-
 
-      # Everything the managed outputs are compiled from, as one exact key.  A
-      # tree SHA is instant and covers the whole subtree, where hashFiles () over
-      # mcs/ alone would read 51233 files.  The distro mono is in it because
+      # Everything the managed outputs are compiled from.  A tree SHA is instant
+      # and covers the whole subtree, where hashFiles () over mcs/ alone would
+      # read 51233 files.  The distro mono is in it because
       # MONO_USE_SYSTEM_RUNTIME_FOR_TOOLS makes it the compiler these assemblies
       # come out of.
-      - name: Managed build cache key
+      #
+      # Two keys rather than one, because the halves move at different rates:
+      # over the last 59 commits on the default branch mono/tests changed 24
+      # times and mcs 19, so one key over both missed 59% of the transitions
+      # against 42% for the class libraries alone.  The corpora are built
+      # against the class libraries, so the corpora key is a superset of the
+      # other and the reachable states are both-hit, class-libraries-hit and
+      # both-miss.
+      - name: Managed build cache keys
         id: managed-key
         run: |
-          printf '%s\n' \
-            "$(git rev-parse HEAD:mcs)" \
-            "$(git rev-parse HEAD:cmake)" \
-            "$(git rev-parse HEAD:mono/tests)" \
-            "$(git rev-parse HEAD:external)" \
-            "$(dpkg-query -W -f='${Version}' mono-devel)" \
-            | sha256sum | cut -c1-40 \
-            | sed 's/^/key=managed-linux-x64-v1-/' >> "$GITHUB_OUTPUT"
+          mcs=$(git rev-parse HEAD:mcs)
+          cmakedir=$(git rev-parse HEAD:cmake)
+          tests=$(git rev-parse HEAD:mono/tests)
+          external=$(git rev-parse HEAD:external)
+          host=$(dpkg-query -W -f='${Version}' mono-devel)
+          digest () { printf '%s\n' "$@" | sha256sum | cut -c1-40; }
+          {
+            echo "mcs=managed-linux-x64-mcs-v1-$(digest "$mcs" "$cmakedir" "$external" "$host")"
+            echo "tests=managed-linux-x64-tests-v1-$(digest "$mcs" "$cmakedir" "$tests" "$external" "$host")"
+          } >> "$GITHUB_OUTPUT"
 
-      # No restore-keys, deliberately.  The backdating below makes ninja trust
-      # the restored outputs, so an inexact hit would serve assemblies compiled
-      # from other sources and nothing downstream would notice.  A key that does
-      # not match exactly has to miss and rebuild.
-      - name: Restore managed build
-        id: managed-cache
+      # No restore-keys on either, deliberately.  The backdating below makes
+      # ninja trust the restored outputs, so an inexact hit would serve
+      # assemblies compiled from other sources and nothing downstream would
+      # notice.  A key that does not match exactly has to miss and rebuild.
+      - name: Restore the class libraries
+        id: mcs-cache
         uses: actions/cache/restore@v6
         with:
           path: |
             build/mcs
-            build/mono/tests
             build/.ninja_log
             build/.ninja_deps
-          key: ${{ steps.managed-key.outputs.key }}
+          key: ${{ steps.managed-key.outputs.mcs }}
+
+      # Both caches carry the ninja state, so this one keeps its copy outside
+      # the build tree: restored at build/ it would overwrite the other's.
+      - name: Restore the test corpora
+        id: tests-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/mono/tests
+            ninja-state
+          key: ${{ steps.managed-key.outputs.tests }}
+
+      # Prefer this copy, because this key is a superset: a run that saved it
+      # compiled both halves from the sources this run has, so its log and deps
+      # describe both.
+      #
+      # Pairing it with class libraries another run saved is safe either way it
+      # skews.  .ninja_deps records each output's mtime and refuses itself when
+      # the file on disk is newer ("stored deps info out of date"), and an
+      # output that is absent is dirty whatever the log says.  So a mismatched
+      # pair costs a rebuild; it cannot leave a stale output standing.
+      - name: Take the ninja state from the corpora cache
+        if: steps.tests-cache.outputs.cache-hit == 'true'
+        run: |
+          mkdir -p build
+          mv ninja-state/.ninja_log ninja-state/.ninja_deps build/
 
       # Ninja decides an edge is stale from the output mtime recorded in
       # .ninja_log, not from the file on disk, so touching the restored outputs
@@ -110,7 +145,9 @@ jobs:
       # output mtimes on the way in, and SOURCE_DATE_EPOCH is already older than
       # any of them.
       - name: Backdate sources behind the restored outputs
-        if: steps.managed-cache.outputs.cache-hit == 'true'
+        if: >-
+          steps.mcs-cache.outputs.cache-hit == 'true' ||
+          steps.tests-cache.outputs.cache-hit == 'true'
         run: |
           find . -name .git -prune -o -path ./build -prune -o -print0 \
             | xargs -0r touch -h -d "@$SOURCE_DATE_EPOCH"
@@ -144,20 +181,38 @@ jobs:
         id: build
         run: cmake --build build -j "$(nproc)"
 
-      # A hit restored exactly what this key describes, so there is nothing new
-      # to write back.
-      - name: Save managed build
+      # A hit restored exactly what its key describes, so there is nothing new
+      # to write back for that half.
+      - name: Save the class libraries
         if: >-
           steps.build.outcome == 'success' &&
-          steps.managed-cache.outputs.cache-hit != 'true'
+          steps.mcs-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: |
             build/mcs
-            build/mono/tests
             build/.ninja_log
             build/.ninja_deps
-          key: ${{ steps.managed-key.outputs.key }}
+          key: ${{ steps.managed-key.outputs.mcs }}
+
+      - name: Stage the ninja state beside the corpora
+        if: >-
+          steps.build.outcome == 'success' &&
+          steps.tests-cache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ninja-state
+          cp build/.ninja_log build/.ninja_deps ninja-state/
+
+      - name: Save the test corpora
+        if: >-
+          steps.build.outcome == 'success' &&
+          steps.tests-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            build/mono/tests
+            ninja-state
+          key: ${{ steps.managed-key.outputs.tests }}
 
       - name: Save ccache
         if: steps.build.outcome == 'success'
@@ -472,33 +527,53 @@ jobs:
           "$env:ProgramFiles\NASM" `
             | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
-      - name: Managed build cache key
+      # Two keys, for the reason the Linux job's own step gives.
+      - name: Managed build cache keys
         id: managed-key
         shell: bash
         run: |
           mono --version | head -1
-          printf '%s\n' \
-            "$(git rev-parse HEAD:mcs)" \
-            "$(git rev-parse HEAD:cmake)" \
-            "$(git rev-parse HEAD:mono/tests)" \
-            "$(git rev-parse HEAD:external)" \
-            "$(mono --version | head -1)" \
-            | sha256sum | cut -c1-40 \
-            | sed 's/^/key=managed-windows-x64-v1-/' >> "$GITHUB_OUTPUT"
+          mcs=$(git rev-parse HEAD:mcs)
+          cmakedir=$(git rev-parse HEAD:cmake)
+          tests=$(git rev-parse HEAD:mono/tests)
+          external=$(git rev-parse HEAD:external)
+          host=$(mono --version | head -1)
+          digest () { printf '%s\n' "$@" | sha256sum | cut -c1-40; }
+          {
+            echo "mcs=managed-windows-x64-mcs-v1-$(digest "$mcs" "$cmakedir" "$external" "$host")"
+            echo "tests=managed-windows-x64-tests-v1-$(digest "$mcs" "$cmakedir" "$tests" "$external" "$host")"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Restore managed build
-        id: managed-cache
+      - name: Restore the class libraries
+        id: mcs-cache
         uses: actions/cache/restore@v6
         with:
           path: |
             build/mcs
-            build/mono/tests
             build/.ninja_log
             build/.ninja_deps
-          key: ${{ steps.managed-key.outputs.key }}
+          key: ${{ steps.managed-key.outputs.mcs }}
+
+      - name: Restore the test corpora
+        id: tests-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            build/mono/tests
+            ninja-state
+          key: ${{ steps.managed-key.outputs.tests }}
+
+      - name: Take the ninja state from the corpora cache
+        if: steps.tests-cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: |
+          mkdir -p build
+          mv ninja-state/.ninja_log ninja-state/.ninja_deps build/
 
       - name: Backdate sources behind the restored outputs
-        if: steps.managed-cache.outputs.cache-hit == 'true'
+        if: >-
+          steps.mcs-cache.outputs.cache-hit == 'true' ||
+          steps.tests-cache.outputs.cache-hit == 'true'
         shell: bash
         run: |
           find . -name .git -prune -o -path ./build -prune -o -print0 \
@@ -609,18 +684,37 @@ jobs:
           path: build/vcpkg_installed
           key: vcpkg-x64-windows-${{ hashFiles('vcpkg.json', 'vcpkg-triplets/**') }}
 
-      - name: Save managed build
+      - name: Save the class libraries
         if: >-
           steps.build.outcome == 'success' &&
-          steps.managed-cache.outputs.cache-hit != 'true'
+          steps.mcs-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v6
         with:
           path: |
             build/mcs
-            build/mono/tests
             build/.ninja_log
             build/.ninja_deps
-          key: ${{ steps.managed-key.outputs.key }}
+          key: ${{ steps.managed-key.outputs.mcs }}
+
+      - name: Stage the ninja state beside the corpora
+        if: >-
+          steps.build.outcome == 'success' &&
+          steps.tests-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p ninja-state
+          cp build/.ninja_log build/.ninja_deps ninja-state/
+
+      - name: Save the test corpora
+        if: >-
+          steps.build.outcome == 'success' &&
+          steps.tests-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            build/mono/tests
+            ninja-state
+          key: ${{ steps.managed-key.outputs.tests }}
 
       - name: ccache statistics
         if: ${{ !cancelled() }}
