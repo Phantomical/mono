@@ -54,6 +54,9 @@ jobs:
       # so a fixed key would freeze at whatever the very first run compiled.
       # Branch isolation comes from Actions' own cache scoping, not from the key.
       #
+      # `clang` is in the prefix so this fallback cannot reach the GCC job's
+      # entries, which ccache answers nothing out of -- it hashes the compiler.
+      #
       # Restore and save are separate steps because the combined action saves in
       # a post step, and a post step does not run for a cancelled job and is
       # skipped for a failed one. With cancel-in-progress on and the suite
@@ -66,8 +69,8 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/.ccache
-          key: ccache-linux-x64-${{ github.sha }}
-          restore-keys: ccache-linux-x64-
+          key: ccache-linux-x64-clang-${{ github.sha }}
+          restore-keys: ccache-linux-x64-clang-
 
       # Everything the managed outputs are compiled from, as one exact key.  A
       # tree SHA is instant and covers the whole subtree, where hashFiles () over
@@ -161,7 +164,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ~/.ccache
-          key: ccache-linux-x64-${{ github.sha }}
+          key: ccache-linux-x64-clang-${{ github.sha }}
 
       - name: ccache statistics
         run: ccache --show-stats --verbose
