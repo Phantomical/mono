@@ -9,6 +9,7 @@
 #include "passes/class-init-elision.hpp"
 #include "passes/eliminate-static-const.hpp"
 #include "passes/dead-alloc.hpp"
+#include "passes/dead-vtable-store.hpp"
 #include "passes/dump-ir.hpp"
 #include "passes/eliminate-delegate-and-guard-dispatch.hpp"
 #include "passes/eliminate-empty-finally.hpp"
@@ -516,6 +517,10 @@ MonoPassBuilder::buildTier1Pipeline ()
 	// allocation and a barrier carry, and no pass here reads them.
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_optimization));
 
+	// Run after allocation lowering so the call refers to the real allocator,
+	// which has already initialized the vtable.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::EraseDeadVtableStorePass ()));
+
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitDominatedElisionPass ()));
 
 	/*
@@ -740,6 +745,9 @@ MonoPassBuilder::buildTier2Pipeline ()
 	 * In front of the ABI lowering below, which the calls this writes need.
 	 */
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_optimization));
+
+	// Remove vtable stores made redundant by the real allocator call.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::EraseDeadVtableStorePass ()));
 
 	llvm::FunctionPassManager FPM;
 
