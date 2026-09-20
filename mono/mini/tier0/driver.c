@@ -1070,6 +1070,31 @@ mono_dynamic_code_hash_lookup (MonoDomain *domain, MonoMethod *method)
 	return res;
 }
 
+void
+mono_tier0_free_method (MonoDomain *domain, MonoMethod *method)
+{
+	MonoJitDynamicMethodInfo *info;
+
+	mono_domain_lock (domain);
+	info = mono_dynamic_code_hash_lookup (domain, method);
+	if (info)
+		g_hash_table_remove (domain_jit_info (domain)->dynamic_code_hash, method);
+	mono_domain_unlock (domain);
+
+	if (!info)
+		return;
+
+	/*
+	 * Dynamic-method JIT info is allocated separately. Table removal defers
+	 * its free until existing hazardous readers have finished with it.
+	 */
+	if (info->ji)
+		mono_jit_info_table_remove (domain, info->ji);
+
+	mono_code_manager_destroy (info->code_mp);
+	g_free (info);
+}
+
 typedef struct {
 	MonoClass *vtype;
 	GList *active, *inactive;

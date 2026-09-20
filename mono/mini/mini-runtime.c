@@ -2440,6 +2440,7 @@ mono_jit_free_method (MonoDomain *domain, MonoMethod *method)
 	 * this address finds and takes for its own.
 	 */
 	mono_llvm_jit_free_method (method);
+	mono_tier0_free_method (domain, method);
 
 	mono_debug_remove_method (method, domain);
 
