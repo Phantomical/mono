@@ -404,6 +404,51 @@ code_stub_loaded (MonoProfiler *prof, const mono_byte *code, uint64_t size, cons
 	stub_event ((gpointer) code, size, name, EventKind::load);
 }
 
+// These values are part of the CLR ETW schema and must not be renumbered.
+constexpr uint32_t kGCTypeNonConcurrent = 0;
+constexpr uint32_t kGCTypeBackground = 1;
+
+// The profiler callback does not identify what triggered the collection.
+constexpr uint32_t kGCReasonAllocSmall = 0;
+
+// The profiler callback only reports suspensions initiated by the GC.
+constexpr uint32_t kGCSuspendReasonForGC = 1;
+
+static void
+handle_gc_event (MonoProfiler *prof, MonoProfilerGCEvent evt, uint32_t generation, mono_bool is_serial)
+{
+	// SGen reports generation 0 or 1, while Boehm always reports generation 0.
+	// Collections of the same generation do not overlap.
+	static uint32_t gc_count[2];
+	uint32_t type = is_serial ? kGCTypeNonConcurrent : kGCTypeBackground;
+
+	switch (evt) {
+	case MONO_GC_EVENT_PRE_STOP_WORLD:
+		EventWriteGCSuspendEEBegin_V1 (kGCSuspendReasonForGC, gc_count[generation] + 1, 0);
+		break;
+	case MONO_GC_EVENT_POST_STOP_WORLD:
+		EventWriteGCSuspendEEEnd_V1 (0);
+		break;
+	case MONO_GC_EVENT_START:
+		++gc_count[generation];
+		EventWriteGCStart_V2 (gc_count[generation], generation, kGCReasonAllocSmall, type, 0, 0);
+		break;
+	case MONO_GC_EVENT_END:
+		EventWriteGCEnd_V1 (gc_count[generation], generation, 0);
+		break;
+	case MONO_GC_EVENT_PRE_START_WORLD:
+		EventWriteGCRestartEEBegin_V1 (0);
+		break;
+	case MONO_GC_EVENT_POST_START_WORLD:
+		EventWriteGCRestartEEEnd_V1 (0);
+		break;
+	default:
+		// The CLR schema does not distinguish the locked and unlocked portions
+		// of the suspend and restart sequences.
+		break;
+	}
+}
+
 static void
 method_load (MonoMethod *method, MonoJitInfo *jinfo, EventKind kind)
 {
@@ -485,6 +530,47 @@ struct JITEnumerationData {
 	int mNumStubs;
 	mono::EtwRundownPass pass;
 };
+
+/*
+ * MethodJittingStarted and MethodLoadVerbose use the same MethodID, allowing
+ * ETW consumers to measure the time between compilation and publication. A
+ * failed compilation has no corresponding method-load event.
+ */
+static void
+jit_begin (MonoProfiler *prof, MonoMethod *method)
+{
+	if (!EventEnabledMethodJittingStarted ())
+		return;
+
+	ERROR_DECL (error);
+	MonoMethodHeader *header = mono_method_get_header_checked (method, error);
+	uint32_t il_size = 0;
+
+	if (header != NULL)
+		il_size = header->code_size;
+	else
+		mono_error_cleanup (error);
+
+	MonoClass *klass = mono_method_get_class (method);
+	MonoImage *image = mono_class_get_image (klass);
+	uint32_t method_token = mono_unity_method_get_token (method);
+	char *signature = mono_signature_get_desc (mono_method_signature_internal (method), TRUE);
+	char *class_full_name = mono::etw_method_namespace (method);
+	const char *method_name = mono_method_get_name (method);
+
+	gunichar2 *namespace_utf16 = u8to16 (class_full_name);
+	gunichar2 *method_name_utf16 = u8to16 (method_name);
+	gunichar2 *signature_utf16 = u8to16 (signature);
+
+	EventWriteMethodJittingStarted ((uint64_t) method, (uint64_t) image, method_token, il_size,
+	                                namespace_utf16, method_name_utf16, signature_utf16);
+
+	g_free (signature_utf16);
+	g_free (method_name_utf16);
+	g_free (namespace_utf16);
+	g_free (class_full_name);
+	g_free (signature);
+}
 
 static void
 method_jit_done (MonoProfiler *prof, MonoMethod *method, MonoJitInfo *jinfo)
@@ -680,8 +766,10 @@ mono_profiler_init_etw (const char *desc)
 	MonoProfilerHandle handle = mono_profiler_create (NULL);
 	mono_profiler_set_image_loaded_callback (handle, image_loaded);
 	mono_profiler_set_image_unloading_callback (handle, image_unloading);
+	mono_profiler_set_jit_begin_callback (handle, jit_begin);
 	mono_profiler_set_jit_done_callback (handle, method_jit_done);
 	mono_profiler_set_jit_code_stub_callback (handle, code_stub_loaded);
+	mono_profiler_set_gc_event_callback (handle, handle_gc_event);
 	mono_profiler_set_cleanup_callback(handle, mono_profiler_cleanup_etw);
 
 	is_initialized = TRUE;
