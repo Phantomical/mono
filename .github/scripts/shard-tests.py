@@ -92,7 +92,10 @@ def main():
     known = sum(1 for n in names if n in costs)
     print(f"{len(names)} tests over {args.shards} shards, "
           f"{known} with a recorded duration")
-    print(f"predicted {min(load):.0f}s to {max(load):.0f}s a shard")
+    if costs:
+        print(f"predicted {min(load):.0f}s to {max(load):.0f}s a shard")
+    else:
+        print("no durations to split on, so the shards are even by count")
 
 
 if __name__ == "__main__":
