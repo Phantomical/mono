@@ -37,10 +37,9 @@ using System.Runtime.CompilerServices;
  * catches. Inlining splices both into the root's table, so this is what
  * exercises that join once the clauses are not the root's own.
  *
- * What says an inline happened is the stack trace, the way tier2-inline-policy.cs
- * reads it: an inlined body owns no code, so its frame reports the offset into
- * Root () that it was inlined at, and a body that was really called reports an
- * offset into itself.
+ * The stack trace identifies an inline by its code address and native offset.
+ * An inlined helper shares both values with Root (), while a separately compiled
+ * helper has a different code address even if its native offset happens to match.
  */
 
 namespace Mono.Tiering {
@@ -165,10 +164,21 @@ static class Program {
 	static bool saw_dies, saw_stays, saw_catch, saw_sibling, saw_none;
 	static bool inlined_dies, inlined_stays, inlined_catch, inlined_sibling, inlined_none;
 
+	static readonly MethodInfo methodAddressGetter =
+		typeof (StackFrame).GetMethod ("GetMethodAddress", BindingFlags.NonPublic | BindingFlags.Instance);
+
+	static long MethodAddress (StackFrame f)
+	{
+		return (long) methodAddressGetter.Invoke (f, null);
+	}
+
+	// Native offsets are relative to each compiled method, so unrelated frames
+	// can have the same offset. An inlined helper also shares Root's code address.
 	static bool RunsInsideRoot (Exception e, string helper)
 	{
 		StackTrace st = new StackTrace (e, false);
 		int in_helper = -1, in_root = -2;
+		long helper_addr = -1, root_addr = -2;
 
 		for (int i = 0; i < st.FrameCount; i++) {
 			StackFrame f = st.GetFrame (i);
@@ -176,13 +186,17 @@ static class Program {
 
 			if (m == null)
 				continue;
-			if (m.DeclaringType.Name == "Clauses" && m.Name == helper)
+			if (m.DeclaringType.Name == "Clauses" && m.Name == helper) {
 				in_helper = f.GetNativeOffset ();
-			if (m.DeclaringType.Name == "Program" && m.Name == "Root")
+				helper_addr = MethodAddress (f);
+			}
+			if (m.DeclaringType.Name == "Program" && m.Name == "Root") {
 				in_root = f.GetNativeOffset ();
+				root_addr = MethodAddress (f);
+			}
 		}
 
-		return in_helper >= 0 && in_helper == in_root;
+		return in_helper >= 0 && helper_addr == root_addr && in_helper == in_root;
 	}
 
 	static void Record (Exception e, string helper)
