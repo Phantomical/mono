@@ -440,15 +440,11 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   waiting for a body runs at tier 0 in the meantime.
   `.claude/plans/tier1-promotion-latency.md` has the sweeps and what is still open.
 - `--llvm-opt=-mono-worker-idle-ms=<n>` (`runtime/options.cpp`) — how long a worker
-  waits for work before the queue retires it, default 1000. A retired thread detaches
-  and exits, and the next enqueue that wants a thread starts a fresh one on the entry it
-  gave back. So this decides how long a program past its warm-up keeps compile threads,
-  where `-mono-workers` decides how many it can have. Zero keeps every thread that
-  started, which separates the cost of retiring threads from the cost of holding them.
-  Holding one is not free: the default suspend policy is preemptive, so the collector
-  signals an attached thread and waits for it at every collection, wherever that thread
-  parked. A restart costs around 0.7 ms, most of it rebuilding the pipelines and the
-  TargetMachine, which are per-thread.
+  waits for work before the queue retires it, default 0. Zero keeps workers for the
+  lifetime of the queue, so later compilation bursts reuse the same OS threads and
+  profiler samples are not split across replacement thread IDs. A nonzero value retires
+  idle workers, reducing the number of attached threads the collector must suspend.
+  `-mono-workers` limits concurrency; this option controls worker lifetime.
 - `MONO_LLVM_JIT_RECOMPILE=<substr>` — translate matching methods afresh on every
   request instead of answering from the cache, so they end up with several live bodies.
   No other setting produces one, and the code that has to cope has no other exerciser.
