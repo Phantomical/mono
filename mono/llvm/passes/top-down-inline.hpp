@@ -1,6 +1,7 @@
 /**
  * \file
- * \brief Inlining a hot method's callees into it, hottest call site first.
+ * \brief Inlining a hot method's callees into it, most valuable call site
+ * first.
  */
 
 #ifndef MONO_LLVM_PASSES_TOP_DOWN_INLINE_HPP
@@ -69,6 +70,11 @@ public:
 	/// Empty is a callee this domain never promoted through tier 1: its
 	/// branches then come from LLVM's static estimates.
 	virtual llvm::ArrayRef<uint8_t> profile_for (llvm::Function &decl) = 0;
+
+	/// Return \p decl's body size in IL bytes, the unit used by the inline budget.
+	///
+	/// Return zero when the managed method or its metadata cannot be loaded.
+	virtual uint32_t il_size (llvm::Function &decl) = 0;
 
 	/// Says that the cost model weighed \p callee at a site in \p caller and
 	/// inlined it. \p cost and \p count are what declined () below gets, for a
@@ -141,10 +147,8 @@ public:
 	Result run (llvm::Module &, llvm::ModuleAnalysisManager &) { return Result { *slot_ }; }
 };
 
-/// Inlines a method's hottest call sites into it.
-///
-/// Sites are ranked by the caller's own block counts, so a caller the profile
-/// describes spends its budget where the calls really are.
+/// Inline a method's most valuable call sites first, measured by profile count
+/// per callee IL byte.
 ///
 /// Each candidate is materialized when its site reaches the front of the queue.
 /// So a site the gates or the cost model refuse costs nothing but the questions.

@@ -149,6 +149,26 @@ ProfileInliner::profile_for (Function &decl)
 	return profile_scratch_;
 }
 
+uint32_t
+ProfileInliner::il_size (Function &decl)
+{
+	MonoMethod *callee = get_method (decl);
+
+	if (callee == nullptr)
+		return 0;
+
+	ERROR_DECL (error);
+	MinimalCompile cfg (callee, target_.domain, error);
+	MonoMethodHeader *header = cfg.get ()->header;
+
+	if (header == nullptr) {
+		mono_error_cleanup (error);
+		return 0;
+	}
+
+	return header->code_size;
+}
+
 /// Prints why materialize () handed back nothing for \p callee, under the trace.
 /// The site that asked keeps its call, and nothing else says this happened -
 /// StripInlineCopiesPass never saw a body to take back off.
