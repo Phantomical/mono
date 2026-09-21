@@ -9,8 +9,11 @@
 #include "hidden-return.hpp"
 #include "mini-runtime.h"
 
+#include "../runtime/options.hpp"
+
 #include "mono/metadata/class-init.h"
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/gc-internals.h"
 #include "mono/metadata/image.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/reflection-internals.h"
@@ -258,6 +261,22 @@ struct BuiltinEmitters {
 		                              call.constrained != nullptr && !call.box_receiver);
 	}
 
+	// InternalGetHashCode is reached only from Object.GetHashCode (). Use the
+	// address formula for non-moving collectors and the cached hash for moving
+	// collectors, matching tier 0's collector check.
+	static BuiltinResult get_hash_code (MethodLLVMEmitter &emitter,
+	                                    llvm::IRBuilder<> &builder,
+	                                    const BuiltinCall &call)
+	{
+		if (!hash_code_fast_path ())
+			return std::nullopt;
+
+		if (!mono_gc_is_moving ())
+			return emitter.emit_hash_code_pointer_fast_path (builder, call.sig);
+
+		return emitter.emit_hash_code_fast_path (builder, call.callee, call.sig);
+	}
+
 	/// ByReference<T> is a contract with the JIT, not code. Its IL bodies only
 	/// throw, and the JIT must substitute the real semantics itself. The
 	/// struct is one interior pointer. The constructor stores it, and the
@@ -356,6 +375,7 @@ const BuiltinMethod string_methods[] = {
 
 const BuiltinMethod object_methods[] = {
 	{ "GetType", 0, Receiver::one, BuiltinEmitters::get_type },
+	{ "InternalGetHashCode", 1, Receiver::none, BuiltinEmitters::get_hash_code },
 };
 
 const BuiltinMethod runtime_imports_methods[] = {

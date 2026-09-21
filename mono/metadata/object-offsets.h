@@ -144,6 +144,7 @@ DECL_OFFSET(MonoReflectionType, type)
 //Internal structs
 DECL_OFFSET(MonoThreadsSync, status)
 DECL_OFFSET(MonoThreadsSync, nest)
+DECL_OFFSET(MonoThreadsSync, hash_code)
 
 DECL_OFFSET(MonoProfilerCallContext, method)
 DECL_OFFSET(MonoProfilerCallContext, return_value)

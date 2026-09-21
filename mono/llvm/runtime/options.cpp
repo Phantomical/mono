@@ -92,6 +92,11 @@ llvm::cl::opt<bool> ThreadStaticFastPathOpt (
 	"mono-thread-static-fast-path", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Address a thread static directly instead of through the icall"));
 
+llvm::cl::opt<bool> HashCodeFastPathOpt (
+	"mono-hash-fastpath", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Read Object.GetHashCode's cached hash out of the lock word "
+	                "instead of through the icall"));
+
 llvm::cl::opt<bool> TagNonPointerInvariantGroupOpt (
 	"mono-invariant-group-nonptr", llvm::cl::Hidden, llvm::cl::init (false),
 	llvm::cl::desc ("Tag a non-pointer array-header read with !invariant.group"));
@@ -375,6 +380,12 @@ bool
 thread_static_fast_path ()
 {
 	return ThreadStaticFastPathOpt;
+}
+
+bool
+hash_code_fast_path ()
+{
+	return HashCodeFastPathOpt;
 }
 
 bool

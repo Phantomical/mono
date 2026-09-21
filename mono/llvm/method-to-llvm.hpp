@@ -1189,6 +1189,9 @@ private:
 	                              MonoMethodSignature *sig);
 	llvm::Error emit_monitor_fast_path (MonoIrBuilder &builder, MonoMethod *callee_method,
 	                                    MonoMethodSignature *sig, MonoJitICallId helper);
+	llvm::Error emit_hash_code_fast_path (MonoIrBuilder &builder, MonoMethod *callee_method,
+	                                      MonoMethodSignature *sig);
+	llvm::Error emit_hash_code_pointer_fast_path (MonoIrBuilder &builder, MonoMethodSignature *sig);
 	llvm::Error emit_current_managed_thread_id (MonoIrBuilder &builder,
 	                                            MonoMethodSignature *sig);
 	llvm::Expected<llvm::Value *> emit_internal_thread (MonoIrBuilder &builder);
