@@ -1,4 +1,6 @@
 #include "method-to-llvm.hpp"
+#include "../runtime/options.hpp"
+#include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
 #include "passes/cast-func.hpp"
@@ -157,8 +159,9 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	 * writes the vtable of a transparent proxy, whose answer can change.
 	 */
 	llvm::Value *cache = nullptr;
+	bool klass_depends_on_context = depends_on_context (klass);
 
-	if (depends_on_context (klass)) {
+	if (klass_depends_on_context) {
 		// A cached vtable only answers for the class the site tests against,
 		// so one instantiation must not read another's cache. The context
 		// holds a slot for each of them.
@@ -188,6 +191,29 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 
 	// Compute the depth while the front end still has the class.
 	uint16_t subtype_depth = subtype_test_depth (klass);
+	llvm::Type *i16 = llvm::Type::getInt16Ty (context ());
+	llvm::Value *rgctx_depth = llvm::ConstantInt::get (i16, 0);
+
+	/*
+	 * A bare type parameter's own depth is zero above, because it depends on
+	 * the binding. Once a shared body resolves that binding through the
+	 * context, the resolved class answers the same question - already worked
+	 * out and left in the cache array's third word, beside the vtable cache
+	 * and the class an uncached fallback would want.
+	 */
+	bool bare_type_parameter = (*type)->type == MONO_TYPE_VAR || (*type)->type == MONO_TYPE_MVAR;
+
+	if (subtype_depth == 0 && bare_type_parameter && klass_depends_on_context
+	    && rgctx_cast_depth ()) {
+		llvm::Value *slot = builder.CreateGEP (
+			llvm::Type::getInt8Ty (context ()), cache,
+			builder.getInt32 (2 * TARGET_SIZEOF_VOID_P));
+		llvm::Value *word = builder.CreateAlignedLoad (
+			llvm::Type::getIntNTy (context (), TARGET_SIZEOF_VOID_P * 8), slot,
+			llvm::Align (TARGET_SIZEOF_VOID_P), "rgctx_subtype_depth");
+
+		rgctx_depth = builder.CreateTrunc (word, i16);
+	}
 
 	/*
 	 * The site is one call rather than the probe it stands for, so the class
@@ -198,7 +224,7 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	llvm::Value *result = emit_protected_call (
 		builder, cast_func_decl (*module, throw_on_fail),
 		{ obj.value, *tested, cache, *test, *remote_test, *proxy_class,
-		  llvm::ConstantInt::get (llvm::Type::getInt16Ty (context ()), subtype_depth) });
+		  llvm::ConstantInt::get (i16, subtype_depth), rgctx_depth });
 
 	/*
 	 * The test answers with the operand or with null and keeps it nowhere

@@ -30,40 +30,13 @@ using namespace llvm;
 
 namespace mono {
 
-/**
- * Whether `mono_class_has_parent ()` is the whole answer for a cast to klass,
- * and the depth to test it at.
- *
- * `mono_class_is_assignable_from_general ()` (`mono/metadata/class.c`) ends at
- * that call, and each branch above it either agrees or governs a shape refused
- * here. An interface reads the interface bitmap. An array and a delegate have
- * variance, and a pointer, a nullable and a generic argument each have a rule
- * of their own.
- *
- * A marshal-by-ref target never reaches that function at all. The runtime
- * answers it with `mono_object_handle_isinst_mbyref ()` instead, so this
- * refuses it too.
- *
- * The depth is a property of klass alone, so it remains valid when the site
- * obtains the class from an rgctx fetch. Open type parameters are rejected
- * because their depth depends on the eventual binding.
- */
+/// The supertype-chain depth to test a cast to klass at. A value-type klass
+/// may use it here: a value type can never be a transparent proxy, so the
+/// failure arm below skips the proxy check for one.
 uint16_t
 subtype_test_depth (MonoClass *klass)
 {
-	MonoType *self = m_class_get_byval_arg (klass);
-
-	if (mono_class_is_interface (klass) || m_class_get_marshalbyref (klass)
-	    || m_class_get_rank (klass) != 0 || mono_class_is_nullable (klass)
-	    || m_class_is_delegate (klass) || m_class_get_class_kind (klass) == MONO_CLASS_POINTER
-	    || self->type == MONO_TYPE_VAR || self->type == MONO_TYPE_MVAR)
-		return 0;
-
-	// The depth reached below indexes the object's supertypes, and the
-	// runtime writes this one once and never changes it.
-	mono_class_setup_supertypes (klass);
-
-	return m_class_get_idepth (klass);
+	return mono_class_get_supertype_test_depth (klass, /* allow_valuetype */ TRUE);
 }
 
 namespace {
@@ -127,11 +100,12 @@ load_vtable (IRBuilder<> &b, Value *object, const Twine &name = "")
 
 /// Emits the inline half of a cast: branches to yes when the object's class has
 /// the class tested at depth among its supertypes, and to otherwise when it cannot.
-/// The caller supplies the depth because the class may come from an rgctx fetch.
+/// The caller supplies the depth, as an i16, because the class may come from an
+/// rgctx fetch - and so, at a site sharing a generic body, may the depth itself.
 ///
 /// Leaves yes and otherwise unterminated. The caller fills in both.
 void
-emit_subtype_test (IRBuilder<> &b, Function *f, uint16_t depth, Value *obj, Value *target,
+emit_subtype_test (IRBuilder<> &b, Function *f, Value *depth, Value *obj, Value *target,
                    BasicBlock *yes, BasicBlock *otherwise)
 {
 	LLVMContext &c = b.getContext ();
@@ -155,7 +129,7 @@ emit_subtype_test (IRBuilder<> &b, Function *f, uint16_t depth, Value *obj, Valu
 
 	BasicBlock *deep_enough = BasicBlock::Create (c, "cast_deep_enough", f);
 
-	b.CreateCondBr (b.CreateICmpUGE (its_depth, b.getInt16 (depth)), deep_enough, otherwise);
+	b.CreateCondBr (b.CreateICmpUGE (its_depth, depth), deep_enough, otherwise);
 	b.SetInsertPoint (deep_enough);
 
 	Value *supertypes = b.CreateAlignedLoad (
@@ -163,8 +137,10 @@ emit_subtype_test (IRBuilder<> &b, Function *f, uint16_t depth, Value *obj, Valu
 		b.CreateGEP (b.getInt8Ty (), its_class,
 	                     b.getInt32 (MONO_STRUCT_OFFSET (MonoClass, supertypes))),
 		Align (TARGET_SIZEOF_VOID_P), "supertypes");
+	Value *index =
+		b.CreateZExt (b.CreateSub (depth, b.getInt16 (1)), b.getInt32Ty (), "supertype_index");
 	Value *at_depth =
-		b.CreateAlignedLoad (ptr, b.CreateGEP (ptr, supertypes, b.getInt32 (depth - 1)),
+		b.CreateAlignedLoad (ptr, b.CreateGEP (ptr, supertypes, index),
 	                             Align (TARGET_SIZEOF_VOID_P), "supertype");
 
 	b.CreateCondBr (b.CreateICmpEQ (at_depth, target), yes, otherwise);
@@ -265,6 +241,7 @@ lower (CallBase *site, bool throw_on_fail)
 	Value *proxy_class = site->getArgOperand (5);
 	uint16_t subtype_depth =
 		(uint16_t) cast<ConstantInt> (site->getArgOperand (6))->getZExtValue ();
+	Value *rgctx_depth = site->getArgOperand (7);
 
 	BasicBlock *tail;
 	BasicBlock *pad = nullptr;
@@ -282,7 +259,15 @@ lower (CallBase *site, bool throw_on_fail)
 
 	MonoClass *klass = tested_class (site);
 	bool to_interface = klass != nullptr && mono_class_is_interface (klass);
-	bool via_subtype_chain = subtype_depth != 0;
+	bool via_static_subtype_chain = subtype_depth != 0;
+
+	// rgctx_depth is the front end's ConstantInt 0 wherever a shared body cannot
+	// resolve the target through a bare type parameter, so a real Value here is
+	// what tells the two rgctx-resolved shapes apart: a declared class (already
+	// covered by subtype_depth above, since its depth does not depend on the
+	// binding) from a bare one, whose depth does.
+	bool via_dynamic_subtype_chain = !via_static_subtype_chain && !isa<ConstantInt> (rgctx_depth);
+	bool via_subtype_chain = via_static_subtype_chain || via_dynamic_subtype_chain;
 	bool via_interface_bitmap = klass != nullptr && to_interface && interface_test_applies (klass)
 	                             && interface_test_is_conclusive (klass);
 	bool via_conclusive_test = via_subtype_chain || via_interface_bitmap;
@@ -296,50 +281,15 @@ lower (CallBase *site, bool throw_on_fail)
 	BasicBlock *remote = nullptr;
 	Value *answer = nullptr;
 	CallBase *slow = nullptr;
-	BasicBlock *new_pad_pred = nullptr;
+	SmallVector<BasicBlock *, 2> new_pad_preds;
 
 	IRBuilder<> b (c);
 
 	b.SetCurrentDebugLocation (site->getDebugLoc ());
 
-	/*
-	 * The inline subtype and conclusive interface tests produce the same answer
-	 * as the runtime helper, so they can bypass the per-site cache.
-	 *
-	 * A failed isinst only needs the uncached helper for a transparent proxy.
-	 * castclass always needs it to report InvalidCastException.
-	 */
-	if (via_conclusive_test) {
-		told_yes = BasicBlock::Create (c, "cast_inline_yes", f);
-		first = BasicBlock::Create (c, via_subtype_chain ? "cast_subtype" : "cast_interface", f);
-		remote = BasicBlock::Create (c, "cast_remote", f);
-
-		b.SetInsertPoint (first);
-
-		if (via_subtype_chain)
-			emit_subtype_test (b, f, subtype_depth, obj, target, told_yes, remote);
-		else
-			emit_interface_test (b, f, klass, obj, told_yes, remote);
-
-		b.SetInsertPoint (told_yes);
-		b.CreateBr (done);
-	} else {
-		probe = BasicBlock::Create (c, "cast_probe", f);
-		hit = BasicBlock::Create (c, "cast_hit", f);
-		miss = BasicBlock::Create (c, "cast_miss", f);
-		first = probe;
-
-		if (klass != nullptr && to_interface && interface_test_applies (klass)) {
-			told_yes = BasicBlock::Create (c, "cast_inline_yes", f);
-			first = BasicBlock::Create (c, "cast_interface", f);
-
-			b.SetInsertPoint (first);
-			emit_interface_test (b, f, klass, obj, told_yes, probe);
-
-			b.SetInsertPoint (told_yes);
-			b.CreateBr (done);
-		}
-
+	// Shared by the general path below and by the dynamic subtype chain's own
+	// fallback, reached when depth turns out to be zero at run time.
+	auto emit_probe = [&] () {
 		b.SetInsertPoint (probe);
 
 		Value *cached = b.CreateAlignedLoad (ptr, cache, Align (TARGET_SIZEOF_VOID_P),
@@ -376,7 +326,7 @@ lower (CallBase *site, bool throw_on_fail)
 
 		if (pad != nullptr) {
 			slow = b.CreateInvoke (icall, done, pad, args);
-			new_pad_pred = miss;
+			new_pad_preds.push_back (miss);
 		} else {
 			CallInst *plain = b.CreateCall (icall, args);
 
@@ -386,6 +336,71 @@ lower (CallBase *site, bool throw_on_fail)
 			slow = plain;
 			b.CreateBr (done);
 		}
+	};
+
+	/*
+	 * The inline subtype and conclusive interface tests produce the same answer
+	 * as the runtime helper, so they can bypass the per-site cache.
+	 *
+	 * A failed isinst only needs the uncached helper for a transparent proxy.
+	 * castclass always needs it to report InvalidCastException.
+	 *
+	 * The dynamic subtype chain is the same test with the depth resolved at run
+	 * time, and it can resolve to zero - klass, once known, turns out to be a
+	 * shape the chain does not decide - so that arm also builds the general,
+	 * cached path as its own fallback.
+	 */
+	if (via_conclusive_test) {
+		told_yes = BasicBlock::Create (c, "cast_inline_yes", f);
+		first = BasicBlock::Create (
+			c, via_dynamic_subtype_chain ? "cast_subtype_dynamic"
+			                             : via_static_subtype_chain ? "cast_subtype" : "cast_interface",
+			f);
+		remote = BasicBlock::Create (c, "cast_remote", f);
+
+		if (via_dynamic_subtype_chain) {
+			probe = BasicBlock::Create (c, "cast_probe", f);
+			hit = BasicBlock::Create (c, "cast_hit", f);
+			miss = BasicBlock::Create (c, "cast_miss", f);
+		}
+
+		b.SetInsertPoint (first);
+
+		if (via_dynamic_subtype_chain) {
+			BasicBlock *has_depth = BasicBlock::Create (c, "cast_subtype_dynamic_has_depth", f);
+
+			b.CreateCondBr (b.CreateICmpNE (rgctx_depth, b.getInt16 (0)), has_depth, probe);
+			b.SetInsertPoint (has_depth);
+			emit_subtype_test (b, f, rgctx_depth, obj, target, told_yes, remote);
+		} else if (via_static_subtype_chain) {
+			emit_subtype_test (b, f, b.getInt16 (subtype_depth), obj, target, told_yes, remote);
+		} else {
+			emit_interface_test (b, f, klass, obj, told_yes, remote);
+		}
+
+		b.SetInsertPoint (told_yes);
+		b.CreateBr (done);
+
+		if (via_dynamic_subtype_chain)
+			emit_probe ();
+	} else {
+		probe = BasicBlock::Create (c, "cast_probe", f);
+		hit = BasicBlock::Create (c, "cast_hit", f);
+		miss = BasicBlock::Create (c, "cast_miss", f);
+		first = probe;
+
+		if (klass != nullptr && to_interface && interface_test_applies (klass)) {
+			told_yes = BasicBlock::Create (c, "cast_inline_yes", f);
+			first = BasicBlock::Create (c, "cast_interface", f);
+
+			b.SetInsertPoint (first);
+			emit_interface_test (b, f, klass, obj, told_yes, probe);
+
+			b.SetInsertPoint (told_yes);
+			b.CreateBr (done);
+		}
+
+		emit_probe ();
 	}
 
 	b.SetInsertPoint (done);
@@ -415,7 +430,7 @@ lower (CallBase *site, bool throw_on_fail)
 
 			if (pad != nullptr) {
 				call = b.CreateInvoke (remote_icall, done, pad, remote_args);
-				new_pad_pred = remote;
+				new_pad_preds.push_back (remote);
 			} else {
 				CallInst *plain = b.CreateCall (remote_icall, remote_args);
 
@@ -453,7 +468,7 @@ lower (CallBase *site, bool throw_on_fail)
 
 			if (pad != nullptr) {
 				call = b.CreateInvoke (remote_icall, done, pad, remote_args);
-				new_pad_pred = ask;
+				new_pad_preds.push_back (ask);
 			} else {
 				CallInst *plain = b.CreateCall (remote_icall, remote_args);
 
@@ -464,7 +479,11 @@ lower (CallBase *site, bool throw_on_fail)
 
 			result->addIncoming (call, ask);
 		}
-	} else {
+	}
+
+	// hit/miss exist either because the general path built them, or because the
+	// dynamic subtype chain's own zero-depth fallback did.
+	if (hit != nullptr) {
 		result->addIncoming (answer, hit);
 		result->addIncoming (slow, miss);
 	}
@@ -475,18 +494,22 @@ lower (CallBase *site, bool throw_on_fail)
 	b.CreateBr (tail);
 
 	// The phis of the two blocks the site reached name it as their predecessor.
-	// Renaming keeps the values they take, which is what the new edges carry as
-	// well, and leaves nothing naming head once the site goes. At most one new
-	// block invokes into pad: the cache miss or the uncached fallback.
+	// Adding the same incoming value under each new name and then dropping
+	// head's own keeps what they take, and leaves nothing naming head once the
+	// site goes. The dynamic subtype chain is the one shape with two new blocks
+	// that can unwind into pad on this site's behalf: its own remote or ask, and
+	// the zero-depth fallback's miss.
 	tail->replacePhiUsesWith (head, done);
 
 	if (pad != nullptr) {
-		// Remove the old incoming values when no replacement block can unwind.
-		if (new_pad_pred != nullptr)
-			pad->replacePhiUsesWith (head, new_pad_pred);
-		else
-			for (PHINode &phi : pad->phis ())
-				phi.removeIncomingValue (head, false);
+		for (PHINode &phi : pad->phis ()) {
+			Value *from_head = phi.getIncomingValueForBlock (head);
+
+			for (BasicBlock *pred : new_pad_preds)
+				phi.addIncoming (from_head, pred);
+
+			phi.removeIncomingValue (head, false);
+		}
 	}
 
 	site->eraseFromParent ();
@@ -521,7 +544,9 @@ cast_func_decl (Module &m, bool throw_on_fail)
 
 	return builtin_decl (
 		m, name,
-		FunctionType::get (ptr, { ptr, ptr, ptr, ptr, ptr, ptr, Type::getInt16Ty (c) }, false));
+		FunctionType::get (
+			ptr, { ptr, ptr, ptr, ptr, ptr, ptr, Type::getInt16Ty (c), Type::getInt16Ty (c) },
+			false));
 }
 
 bool

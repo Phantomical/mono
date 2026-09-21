@@ -761,6 +761,16 @@ mono_runtime_suite(runtime-class-guard-off TESTS class-devirt.exe
 mono_runtime_suite(runtime-fault-null-checks-off TESTS implicit-null-checks.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-fault-null-checks=0")
 
+# A bare type parameter's cast site resolves its target class through the
+# rgctx regardless of tier, so tier 0 is off rather than raised -- the point
+# is to reach the backend at all, not to reach a particular tier of it. The
+# off arm falls every such site back to the cached probe, which is the answer
+# the resolved depth has to agree with.
+mono_runtime_suite(runtime-shared-cast-depth TESTS shared-cast-depth.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0")
+mono_runtime_suite(runtime-shared-cast-depth-off TESTS shared-cast-depth.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier0-filter=0 --llvm-opt=-mono-rgctx-cast-depth=0")
+
 # Exercise invariant element_class loads after Sum () reaches tier 2.
 mono_runtime_suite(runtime-unbox-element-class TESTS unbox-element-class.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000")

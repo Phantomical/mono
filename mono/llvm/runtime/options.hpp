@@ -119,6 +119,14 @@ bool tier2_enabled ();
 /// translator writes the same IR either way, so the two arms differ in one pass.
 bool eliminate_casts ();
 
+/// Whether a cast against a bare type parameter may resolve the supertype-chain
+/// depth through the generic context.
+///
+/// A false value leaves such a site on the cached probe and the wrapper, which
+/// is the answer the resolved depth has to agree with. The translator writes
+/// the same IR either way, so the two arms differ in one pass.
+bool rgctx_cast_depth ();
+
 /// Whether the delegate-Invoke elimination is on.
 ///
 /// A false value leaves every Invoke reading its entry off the delegate, which

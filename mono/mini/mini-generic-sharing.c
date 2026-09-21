@@ -944,9 +944,18 @@ class_type_info (MonoDomain *domain, MonoClass *klass, MonoRgctxInfoType info_ty
 		return vtable;
 	}
 	case MONO_RGCTX_INFO_CAST_CACHE: {
-		/*First slot is the cache itself, the second the vtable.*/
-		gpointer **cache_data = (gpointer **)mono_domain_alloc0 (domain, sizeof (gpointer) * 2);
+		/*
+		 * Word 0 is the vtable cache the cast icall reads and writes. Word 1
+		 * is klass, which the classic tier-0 compiler's own cast sites load
+		 * back out for their icall's class argument - a separate rgctx fetch
+		 * carries klass for the LLVM backend instead. Word 2 is the
+		 * supertype-chain depth to test a cast to klass at, or zero where
+		 * the chain does not decide one, computed once here rather than on
+		 * every call a shared body makes against a bare type parameter.
+		 */
+		gpointer **cache_data = (gpointer **)mono_domain_alloc0 (domain, sizeof (gpointer) * 3);
 		cache_data [1] = (gpointer *)klass;
+		cache_data [2] = (gpointer *)(uintptr_t) mono_class_get_supertype_test_depth (klass, FALSE);
 		return cache_data;
 	}
 	case MONO_RGCTX_INFO_ARRAY_ELEMENT_SIZE:

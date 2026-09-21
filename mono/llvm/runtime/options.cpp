@@ -66,6 +66,11 @@ llvm::cl::opt<bool> EliminateCastsOpt (
 	"mono-eliminate-casts", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Answer a type test the translator can settle without a probe"));
 
+llvm::cl::opt<bool> RgctxCastDepthOpt (
+	"mono-rgctx-cast-depth", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Resolve the supertype-chain depth for a cast against a bare "
+	                "type parameter through the generic context"));
+
 llvm::cl::opt<bool> EliminateDelegatesOpt (
 	"mono-eliminate-delegates", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Eliminate a delegate Invoke whose target the translator can name"));
@@ -359,6 +364,12 @@ bool
 eliminate_casts ()
 {
 	return EliminateCastsOpt;
+}
+
+bool
+rgctx_cast_depth ()
+{
+	return RgctxCastDepthOpt;
 }
 
 bool

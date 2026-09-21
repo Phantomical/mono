@@ -617,6 +617,16 @@ typedef struct {
 void
 mono_class_setup_supertypes (MonoClass *klass);
 
+/*
+ * The supertype-chain depth to test a cast to klass at, or zero where the
+ * chain does not decide such a cast: klass is an interface, a marshal-by-ref
+ * class, an array, Nullable<T>, a delegate, a pointer, or an open type
+ * parameter. allow_valuetype answers whether a value-type klass may answer
+ * with its own depth instead of joining that list.
+ */
+guint16
+mono_class_get_supertype_test_depth (MonoClass *klass, gboolean allow_valuetype);
+
 /* WARNING
  * Only call this function if you can ensure both @klass and @parent
  * have supertype information initialized.

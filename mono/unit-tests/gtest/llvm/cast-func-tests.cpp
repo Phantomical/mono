@@ -42,11 +42,15 @@ struct CastModule {
 	BasicBlock *pad = nullptr;
 	CallBase *site = nullptr;
 
-	CastModule (bool throw_on_fail, bool protect = false)
+	// dynamic_depth builds an eighth operand that is a load rather than a
+	// constant, the shape a bare type parameter's cast site gives it once a
+	// shared body resolves the class through its context.
+	CastModule (bool throw_on_fail, bool protect = false, bool dynamic_depth = false)
 	{
 		module = std::make_unique<Module> ("casts", *context);
 
 		Type *ptr = PointerType::get (*context, 0);
+		Type *i16 = Type::getInt16Ty (*context);
 		Type *i64 = Type::getInt64Ty (*context);
 
 		// The wrapper's own signature spells the class and the cache as
@@ -81,9 +85,19 @@ struct CastModule {
 		BasicBlock *entry = BasicBlock::Create (*context, "entry", caller);
 		BasicBlock *tail = BasicBlock::Create (*context, "tail", caller);
 		IRBuilder<> b (entry);
-		Value *args[] = { caller->getArg (0), klass,  cache,
-		                 wrapper,             remote_wrapper, proxy_class,
-		                 ConstantInt::get (Type::getInt16Ty (*context), 0) };
+		Value *rgctx_depth = ConstantInt::get (i16, 0);
+
+		if (dynamic_depth) {
+			auto *depth_slot = new GlobalVariable (*module, i16, false,
+			                                       GlobalValue::InternalLinkage,
+			                                       ConstantInt::get (i16, 0), "rgctx_depth_slot");
+
+			rgctx_depth = b.CreateLoad (i16, depth_slot, "rgctx_depth");
+		}
+
+		Value *args[] = { caller->getArg (0), klass,       cache,       wrapper,
+		                 remote_wrapper,      proxy_class, ConstantInt::get (i16, 0),
+		                 rgctx_depth };
 		Function *decl = cast_func_decl (*module, throw_on_fail);
 
 		if (!protect) {
@@ -222,6 +236,46 @@ TEST (CastFuncTest, TheNullCheckStandsInFrontOfEveryVtableRead)
 	// The taken edge answers null, and it reads nothing off the object.
 	for (Instruction &in : entry)
 		EXPECT_FALSE (isa<LoadInst> (in)) << "the null check reads the object";
+}
+
+/*
+ * A resolved zero at run time - klass turned out to be a shape the chain
+ * does not decide - takes the same cached path an ordinary site without a
+ * static depth builds, so a dynamic site carries both.
+ */
+TEST (CastFuncTest, ADynamicDepthBuildsTheSubtypeTestAndTheCachedFallback)
+{
+	CastModule m (/*throw_on_fail=*/false, /*protect=*/false, /*dynamic_depth=*/true);
+
+	m.lower ();
+
+	EXPECT_FALSE (verifyModule (*m.module, &errs ()));
+	EXPECT_EQ (m.count ("cast_subtype_dynamic_has_depth:"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("%cached_vtable = load"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("call ptr @isinst_wrapper"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("call ptr @isinst_remote_wrapper"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("%cast_result = phi"), 1u) << m.text ();
+}
+
+// The dynamic arm's own remote check and its cached fallback each reach a
+// clause-protected site's unwind edge on their own failure, so both stay
+// among the pad's predecessors once the site is gone.
+TEST (CastFuncTest, AProtectedDynamicSiteKeepsBothFallbacksOnTheUnwindEdge)
+{
+	CastModule m (/*throw_on_fail=*/false, /*protect=*/true, /*dynamic_depth=*/true);
+
+	m.lower ();
+
+	ASSERT_FALSE (verifyModule (*m.module, &errs ()));
+
+	unsigned edges = 0;
+
+	for (BasicBlock &block : *m.caller)
+		for (const BasicBlock *to : successors (&block))
+			if (to == m.pad)
+				++edges;
+
+	EXPECT_EQ (edges, 2u);
 }
 
 } // namespace
