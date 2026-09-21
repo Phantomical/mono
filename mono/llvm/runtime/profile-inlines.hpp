@@ -56,6 +56,7 @@ public:
 	                             std::optional<SiteHeat> heat,
 	                             const llvm::CallBase &call) override;
 	llvm::ArrayRef<uint8_t> profile_for (llvm::Function &decl) override;
+	uint32_t il_size (llvm::Function &decl) override;
 	void inlined (llvm::Function &caller, llvm::Function &callee,
 	             const llvm::InlineCost &cost, uint64_t count) override;
 	void declined (llvm::Function &caller, llvm::Function &callee,
