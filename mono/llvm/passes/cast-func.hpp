@@ -25,10 +25,11 @@ class Module;
 namespace mono {
 
 /*
- * Both declarations take the same seven operands:
+ * Both declarations take the same eight operands:
  *
  *   ptr @mono.cast.isinst (ptr obj, ptr class, ptr cache, ptr icall,
- *                          ptr remote_icall, ptr proxy_class, i16 subtype_depth)
+ *                          ptr remote_icall, ptr proxy_class, i16 subtype_depth,
+ *                          i16 rgctx_depth)
  *
  * class is the class the test names. It is a marked global for a class the
  * compile can name, and the value an rgctx fetch answered for one it cannot.
@@ -47,6 +48,14 @@ namespace mono {
  * subtype_depth is computed from the tested class before an rgctx fetch can
  * replace the class operand. It enables the supertype-chain miss test in a
  * shared body.
+ *
+ * rgctx_depth is a second, later-resolving answer to the same question, for a
+ * site whose class is a bare type parameter rather than a class the parameter
+ * only appears inside: subtype_depth is always zero there, because the depth
+ * depends on the eventual binding, and rgctx_depth carries what the binding's
+ * own class answers once a shared body resolves it. A site with nothing to
+ * resolve this way passes a zero constant, which the lowering tells apart
+ * from a resolved zero by testing whether the operand is a constant at all.
  *
  * Neither declaration is nounwind. The wrapper raises the class's own load
  * failure, and castclass raises InvalidCastException, so a site inside a clause

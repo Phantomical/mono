@@ -4085,6 +4085,23 @@ mono_class_setup_supertypes (MonoClass *klass)
 	mono_loader_unlock ();
 }
 
+guint16
+mono_class_get_supertype_test_depth (MonoClass *klass, gboolean allow_valuetype)
+{
+	MonoType *self = m_class_get_byval_arg (klass);
+
+	if (mono_class_is_interface (klass) || m_class_get_marshalbyref (klass)
+	    || m_class_get_rank (klass) != 0 || mono_class_is_nullable (klass)
+	    || m_class_is_delegate (klass) || m_class_get_class_kind (klass) == MONO_CLASS_POINTER
+	    || self->type == MONO_TYPE_VAR || self->type == MONO_TYPE_MVAR
+	    || (!allow_valuetype && m_class_is_valuetype (klass)))
+		return 0;
+
+	mono_class_setup_supertypes (klass);
+
+	return m_class_get_idepth (klass);
+}
+
 /* mono_class_setup_nested_types:
  *
  * Initialize the nested_classes property for the given MonoClass if it hasn't already been initialized.
