@@ -3,6 +3,7 @@
 #include "alloc-func.hpp"
 #include "analysis/builtins.hpp"
 #include "analysis/constant-values.hpp"
+#include "analysis/enum-flag.hpp"
 #include "analysis/operand-class.hpp"
 #include "analysis/strip-casts.hpp"
 #include "analysis/vtable-info.hpp"
@@ -12,6 +13,7 @@
 #include "compile-state.hpp"
 #include "devirtualize.hpp"
 #include "direct-call.hpp"
+#include "enum-flag.hpp"
 #include "gc-barrier.hpp"
 #include "hidden-return.hpp"
 #include "lower-builtins.hpp"
@@ -22,6 +24,7 @@
 
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/class.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
 
@@ -46,6 +49,7 @@
 #include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
+#include <llvm/Support/Alignment.h>
 #include <llvm/Support/ErrorHandling.h>
 
 #include <algorithm>
@@ -261,6 +265,51 @@ eliminate_type_tests (Function &f, FunctionAnalysisManager &fam)
 	bool changed = eliminate_sites (f, cast_isinst_name, false, fam);
 
 	return eliminate_sites (f, cast_castclass_name, true, fam) || changed;
+}
+
+bool
+eliminate_enum_has_flag (Function &f, FunctionAnalysisManager &fam)
+{
+	if (current_compile ().domain == nullptr || !eliminate_enum_has_flag_option ())
+		return false;
+
+	SmallVector<CallBase *, 8> sites = builtin_sites (f, enum_hasflag_name);
+
+	if (sites.empty ())
+		return false;
+
+	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
+	bool changed = false;
+
+	for (CallBase *site : sites) {
+		MonoClass *klass = enum_has_flag_class (site->getArgOperand (0),
+		                                        site->getArgOperand (1), f, values);
+
+		if (klass == nullptr)
+			continue;
+
+		uint32_t align;
+		int width = mono_class_value_size (klass, &align);
+		IRBuilder<> b (site);
+		Type *scalar = b.getIntNTy ((unsigned) width * 8);
+		Align load_align ((unsigned) width);
+
+		auto payload = [&] (Value *boxed) {
+			return b.CreateGEP (b.getInt8Ty (), boxed,
+			                    b.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
+		};
+
+		Value *held = b.CreateAlignedLoad (scalar, payload (site->getArgOperand (0)),
+		                                   load_align);
+		Value *asked = b.CreateAlignedLoad (scalar, payload (site->getArgOperand (1)),
+		                                    load_align);
+		Value *equal = b.CreateICmpEQ (b.CreateAnd (held, asked), asked);
+
+		answer_with (site, b.CreateZExt (equal, b.getInt8Ty ()));
+		changed = true;
+	}
+
+	return changed;
 }
 
 namespace {
@@ -1078,6 +1127,7 @@ MonoBuiltinConstProp::run (Function &f, FunctionAnalysisManager &fam)
 		// chain's receiver comes from.
 		bool again = eliminate_type_tests (f, fam);
 
+		again |= eliminate_enum_has_flag (f, fam);
 		again |= eliminate_object_vtables (f, fam);
 		again |= eliminate_vtable_fields (f, fam);
 		again |= eliminate_element_class_reads (f, fam);
@@ -1121,6 +1171,7 @@ MonoBuiltinLower::run (Module &m, ModuleAnalysisManager &)
 	case LowerStage::post_inline:
 		changed = lower_vtable_reads (m);
 		changed |= lower_type_tests (m);
+		changed |= lower_enum_has_flag (m);
 		break;
 
 	case LowerStage::post_optimization:
