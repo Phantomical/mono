@@ -186,16 +186,19 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	if (!proxy_class)
 		return proxy_class.takeError ();
 
+	// Compute the depth while the front end still has the class.
+	uint16_t subtype_depth = subtype_test_depth (klass);
+
 	/*
 	 * The site is one call rather than the probe it stands for, so the class
 	 * the test names stays an operand. eliminate_type_tests () decides a site whose
 	 * operand has a class the IR gives, and the lowering writes the probe and
 	 * the wrapper back for every site nothing answered.
 	 */
-	llvm::Value *result =
-		emit_protected_call (builder, cast_func_decl (*module, throw_on_fail),
-	                             { obj.value, *tested, cache, *test, *remote_test,
-	                               *proxy_class });
+	llvm::Value *result = emit_protected_call (
+		builder, cast_func_decl (*module, throw_on_fail),
+		{ obj.value, *tested, cache, *test, *remote_test, *proxy_class,
+		  llvm::ConstantInt::get (llvm::Type::getInt16Ty (context ()), subtype_depth) });
 
 	/*
 	 * The test answers with the operand or with null and keeps it nowhere
@@ -204,7 +207,7 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 	 * writes the operand's vtable into the cache rather than the operand, and
 	 * the walk behind it compares classes.
 	 *
-	 * An interface and a marshal-by-ref class are the two `subtype_test_applies
+	 * An interface and a marshal-by-ref class are the two `subtype_test_depth
 	 * ()` (`passes/cast-func.cpp`) refuses for the same reason: they reach
 	 * `mono_object_handle_isinst_mbyref ()`, which asks a transparent proxy's
 	 * own CanCastTo (). That is managed code holding the operand, so a site
