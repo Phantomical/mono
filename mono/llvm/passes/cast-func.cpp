@@ -29,10 +29,10 @@
 using namespace llvm;
 
 namespace mono {
-namespace {
 
 /**
- * Whether `mono_class_has_parent ()` is the whole answer for a cast to klass.
+ * Whether `mono_class_has_parent ()` is the whole answer for a cast to klass,
+ * and the depth to test it at.
  *
  * `mono_class_is_assignable_from_general ()` (`mono/metadata/class.c`) ends at
  * that call, and each branch above it either agrees or governs a shape refused
@@ -44,12 +44,16 @@ namespace {
  * answers it with `mono_object_handle_isinst_mbyref ()` instead, so this
  * refuses it too.
  *
- * A context-dependent class does not reach here. The test compares against the
- * class and against its depth as constants, and the operand carries neither
- * where an rgctx fetch answered for the class.
+ * The depth is a property of klass alone, so it stays valid however the
+ * operand that names the class at the site is built - a marked global for a
+ * class the compile can name, or the value an rgctx fetch answers when the
+ * class is only known once the body's own context resolves it. klass being
+ * an open type parameter itself is not such a case: the check above already
+ * refuses it, because its depth varies with whatever the parameter is bound
+ * to and so is not a property of klass alone.
  */
-bool
-subtype_test_applies (MonoClass *klass)
+uint16_t
+subtype_test_depth (MonoClass *klass)
 {
 	MonoType *self = m_class_get_byval_arg (klass);
 
@@ -57,14 +61,16 @@ subtype_test_applies (MonoClass *klass)
 	    || m_class_get_rank (klass) != 0 || mono_class_is_nullable (klass)
 	    || m_class_is_delegate (klass) || m_class_get_class_kind (klass) == MONO_CLASS_POINTER
 	    || self->type == MONO_TYPE_VAR || self->type == MONO_TYPE_MVAR)
-		return false;
+		return 0;
 
 	// The depth reached below indexes the object's supertypes, and the
 	// runtime writes this one once and never changes it.
 	mono_class_setup_supertypes (klass);
 
-	return m_class_get_idepth (klass) > 0;
+	return m_class_get_idepth (klass);
 }
+
+namespace {
 
 /**
  * Whether the interface bitmap is the whole answer for a cast to klass.
@@ -124,16 +130,20 @@ load_vtable (IRBuilder<> &b, Value *object, const Twine &name = "")
 }
 
 /// Emits the inline half of a cast: branches to yes when the object's class has
-/// klass among its supertypes, and to otherwise when this cannot tell.
+/// the class tested at depth among its supertypes, and to otherwise when this
+/// cannot tell.
+///
+/// depth is subtype_test_depth () of that class, taken by the caller rather
+/// than read here, because the class itself may be a value only an rgctx
+/// fetch answers.
 ///
 /// Leaves yes and otherwise unterminated. The caller fills in both.
 void
-emit_subtype_test (IRBuilder<> &b, Function *f, MonoClass *klass, Value *obj, Value *target,
+emit_subtype_test (IRBuilder<> &b, Function *f, uint16_t depth, Value *obj, Value *target,
                    BasicBlock *yes, BasicBlock *otherwise)
 {
 	LLVMContext &c = b.getContext ();
 	Type *ptr = PointerType::get (c, 0);
-	uint16_t depth = m_class_get_idepth (klass);
 
 	Value *vtable = load_vtable (b, obj);
 	Value *its_class = b.CreateAlignedLoad (
@@ -261,6 +271,8 @@ lower (CallBase *site, bool throw_on_fail)
 	auto *icall = cast<Function> (site->getArgOperand (3)->stripPointerCasts ());
 	auto *remote_icall = cast<Function> (site->getArgOperand (4)->stripPointerCasts ());
 	Value *proxy_class = site->getArgOperand (5);
+	uint16_t subtype_depth =
+		(uint16_t) cast<ConstantInt> (site->getArgOperand (6))->getZExtValue ();
 
 	BasicBlock *tail;
 	BasicBlock *pad = nullptr;
@@ -278,11 +290,15 @@ lower (CallBase *site, bool throw_on_fail)
 
 	MonoClass *klass = tested_class (site);
 	bool to_interface = klass != nullptr && mono_class_is_interface (klass);
-	bool via_subtype_chain = klass != nullptr && !to_interface && subtype_test_applies (klass);
+	bool via_subtype_chain = subtype_depth != 0;
 	bool via_interface_bitmap = klass != nullptr && to_interface && interface_test_applies (klass)
 	                             && interface_test_is_conclusive (klass);
 	bool via_conclusive_test = via_subtype_chain || via_interface_bitmap;
-	bool to_valuetype = via_subtype_chain && m_class_is_valuetype (klass);
+
+	// A class an rgctx fetch answered can still be a value type, but nothing
+	// here can ask it. Such a site takes the proxy check on the general arm
+	// below instead, which a value type answers no for either way.
+	bool to_valuetype = via_subtype_chain && klass != nullptr && m_class_is_valuetype (klass);
 
 	BasicBlock *told_yes = nullptr;
 	BasicBlock *first;
@@ -311,7 +327,7 @@ lower (CallBase *site, bool throw_on_fail)
 		b.SetInsertPoint (first);
 
 		if (via_subtype_chain)
-			emit_subtype_test (b, f, klass, obj, target, told_yes, remote);
+			emit_subtype_test (b, f, subtype_depth, obj, target, told_yes, remote);
 		else
 			emit_interface_test (b, f, klass, obj, told_yes, remote);
 
@@ -513,8 +529,9 @@ cast_func_decl (Module &m, bool throw_on_fail)
 	LLVMContext &c = m.getContext ();
 	Type *ptr = PointerType::get (c, 0);
 
-	return builtin_decl (m, name,
-	                     FunctionType::get (ptr, { ptr, ptr, ptr, ptr, ptr, ptr }, false));
+	return builtin_decl (
+		m, name,
+		FunctionType::get (ptr, { ptr, ptr, ptr, ptr, ptr, ptr, Type::getInt16Ty (c) }, false));
 }
 
 bool

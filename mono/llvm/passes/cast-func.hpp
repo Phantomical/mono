@@ -11,7 +11,11 @@
 #ifndef MONO_LLVM_PASSES_CAST_FUNC_HPP
 #define MONO_LLVM_PASSES_CAST_FUNC_HPP
 
+#include "mono/metadata/object-forward.h"
+
 #include <llvm/ADT/StringRef.h>
+
+#include <cstdint>
 
 namespace llvm {
 class Function;
@@ -21,10 +25,10 @@ class Module;
 namespace mono {
 
 /*
- * Both declarations take the same six operands:
+ * Both declarations take the same seven operands:
  *
  *   ptr @mono.cast.isinst (ptr obj, ptr class, ptr cache, ptr icall,
- *                          ptr remote_icall, ptr proxy_class)
+ *                          ptr remote_icall, ptr proxy_class, i16 subtype_depth)
  *
  * class is the class the test names. It is a marked global for a class the
  * compile can name, and the value an rgctx fetch answered for one it cannot.
@@ -40,10 +44,22 @@ namespace mono {
  * failure to report InvalidCastException. proxy_class is the marked
  * TransparentProxy class used to identify those isinst cases.
  *
+ * subtype_depth is subtype_test_depth () of the class the test names, taken
+ * where the translator still has it even when class itself came from an
+ * rgctx fetch. It is what lets the supertype-chain test answer a miss for a
+ * class a shared body only learns at runtime.
+ *
  * Neither declaration is nounwind. The wrapper raises the class's own load
  * failure, and castclass raises InvalidCastException, so a site inside a clause
  * is an invoke and the lowering keeps that edge.
  */
+
+/// The supertype-chain depth to test a cast to klass at, or zero where the
+/// chain does not decide such a cast and the cached probe is needed instead.
+///
+/// Depends only on klass itself, so a caller who still holds klass may call
+/// this ahead of an rgctx fetch that will stand in for it as the operand.
+uint16_t subtype_test_depth (MonoClass *klass);
 
 /// Answers obj where obj is an instance of the class, and null where it is not.
 constexpr llvm::StringRef cast_isinst_name = "mono.cast.isinst";
