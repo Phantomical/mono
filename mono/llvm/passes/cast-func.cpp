@@ -54,9 +54,8 @@ subtype_test_applies (MonoClass *klass)
 	MonoType *self = m_class_get_byval_arg (klass);
 
 	if (mono_class_is_interface (klass) || m_class_get_marshalbyref (klass)
-	    || m_class_get_rank (klass) != 0 || m_class_is_valuetype (klass)
-	    || mono_class_is_nullable (klass) || m_class_is_delegate (klass)
-	    || m_class_get_class_kind (klass) == MONO_CLASS_POINTER
+	    || m_class_get_rank (klass) != 0 || mono_class_is_nullable (klass)
+	    || m_class_is_delegate (klass) || m_class_get_class_kind (klass) == MONO_CLASS_POINTER
 	    || self->type == MONO_TYPE_VAR || self->type == MONO_TYPE_MVAR)
 		return false;
 
@@ -283,6 +282,7 @@ lower (CallBase *site, bool throw_on_fail)
 	bool via_interface_bitmap = klass != nullptr && to_interface && interface_test_applies (klass)
 	                             && interface_test_is_conclusive (klass);
 	bool via_conclusive_test = via_subtype_chain || via_interface_bitmap;
+	bool to_valuetype = via_subtype_chain && m_class_is_valuetype (klass);
 
 	BasicBlock *told_yes = nullptr;
 	BasicBlock *first;
@@ -400,9 +400,9 @@ lower (CallBase *site, bool throw_on_fail)
 	if (via_conclusive_test) {
 		b.SetInsertPoint (remote);
 
-		SmallVector<Value *, 2> remote_args = adapt_to_callee (b, remote_icall, { obj, target });
-
 		if (throw_on_fail) {
+			SmallVector<Value *, 2> remote_args = adapt_to_callee (b, remote_icall, { obj, target });
+
 			// Every failed castclass test must call the helper to report an
 			// InvalidCastException, so checking for a proxy first saves nothing.
 			CallBase *call;
@@ -419,6 +419,11 @@ lower (CallBase *site, bool throw_on_fail)
 			}
 
 			result->addIncoming (call, remote);
+		} else if (to_valuetype) {
+			// A transparent proxy cannot be assignable to a value type, so the
+			// failed subtype test is conclusive.
+			b.CreateBr (done);
+			result->addIncoming (null, remote);
 		} else {
 			Value *its_class = b.CreateAlignedLoad (
 				ptr,
@@ -437,6 +442,7 @@ lower (CallBase *site, bool throw_on_fail)
 
 			b.SetInsertPoint (ask);
 
+			SmallVector<Value *, 2> remote_args = adapt_to_callee (b, remote_icall, { obj, target });
 			CallBase *call;
 
 			if (pad != nullptr) {
@@ -468,8 +474,14 @@ lower (CallBase *site, bool throw_on_fail)
 	// block invokes into pad: the cache miss or the uncached fallback.
 	tail->replacePhiUsesWith (head, done);
 
-	if (pad != nullptr)
-		pad->replacePhiUsesWith (head, new_pad_pred);
+	if (pad != nullptr) {
+		// Remove the old incoming values when no replacement block can unwind.
+		if (new_pad_pred != nullptr)
+			pad->replacePhiUsesWith (head, new_pad_pred);
+		else
+			for (PHINode &phi : pad->phis ())
+				phi.removeIncomingValue (head, false);
+	}
 
 	site->eraseFromParent ();
 
