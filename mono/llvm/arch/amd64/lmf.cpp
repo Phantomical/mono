@@ -16,6 +16,10 @@
 
 #include "mono/utils/mono-tls-inline.h"
 
+#ifdef HOST_WIN32
+#include <intrin.h>
+#endif
+
 // This breaks some LLVM headers
 #undef PIC
 
@@ -24,6 +28,7 @@
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Intrinsics.h>
 
+#include <cstdint>
 #include <optional>
 
 namespace mono::arch {
@@ -127,6 +132,8 @@ emit_callee_saved_clobber (llvm::IRBuilderBase &b)
 		/*hasSideEffects=*/true));
 }
 
+#if !defined (HOST_WIN32)
+
 /*
  * The %fs-relative displacement mono_tls_lmf_addr sits at, or nothing when this
  * build cannot name one.
@@ -141,7 +148,7 @@ emit_callee_saved_clobber (llvm::IRBuilderBase &b)
 static std::optional<int32_t>
 lmf_address_tls_displacement ()
 {
-#if defined (MONO_KEYWORD_THREAD) && !defined (HOST_WIN32)
+#if defined (MONO_KEYWORD_THREAD)
 	gint32 offset = mono_tls_offsets[TLS_KEY_LMF_ADDR];
 	uint8_t *thread_pointer;
 
@@ -151,16 +158,55 @@ lmf_address_tls_displacement ()
 		return std::nullopt;
 	return offset;
 #else
-	/*
-	 * Windows reaches a __declspec(thread) variable through the TEB's
-	 * ThreadLocalStoragePointer, which is an array a module indexes into --
-	 * two loads and a per-module index, not a displacement from the thread
-	 * pointer.  So there is no constant a load can be folded to, and the
-	 * caller emits the call instead.
-	 */
 	return std::nullopt;
 #endif
 }
+
+#else // HOST_WIN32
+
+extern "C" unsigned long _tls_index;
+
+namespace {
+
+/// mono_tls_lmf_addr's location inside its module's TLS block: the module's
+/// own TLS index, and the variable's byte offset within the block that
+/// index names.
+struct WindowsTlsLocation {
+	int32_t tls_index;
+	int32_t block_offset;
+};
+
+/*
+ * Windows has no fixed per-thread-local displacement. The loader gives a
+ * __declspec(thread) variable's module a TLS index, and each thread's own
+ * block for that module sits at its own address, so only the offset
+ * inside the block is constant. Both the index and the offset are fixed
+ * for the process once the loader assigns them, so this reads them once,
+ * off the compiling thread's own TEB, and keeps the answer. The offset
+ * comes from this build's own &mono_tls_lmf_addr rather than a stored
+ * constant, so a wrong module index shows up as a mismatched block, not a
+ * silently wrong address.
+ */
+std::optional<WindowsTlsLocation>
+compute_windows_tls_location ()
+{
+	void **tls_array = (void **) __readgsqword (0x58);
+
+	if (!tls_array || !tls_array [_tls_index])
+		return std::nullopt;
+
+	int64_t offset = (uint8_t *) &mono_tls_lmf_addr
+	                  - (uint8_t *) tls_array [_tls_index];
+
+	if (offset < 0 || offset > INT32_MAX)
+		return std::nullopt;
+
+	return WindowsTlsLocation { (int32_t) _tls_index, (int32_t) offset };
+}
+
+} // namespace
+
+#endif // HOST_WIN32
 
 /*
  * Address space 257 is what LLVM calls %fs-relative on x86-64, so the load below
@@ -168,11 +214,38 @@ lmf_address_tls_displacement ()
  * with neither a jit-info record nor an LMF to walk from. That window is the
  * whole point: a wrapper's prologue reaches this before it has linked anything
  * onto the chain, and an async stack walk that starts inside it sees no managed
- * frame at all.
+ * frame at all. Address space 256 is %gs-relative. The Windows arm below
+ * keeps the same property with three loads and an add: still no call, so
+ * the same window holds there too.
  */
 llvm::Value *
 emit_lmf_address (llvm::IRBuilderBase &b)
 {
+	llvm::LLVMContext &ctx = b.getContext ();
+	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
+	llvm::Align align (TARGET_SIZEOF_VOID_P);
+
+#if defined (HOST_WIN32)
+	static const std::optional<WindowsTlsLocation> location =
+		compute_windows_tls_location ();
+
+	if (!location)
+		return nullptr;
+
+	llvm::Value *teb_slot = b.CreateIntToPtr (
+		b.getInt64 (0x58), llvm::PointerType::get (ctx, 256));
+	llvm::Value *tls_array = b.CreateAlignedLoad (ptr, teb_slot, align);
+	llvm::Value *block = b.CreateAlignedLoad (
+		ptr,
+		b.CreateConstInBoundsGEP1_32 (ptr, tls_array, location->tls_index),
+		align);
+
+	return b.CreateAlignedLoad (
+		ptr,
+		b.CreateConstInBoundsGEP1_32 (b.getInt8Ty (), block,
+	                                      location->block_offset),
+		align, "lmf_addr");
+#else
 	std::optional<int32_t> displacement = lmf_address_tls_displacement ();
 
 	if (!displacement)
@@ -180,11 +253,10 @@ emit_lmf_address (llvm::IRBuilderBase &b)
 
 	llvm::Value *slot = b.CreateIntToPtr (
 		b.getInt64 ((uint64_t) (int64_t) *displacement),
-		llvm::PointerType::get (b.getContext (), 257));
+		llvm::PointerType::get (ctx, 257));
 
-	return b.CreateAlignedLoad (llvm::PointerType::get (b.getContext (), 0),
-	                            slot, llvm::Align (TARGET_SIZEOF_VOID_P),
-	                            "lmf_addr");
+	return b.CreateAlignedLoad (ptr, slot, align, "lmf_addr");
+#endif
 }
 
 /*
