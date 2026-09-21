@@ -204,6 +204,12 @@ struct BuiltinEmitters {
 		return emitter.emit_thread_spin_wait_nop (builder);
 	}
 
+	static BuiltinResult enum_has_flag (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                    const BuiltinCall &call)
+	{
+		return emitter.emit_enum_has_flag (builder, call.callee, call.sig);
+	}
+
 	/// Fold RuntimeHelpers.IsReferenceOrContainsReferences<T> for concrete T.
 	static BuiltinResult is_reference_or_contains_references (
 		MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder, const BuiltinCall &call)
@@ -565,6 +571,10 @@ const BuiltinMethod volatile_methods[] = {
 	{ "Write", 2, Receiver::none, BuiltinEmitters::volatile_write_wide },
 };
 
+const BuiltinMethod enum_methods[] = {
+	{ "HasFlag", 1, Receiver::one, BuiltinEmitters::enum_has_flag },
+};
+
 const BuiltinMethod debugger_methods[] = {
 	{ "Break", 0, Receiver::none, BuiltinEmitters::debugger_break },
 };
@@ -671,6 +681,7 @@ class_table ()
 		{ { nullptr, "System.Threading", "Thread" }, &mono_defaults.thread_class,
 		  thread_methods },
 		{ { nullptr, "System.Threading", "Volatile" }, nullptr, volatile_methods },
+		{ { nullptr, "System", "Enum" }, &mono_defaults.enum_class, enum_methods },
 		{ { nullptr, "System.Diagnostics", "Debugger" }, nullptr, debugger_methods },
 		{ { nullptr, "System.Runtime.CompilerServices", "RuntimeHelpers" }, nullptr,
 		  runtime_helpers_methods },
