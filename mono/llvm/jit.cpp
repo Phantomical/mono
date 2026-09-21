@@ -18,6 +18,7 @@
 #include "sidetables.hpp"
 #include "passes/builtins.hpp"
 #include "passes/class-init-elision.hpp"
+#include "passes/class-init-guard.hpp"
 #include "passes/profile-counters.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "passes/top-down-inline.hpp"
@@ -160,6 +161,7 @@ is_mono_pass (StringRef pass)
 {
 	return pass == MonoBuiltinConstProp::name () || pass == MonoBuiltinLower::name ()
 	       || pass == ClassInitDominatedElisionPass::name ()
+	       || pass == ClassInitGuardPass::name ()
 	       || pass == RestoreTailPositionPass::name ()
 	       || pass == arch::MonoAbiPass::name ();
 }

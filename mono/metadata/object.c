@@ -447,10 +447,10 @@ mono_runtime_class_init_full (MonoVTable *vtable, MonoError *error)
 
 	MonoDomain *domain = vtable->domain;
 
-	error_init (error);
-
 	if (vtable->initialized)
 		return TRUE;
+
+	error_init (error);
 
 	MonoClass *klass = vtable->klass;
 	MonoMemoryManager *memory_manager = mono_domain_ambient_memory_manager (domain);

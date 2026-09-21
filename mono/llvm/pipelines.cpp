@@ -7,6 +7,7 @@
 #include "passes/builtins.hpp"
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init-elision.hpp"
+#include "passes/class-init-guard.hpp"
 #include "passes/eliminate-static-const.hpp"
 #include "passes/dead-alloc.hpp"
 #include "passes/dead-vtable-store.hpp"
@@ -557,6 +558,10 @@ MonoPassBuilder::buildTier1Pipeline ()
 	if (PTO.EnablePromotion)
 		MPM.addPass (mono::TierCounterPass ());
 
+	// Run after class-init elision and tier-1 instrumentation so the new
+	// guard is not itself instrumented.
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitGuardPass ()));
+
 	MPM.addPass (mono::RgctxFetchPass ());
 	MPM.addPass (arch::MonoAbiPass ());
 
@@ -759,8 +764,13 @@ MonoPassBuilder::buildTier2Pipeline ()
 	FPM.addPass (mono::InitonlyNullnessPass ());
 	FPM.addPass (mono::RgctxDedupPass ());
 
-	// Last, because what it repairs is the pipeline's own doing.
+	// Restore tail position before adding the final class-init guards.
 	FPM.addPass (mono::RestoreTailPositionPass ());
+
+	// Run after class-init elision and profile use; only calls left by elision
+	// need guarding, and the new blocks should not affect profile matching.
+	FPM.addPass (mono::ClassInitGuardPass ());
+
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (std::move (FPM)));
 
 	MPM.addPass (mono::RgctxFetchPass ());
