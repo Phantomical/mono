@@ -522,6 +522,21 @@ mono_tier0_spent (MonoMethod *method, MonoDomain *domain)
 	arm_tier0_counter (dm);
 }
 
+void *
+mono_domain_method_get_runtime_invoke_info (MonoMethod *method, MonoDomain *domain)
+{
+	mono::MonoDomainMethod *dm = mono::domain_method_find (domain, method);
+
+	return dm != nullptr ? dm->runtime_invoke_info.load (std::memory_order_acquire) : nullptr;
+}
+
+void
+mono_domain_method_set_runtime_invoke_info (MonoMethod *method, MonoDomain *domain, void *value)
+{
+	if (mono::MonoDomainMethod *dm = mono::domain_method_find (domain, method))
+		dm->runtime_invoke_info.store (value, std::memory_order_release);
+}
+
 namespace {
 
 /// Mono.Tiering.MonoTier::PromoteNow, which puts a method at a tier without

@@ -259,6 +259,9 @@ public:
 	/// The jit-info record the thunk was registered under.
 	MonoJitInfo *jinfo = nullptr;
 
+	/// Cached RuntimeInvokeInfo for this method in this domain.
+	std::atomic<void *> runtime_invoke_info{nullptr};
+
 	/* -- The bodies ------------------------------------------------------ */
 
 	/// Records \p code as the body the entry names.
