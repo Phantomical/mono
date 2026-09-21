@@ -10,6 +10,7 @@
 #include "mono/metadata/metadata.h"
 
 #include <llvm/ADT/ArrayRef.h>
+#include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Intrinsics.h>
@@ -91,16 +92,20 @@ constexpr llvm::Intrinsic::ID no_intrinsic = llvm::Intrinsic::not_intrinsic;
  *
  * The names below are deliberately absent.
  *
- * Max and Min stay, and the reason is signed zero rather than NaN. The body of
- * Math.Max (double, double) returns the first operand when it is greater and
- * when it is a NaN, and the second operand otherwise. Two operands that compare
- * equal therefore give back the second: Max (+0.0, -0.0) is -0.0 and
- * Max (-0.0, +0.0) is +0.0. llvm.maximum answers +0.0 to both, and llvm.maxnum
- * answers the wrong operand for a NaN as well.
+ * Max and Min stay absent for float and double, and the reason is signed zero
+ * rather than NaN. The body of Math.Max (double, double) returns the first
+ * operand when it is greater and when it is a NaN, and the second operand
+ * otherwise. Two operands that compare equal therefore give back the second:
+ * Max (+0.0, -0.0) is -0.0 and Max (-0.0, +0.0) is +0.0. llvm.maximum answers
+ * +0.0 to both, and llvm.maxnum answers the wrong operand for a NaN as well.
  *
  * --ffast-math does not bring them back. relaxed_float_flags () leaves nnan out,
  * and the NaN operand is half of what these two get wrong. unity-main takes them
  * under mono_use_fast_math, where the whole set is on.
+ *
+ * Every integer overload of Max and Min is answered instead, by
+ * int_minmax_intrinsic_for (). The intrinsic depends on the operand's width
+ * and signedness, which no row here can express.
  *
  * IEEERemainder stays. Its managed body preserves the NaN payload of whichever
  * operand was a NaN, and it calls Math.Round on the quotient. libm remainder is
@@ -129,6 +134,11 @@ const MathTableEntry math_table[] = {
 	{ "Ceiling", 1, icall, call_intrinsic, llvm::Intrinsic::ceil, nullptr, nullptr },
 	{ "Atan2", 2, icall, call_intrinsic, llvm::Intrinsic::atan2, nullptr, nullptr },
 	{ "Pow", 2, icall, call_intrinsic, llvm::Intrinsic::pow, nullptr, nullptr },
+
+	// The managed arbitrary-base overload computes Log (a) / Log (newBase)
+	// after handling its special cases.
+	{ "Log", 2, Body::Managed, MathIntrinsic::Emit::LogBase, no_intrinsic,
+	  nullptr, nullptr },
 
 	// frem is fmod, which is what the icall calls.
 	{ "FMod", 2, icall, MathIntrinsic::Emit::Remainder, no_intrinsic, nullptr, nullptr },
@@ -198,6 +208,70 @@ matches_shape (const MathTableEntry &entry, MonoMethodSignature *sig)
 	return true;
 }
 
+/// Whether t is one of the fixed-width integer types used by Min and Max.
+bool
+is_plain_int (MonoType *t)
+{
+	if (t->byref)
+		return false;
+
+	switch (t->type) {
+	case MONO_TYPE_I1:
+	case MONO_TYPE_U1:
+	case MONO_TYPE_I2:
+	case MONO_TYPE_U2:
+	case MONO_TYPE_I4:
+	case MONO_TYPE_U4:
+	case MONO_TYPE_I8:
+	case MONO_TYPE_U8:
+		return true;
+	default:
+		return false;
+	}
+}
+
+bool
+is_unsigned_int (MonoType *t)
+{
+	switch (t->type) {
+	case MONO_TYPE_U1:
+	case MONO_TYPE_U2:
+	case MONO_TYPE_U4:
+	case MONO_TYPE_U8:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/// Select the signed or unsigned LLVM min/max intrinsic for an integer overload.
+std::optional<MathIntrinsic>
+int_minmax_intrinsic_for (std::string_view name, Body body, MonoMethodSignature *sig)
+{
+	if (body != Body::Managed || sig->param_count != 2)
+		return std::nullopt;
+	if (name != "Min" && name != "Max")
+		return std::nullopt;
+
+	MonoType *ret = sig->ret;
+
+	if (!is_plain_int (ret))
+		return std::nullopt;
+
+	for (int i = 0; i < 2; i++)
+		if (sig->params[i]->byref || sig->params[i]->type != ret->type)
+			return std::nullopt;
+
+	bool is_unsigned = is_unsigned_int (ret);
+	llvm::Intrinsic::ID id = name == "Min"
+	                                  ? (is_unsigned ? llvm::Intrinsic::umin
+	                                                 : llvm::Intrinsic::smin)
+	                                  : (is_unsigned ? llvm::Intrinsic::umax
+	                                                 : llvm::Intrinsic::smax);
+
+	return MathIntrinsic { MathIntrinsic::Emit::Intrinsic, id, nullptr };
+}
+
 } // namespace
 
 llvm::ArrayRef<MathBuiltin>
@@ -208,6 +282,10 @@ math_builtins ()
 
 		for (const MathTableEntry &entry : math_table)
 			made.push_back ({ entry.name, (int) entry.arity });
+
+		// These overloads are selected by type, not by a table row.
+		made.push_back ({ "Min", 2 });
+		made.push_back ({ "Max", 2 });
 
 		return made;
 	} ();
@@ -253,7 +331,7 @@ math_intrinsic_for (MonoMethod *method, MonoMethodSignature *sig)
 			               is_float ? entry.libm_float : entry.libm_double };
 	}
 
-	return std::nullopt;
+	return int_minmax_intrinsic_for (name, body, sig);
 }
 
 /// Declares the libm function name, over arity arguments of type and returning
@@ -318,6 +396,34 @@ MethodLLVMEmitter::emit_math_call (MonoIrBuilder &builder, const MathIntrinsic &
 		builder.CreateAlignedStore (builder.CreateExtractValue (halves, 1),
 		                            (*args)[1], type_alignment (sig->ret));
 		result = builder.CreateExtractValue (halves, 0);
+		break;
+	}
+	case MathIntrinsic::Emit::LogBase: {
+		// Preserve the managed body's special-case ordering with selects.
+		// Compute the quotient unconditionally; selects replace it for special cases.
+		llvm::Value *a = (*args)[0];
+		llvm::Value *new_base = (*args)[1];
+		llvm::Constant *one = llvm::ConstantFP::get (type, 1.0);
+		llvm::Constant *zero = llvm::ConstantFP::get (type, 0.0);
+		llvm::Constant *positive_infinity = llvm::ConstantFP::getInfinity (type);
+		llvm::Constant *nan = llvm::ConstantFP::getNaN (type);
+
+		llvm::Value *log_a =
+			relax_float (builder.CreateIntrinsic (llvm::Intrinsic::log, { type }, { a }));
+		llvm::Value *log_base = relax_float (
+			builder.CreateIntrinsic (llvm::Intrinsic::log, { type }, { new_base }));
+		llvm::Value *quotient = relax_float (builder.CreateFDiv (log_a, log_base));
+
+		llvm::Value *forces_nan = builder.CreateAnd (
+			builder.CreateFCmpONE (a, one),
+			builder.CreateOr (builder.CreateFCmpOEQ (new_base, zero),
+			                  builder.CreateFCmpOEQ (new_base, positive_infinity)));
+
+		result = builder.CreateSelect (forces_nan, nan, quotient);
+		result = builder.CreateSelect (builder.CreateFCmpOEQ (new_base, one), nan, result);
+		result = builder.CreateSelect (builder.CreateFCmpUNO (new_base, new_base),
+		                               new_base, result);
+		result = builder.CreateSelect (builder.CreateFCmpUNO (a, a), a, result);
 		break;
 	}
 	}

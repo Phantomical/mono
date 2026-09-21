@@ -282,6 +282,8 @@ struct MathIntrinsic {
 		/// llvm.modf, whose integral half is stored through the call's last
 		/// argument and whose fractional half is the result.
 		Modf,
+		/// The two-argument Math.Log/MathF.Log managed body.
+		LogBase,
 	};
 
 	Emit emit;
