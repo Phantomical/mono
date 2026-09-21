@@ -246,6 +246,39 @@ exit2:
 	EXPECT_EQ (m.markers_in ("exit2"), 1u);
 }
 
+TEST (SinkKeepAliveTest, DoesNotSinkToExitThatBypassesDelegateDefinition)
+{
+	// %shortcut reaches the loop exit without defining %delegate. Moving the
+	// marker to %exit would therefore create a use not dominated by its value.
+	Sunk m (R"(
+define void @caller(ptr %ref, i1 %skip, i1 %cond) {
+entry:
+  br i1 %skip, label %shortcut, label %compute
+
+compute:
+  %delegate = load ptr, ptr %ref, align 8
+  br label %header
+
+header:
+  br i1 %cond, label %body, label %exit
+
+body:
+  call void (...) @llvm.fake.use(ptr %delegate)
+  br label %header
+
+shortcut:
+  br label %exit
+
+exit:
+  ret void
+}
+)");
+
+	EXPECT_FALSE (m.changed);
+	EXPECT_EQ (m.markers_in ("body"), 1u);
+	EXPECT_EQ (m.markers_in ("exit"), 0u);
+}
+
 TEST (SinkKeepAliveTest, SinksPastANestedLoopToTheOutermostThatIsStillInvariant)
 {
 	Sunk m (R"(

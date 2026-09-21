@@ -30,25 +30,39 @@ is_keep_alive_marker (const CallInst &call)
 	return call.getIntrinsicID () == Intrinsic::fake_use && call.arg_size () == 1;
 }
 
-/// The outermost loop enclosing \p from where \p delegate stays one value
-/// throughout. Null where \p from is null or the value never reaches that
-/// far.
+/// The outermost loop enclosing \p from where \p delegate is invariant and
+/// dominates both the loop header and every exit block. Null if no such loop
+/// exists.
 ///
-/// `Loop::isLoopInvariant ()` only asks whether \p delegate is defined
-/// outside the loop. It does not ask whether that definition reaches the
-/// loop, so each step out here also asks \p dt.
+/// `Loop::isLoopInvariant ()` only proves that \p delegate is defined outside
+/// the loop. Its definition may not dominate the loop or an exit block that
+/// is also reachable along a path that bypasses the loop.
 Loop *
 outermost_invariant_loop (Loop *from, Value *delegate, DominatorTree &dt)
 {
 	Loop *outer = nullptr;
+	const auto *def = dyn_cast<Instruction> (delegate);
 
 	for (Loop *at = from; at != nullptr; at = at->getParentLoop ()) {
 		if (!at->isLoopInvariant (delegate))
 			break;
 
-		if (const auto *def = dyn_cast<Instruction> (delegate))
+		if (def != nullptr) {
 			if (!dt.dominates (def, at->getHeader ()))
 				break;
+
+			SmallVector<BasicBlock *, 4> exits;
+			at->getUniqueExitBlocks (exits);
+
+			bool all_reached = true;
+
+			for (BasicBlock *exit : exits)
+				if (!dt.dominates (def, exit))
+					all_reached = false;
+
+			if (!all_reached)
+				break;
+		}
 
 		outer = at;
 	}
