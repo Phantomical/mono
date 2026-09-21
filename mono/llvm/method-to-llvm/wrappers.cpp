@@ -563,9 +563,18 @@ MethodLLVMEmitter::emit_mono_tls (MonoIrBuilder &builder, uint32_t key)
 
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 	llvm::FunctionType *type = llvm::FunctionType::get (ptr, false);
-	llvm::Value *value = builder.CreateCall (llvm::FunctionCallee (
+	llvm::CallInst *value = builder.CreateCall (llvm::FunctionCallee (
 		type, address_symbol (std::string ("mono_icall_") + info->name,
 	                              const_cast<void *> (info->func))));
+
+	/*
+	 * The getter only reads the current thread's slot. Describe that at the
+	 * call site so LLVM can share and hoist the lookup. The call is indirect,
+	 * so the attributes must be attached here rather than to a declaration.
+	 */
+	value->setDoesNotThrow ();
+	value->addFnAttr (llvm::Attribute::WillReturn);
+	value->setMemoryEffects (llvm::MemoryEffects::none ());
 
 	push_stack (value, m_class_get_byval_arg (mono_defaults.int_class));
 	return llvm::Error::success ();
