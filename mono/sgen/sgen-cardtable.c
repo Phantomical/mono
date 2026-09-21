@@ -58,7 +58,7 @@ sgen_card_table_number_of_cards_in_range (mword address, mword size)
 	return (end >> CARD_BITS) - (address >> CARD_BITS) + 1;
 }
 
-static void
+void
 sgen_card_table_wbarrier_set_field (GCObject *obj, gpointer field_ptr, GCObject* value)
 {
 	*(void**)field_ptr = value;
