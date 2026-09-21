@@ -4268,6 +4268,8 @@ register_icalls (void)
 
 	/* other jit icalls */
 	register_icall (ves_icall_mono_delegate_ctor, mono_icall_sig_void_object_object_ptr, FALSE);
+	register_icall (ves_icall_mono_delegate_ctor_with_method,
+				 mono_icall_sig_void_object_object_ptr_ptr, FALSE);
 	register_icall (mono_class_static_field_address,
 				 mono_icall_sig_ptr_ptr_ptr, FALSE);
 	register_icall (mono_ldtoken_wrapper, mono_icall_sig_ptr_ptr_ptr_ptr, FALSE);

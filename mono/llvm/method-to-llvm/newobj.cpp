@@ -321,10 +321,31 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 		run = llvm::FunctionCallee ((*declaration)->getFunctionType (), *code);
 	}
 
+	// Pass a statically resolved ldftn target directly to the constructor.
+	llvm::Function *fast_decl = nullptr;
+	MonoMethod *bound =
+		ctor_by_context ? nullptr : delegate_ctor_target (klass, sig, args);
+
+	if (bound != nullptr) {
+		llvm::Expected<llvm::Function *> fast = icall_wrapper_decl (
+			MONO_JIT_ICALL_ves_icall_mono_delegate_ctor_with_method);
+		if (!fast)
+			return fast.takeError ();
+
+		llvm::Expected<llvm::Value *> method_value = method_operand (builder, bound);
+		if (!method_value)
+			return method_value.takeError ();
+
+		args.push_back (*method_value);
+		args = adapt_to_callee (builder, *fast, args);
+		fast_decl = *fast;
+		run = *fast;
+	}
+
 	emit_protected_call (builder, run, args, [&] (llvm::CallBase *site) {
 		if (keyed)
 			site->addParamAttr (site->arg_size () - 1, llvm::Attribute::Nest);
-		carry_parameter_extensions (site, *declaration);
+		carry_parameter_extensions (site, fast_decl != nullptr ? fast_decl : *declaration);
 	});
 	pop_stack (count);
 
@@ -335,7 +356,7 @@ MethodLLVMEmitter::emit_newobj (MonoIrBuilder &builder, uint32_t token)
 
 		// A delegate also states the method it calls, which is what lets a
 		// later pass answer its Invoke without dispatching.
-		if (MonoMethod *bound = delegate_ctor_target (klass, sig, args))
+		if (bound != nullptr)
 			if (auto *site = llvm::dyn_cast<llvm::Instruction> (created))
 				mark_delegate_target (*site, bound);
 
