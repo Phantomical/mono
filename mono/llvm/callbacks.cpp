@@ -7,7 +7,9 @@
 
 #include "arch/arch.hpp"
 
+#include "mono/metadata/profiler-private.h"
 #include "mono/utils/mono-hwcap.h"
+#include "mono/utils/mono-mmap.h"
 
 #include <llvm/ExecutionEngine/Orc/IndirectionUtils.h>
 
@@ -90,6 +92,32 @@ LazyCallbacks::pool_for (ResolverKind kind)
 	return *pool_;
 }
 
+/*
+ * A trampoline carries no name of its own, and reporting one event per
+ * trampoline would flood a capture. Its page is what the OS handed out as
+ * one unit, so report that once instead.
+ */
+void
+LazyCallbacks::report_trampoline_page (ExecutorAddr trampoline)
+{
+	if (!MONO_PROFILER_ENABLED (jit_code_stub))
+		return;
+
+	uintptr_t page_size = uintptr_t (mono_pagesize ());
+	ExecutorAddr page = ExecutorAddr::fromPtr (reinterpret_cast<void *> (
+		trampoline.getValue () & ~(page_size - 1)));
+
+	{
+		std::lock_guard<std::mutex> lock (mutex_);
+		if (!reported_trampoline_pages_.insert (page).second)
+			return;
+	}
+
+	MONO_PROFILER_RAISE (jit_code_stub,
+	                     (page.toPtr<const mono_byte *> (), uint64_t (page_size),
+	                      "[mono] lazy entry trampolines"));
+}
+
 Expected<void *>
 LazyCallbacks::reserve (LazyCompile compile, ResolverKind kind)
 {
@@ -97,6 +125,8 @@ LazyCallbacks::reserve (LazyCompile compile, ResolverKind kind)
 
 	if (!trampoline)
 		return trampoline.takeError ();
+
+	report_trampoline_page (*trampoline);
 
 	auto callback = std::make_shared<Callback> ();
 	callback->compile = std::move (compile);
