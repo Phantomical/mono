@@ -25,3 +25,47 @@ ves_icall_mono_delegate_ctor (MonoObject *this_obj_raw, MonoObject *target_raw, 
 leave:
 	HANDLE_FUNCTION_RETURN ();
 }
+
+/*
+ * A newobj whose ldftn target this compile already resolved names the method
+ * directly, so the constructor does not have to recover it from addr through
+ * the jit info table.
+ */
+void
+ves_icall_mono_delegate_ctor_with_method (MonoObject *this_obj_raw, MonoObject *target_raw,
+                                          gpointer addr, MonoMethod *method)
+{
+	HANDLE_FUNCTION_ENTER ();
+	ERROR_DECL (error);
+	MONO_HANDLE_DCL (MonoObject, this_obj);
+	MONO_HANDLE_DCL (MonoObject, target);
+
+	if (!addr) {
+		mono_error_set_argument_null (error, "method", "");
+		mono_error_set_pending_exception (error);
+		goto leave;
+	}
+
+	/*
+	 * A null target for a closed instance-method binding is illegal. Invoke
+	 * declaring one parameter more than the method marks an open binding,
+	 * where a null target is expected instead.
+	 */
+	if (MONO_HANDLE_IS_NULL (target) && !(method->flags & METHOD_ATTRIBUTE_STATIC)) {
+		MonoMethod *invoke = mono_get_delegate_invoke_internal (mono_handle_class (this_obj));
+		MonoMethodSignature *invoke_sig = invoke ? mono_method_signature_internal (invoke) : NULL;
+		MonoMethodSignature *bound_sig = mono_method_signature_internal (method);
+
+		if (invoke_sig && bound_sig && invoke_sig->param_count == bound_sig->param_count) {
+			mono_error_set_argument (error, "this", "Delegate to an instance method cannot have null 'this'");
+			mono_error_set_pending_exception (error);
+			goto leave;
+		}
+	}
+
+	mono_delegate_ctor (this_obj, target, addr, method, error);
+	mono_error_set_pending_exception (error);
+
+leave:
+	HANDLE_FUNCTION_RETURN ();
+}
