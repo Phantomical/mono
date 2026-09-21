@@ -120,6 +120,17 @@ struct BuiltinEmitters {
 		return emitter.emit_buffer_copy (builder, *copy, call.sig);
 	}
 
+	static BuiltinResult array_clear (MethodLLVMEmitter &emitter,
+	                                  llvm::IRBuilder<> &builder, const BuiltinCall &)
+	{
+		MonoClass *element = emitter.array_clear_element_class ();
+
+		if (element == nullptr)
+			return std::nullopt;
+
+		return emitter.emit_array_clear (builder, element);
+	}
+
 	static BuiltinResult cor_element_type (MethodLLVMEmitter &emitter,
 	                                       llvm::IRBuilder<> &builder,
 	                                       const BuiltinCall &call)
@@ -301,6 +312,8 @@ const BuiltinMethod array_methods[] = {
 	// inliner has already inlined a forwarded parameter into a constant.
 	{ "GetLength", 1, Receiver::one, BuiltinEmitters::array_dimension },
 	{ "GetLowerBound", 1, Receiver::one, BuiltinEmitters::array_lower_bound },
+
+	{ "Clear", 3, Receiver::none, BuiltinEmitters::array_clear },
 };
 
 const BuiltinMethod string_methods[] = {

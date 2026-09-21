@@ -1163,6 +1163,8 @@ private:
 	llvm::Error emit_array_total_length (MonoIrBuilder &builder);
 	llvm::Error emit_array_dimension (MonoIrBuilder &builder, MonoMethod *accessor,
 	                                  bool lower_bound);
+	MonoClass *array_clear_element_class ();
+	llvm::Error emit_array_clear (MonoIrBuilder &builder, MonoClass *element);
 	llvm::Error emit_string_length (MonoIrBuilder &builder);
 	llvm::Expected<llvm::Value *> emit_string_alloc (MonoIrBuilder &builder,
 	                                                 llvm::Value *length);
