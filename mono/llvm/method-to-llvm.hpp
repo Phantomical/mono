@@ -895,7 +895,8 @@ private:
 	void emit_throw_corlib_exception (MonoIrBuilder &builder, const char *name);
 	llvm::CondBrInst *emit_cond_exception (MonoIrBuilder &builder, llvm::Value *condition,
 	                                       const char *name);
-	void emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer);
+	void emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer,
+	                      bool object_reference);
 
 	void emit_division_guards (MonoIrBuilder &builder, llvm::Value *lhs, llvm::Value *rhs,
 	                           bool is_signed);

@@ -631,7 +631,7 @@ MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
 	// Managed pointers already identify storage, while native pointers follow
 	// unsafe-code semantics. Only object references need a managed null check here.
 	if (null_check && type == ObjectRef)
-		emit_null_check (builder, base);
+		emit_null_check (builder, base, /*object_reference=*/false);
 
 	/*
 	 * A field's recorded offset counts from the start of the MonoObject. A value type

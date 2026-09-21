@@ -101,6 +101,11 @@ llvm::cl::opt<bool> TagNonPointerInvariantGroupOpt (
 	"mono-invariant-group-nonptr", llvm::cl::Hidden, llvm::cl::init (false),
 	llvm::cl::desc ("Tag a non-pointer array-header read with !invariant.group"));
 
+llvm::cl::opt<bool> FaultNullChecksOpt (
+	"mono-fault-null-checks", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Rewrite a surviving object-reference null check into a faulting "
+	                "access"));
+
 llvm::cl::opt<unsigned> Tier1ThresholdOpt (
 	"mono-tier1-threshold", llvm::cl::Hidden, llvm::cl::init (5000000),
 	llvm::cl::desc ("What a tier-0 body spends before it asks for tier 1"));
@@ -392,6 +397,12 @@ bool
 tag_non_pointer_invariant_group ()
 {
 	return TagNonPointerInvariantGroupOpt;
+}
+
+bool
+fault_null_checks ()
+{
+	return FaultNullChecksOpt;
 }
 
 llvm::FastMathFlags

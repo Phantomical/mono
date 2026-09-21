@@ -176,6 +176,10 @@ bool hash_code_fast_path ();
 /// Disabled by default because of llvm/llvm-project#219885.
 bool tag_non_pointer_invariant_group ();
 
+/// Whether eligible surviving object-reference null checks are rewritten into
+/// faulting accesses for optimized code.
+bool fault_null_checks ();
+
 /// The fast-math flags the float operations a method asks for carry.
 ///
 /// Empty unless --ffast-math is on the command line, which is the only way to

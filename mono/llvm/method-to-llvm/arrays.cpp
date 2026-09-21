@@ -163,7 +163,7 @@ MethodLLVMEmitter::array_length (MonoIrBuilder &builder, StackValue array)
 		return invalid_il (llvm::Twine ("an array was expected, not operand type ")
 		                   + describe (array.type, stack_type (array.type)));
 
-	emit_null_check (builder, array.value);
+	emit_null_check (builder, array.value, /*object_reference=*/true);
 
 	llvm::Value *slot =
 		builder.CreateGEP (builder.getInt8Ty (), array.value,
@@ -226,7 +226,7 @@ llvm::Error
 MethodLLVMEmitter::emit_array_type_check (MonoIrBuilder &builder, llvm::Value *array,
                                           MonoClass *array_class)
 {
-	emit_null_check (builder, array);
+	emit_null_check (builder, array, /*object_reference=*/true);
 
 	llvm::Value *vtable = load_vtable (builder, array);
 	llvm::Expected<llvm::Value *> wanted =
@@ -557,7 +557,7 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 		wanted = *constant;
 		trace_stelem_check (method, "tests a constant element class");
 	} else {
-		emit_null_check (builder, array.value);
+		emit_null_check (builder, array.value, /*object_reference=*/true);
 
 		llvm::Value *array_vtable = load_vtable (builder, array.value, "array_vtable");
 		llvm::Value *array_class = builder.CreateCall (vtable_klass_decl (*module),
@@ -845,7 +845,7 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 			    emit_array_type_check (builder, array.value, accessor->klass))
 			return refused;
 
-	emit_null_check (builder, array.value);
+	emit_null_check (builder, array.value, /*object_reference=*/true);
 
 	std::vector<llvm::Value *> indices;
 
@@ -1396,7 +1396,7 @@ MethodLLVMEmitter::emit_array_rank (MonoIrBuilder &builder)
 		return invalid_il (llvm::Twine ("an array was expected, not operand type ")
 		                   + describe (array.type, stack_type (array.type)));
 
-	emit_null_check (builder, array.value);
+	emit_null_check (builder, array.value, /*object_reference=*/true);
 
 	llvm::Value *rank = builder.CreateCall (
 		vtable_rank_decl (*module), { load_vtable (builder, array.value) }, "rank");

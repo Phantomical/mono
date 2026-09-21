@@ -29,6 +29,8 @@
 #endif
 
 #include <llvm/ADT/StringRef.h>
+#include <llvm/CodeGen/Register.h>
+#include <llvm/IR/DebugLoc.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Support/Error.h>
 
@@ -39,7 +41,9 @@
 namespace llvm {
 class Function;
 class IRBuilderBase;
+class MachineBasicBlock;
 class Module;
+class TargetInstrInfo;
 class Value;
 } // namespace llvm
 
@@ -137,6 +141,17 @@ llvm::Function *create_mono_entry_thunk (llvm::Module &m, llvm::StringRef name,
 /// reach every other, so a target out of range is a fatal error rather than a
 /// wrong jump.
 void write_context_stub (char *at, void *context, void *target);
+
+/// Appends an instruction to the end of \p mbb that reads one byte at
+/// [\p pointer + 0] and discards it. A null \p pointer faults there. A
+/// non-null one only sets flags nothing reads. Defines no register, so it
+/// needs no free one to write into at this late a stage.
+///
+/// \p tii is the function's own TargetInstrInfo, and \p dl becomes the new
+/// instruction's location.
+void emit_faulting_byte_read (llvm::MachineBasicBlock &mbb,
+                              const llvm::TargetInstrInfo &tii,
+                              llvm::Register pointer, llvm::DebugLoc dl);
 
 } // namespace mono::arch
 

@@ -27,6 +27,10 @@ using System.Runtime.CompilerServices;
  * Each case runs at tier 0, tier 1 and tier 2 and must answer the same at all
  * three. That is what separates a fold that dispatches wrongly from a
  * translator bug present at every tier.
+ *
+ * DevirtualizedCall covers a sealed receiver whose call is not inlined. The
+ * caller therefore has no receiver dereference for ImplicitNullChecks to use,
+ * leaving the post-codegen pass to rewrite the check.
  */
 
 namespace Mono.Tiering {
@@ -62,6 +66,22 @@ struct Padding512 {
 
 struct Padding64 {
 	public long R0, R1, R2, R3, R4, R5, R6, R7;
+}
+
+/// Sealed receiver for the devirtualized-call cases.
+sealed class Leaf {
+	public int Value;
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	public int Get ()
+	{
+		int x = Value;
+
+		for (int i = 0; i < 8; i++)
+			x = x * 3 + i - (x >> 1) + (x & 7) - (i * i) + (x ^ i);
+
+		return x;
+	}
 }
 
 static class Program {
@@ -128,6 +148,14 @@ static class Program {
 	static int BareLoadFarField (Wide wide)
 	{
 		return wide.Last;
+	}
+
+	/// The call is devirtualized but not inlined, so the caller has no receiver
+	/// dereference for ImplicitNullChecks to fold into.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int BareDevirtualizedCall (Leaf leaf)
+	{
+		return leaf.Get ();
 	}
 
 	// The guarded arm. A clause protects the site.
@@ -237,6 +265,26 @@ static class Program {
 		return result;
 	}
 
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static Result GuardedDevirtualizedCall (Leaf leaf)
+	{
+		Result result = new Result ();
+
+		try {
+			try {
+				GC.KeepAlive (leaf.Get ());
+			} catch (NullReferenceException) {
+				result.Where = Caught.Inner;
+			} finally {
+				result.Finally = true;
+			}
+		} catch (Exception) {
+			result.Where = Caught.Outer;
+		}
+
+		return result;
+	}
+
 	static void Fail (string what, string tier, string how)
 	{
 		Console.WriteLine ("FAIL: {0} at {1} {2}", what, tier, how);
@@ -276,11 +324,13 @@ static class Program {
 		ExpectThrow ("BareArrayElement", tier, () => BareArrayElement (null));
 		ExpectThrow ("BareVirtualCall", tier, () => BareVirtualCall (null));
 		ExpectThrow ("BareLoadFarField", tier, () => BareLoadFarField (null));
+		ExpectThrow ("BareDevirtualizedCall", tier, () => BareDevirtualizedCall (null));
 
 		ExpectInner ("GuardedLoadField", tier, GuardedLoadField (null));
 		ExpectInner ("GuardedStoreField", tier, GuardedStoreField (null));
 		ExpectInner ("GuardedArrayElement", tier, GuardedArrayElement (null));
 		ExpectInner ("GuardedVirtualCall", tier, GuardedVirtualCall (null));
+		ExpectInner ("GuardedDevirtualizedCall", tier, GuardedDevirtualizedCall (null));
 		unsafe { ExpectInner ("GuardedBlockCopy", tier, GuardedBlockCopy (null)); }
 
 		// A case that must not throw, so a tier that raises an exception
@@ -290,6 +340,12 @@ static class Program {
 		present.First = 11;
 		if (BareLoadField (present) != 11)
 			Fail ("BareLoadField", tier, "read the wrong field");
+
+		Leaf leaf = new Leaf ();
+
+		leaf.Value = 11;
+		if (BareDevirtualizedCall (leaf) != leaf.Get ())
+			Fail ("BareDevirtualizedCall", tier, "read the wrong value");
 	}
 
 	/// Calls each case without checking it, to give the tier-2 compile counts
@@ -303,19 +359,22 @@ static class Program {
 		try { BareArrayElement (null); } catch (NullReferenceException) { }
 		try { BareVirtualCall (null); } catch (NullReferenceException) { }
 		try { BareLoadFarField (null); } catch (NullReferenceException) { }
+		try { BareDevirtualizedCall (null); } catch (NullReferenceException) { }
 
 		GuardedLoadField (null);
 		GuardedStoreField (null);
 		GuardedArrayElement (null);
 		GuardedVirtualCall (null);
+		GuardedDevirtualizedCall (null);
 		unsafe { GuardedBlockCopy (null); }
 	}
 
 	static readonly string[] cases = {
 		"BareLoadField", "BareStoreField", "BareStoreReference",
 		"BareArrayLength", "BareArrayElement", "BareVirtualCall",
-		"BareLoadFarField", "GuardedLoadField", "GuardedStoreField",
-		"GuardedArrayElement", "GuardedVirtualCall", "GuardedBlockCopy",
+		"BareLoadFarField", "BareDevirtualizedCall", "GuardedLoadField",
+		"GuardedStoreField", "GuardedArrayElement", "GuardedVirtualCall",
+		"GuardedDevirtualizedCall", "GuardedBlockCopy",
 	};
 
 	static bool Promote (int tier, string tier_name)

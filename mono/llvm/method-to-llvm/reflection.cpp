@@ -164,7 +164,7 @@ MethodLLVMEmitter::emit_cor_element_type (MonoIrBuilder &builder, MonoMethodSign
 
 	// The icall reads the field through a handle and faults on a null of its
 	// own. An explicit check raises the same exception one load sooner.
-	emit_null_check (builder, argument.value);
+	emit_null_check (builder, argument.value, /*object_reference=*/false);
 
 	TypeTagLoad loaded = load_type_tag (builder, argument.value);
 	llvm::Value *tag = builder.CreateLShr (
@@ -229,7 +229,7 @@ MethodLLVMEmitter::emit_element_type (MonoIrBuilder &builder, MonoMethod *callee
 	int32_t domain = mono_domain_get_id (cfg->domain);
 	llvm::Value *object = (*args)[0];
 
-	emit_null_check (builder, object);
+	emit_null_check (builder, object, /*object_reference=*/false);
 
 	TypeTagLoad loaded = load_type_tag (builder, object);
 	llvm::BasicBlock *walk =
