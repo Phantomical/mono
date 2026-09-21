@@ -433,7 +433,9 @@ windows_sources = \
 	mini-windows.c \
 	mini-windows.h \
 	mini-windows-dllmain.c \
-	mini-windows-dlldac.c
+	mini-windows-dlldac.c \
+	etw-profiler.c \
+	CLR-ETW-Generated.h
 
 posix_sources = \
 	mini-posix.c

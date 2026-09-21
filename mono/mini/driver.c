@@ -1617,6 +1617,10 @@ mono_jit_parse_options (int argc, char * argv[])
 			mono_gc_params_set (argv[i] + 12);
 		} else if (strncmp (argv[i], "--gc-debug=", 11) == 0) {
 			mono_gc_debug_set (argv[i] + 11);
+		} else if (strcmp (argv [i], "--profile") == 0) {
+			mini_add_profiler_argument (NULL);
+		} else if (strncmp (argv [i], "--profile=", 10) == 0) {
+			mini_add_profiler_argument (argv [i] + 10);
 		} else if (strcmp (argv [i], "--llvm") == 0) {
 #ifndef MONO_ARCH_LLVM_SUPPORTED
 			fprintf (stderr, "Mono Warning: --llvm not supported on this platform.\n");

@@ -3,5 +3,7 @@
   <ItemGroup Label="windows_sources">
     <ClCompile Include="$(MonoSourceLocation)\mono\mini\mini-windows.c" />
     <ClInclude Include="$(MonoSourceLocation)\mono\mini\mini-windows.h" />
+    <ClCompile Include="$(MonoSourceLocation)\mono\mini\etw-profiler.c" />
+    <ClInclude Include="$(MonoSourceLocation)\mono\mini\CLR-ETW-Generated.h" />
   </ItemGroup>
 </Project>
