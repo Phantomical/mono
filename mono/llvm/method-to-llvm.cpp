@@ -2071,20 +2071,31 @@ MethodLLVMEmitter::emit_cond_exception (MonoIrBuilder &builder, llvm::Value *con
 ///
 /// A fold needs the shape emitted here: a dereference in the not-taken arm, on the
 /// pointer that was tested. The pass declines and leaves the branch alone when the
-/// field offset is too far into the page for the hardware to trap on it.
+/// field offset is too far into the page for the hardware to trap on it. It also
+/// declines when the not-taken arm never dereferences the pointer at all - a
+/// devirtualized callvirt is the common case. MonoNullCheckFaultPass rewrites such a
+/// survivor into a faulting access of its own. It only takes a check where
+/// \p object_reference says the pointer is certainly readable at offset 0 when it is
+/// not null. A non-null unmanaged pointer, such as the base behind a ldind or a field
+/// base that may be a byref, carries no such guarantee, so that pass must not touch
+/// its check.
 ///
 /// The tag goes on every check, inside a try region as well. A folded check raises
 /// its exception from the dereference rather than from the call this emits, and the
 /// gather grows a call's protected range over the code around it in the same try
 /// region (eh-gather.cpp), so the dereference is inside that range too.
 void
-MethodLLVMEmitter::emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer)
+MethodLLVMEmitter::emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer,
+                                    bool object_reference)
 {
 	llvm::CondBrInst *branch = emit_cond_exception (builder, builder.CreateIsNull (pointer),
 	                                                "NullReferenceException");
 
 	branch->setMetadata (llvm::LLVMContext::MD_make_implicit,
 	                     llvm::MDNode::get (context (), {}));
+
+	if (object_reference)
+		branch->setMetadata ("mono.null.objref", llvm::MDNode::get (context (), {}));
 }
 
 /// The class a slot or a call declared \p type is bounded by, or null where

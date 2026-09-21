@@ -743,6 +743,15 @@ mono_runtime_suite(runtime-class-guard TESTS class-devirt.exe
 mono_runtime_suite(runtime-class-guard-off TESTS class-devirt.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-classes=0")
 
+# The faulting-access rewrite MonoNullCheckFaultPass makes of a null check
+# ImplicitNullChecks itself declined to fold. implicit-null-checks.cs drives
+# its own tiers through PromoteNow, so this needs no threshold of its own,
+# only the off arm: it leaves every such check as the compare and branch
+# ImplicitNullChecks left standing, which is the answer the rewrite has to
+# agree with.
+mono_runtime_suite(runtime-fault-null-checks-off TESTS implicit-null-checks.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-fault-null-checks=0")
+
 # Exercise invariant element_class loads after Sum () reaches tier 2.
 mono_runtime_suite(runtime-unbox-element-class TESTS unbox-element-class.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000")

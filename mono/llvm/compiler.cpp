@@ -39,6 +39,8 @@
 #include "passes/eh-gather.hpp"
 #include "passes/faulting-location.hpp"
 #include "passes/finally-range.hpp"
+#include "passes/null-check-fault.hpp"
+#include "runtime/options.hpp"
 
 #include <llvm/Analysis/RuntimeLibcallInfo.h>
 #include <llvm/Analysis/TargetLibraryInfo.h>
@@ -1086,6 +1088,10 @@ build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &
 		pm->add (new MachinePassMarkPass ());
 
 	tpc->addMachinePasses ();
+
+	// Rewrite eligible checks that ImplicitNullChecks could not fold.
+	if (tm.getOptLevel () != CodeGenOptLevel::None && fault_null_checks ())
+		pm->add (new MonoNullCheckFaultPass ());
 
 	/*
 	 * After the machine passes, which is where ImplicitNullChecks folds a check

@@ -231,7 +231,7 @@ MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, Mono
 {
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 
-	emit_null_check (builder, obj);
+	emit_null_check (builder, obj, /*object_reference=*/false);
 
 	llvm::Value *vtable = load_vtable (builder, obj);
 	// An array of T and a boxed T have the same element class, so the rank is

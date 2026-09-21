@@ -177,7 +177,7 @@ MethodLLVMEmitter::emit_ldvirtftn (MonoIrBuilder &builder, uint32_t token)
 	// The lookup can resolve to a vtable slot, an IMT slot, or a generic
 	// virtual resolver. That choice is the runtime's business, so this call
 	// uses its helper instead of a slot load written out here.
-	emit_null_check (builder, obj.value);
+	emit_null_check (builder, obj.value, /*object_reference=*/false);
 
 	// The key says which method was asked for, so it has to be this
 	// instantiation's. A shared body reads it out of the context, and takes the

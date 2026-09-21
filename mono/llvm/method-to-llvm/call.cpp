@@ -1227,7 +1227,7 @@ MethodLLVMEmitter::emit_string_length (MonoIrBuilder &builder)
 		return invalid_il (llvm::Twine ("a string was expected, not operand type ")
 		                   + describe (receiver.type, stack_type (receiver.type)));
 
-	emit_null_check (builder, receiver.value);
+	emit_null_check (builder, receiver.value, /*object_reference=*/false);
 
 	llvm::Value *slot =
 		builder.CreateGEP (builder.getInt8Ty (), receiver.value,
@@ -1287,7 +1287,7 @@ MethodLLVMEmitter::emit_get_type (MonoIrBuilder &builder, bool receiver_by_refer
 		return invalid_il (llvm::Twine ("an object was expected, not operand type ")
 		                   + describe (receiver.type, stack_type (receiver.type)));
 
-	emit_null_check (builder, object);
+	emit_null_check (builder, object, /*object_reference=*/false);
 
 	llvm::Value *vtable = load_vtable (builder, object);
 	/*
@@ -1705,7 +1705,13 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (is_virtual) {
 		// The receiver must be there whether or not the callee is reached
 		// through it: an instance call on null throws before it dispatches.
-		emit_null_check (builder, (*args)[0]);
+		//
+		// direct_this means a constrained. prefix resolved straight to a value
+		// type's own implementation, so the receiver here is the managed
+		// pointer that prefix promises rather than an object reference. The
+		// boxed and the ordinary reference-type cases both already are one by
+		// this point.
+		emit_null_check (builder, (*args)[0], /*object_reference=*/!direct_this);
 
 		// Only a method that can still be overridden needs a lookup. A final
 		// or non-virtual one is already the answer, and a callvirt on it is a

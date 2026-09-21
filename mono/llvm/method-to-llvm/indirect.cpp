@@ -23,7 +23,7 @@ MethodLLVMEmitter::indirect_address (MonoIrBuilder &builder, StackValue address)
 	// Managed pointers already refer to established storage. Native pointers
 	// require a null check regardless of their LLVM representation.
 	if (type == NativeInt)
-		emit_null_check (builder, pointer);
+		emit_null_check (builder, pointer, /*object_reference=*/false);
 	return pointer;
 }
 

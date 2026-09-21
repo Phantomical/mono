@@ -517,6 +517,11 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   turn the thread-static fast path off, so every thread static reads back through
   `mono_domain_get ()` and the `mono_class_static_field_address` icall. On by default.
   `mono/tests/thread-static-fast-path.cs` compares the two arms at tier 2.
+- `--llvm-opt=-mono-fault-null-checks=<0|false|empty>` (`runtime/options.cpp`) — disable
+  the post-codegen rewrite of surviving object-reference null checks into faulting
+  accesses. The rewrite is enabled by default for optimized code; checks on unmanaged
+  pointers and byrefs are not eligible. `mono/tests/implicit-null-checks.cs` covers both
+  the enabled and disabled paths.
 - `--llvm-opt=-mono-invariant-group-nonptr=<1|true>` (`runtime/options.cpp`) — tag a
   non-pointer array-header read (`max_length`, a dimension's length or lower bound) with
   `!invariant.group`, the same as the bounds pointer always carries. Off by default,
