@@ -1153,6 +1153,14 @@ set(MONO_TESTS_INITONLY_NULLNESS_SRC
   initonly-nullness.cs
 )
 
+# Reading a hash already cached in the object's lock word instead of through
+# the icall. It runs twice, on the default and with the fast path off, and
+# both arms have to answer the same: the fast path only changes how the
+# cached forms are read, not what they hold.
+set(MONO_TESTS_HASH_FASTPATH_SRC
+  hash-code-fastpath.cs
+)
+
 # What the cost model answers about a receiver the call site allocated. Two
 # arms the same way, and the file says why it names a threshold of its own.
 set(MONO_TESTS_TIER2_INLINE_DISPATCH_SRC

@@ -167,6 +167,9 @@ bool inline_clause_bearing_callees ();
 /// that answers differently between them has a defect in the fast path.
 bool thread_static_fast_path ();
 
+/// Whether the Object.GetHashCode fast path is on.
+bool hash_code_fast_path ();
+
 /// Whether a non-pointer array-header read — `max_length`, or a dimension's
 /// length or lower bound — is tagged `!invariant.group`.
 ///

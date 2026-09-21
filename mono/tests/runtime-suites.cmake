@@ -711,6 +711,15 @@ _mono_exe_list(_initonly_nullness ${MONO_TESTS_INITONLY_NULLNESS_SRC})
 mono_runtime_suite(runtime-initonly-nullness TESTS ${_initonly_nullness}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0")
 
+# Object.GetHashCode ()'s fast path. Two arms, on and off, the way
+# runtime-eliminate-delegate has it. The root drives its own compiles, so
+# self-promotion is off: what the test reads is the tier it asked for.
+_mono_exe_list(_hash_fastpath ${MONO_TESTS_HASH_FASTPATH_SRC})
+mono_runtime_suite(runtime-hash-fastpath TESTS ${_hash_fastpath}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0")
+mono_runtime_suite(runtime-hash-fastpath-off TESTS ${_hash_fastpath}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-hash-fastpath=0")
+
 # Each SIMD operation is computed at tier 0 and at both compiled tiers, where
 # the backend's written body runs instead of tier 0's IL. The tier-1 and tier-2
 # thresholds are zero so the test's own PromoteNow calls decide which tier ran,
