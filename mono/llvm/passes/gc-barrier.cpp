@@ -7,6 +7,7 @@
 #include "gc-barrier.hpp"
 
 #include "builtins.hpp"
+#include "runtime/options.hpp"
 
 #include "mono/metadata/abi-details.h"
 
@@ -173,8 +174,8 @@ stamp_barrier (Function *decl, const GcBarrierLayout &layout, bool writes_dest =
 	}
 }
 
-/// Writes a 1 into the card byte that \p target indexes. \p target is the
-/// destination as an integer.
+/// Writes a 1 into the card byte that \p target indexes, skipping the store
+/// where the byte already reads 1. \p target is the destination as an integer.
 void
 mark_card (IRBuilder<> &b, Module &m, const GcBarrierLayout &gc, Value *target)
 {
@@ -185,10 +186,33 @@ mark_card (IRBuilder<> &b, Module &m, const GcBarrierLayout &gc, Value *target)
 	if (gc.card_mask != 0)
 		index = b.CreateAnd (index, ConstantInt::get (target->getType (), gc.card_mask));
 
-	b.CreateAlignedStore (
-		b.getInt8 (1),
-		b.CreateGEP (b.getInt8Ty (), gc_symbol (m, gc_card_table_symbol), index),
-		Align (1));
+	Value *card = b.CreateGEP (b.getInt8Ty (), gc_symbol (m, gc_card_table_symbol), index);
+
+	if (!cond_card_mark ()) {
+		b.CreateAlignedStore (b.getInt8 (1), card, Align (1));
+		return;
+	}
+
+	Function *f = b.GetInsertBlock ()->getParent ();
+	LLVMContext &c = b.getContext ();
+	BasicBlock *store = BasicBlock::Create (c, "wb_card_store", f);
+	BasicBlock *marked = BasicBlock::Create (c, "wb_card_marked", f);
+
+	/* The card table is cleared only while the world is stopped, so between
+	 * clears a byte can change only from 0 to 1. A volatile load is sufficient
+	 * to avoid repeating the store when another mutator has already marked it.
+	 */
+	Value *is_marked = b.CreateICmpNE (
+		b.CreateAlignedLoad (b.getInt8Ty (), card, Align (1), /*isVolatile=*/true),
+		b.getInt8 (0), "wb_card_is_marked");
+
+	b.CreateCondBr (is_marked, marked, store);
+
+	b.SetInsertPoint (store);
+	b.CreateAlignedStore (b.getInt8 (1), card, Align (1));
+	b.CreateBr (marked);
+
+	b.SetInsertPoint (marked);
 }
 
 /// Rewrites one site into the test and the card store it stands for.

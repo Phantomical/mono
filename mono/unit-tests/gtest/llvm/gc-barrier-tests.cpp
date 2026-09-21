@@ -24,6 +24,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Support/CommandLine.h>
 
 #include <gtest/gtest.h>
 
@@ -122,6 +123,23 @@ concurrent_layout ()
 	return layout;
 }
 
+/// Temporarily overrides -mono-cond-card-mark for a test.
+struct CondCardMarkOverride {
+	cl::opt<bool> *option;
+	bool was_set;
+
+	explicit CondCardMarkOverride (bool value)
+	{
+		cl::Option *registered = cl::getRegisteredOptions ().lookup ("mono-cond-card-mark");
+
+		option = static_cast<cl::opt<bool> *> (registered);
+		was_set = option->getValue ();
+		option->setValue (value);
+	}
+
+	~CondCardMarkOverride () { option->setValue (was_set); }
+};
+
 TEST (GcBarrierTest, ACardCollectorTestsTheDestinationAndTheValue)
 {
 	BarrierModule m (value_decides_layout ());
@@ -133,11 +151,42 @@ TEST (GcBarrierTest, ACardCollectorTestsTheDestinationAndTheValue)
 
 	EXPECT_EQ (m.count ("%wb_target_is_old = icmp ne"), 1u) << m.text ();
 	EXPECT_EQ (m.count ("%wb_value_is_young = icmp eq"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("%wb_card_is_marked = icmp ne"), 1u) << m.text ();
 	EXPECT_EQ (m.count ("store i8 1"), 1u) << m.text ();
 	EXPECT_EQ (m.count ("@mono_gc_card_table"), 2u) << m.text ();
 
-	// The collector keeps no flag to read, so nothing loads one.
-	EXPECT_EQ (m.count ("load volatile"), 0u) << m.text ();
+	// The only volatile load is the card-byte test performed by the mark.
+	EXPECT_EQ (m.count ("load volatile"), 1u) << m.text ();
+}
+
+// The store is guarded by a branch and both arms rejoin afterward.
+TEST (GcBarrierTest, ACardMarkBranchesAroundAnAlreadyMarkedByte)
+{
+	BarrierModule m (value_decides_layout ());
+
+	m.lower ();
+
+	EXPECT_FALSE (verifyModule (*m.module, &errs ()));
+	EXPECT_EQ (m.count ("br i1 %wb_card_is_marked, label %wb_card_marked, "
+	                    "label %wb_card_store"),
+	           1u)
+		<< m.text ();
+	EXPECT_EQ (m.count ("wb_card_store:"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("wb_card_marked:"), 1u) << m.text ();
+}
+
+// Disabling the option restores the unconditional store.
+TEST (GcBarrierTest, CondCardMarkOffStoresUnconditionally)
+{
+	CondCardMarkOverride off (false);
+	BarrierModule m (value_decides_layout ());
+
+	m.lower ();
+
+	EXPECT_FALSE (verifyModule (*m.module, &errs ()));
+	EXPECT_EQ (m.count ("store i8 1"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("load"), 0u) << m.text ();
+	EXPECT_EQ (m.count ("wb_card_store"), 0u) << m.text ();
 }
 
 // A concurrent major collector wants a card under every old destination, and
