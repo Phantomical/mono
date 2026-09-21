@@ -490,66 +490,100 @@ MonoBackend::policy_entry (DomainState &domain, MonoDomainMethod &dm)
 		llvm::logAllUnhandledErrors (forward.takeError (), llvm::errs (), "mono: ");
 	}
 
-	/*
-	 * The entry moves to the compile trampoline before tier 0 compiles the
-	 * method, and that order is what makes the move safe to take here.
-	 * Compiling a method runs its class initializer, and a cctor that calls
-	 * back into this very method would otherwise re-enter the trampoline being
-	 * resolved and take this decision again below itself, with nothing to stop
-	 * it. It reaches the compile instead.
-	 */
+	while (true) {
+		ready = dm.body ();
 
-	/* A tier above this one already owns the entry, a detour among them. It
-	 * keeps it, and the caller goes through the thunk to reach it. */
-	if (!dm.publish (MonoTier::none, dm.compile_trampoline))
-		return dm.thunk.code ();
+		if (ready && !recompiling (dm.method))
+			return ready->code;
 
-	llvm::Expected<Compiled> tier0 = tier0_entry (domain, dm);
+		CompileTurn claim = take_compile_turn (&dm, CompileWork::entry);
 
-	if (tier0)
-		return tier0->body;
+		if (claim == CompileTurn::done)
+			continue;
 
-	llvm::consumeError (tier0.takeError ());
-	return dm.compile_trampoline;
+		bool holding = claim == CompileTurn::mine;
+		llvm::scope_exit unclaim (
+			[&] { finish_compile_turn (&dm, CompileWork::entry, claim); });
+
+		if (!holding && is_jit_trace_enabled ())
+			MONO_LOCK (jit_trace_mutex ())
+			{
+				llvm::errs () << "[llvm-jit] compiling " << dm.name
+					      << " beside another thread's first compile of it\n";
+			}
+
+		ready = dm.body ();
+
+		if (ready && !recompiling (dm.method))
+			return ready->code;
+
+		/* Move the entry before tier 0 runs; class initialization may call back. */
+
+		/* A tier above this one already owns the entry, a detour among them. It
+		 * keeps it, and the caller goes through the thunk to reach it. */
+		if (!dm.publish (MonoTier::none, dm.compile_trampoline))
+			return dm.thunk.code ();
+
+		llvm::Expected<Compiled> tier0 = tier0_entry (domain, dm);
+
+		if (tier0)
+			return tier0->body;
+
+		llvm::consumeError (tier0.takeError ());
+		return dm.compile_trampoline;
+	}
 }
 
 void *
 MonoBackend::compile_entry (DomainState &domain, MonoDomainMethod &dm)
 {
-	/*
-	 * The entry can have moved on since the policy step published this
-	 * trampoline: it publishes before it offers the method to tier 0, so a
-	 * thread that read the thunk in between arrives here for a method tier 0
-	 * now runs.
-	 */
-	std::optional<MonoMethodBody> ready = dm.body ();
+	while (true) {
+		/* The policy step may have published this trampoline before tier 0 ran. */
+		std::optional<MonoMethodBody> ready = dm.body ();
 
-	if (ready && !recompiling (dm.method))
-		return ready->code;
+		if (ready && !recompiling (dm.method))
+			return ready->code;
 
-	llvm::Expected<void *> code = entry_point (domain, dm, /*allow_tier0=*/false);
+		CompileTurn claim = take_compile_turn (&dm, CompileWork::entry);
 
-	if (code)
-		return *code;
+		if (claim == CompileTurn::done)
+			continue;
 
-	/*
-	 * A thunk is the end of the line for a failure: the trampoline behind it
-	 * has already put the call's arguments back, and no caller is expecting a
-	 * miss. So it becomes a body that raises, and costs the one method that
-	 * could not be compiled rather than the process.
-	 */
-	auto note = [] (const CompiledMethod &, MonoJitInfo *) {};
-	llvm::Expected<Compiled> raising =
-		raise_on_call (*domain.jit, domain.domain, dm.method, code.takeError (), note);
+		bool holding = claim == CompileTurn::mine;
+		llvm::scope_exit unclaim (
+			[&] { finish_compile_turn (&dm, CompileWork::entry, claim); });
 
-	if (!raising) {
-		llvm::logAllUnhandledErrors (raising.takeError (), llvm::errs (), "mono: ");
-		return (void *) &lazy_compile_failed;
+		if (!holding && is_jit_trace_enabled ())
+			MONO_LOCK (jit_trace_mutex ())
+			{
+				llvm::errs () << "[llvm-jit] compiling " << dm.name
+					      << " beside another thread's first compile of it\n";
+			}
+
+		ready = dm.body ();
+
+		if (ready && !recompiling (dm.method))
+			return ready->code;
+
+		llvm::Expected<void *> code = entry_point (domain, dm, /*allow_tier0=*/false);
+
+		if (code)
+			return *code;
+
+		/* Turn an uncompileable entry into a body that raises on the next call. */
+		auto note = [] (const CompiledMethod &, MonoJitInfo *) {};
+		llvm::Expected<Compiled> raising =
+			raise_on_call (*domain.jit, domain.domain, dm.method, code.takeError (), note);
+
+		if (!raising) {
+			llvm::logAllUnhandledErrors (raising.takeError (), llvm::errs (), "mono: ");
+			return (void *) &lazy_compile_failed;
+		}
+
+		/* The thunk follows, so the next call skips the trampoline. */
+		dm.publish (MonoTier::none, raising->body);
+		return raising->body;
 	}
-
-	/* The thunk follows, so the next call skips the trampoline. */
-	dm.publish (MonoTier::none, raising->body);
-	return raising->body;
 }
 
 llvm::Error
@@ -655,11 +689,8 @@ MonoBackend::attach_interop (MonoDomainMethod &dm)
 		if (turn == CompileTurn::done)
 			continue;
 
-		bool mine = turn == CompileTurn::mine;
-		llvm::scope_exit end_turn ([&] {
-			if (mine)
-				self->finish_compile_turn (&dm, CompileWork::interop_entry);
-		});
+		llvm::scope_exit end_turn (
+			[&] { self->finish_compile_turn (&dm, CompileWork::interop_entry, turn); });
 
 		llvm::Expected<void *> code = compile_interop_entry (
 			*(*domain)->jit, (*domain)->domain, method, dm.thunk.code (), note);
@@ -936,6 +967,9 @@ shared_form (MonoMethod *method)
 	return shared;
 }
 
+/* Number of compile attempts currently owned by this thread. */
+static thread_local unsigned compile_turns_on_this_thread;
+
 /*
  * Whether this thread may block waiting for another thread's compile.
  *
@@ -944,11 +978,15 @@ shared_form (MonoMethod *method)
  * make progress only by one of them giving up. So a thread holding anything
  * ranked does the work itself instead, and every wait below is a thread with
  * nothing held and no cycle to close.
+ *
+ * A compile can run a class initializer that re-enters the JIT. Such a
+ * thread must compile independently instead of waiting on another turn.
  */
 static bool
 can_wait_for_compile ()
 {
-	return mono_lock_ranks_held () == 0 && !mono_loader_lock_is_owned_by_self ();
+	return compile_turns_on_this_thread == 0 && mono_lock_ranks_held () == 0
+	       && !mono_loader_lock_is_owned_by_self ();
 }
 
 /*
@@ -956,11 +994,6 @@ can_wait_for_compile ()
  * reach the same shared form, and every native caller of one method reaches the
  * same interop entry, so a second thread finding either unbuilt would repeat a
  * compile the first is already doing.
- *
- * A wait cannot cycle among the claims themselves, because no thread that holds
- * one comes to want a second: the shared method reduces to itself, so its own
- * compile takes no further claim, and an interop entry compiles a wrapper whose
- * claims are the wrapper's own record.
  */
 MonoBackend::CompileTurn
 MonoBackend::take_compile_turn (MonoDomainMethod *record, CompileWork work)
@@ -969,8 +1002,10 @@ MonoBackend::take_compile_turn (MonoDomainMethod *record, CompileWork work)
 	std::unique_lock<std::mutex> lock (compiling_mutex_);
 
 	while (!compiling_.insert (key).second) {
-		if (!can_wait_for_compile ())
+		if (!can_wait_for_compile ()) {
+			++compile_turns_on_this_thread;
 			return CompileTurn::duplicate;
+		}
 
 		/*
 		 * A thread parked here reaches no safepoint, so a collection that
@@ -986,12 +1021,21 @@ MonoBackend::take_compile_turn (MonoDomainMethod *record, CompileWork work)
 			return CompileTurn::done;
 	}
 
+	++compile_turns_on_this_thread;
 	return CompileTurn::mine;
 }
 
 void
-MonoBackend::finish_compile_turn (MonoDomainMethod *record, CompileWork work)
+MonoBackend::finish_compile_turn (MonoDomainMethod *record, CompileWork work, CompileTurn turn)
 {
+	if (turn == CompileTurn::done)
+		return;
+
+	--compile_turns_on_this_thread;
+
+	if (turn != CompileTurn::mine)
+		return;
+
 	auto key = std::make_pair (record, static_cast<unsigned> (work));
 
 	MONO_LOCK (compiling_mutex_) { compiling_.erase (key); }
@@ -1032,10 +1076,8 @@ MonoBackend::enter_shared_body (DomainState &domain, MonoDomainMethod &dm,
 		}
 
 		bool holding = claim == CompileTurn::mine;
-		llvm::scope_exit unclaim ([&] {
-			if (holding)
-				finish_compile_turn (*owner, CompileWork::shared_body);
-		});
+		llvm::scope_exit unclaim (
+			[&] { finish_compile_turn (*owner, CompileWork::shared_body, claim); });
 
 		if (!holding && is_jit_trace_enabled ())
 			MONO_LOCK (jit_trace_mutex ())
