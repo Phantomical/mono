@@ -187,6 +187,20 @@ struct BuiltinEmitters {
 		return emitter.emit_current_managed_thread_id (builder, call.sig);
 	}
 
+	static BuiltinResult thread_memory_barrier (MethodLLVMEmitter &emitter,
+	                                            llvm::IRBuilder<> &builder,
+	                                            const BuiltinCall &)
+	{
+		return emitter.emit_thread_memory_barrier (builder);
+	}
+
+	static BuiltinResult thread_spin_wait_nop (MethodLLVMEmitter &emitter,
+	                                           llvm::IRBuilder<> &builder,
+	                                           const BuiltinCall &)
+	{
+		return emitter.emit_thread_spin_wait_nop (builder);
+	}
+
 	/// Fold RuntimeHelpers.IsReferenceOrContainsReferences<T> for concrete T.
 	static BuiltinResult is_reference_or_contains_references (
 		MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder, const BuiltinCall &call)
@@ -381,6 +395,12 @@ const BuiltinMethod environment_methods[] = {
 	  BuiltinEmitters::managed_thread_id },
 };
 
+// Interlocked.MemoryBarrier () forwards to Thread.MemoryBarrier ().
+const BuiltinMethod thread_methods[] = {
+	{ "MemoryBarrier", 0, Receiver::none, BuiltinEmitters::thread_memory_barrier },
+	{ "SpinWait_nop", 0, Receiver::none, BuiltinEmitters::thread_spin_wait_nop },
+};
+
 const BuiltinMethod debugger_methods[] = {
 	{ "Break", 0, Receiver::none, BuiltinEmitters::debugger_break },
 };
@@ -461,6 +481,8 @@ class_table ()
 		{ { nullptr, "System", "RuntimeTypeHandle" }, nullptr, type_handle_methods },
 		{ { nullptr, "System.Threading", "Monitor" }, nullptr, monitor_methods },
 		{ { nullptr, "System", "Environment" }, nullptr, environment_methods },
+		{ { nullptr, "System.Threading", "Thread" }, &mono_defaults.thread_class,
+		  thread_methods },
 		{ { nullptr, "System.Diagnostics", "Debugger" }, nullptr, debugger_methods },
 		{ { nullptr, "System.Runtime.CompilerServices", "RuntimeHelpers" }, nullptr,
 		  runtime_helpers_methods },
