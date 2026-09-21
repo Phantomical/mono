@@ -545,15 +545,21 @@ MethodLLVMEmitter::emit_mono_icall_addr (MonoIrBuilder &builder, uint32_t token)
 /*
  * III.F0.0D  mono_tls - push one of the runtime's per-thread variables
  *
- * The operand is a MonoTlsKey. The runtime registers a getter for each key
- * as a jit icall. The value comes from that call instead of from a
- * thread-local access sequence written here.
+ * The operand is a MonoTlsKey. SgenThreadInfo can use a direct TLS load where
+ * supported; other keys use the runtime's JIT icall getter.
  */
 llvm::Error
 MethodLLVMEmitter::emit_mono_tls (MonoIrBuilder &builder, uint32_t key)
 {
 	if (key >= TLS_KEY_NUM)
 		return invalid_il (llvm::Twine (key) + " is not a thread-local the runtime keeps");
+
+	if (static_cast<MonoTlsKey> (key) == TLS_KEY_SGEN_THREAD_INFO) {
+		if (llvm::Value *fast = arch::emit_sgen_thread_info (builder)) {
+			push_stack (fast, m_class_get_byval_arg (mono_defaults.int_class));
+			return llvm::Error::success ();
+		}
+	}
 
 	MonoJitICallInfo *info = mono_find_jit_icall_info (
 		mono_get_tls_key_to_jit_icall_id (static_cast<MonoTlsKey> (key)));

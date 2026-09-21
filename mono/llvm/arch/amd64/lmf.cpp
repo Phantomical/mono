@@ -134,27 +134,17 @@ emit_callee_saved_clobber (llvm::IRBuilderBase &b)
 
 #if !defined (HOST_WIN32)
 
-/*
- * The %fs-relative displacement mono_tls_lmf_addr sits at, or nothing when this
- * build cannot name one.
- *
- * mono_tls_offsets holds what the linker resolved for the thread-local, which is
- * only a displacement from the thread pointer under the initial-exec and
- * local-exec models. Under the dynamic ones the block moves per thread and the
- * number means nothing. Rather than reason about which model a given build got,
- * check the answer: walk the displacement from this thread's own thread pointer
- * and see whether it arrives at the variable.
- */
+/* Return the %fs displacement for \p variable when \p key resolves to it. */
 static std::optional<int32_t>
-lmf_address_tls_displacement ()
+tls_displacement (MonoTlsKey key, const void *variable)
 {
 #if defined (MONO_KEYWORD_THREAD)
-	gint32 offset = mono_tls_offsets[TLS_KEY_LMF_ADDR];
+	gint32 offset = mono_tls_offsets[key];
 	uint8_t *thread_pointer;
 
 	asm ("movq %%fs:0, %0" : "=r" (thread_pointer));
 
-	if (thread_pointer + offset != (uint8_t *) &mono_tls_lmf_addr)
+	if (thread_pointer + offset != (const uint8_t *) variable)
 		return std::nullopt;
 	return offset;
 #else
@@ -168,22 +158,22 @@ extern "C" unsigned long _tls_index;
 
 namespace {
 
-/// Location of mono_tls_lmf_addr in the Windows TLS block.
+/// A thread-local variable's location in the Windows TLS block.
 struct WindowsTlsLocation {
 	int32_t tls_index;
 	int32_t block_offset;
 };
 
-/* Derive the module TLS index and variable offset once for this process. */
+/* Derive the module TLS index and \p variable's offset once. */
 std::optional<WindowsTlsLocation>
-compute_windows_tls_location ()
+compute_windows_tls_location (const void *variable)
 {
 	void **tls_array = (void **) __readgsqword (0x58);
 
 	if (!tls_array || !tls_array [_tls_index])
 		return std::nullopt;
 
-	int64_t offset = (uint8_t *) &mono_tls_lmf_addr
+	int64_t offset = (const uint8_t *) variable
 	                  - (uint8_t *) tls_array [_tls_index];
 
 	if (offset < 0 || offset > INT32_MAX)
@@ -196,21 +186,8 @@ compute_windows_tls_location ()
 
 #endif // HOST_WIN32
 
-/*
- * Address space 257 is what LLVM calls %fs-relative on x86-64, so the load below
- * is one `mov %fs:disp, reg` - no call, and so nowhere for a thread to be caught
- * with neither a jit-info record nor an LMF to walk from. That window is the
- * whole point: a wrapper's prologue reaches this before it has linked anything
- * onto the chain, and an async stack walk that starts inside it sees no managed
- * frame at all. The Windows path preserves the same no-call property.
- */
-/*
- * The TLS locations and the LMF slot remain valid while a thread holds managed
- * frames. Marking these loads invariant lets LLVM reuse one derivation across
- * the transitions in a method instead of rebuilding the address chain each
- * time. mono_set_lmf_addr () updates the slot when the thread attaches or
- * detaches, outside that interval.
- */
+/* These TLS slots are stable while managed frames are active, so LLVM can reuse
+ * the address derivation across transitions in a method. */
 llvm::LoadInst *
 load_invariant (llvm::IRBuilderBase &b, llvm::Type *type, llvm::Value *address,
                 llvm::Align align, const llvm::Twine &name = "")
@@ -223,16 +200,16 @@ load_invariant (llvm::IRBuilderBase &b, llvm::Type *type, llvm::Value *address,
 	return load;
 }
 
-llvm::Value *
-emit_lmf_address (llvm::IRBuilderBase &b)
+#if defined (HOST_WIN32)
+
+/// Loads the thread-local slot at \p location, or null when unavailable.
+static llvm::Value *
+emit_tls_value_at (llvm::IRBuilderBase &b, std::optional<WindowsTlsLocation> location,
+                   const llvm::Twine &name)
 {
 	llvm::LLVMContext &ctx = b.getContext ();
 	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
 	llvm::Align align (TARGET_SIZEOF_VOID_P);
-
-#if defined (HOST_WIN32)
-	static const std::optional<WindowsTlsLocation> location =
-		compute_windows_tls_location ();
 
 	if (!location)
 		return nullptr;
@@ -248,9 +225,19 @@ emit_lmf_address (llvm::IRBuilderBase &b)
 		b, ptr,
 		b.CreateConstInBoundsGEP1_32 (b.getInt8Ty (), block,
 	                                      location->block_offset),
-		align, "lmf_addr");
+		align, name);
+}
+
 #else
-	std::optional<int32_t> displacement = lmf_address_tls_displacement ();
+
+/// Loads the thread-local slot at \p displacement, or null where none was found.
+static llvm::Value *
+emit_tls_value_at (llvm::IRBuilderBase &b, std::optional<int32_t> displacement,
+                   const llvm::Twine &name)
+{
+	llvm::LLVMContext &ctx = b.getContext ();
+	llvm::Type *ptr = llvm::PointerType::get (ctx, 0);
+	llvm::Align align (TARGET_SIZEOF_VOID_P);
 
 	if (!displacement)
 		return nullptr;
@@ -259,8 +246,41 @@ emit_lmf_address (llvm::IRBuilderBase &b)
 		b.getInt64 ((uint64_t) (int64_t) *displacement),
 		llvm::PointerType::get (ctx, 257));
 
-	return load_invariant (b, ptr, slot, align, "lmf_addr");
+	return load_invariant (b, ptr, slot, align, name);
+}
+
 #endif
+
+/*
+ * No call: a wrapper's prologue reaches this before it has linked anything
+ * onto the LMF chain, so an async stack walk that starts inside it sees no
+ * managed frame at all. A call here would have somewhere to be caught with
+ * neither a jit-info record nor an LMF to walk from.
+ */
+llvm::Value *
+emit_lmf_address (llvm::IRBuilderBase &b)
+{
+#if defined (HOST_WIN32)
+	static const std::optional<WindowsTlsLocation> location =
+		compute_windows_tls_location (&mono_tls_lmf_addr);
+#else
+	static const std::optional<int32_t> location =
+		tls_displacement (TLS_KEY_LMF_ADDR, &mono_tls_lmf_addr);
+#endif
+	return emit_tls_value_at (b, location, "lmf_addr");
+}
+
+llvm::Value *
+emit_sgen_thread_info (llvm::IRBuilderBase &b)
+{
+#if defined (HOST_WIN32)
+	static const std::optional<WindowsTlsLocation> location =
+		compute_windows_tls_location (&mono_tls_sgen_thread_info);
+#else
+	static const std::optional<int32_t> location =
+		tls_displacement (TLS_KEY_SGEN_THREAD_INFO, &mono_tls_sgen_thread_info);
+#endif
+	return emit_tls_value_at (b, location, "sgen_thread_info");
 }
 
 /*
