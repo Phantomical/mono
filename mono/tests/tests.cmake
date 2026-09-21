@@ -505,6 +505,7 @@ set(MONO_TESTS_CS_SRC
   transparentproxy.cs
   proxy-cast-cache.cs
   proxy-cast-concrete-class.cs
+  tier2-interface-cast-fastpath.cs
   bug-48015.cs
   delegate9.cs
   marshal-valuetypes.cs
