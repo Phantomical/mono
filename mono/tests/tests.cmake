@@ -241,6 +241,7 @@ set(MONO_TESTS_CS_SRC
   tier2-inline-cast-bound.cs
   array-devirt.cs
   array-native-int-cast.cs
+  array-clear-memset.cs
   unbox-element-class.cs
   class-devirt.cs
   gshared-boehm-alloc-shape.cs
