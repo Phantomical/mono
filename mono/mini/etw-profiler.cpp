@@ -521,6 +521,7 @@ method_load (MonoMethod *method, MonoJitInfo *jinfo, EventKind kind)
 	g_free (namespace_utf16);
 	g_free (sourceFilePath);
 	g_free (class_full_name);
+	g_free (signature);
 }
 
 struct JITEnumerationData {
