@@ -8,7 +8,18 @@
 
 #include <llvm/CodeGen/MachineFunctionPass.h>
 
+namespace llvm {
+class MachineBasicBlock;
+class MachineInstr;
+} // namespace llvm
+
 namespace mono {
+
+/// The block a FAULTING_OP instruction hands control to when it faults. Reads
+/// the instruction's own machine-block operand, so it answers the same
+/// whether ImplicitNullChecks or MonoNullCheckFaultPass built the
+/// instruction.
+llvm::MachineBasicBlock *faulting_op_handler (const llvm::MachineInstr &mi);
 
 /**
  * Gives each faulting instruction the location LLVM dropped when it folded a
