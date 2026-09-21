@@ -111,6 +111,11 @@ llvm::cl::opt<bool> FaultNullChecksOpt (
 	llvm::cl::desc ("Rewrite a surviving object-reference null check into a faulting "
 	                "access"));
 
+llvm::cl::opt<bool> CondCardMarkOpt (
+	"mono-cond-card-mark", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Test a card's byte before storing it, skipping the store where "
+	                "it already reads 1"));
+
 llvm::cl::opt<unsigned> Tier1ThresholdOpt (
 	"mono-tier1-threshold", llvm::cl::Hidden, llvm::cl::init (5000000),
 	llvm::cl::desc ("What a tier-0 body spends before it asks for tier 1"));
@@ -414,6 +419,12 @@ bool
 fault_null_checks ()
 {
 	return FaultNullChecksOpt;
+}
+
+bool
+cond_card_mark ()
+{
+	return CondCardMarkOpt;
 }
 
 llvm::FastMathFlags

@@ -529,6 +529,14 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   dangling instruction out of its own cache for exactly this shape, on the LLVM this
   backend builds against. Turn it on once the fix, `#219929`, ships in the installed
   LLVM.
+- `--llvm-opt=-mono-cond-card-mark=<0|false|empty>` (`runtime/options.cpp`) — test the
+  card byte before storing it, skipping the store when it is already marked. Enabled by
+  default to reduce cache-line contention between mutators. The card table is cleared
+  only with the world stopped, so a mark cannot be lost when a concurrent mutator sees
+  the byte already set. `sgen-wbarrier-mod-union`
+  (`mono/tests/runtime-suites.cmake`) covers the concurrent collector case, and
+  `mono/unit-tests/gtest/llvm/gc-barrier-tests.cpp` also tests the unconditional-store
+  option.
 
 Inlining. `MONO_LLVM_JIT_TRACE=1` prints a line for each inline, which is the only place
 an inline is visible from outside. Every knob below is an LLVM command-line option,

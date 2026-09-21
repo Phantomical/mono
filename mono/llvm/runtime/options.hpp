@@ -187,6 +187,14 @@ bool tag_non_pointer_invariant_group ();
 /// faulting accesses for optimized code.
 bool fault_null_checks ();
 
+/// Whether a card mark tests the byte before it stores, skipping the store
+/// where the byte already reads 1.
+///
+/// A false value stores unconditionally, which is the answer the skip has to
+/// agree with. The translator writes the same site either way, so the two arms
+/// differ in one pass.
+bool cond_card_mark ();
+
 /// The fast-math flags the float operations a method asks for carry.
 ///
 /// Empty unless --ffast-math is on the command line, which is the only way to
