@@ -31,14 +31,12 @@
 
 namespace mono {
 
-namespace {
-
 /// Reads the collector's write-barrier layout, once for the process.
 ///
 /// The collector fixes each address and shift while it starts, before any method
 /// compiles, so a compile can bake them in.
 const GcBarrierLayout &
-write_barrier_layout ()
+current_write_barrier_layout ()
 {
 	static const GcBarrierLayout layout = [] {
 		GcBarrierLayout read;
@@ -78,8 +76,6 @@ write_barrier_layout ()
 	return layout;
 }
 
-} // namespace
-
 /// Records the addresses the card path names, so the engine resolves the
 /// globals the lowering makes. A pass cannot ask for them itself.
 void
@@ -108,7 +104,7 @@ MethodLLVMEmitter::emit_value_copy (MonoIrBuilder &builder, llvm::Value *dest,
                                     llvm::Value *src, MonoClass *klass, bool may_overlap)
 {
 	llvm::LLVMContext &ctx = context ();
-	const GcBarrierLayout &gc = write_barrier_layout ();
+	const GcBarrierLayout &gc = current_write_barrier_layout ();
 	guint32 align = 0;
 	llvm::Value *size = builder.getInt64 (mono_class_value_size (klass, &align));
 	llvm::Expected<llvm::Value *> cls = class_operand (builder, klass, "mono_class_");
@@ -145,7 +141,7 @@ MethodLLVMEmitter::emit_reference_store (MonoIrBuilder &builder, llvm::Value *ad
                                          llvm::Value *value, llvm::Align align,
                                          ManagedAccess access)
 {
-	const GcBarrierLayout &gc = write_barrier_layout ();
+	const GcBarrierLayout &gc = current_write_barrier_layout ();
 	llvm::StoreInst *store = builder.CreateAlignedStore (value, address, align);
 
 	if (llvm::MDNode *tag = tbaa_tag (access, /*is_reference=*/true))

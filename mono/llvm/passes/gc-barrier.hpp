@@ -118,6 +118,15 @@ constexpr llvm::StringRef gc_barrier_helper_name =
 constexpr llvm::StringRef gc_value_copy_helper_name =
 	"mono_gc_wbarrier_value_copy_internal";
 
+/// The collector's write-barrier layout, read once for the process.
+///
+/// The collector fixes each address and shift while it starts, before any
+/// method compiles, so a compile can bake them in. Implemented in
+/// method-to-llvm/fields.cpp, on the front-end side of this split, because
+/// the read itself calls into the runtime and this pass-side header stays
+/// free of that.
+const GcBarrierLayout &current_write_barrier_layout ();
+
 /// The declaration in \p m, made on first use and stamped with \p layout.
 llvm::Function *gc_barrier_decl (llvm::Module &m, const GcBarrierLayout &layout);
 
