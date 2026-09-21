@@ -11,6 +11,7 @@
 
 #include "../mono_lsda_format.hpp"
 
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/AssumptionCache.h>
 #include <llvm/Analysis/BlockFrequencyInfo.h>
@@ -46,10 +47,19 @@ struct Site {
 	WeakTrackingVH call;
 	uint64_t count = 0;
 	unsigned depth = 0;
+	uint32_t size = 0;
 };
 
-struct Colder {
-	bool operator() (const Site &a, const Site &b) const { return a.count < b.count; }
+/// True when \p a has lower profile density than \p b.
+struct LessDense {
+	bool operator() (const Site &a, const Site &b) const { return density (a) < density (b); }
+
+	/// Unknown sizes are treated as one byte; materialize () still decides
+	/// whether the candidate can be translated.
+	static double density (const Site &s)
+	{
+		return double (s.count) / std::max (1u, s.size);
+	}
 };
 
 /// A musttail site is a real tail call, and a body in its place takes that
@@ -374,6 +384,19 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 	for (Function *root : roots) {
 		std::vector<Site> queue;
 
+		// Several sites can refer to the same callee, so avoid repeating the
+		// metadata lookup for its IL size.
+		DenseMap<const Function *, uint32_t> sizes;
+
+		auto size_of = [&] (Function &callee) {
+			auto [it, fresh] = sizes.try_emplace (&callee, 0);
+
+			if (fresh)
+				it->second = candidates->il_size (callee);
+
+			return it->second;
+		};
+
 		/*
 		 * Read through get_bfi () every time rather than holding a reference.
 		 * An inline drops the root's cached analyses, so the reference from before
@@ -385,8 +408,8 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 
 			uint64_t count = get_bfi (*root).getBlockProfileCount (call->getParent ()).value_or (0);
 
-			queue.push_back (Site{call, count, depth});
-			std::push_heap (queue.begin (), queue.end (), Colder ());
+			queue.push_back (Site{call, count, depth, size_of (*call->getCalledFunction ())});
+			std::push_heap (queue.begin (), queue.end (), LessDense ());
 		};
 
 		/*
@@ -442,7 +465,7 @@ TopDownInlinerPass::run (Module &m, ModuleAnalysisManager &mam)
 			read_sites ();
 
 			while (!queue.empty ()) {
-				std::pop_heap (queue.begin (), queue.end (), Colder ());
+				std::pop_heap (queue.begin (), queue.end (), LessDense ());
 				Site site = queue.back ();
 				queue.pop_back ();
 
