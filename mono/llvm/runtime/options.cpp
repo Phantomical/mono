@@ -131,15 +131,15 @@ llvm::cl::opt<unsigned> InlineILLimitOpt (
 	llvm::cl::desc ("Largest callee in IL bytes the shape-test pre-pass inlines"));
 
 llvm::cl::opt<unsigned> InlineBudgetOpt (
-	"mono-inline-budget", llvm::cl::Hidden, llvm::cl::init (16),
+	"mono-inline-budget", llvm::cl::Hidden, llvm::cl::init (64),
 	llvm::cl::desc ("Bodies the shape-test pre-pass may inline into one method"));
 
 llvm::cl::opt<unsigned> CostedInlineBudgetOpt (
-	"mono-inline-cost-budget", llvm::cl::Hidden, llvm::cl::init (32),
+	"mono-inline-cost-budget", llvm::cl::Hidden, llvm::cl::init (128),
 	llvm::cl::desc ("Bodies the tier-2 cost model may inline into one method"));
 
 llvm::cl::opt<unsigned> CostedInlineByteBudgetOpt (
-	"mono-inline-cost-byte-budget", llvm::cl::Hidden, llvm::cl::init (4096),
+	"mono-inline-cost-byte-budget", llvm::cl::Hidden, llvm::cl::init (16384),
 	llvm::cl::desc ("Translated IL bytes the tier-2 cost model may still spend "
 	                "on one root, alongside the body count above"));
 
@@ -182,13 +182,13 @@ llvm::cl::opt<unsigned> TrivialInlineDepthLimitOpt (
 	llvm::cl::desc ("Inlines deep past root the shape-test pre-pass may go"));
 
 llvm::cl::opt<unsigned> TrivialInlineFanoutLimitOpt (
-	"mono-inline-trivial-fanout-limit", llvm::cl::Hidden, llvm::cl::init (32),
+	"mono-inline-trivial-fanout-limit", llvm::cl::Hidden, llvm::cl::init (64),
 	llvm::cl::desc ("Call sites within one caller a single trivial inline may cover "
 	                "before the pre-pass leaves that callee calling its published "
 	                "entry rather than inlined; 0 turns this off"));
 
 llvm::cl::opt<unsigned> TrivialInlineInstanceBudgetOpt (
-	"mono-inline-trivial-instance-budget", llvm::cl::Hidden, llvm::cl::init (32),
+	"mono-inline-trivial-instance-budget", llvm::cl::Hidden, llvm::cl::init (256),
 	llvm::cl::desc ("Call sites the shape-test pre-pass may spend building a "
 	                "fresh copy for, summed across every callee it builds one "
 	                "for in one root; 0 turns this off"));
