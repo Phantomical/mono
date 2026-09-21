@@ -5,5 +5,11 @@
     <ClInclude Include="$(MonoSourceLocation)\mono\mini\mini-windows.h" />
     <ClCompile Include="$(MonoSourceLocation)\mono\mini\etw-profiler.c" />
     <ClInclude Include="$(MonoSourceLocation)\mono\mini\CLR-ETW-Generated.h" />
+    <ClCompile Include="$(MonoSourceLocation)\mono\mini\ittapi-profiler.c">
+      <AdditionalIncludeDirectories>$(MonoSourceLocation)\external\ittapi\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
+    <ClCompile Include="$(MonoSourceLocation)\external\ittapi\src\ittnotify\jitprofiling.c">
+      <AdditionalIncludeDirectories>$(MonoSourceLocation)\external\ittapi\include;$(MonoSourceLocation)\external\ittapi\src\ittnotify;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
   </ItemGroup>
 </Project>

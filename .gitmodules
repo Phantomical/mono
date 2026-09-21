@@ -61,3 +61,6 @@
 [submodule "external/bdwgc"]
 	path = external/bdwgc
 	url = https://github.com/Unity-Technologies/bdwgc.git
+[submodule "external/ittapi"]
+	path = external/ittapi
+	url = https://github.com/intel/ittapi.git
