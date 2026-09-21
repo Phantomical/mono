@@ -176,8 +176,13 @@ bool hash_code_fast_path ();
 /// Disabled by default because of llvm/llvm-project#219885.
 bool tag_non_pointer_invariant_group ();
 
-/// Whether eligible surviving object-reference null checks are rewritten into
-/// faulting accesses for optimized code.
+/// Whether a surviving object-reference null check is rewritten into a
+/// faulting access, at tier 1 and tier 2 alike.
+///
+/// A false value leaves every such check as the compare and branch
+/// ImplicitNullChecks declined to fold, which is what separates a wrong
+/// fault site from a wrong rewrite. mono/tests/implicit-null-checks.cs is
+/// what the two arms have to agree on, at every tier the file drives.
 bool fault_null_checks ();
 
 /// The fast-math flags the float operations a method asks for carry.

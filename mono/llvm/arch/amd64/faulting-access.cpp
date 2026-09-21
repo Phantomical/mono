@@ -31,11 +31,11 @@ cmp8mi_opcode (const TargetInstrInfo &tii)
 } // namespace
 
 void
-emit_faulting_byte_read (MachineBasicBlock &mbb, const TargetInstrInfo &tii,
-                         Register pointer, DebugLoc dl)
+emit_faulting_byte_read (MachineBasicBlock &mbb, MachineBasicBlock::iterator at,
+                         const TargetInstrInfo &tii, Register pointer, DebugLoc dl)
 {
 	// The unused index, displacement, and segment operands are encoded as zero.
-	BuildMI (&mbb, dl, tii.get (cmp8mi_opcode (tii)))
+	BuildMI (mbb, at, dl, tii.get (cmp8mi_opcode (tii)))
 		.addReg (pointer)
 		.addImm (1)
 		.addReg (0)

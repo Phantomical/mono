@@ -1588,6 +1588,8 @@ MonoJit::create (CodeArena *arena)
 	 * that SelectionDAG selects gets `TEST` instead. RegAllocFast then reloads
 	 * the tested pointer into a register of its own, which is not the register
 	 * the test read, so isSuitableMemoryOp () refuses the dereference.
+	 * MonoNullCheckFaultPass (passes/null-check-fault.cpp) handles those checks
+	 * at tier 1 instead.
 	 *
 	 * LLVM expects the runtime to read __llvm_faultmaps for the handler of a
 	 * faulting access. Mono instead turns a SIGSEGV inside a compiled body
