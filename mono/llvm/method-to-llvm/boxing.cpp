@@ -151,6 +151,7 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 				context (), 1, std::nullopt));
 		// The allocator raises OutOfMemoryException instead of answering null.
 		(*fast)->addRetAttr (llvm::Attribute::NonNull);
+		(*fast)->addFnAttr (alloc_wrapper_attribute);
 		serves = *fast;
 	} else {
 		// mono_gc_get_managed_allocator () answers null under Boehm, which has

@@ -14,6 +14,7 @@
 #define MONO_LLVM_PASSES_ALLOC_FUNC_HPP
 
 #include <llvm/ADT/StringRef.h>
+#include <llvm/IR/PassManager.h>
 
 namespace llvm {
 class Function;
@@ -88,6 +89,20 @@ llvm::Function *alloc_func_decl (llvm::Module &m, AllocShape shape, bool erasabl
 /// Rewrites every allocation call into a call of the allocator it carries,
 /// erases the declarations, and says whether it changed anything.
 bool lower_allocations (llvm::Module &m);
+
+/// Attribute marking a managed allocator whose body can be considered for
+/// inlining. Runtime icall wrappers do not carry it.
+constexpr llvm::StringRef alloc_wrapper_attribute = "mono-alloc-wrapper";
+
+/// Rewrites marked allocator sites in \p f into direct calls before tier-2
+/// inlining. Other sites remain symbolic for lower_allocations ().
+bool materialize_allocator_calls (llvm::Function &f);
+
+/// Runs materialize_allocator_calls () over one function.
+class MaterializeAllocatorCallsPass : public llvm::PassInfoMixin<MaterializeAllocatorCallsPass> {
+public:
+	llvm::PreservedAnalyses run (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+};
 
 } // namespace mono
 

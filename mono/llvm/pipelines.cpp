@@ -4,6 +4,7 @@
 #include "arch/arch.hpp"
 #include "compile-state.hpp"
 #include "jit.hpp"
+#include "passes/alloc-func.hpp"
 #include "passes/builtins.hpp"
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init-elision.hpp"
@@ -665,6 +666,10 @@ MonoPassBuilder::buildTier2Pipeline ()
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
 		mono::EliminateDelegateAndGuardDispatchPass ()));
 
+	/* Resolve marked allocator calls before the first inlining round. */
+	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
+		mono::MaterializeAllocatorCallsPass ()));
+
 	/*
 	 * Both eliminations run again between the inliner's rounds. Most of what they
 	 * find there is not in the caller's own code: it arrives with an inline.
@@ -676,6 +681,7 @@ MonoPassBuilder::buildTier2Pipeline ()
 	llvm::FunctionPassManager between;
 
 	between.addPass (mono::EliminateDelegateAndGuardDispatchPass ());
+	between.addPass (mono::MaterializeAllocatorCallsPass ());
 	between.addPass (buildTier2FunctionSimplificationPipeline ());
 
 	MPM.addPass (mono::TopDownInlinerPass (*TM, buildTier2MaterializePipeline (),

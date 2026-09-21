@@ -1156,6 +1156,7 @@ MethodLLVMEmitter::emit_vector_alloc (MonoIrBuilder &builder, MonoClass *array,
 		(*fast)->addRetAttr (llvm::Attribute::NoAlias);
 		// The allocator raises OutOfMemoryException instead of answering null.
 		(*fast)->addRetAttr (llvm::Attribute::NonNull);
+		(*fast)->addFnAttr (alloc_wrapper_attribute);
 		serves = *fast;
 	} else {
 		// mono_gc_get_managed_array_allocator () answers null under Boehm,
