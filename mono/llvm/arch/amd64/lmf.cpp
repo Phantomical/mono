@@ -204,6 +204,25 @@ compute_windows_tls_location ()
  * onto the chain, and an async stack walk that starts inside it sees no managed
  * frame at all. The Windows path preserves the same no-call property.
  */
+/*
+ * The TLS locations and the LMF slot remain valid while a thread holds managed
+ * frames. Marking these loads invariant lets LLVM reuse one derivation across
+ * the transitions in a method instead of rebuilding the address chain each
+ * time. mono_set_lmf_addr () updates the slot when the thread attaches or
+ * detaches, outside that interval.
+ */
+llvm::LoadInst *
+load_invariant (llvm::IRBuilderBase &b, llvm::Type *type, llvm::Value *address,
+                llvm::Align align, const llvm::Twine &name = "")
+{
+	llvm::LoadInst *load = b.CreateAlignedLoad (type, address, align, name);
+
+	load->setMetadata (llvm::LLVMContext::MD_invariant_load,
+	                   llvm::MDNode::get (b.getContext (), {}));
+
+	return load;
+}
+
 llvm::Value *
 emit_lmf_address (llvm::IRBuilderBase &b)
 {
@@ -220,14 +239,13 @@ emit_lmf_address (llvm::IRBuilderBase &b)
 
 	llvm::Value *teb_slot = b.CreateIntToPtr (
 		b.getInt64 (0x58), llvm::PointerType::get (ctx, 256));
-	llvm::Value *tls_array = b.CreateAlignedLoad (ptr, teb_slot, align);
-	llvm::Value *block = b.CreateAlignedLoad (
-		ptr,
-		b.CreateConstInBoundsGEP1_32 (ptr, tls_array, location->tls_index),
+	llvm::Value *tls_array = load_invariant (b, ptr, teb_slot, align);
+	llvm::Value *block = load_invariant (
+		b, ptr, b.CreateConstInBoundsGEP1_32 (ptr, tls_array, location->tls_index),
 		align);
 
-	return b.CreateAlignedLoad (
-		ptr,
+	return load_invariant (
+		b, ptr,
 		b.CreateConstInBoundsGEP1_32 (b.getInt8Ty (), block,
 	                                      location->block_offset),
 		align, "lmf_addr");
@@ -241,7 +259,7 @@ emit_lmf_address (llvm::IRBuilderBase &b)
 		b.getInt64 ((uint64_t) (int64_t) *displacement),
 		llvm::PointerType::get (ctx, 257));
 
-	return b.CreateAlignedLoad (ptr, slot, align, "lmf_addr");
+	return load_invariant (b, ptr, slot, align, "lmf_addr");
 #endif
 }
 
