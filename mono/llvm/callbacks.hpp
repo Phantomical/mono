@@ -9,6 +9,7 @@
 #include "arch/arch.hpp"
 
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/DenseSet.h>
 #include <llvm/ADT/FunctionExtras.h>
 #include <llvm/ExecutionEngine/Orc/Shared/ExecutorAddress.h>
 #include <llvm/Support/Error.h>
@@ -122,10 +123,16 @@ private:
 	/// Returns the pool for kind, falling back to the default pool.
 	llvm::orc::TrampolinePool &pool_for (ResolverKind kind);
 
+	/// Reports a trampoline page to profilers once.
+	void report_trampoline_page (llvm::orc::ExecutorAddr trampoline);
+
 	void *on_error_;
 
 	std::mutex mutex_;
 	llvm::DenseMap<llvm::orc::ExecutorAddr, std::shared_ptr<Callback>> callbacks_;
+
+	/// Pages already reported.
+	llvm::DenseSet<llvm::orc::ExecutorAddr> reported_trampoline_pages_;
 
 	llvm::orc::ExecutorAddr resolver_;
 	llvm::orc::ExecutorAddr resolver_avx_;
