@@ -255,6 +255,7 @@ set(MONO_TESTS_CS_SRC
   tier2-loop-unswitch.cs
   managed-thread-id.cs
   thread-static-fast-path.cs
+  thread-memory-barrier.cs
   vector-hwaccel.cs
   vector-hwaccel-elsewhere.cs
   pinvoke-narrow-arg.cs
