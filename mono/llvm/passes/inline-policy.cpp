@@ -115,7 +115,7 @@ cl::opt<bool> ColdElisionILLimit (
 	          "the cold one"));
 
 cl::opt<int> SaveLmfPenalty (
-	"mono-inline-save-lmf-penalty", cl::Hidden, cl::init (100),
+	"mono-inline-save-lmf-penalty", cl::Hidden, cl::init (20),
 	cl::desc ("Cost added for a callee whose front end pushes an LMF entry"));
 
 cl::opt<bool> RankSitesInPromotedBody (
