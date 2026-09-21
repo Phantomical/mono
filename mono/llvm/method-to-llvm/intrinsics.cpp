@@ -235,6 +235,17 @@ struct BuiltinEmitters {
 		                              call.sig->ret);
 	}
 
+	/// RuntimeHelpers.get_OffsetToStringData answers offsetof (MonoString,
+	/// chars), which is a compile-time constant.
+	static BuiltinResult offset_to_string_data (MethodLLVMEmitter &emitter,
+	                                            llvm::IRBuilder<> &builder,
+	                                            const BuiltinCall &call)
+	{
+		return emitter.push_produced (
+			builder, builder.getInt32 (MONO_STRUCT_OFFSET (MonoString, chars)),
+			call.sig->ret);
+	}
+
 	/// Debugger.Break () has an empty body and a comment where the code goes:
 	/// the JIT gives the call its meaning, and that meaning is the one the break
 	/// instruction has. An embedder can say no through mono_set_break_policy.
@@ -327,6 +338,149 @@ struct BuiltinEmitters {
 	{
 		builder.CreateRet (builder.getInt8 (1));
 		return llvm::Error::success ();
+	}
+
+	/// Every Unsafe member but one has a body that only throws
+	/// NotImplementedException. A member this backend does not recognize -
+	/// that one included - is left to run its own IL rather than answered
+	/// here.
+	static BuiltinResult unsafe_body (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                  MonoMethod *method)
+	{
+		if (!is_unsafe_body_method (method))
+			return std::nullopt;
+
+		return emitter.emit_unsafe_body (builder, method);
+	}
+
+	static BuiltinResult interlocked_compare_exchange_scalar (MethodLLVMEmitter &emitter,
+	                                                           llvm::IRBuilder<> &builder,
+	                                                           const BuiltinCall &call)
+	{
+		if (!interlocked_scalar_width (call.sig->params[1]))
+			return std::nullopt;
+
+		return emitter.emit_interlocked_compare_exchange_scalar (builder, call.sig);
+	}
+
+	/// The two four-argument overloads are told apart by what their first
+	/// argument points at: `CompareExchange (ref int, int, int, ref bool)`,
+	/// or the internal object one both public CompareExchange overloads
+	/// funnel through.
+	static BuiltinResult interlocked_compare_exchange_4 (MethodLLVMEmitter &emitter,
+	                                                     llvm::IRBuilder<> &builder,
+	                                                     const BuiltinCall &call)
+	{
+		MonoType *location = call.sig->params[0];
+
+		if (location->type == MONO_TYPE_I4)
+			return emitter.emit_interlocked_compare_exchange_bool (builder, call.sig);
+		if (location->type == MONO_TYPE_OBJECT)
+			return emitter.emit_interlocked_compare_exchange_object (builder, call.sig);
+
+		return std::nullopt;
+	}
+
+	static BuiltinResult interlocked_exchange_scalar (MethodLLVMEmitter &emitter,
+	                                                  llvm::IRBuilder<> &builder,
+	                                                  const BuiltinCall &call)
+	{
+		if (!interlocked_scalar_width (call.sig->params[0]))
+			return std::nullopt;
+
+		return emitter.emit_interlocked_exchange_scalar (builder, call.sig);
+	}
+
+	static BuiltinResult interlocked_exchange_object (MethodLLVMEmitter &emitter,
+	                                                  llvm::IRBuilder<> &builder,
+	                                                  const BuiltinCall &call)
+	{
+		if (call.sig->params[0]->type != MONO_TYPE_OBJECT)
+			return std::nullopt;
+
+		return emitter.emit_interlocked_exchange_object (builder, call.sig);
+	}
+
+	static BuiltinResult interlocked_increment (MethodLLVMEmitter &emitter,
+	                                            llvm::IRBuilder<> &builder,
+	                                            const BuiltinCall &call)
+	{
+		if (call.sig->params[0]->type != MONO_TYPE_I4 && call.sig->params[0]->type != MONO_TYPE_I8)
+			return std::nullopt;
+
+		return emitter.emit_interlocked_increment_decrement (builder, call.sig, true);
+	}
+
+	static BuiltinResult interlocked_decrement (MethodLLVMEmitter &emitter,
+	                                            llvm::IRBuilder<> &builder,
+	                                            const BuiltinCall &call)
+	{
+		if (call.sig->params[0]->type != MONO_TYPE_I4 && call.sig->params[0]->type != MONO_TYPE_I8)
+			return std::nullopt;
+
+		return emitter.emit_interlocked_increment_decrement (builder, call.sig, false);
+	}
+
+	static BuiltinResult interlocked_add (MethodLLVMEmitter &emitter,
+	                                      llvm::IRBuilder<> &builder, const BuiltinCall &call)
+	{
+		if (call.sig->params[0]->type != MONO_TYPE_I4 && call.sig->params[0]->type != MONO_TYPE_I8)
+			return std::nullopt;
+
+		return emitter.emit_interlocked_add (builder, call.sig);
+	}
+
+	static BuiltinResult interlocked_read (MethodLLVMEmitter &emitter,
+	                                       llvm::IRBuilder<> &builder, const BuiltinCall &call)
+	{
+		if (call.sig->params[0]->type != MONO_TYPE_I8)
+			return std::nullopt;
+
+		return emitter.emit_interlocked_read (builder, call.sig);
+	}
+
+	/// Thread.MemoryBarrier () is ves_icall_System_Threading_Thread_MemoryBarrier
+	/// (mono/metadata/threads.c), which is mono_memory_barrier () and nothing
+	/// else.
+	static BuiltinResult thread_memory_barrier (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
+	                                            const BuiltinCall &)
+	{
+		builder.CreateFence (llvm::AtomicOrdering::SequentiallyConsistent);
+		return llvm::Error::success ();
+	}
+
+	/// Thread.SpinWait_nop () is ves_icall_System_Threading_Thread_SpinWait_nop
+	/// (mono/metadata/threads.c), an empty function body: the transition itself
+	/// is the whole of what a call here paid for.
+	static BuiltinResult thread_spin_wait_nop (MethodLLVMEmitter &, llvm::IRBuilder<> &,
+	                                           const BuiltinCall &)
+	{
+		return llvm::Error::success ();
+	}
+
+	static bool is_volatile_wide_type (MonoTypeEnum type)
+	{
+		return type == MONO_TYPE_I8 || type == MONO_TYPE_U8 || type == MONO_TYPE_R8;
+	}
+
+	static BuiltinResult volatile_read_wide (MethodLLVMEmitter &emitter,
+	                                         llvm::IRBuilder<> &builder,
+	                                         const BuiltinCall &call)
+	{
+		if (!is_volatile_wide_type (static_cast<MonoTypeEnum> (call.sig->params[0]->type)))
+			return std::nullopt;
+
+		return emitter.emit_volatile_read_wide (builder, call.sig);
+	}
+
+	static BuiltinResult volatile_write_wide (MethodLLVMEmitter &emitter,
+	                                          llvm::IRBuilder<> &builder,
+	                                          const BuiltinCall &call)
+	{
+		if (!is_volatile_wide_type (static_cast<MonoTypeEnum> (call.sig->params[0]->type)))
+			return std::nullopt;
+
+		return emitter.emit_volatile_write_wide (builder, call.sig);
 	}
 };
 
@@ -421,13 +575,39 @@ const BuiltinMethod thread_methods[] = {
 	{ "SpinWait_nop", 0, Receiver::none, BuiltinEmitters::thread_spin_wait_nop },
 };
 
+// Every narrower overload is Unsafe.As<T, VolatileT> over a genuinely
+// volatile field (System.Threading/Volatile.cs) and needs no row of its
+// own. volatile_read_wide ()/-write_wide () answer only the three that are
+// icalls instead: long, ulong and double.
+const BuiltinMethod volatile_methods[] = {
+	{ "Read", 1, Receiver::none, BuiltinEmitters::volatile_read_wide },
+	{ "Write", 2, Receiver::none, BuiltinEmitters::volatile_write_wide },
+};
+
 const BuiltinMethod debugger_methods[] = {
 	{ "Break", 0, Receiver::none, BuiltinEmitters::debugger_break },
+};
+
+// Increment, Decrement and Add answer both the int and the long overload
+// through one row each, switching on params[0]->type. Read has only the one
+// long overload to answer.
+const BuiltinMethod interlocked_methods[] = {
+	{ "CompareExchange", 3, Receiver::none,
+	  BuiltinEmitters::interlocked_compare_exchange_scalar },
+	{ "CompareExchange", 4, Receiver::none, BuiltinEmitters::interlocked_compare_exchange_4 },
+	{ "Exchange", 2, Receiver::none, BuiltinEmitters::interlocked_exchange_scalar },
+	{ "Exchange", 3, Receiver::none, BuiltinEmitters::interlocked_exchange_object },
+	{ "Increment", 1, Receiver::none, BuiltinEmitters::interlocked_increment },
+	{ "Decrement", 1, Receiver::none, BuiltinEmitters::interlocked_decrement },
+	{ "Add", 2, Receiver::none, BuiltinEmitters::interlocked_add },
+	{ "Read", 1, Receiver::none, BuiltinEmitters::interlocked_read },
 };
 
 const BuiltinMethod runtime_helpers_methods[] = {
 	{ "IsReferenceOrContainsReferences", 0, Receiver::none,
 	  BuiltinEmitters::is_reference_or_contains_references },
+	{ "get_OffsetToStringData", 0, Receiver::none,
+	  BuiltinEmitters::offset_to_string_data },
 };
 
 /// ByReference`1's row takes every member the class has. One with no lowering
@@ -435,6 +615,11 @@ const BuiltinMethod runtime_helpers_methods[] = {
 const BuiltinBody core_bodies[] = {
 	{ { nullptr, "System", "ByReference`1" }, {}, any_signature, false, nullptr,
 	  BuiltinEmitters::byreference },
+	// Unsafe's row also takes every member. unsafe_body () itself decides
+	// which ones it answers, so a member it declines runs its own IL, the
+	// nuint AddByteOffset forwarder included.
+	{ { nullptr, "System.Runtime.CompilerServices", "Unsafe" }, {}, any_signature, false,
+	  nullptr, BuiltinEmitters::unsafe_body },
 };
 
 /// System.Numerics.Vector.get_IsHardwareAccelerated, whichever assembly
@@ -500,9 +685,11 @@ class_table ()
 		  runtime_imports_methods },
 		{ { nullptr, "System", "RuntimeTypeHandle" }, nullptr, type_handle_methods },
 		{ { nullptr, "System.Threading", "Monitor" }, nullptr, monitor_methods },
+		{ { nullptr, "System.Threading", "Interlocked" }, nullptr, interlocked_methods },
 		{ { nullptr, "System", "Environment" }, nullptr, environment_methods },
 		{ { nullptr, "System.Threading", "Thread" }, &mono_defaults.thread_class,
 		  thread_methods },
+		{ { nullptr, "System.Threading", "Volatile" }, nullptr, volatile_methods },
 		{ { nullptr, "System.Diagnostics", "Debugger" }, nullptr, debugger_methods },
 		{ { nullptr, "System.Runtime.CompilerServices", "RuntimeHelpers" }, nullptr,
 		  runtime_helpers_methods },

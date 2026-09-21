@@ -1201,6 +1201,25 @@ private:
 	llvm::Expected<llvm::Value *> emit_internal_thread (MonoIrBuilder &builder);
 	llvm::Expected<llvm::Value *> thread_static_address (MonoIrBuilder &builder,
 	                                                     uint32_t index, uint32_t offset);
+	llvm::Error emit_unsafe_body (MonoIrBuilder &builder, MonoMethod *method);
+
+	llvm::Error emit_interlocked_compare_exchange_scalar (MonoIrBuilder &builder,
+	                                                      MonoMethodSignature *sig);
+	llvm::Error emit_interlocked_compare_exchange_bool (MonoIrBuilder &builder,
+	                                                    MonoMethodSignature *sig);
+	llvm::Error emit_interlocked_compare_exchange_object (MonoIrBuilder &builder,
+	                                                      MonoMethodSignature *sig);
+	llvm::Error emit_interlocked_exchange_scalar (MonoIrBuilder &builder,
+	                                              MonoMethodSignature *sig);
+	llvm::Error emit_interlocked_exchange_object (MonoIrBuilder &builder,
+	                                              MonoMethodSignature *sig);
+	llvm::Error emit_interlocked_increment_decrement (MonoIrBuilder &builder,
+	                                                  MonoMethodSignature *sig, bool increment);
+	llvm::Error emit_interlocked_add (MonoIrBuilder &builder, MonoMethodSignature *sig);
+	llvm::Error emit_interlocked_read (MonoIrBuilder &builder, MonoMethodSignature *sig);
+
+	llvm::Error emit_volatile_read_wide (MonoIrBuilder &builder, MonoMethodSignature *sig);
+	llvm::Error emit_volatile_write_wide (MonoIrBuilder &builder, MonoMethodSignature *sig);
 
 	llvm::Expected<llvm::Value *> indirect_address (MonoIrBuilder &builder,
 	                                                StackValue address);
@@ -1436,6 +1455,28 @@ std::optional<MonoJitICallId> monitor_exit_fast_icall (MonoMethod *method,
 /// Whether target is the Environment.CurrentManagedThreadId getter. sig is the
 /// signature the call site was written against.
 bool is_current_managed_thread_id (MonoMethod *target, MonoMethodSignature *sig);
+
+/// The register width and float-ness of one of the five scalar types an
+/// Interlocked scalar overload is instantiated over: int, long, IntPtr,
+/// float and double.
+struct InterlockedScalarWidth {
+	unsigned bits;
+	bool is_float;
+};
+
+/// t's own InterlockedScalarWidth, or nothing where t is instead a reference
+/// type - the shape the generic, class-constrained overload carries, which
+/// this backend leaves running its own IL.
+std::optional<InterlockedScalarWidth> interlocked_scalar_width (MonoType *t);
+
+/// Whether method is one of the System.Runtime.CompilerServices.Unsafe
+/// overloads this backend replaces outright, so its own IL - which only
+/// throws NotImplementedException - never runs.
+///
+/// False for Unsafe's one member with a real body (the nuint overload of
+/// AddByteOffset, which forwards to the IntPtr one) and for any shared
+/// generic instantiation, both of which compile from their own IL instead.
+bool is_unsafe_body_method (MonoMethod *method);
 
 /// The number of sig's parameters that are ordinary ones, which for a vararg
 /// signature means the fixed part ahead of the sentinel.
