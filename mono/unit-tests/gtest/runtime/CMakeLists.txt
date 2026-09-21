@@ -76,7 +76,8 @@ mono_add_unit_test(test-mono-runtime RUNTIME SOURCES
   test-function-pointer.cpp test-detour.cpp test-icall.cpp
   test-unmanaged-callers-only.cpp test-arch-amd64.cpp
   test-unity-pinned-alloc.cpp test-type-init-recursion.cpp test-tier.cpp
-  test-etw-profiler.cpp test-il-analyzer.cpp test-windows-unwind-table.cpp)
+  test-etw-profiler.cpp test-il-analyzer.cpp test-windows-unwind-table.cpp
+  test-race-entry.cpp)
 mono_unit_test_cases(test-mono-runtime test-mono-callspec "Callspec.*")
 mono_unit_test_cases(test-mono-runtime test-mono-string   "MonoStringTest.*")
 mono_unit_test_cases(test-mono-runtime test-path          "MonoPath.*")
@@ -96,6 +97,7 @@ mono_unit_test_cases(test-mono-runtime test-etw-profiler
 mono_unit_test_cases(test-mono-runtime test-il-analyzer   "ILAnalyzer.*")
 mono_unit_test_cases(test-mono-runtime test-windows-unwind-table
                      "WindowsUnwindTable.*")
+mono_unit_test_cases(test-mono-runtime test-race-entry  "RaceEntry.*")
 
 # One case each, and there cannot be a second. The samples they are built out
 # of run a domain to completion and call mono_jit_cleanup. Nothing in the
@@ -158,6 +160,7 @@ if(MONO_ENABLE_MCS_BUILD)
   _mono_test_assembly(type-init-recursion.exe
                       "${CMAKE_CURRENT_SOURCE_DIR}/type-init-recursion.cs")
   _mono_test_assembly(tier.exe "${CMAKE_CURRENT_SOURCE_DIR}/tier.cs")
+  _mono_test_assembly(race-entry.exe "${CMAKE_CURRENT_SOURCE_DIR}/race-entry.cs")
   _mono_test_assembly(etw.exe "${CMAKE_CURRENT_SOURCE_DIR}/etw.cs")
   _mono_test_assembly(il-analyzer.exe "${CMAKE_CURRENT_SOURCE_DIR}/il-analyzer.cs")
   _mono_test_assembly(test-embed.exe "${CMAKE_SOURCE_DIR}/samples/embed/test.cs")
@@ -172,6 +175,7 @@ if(MONO_ENABLE_MCS_BUILD)
     "${CMAKE_CURRENT_BINARY_DIR}/unity-pinned-alloc.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/type-init-recursion.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/tier.exe"
+    "${CMAKE_CURRENT_BINARY_DIR}/race-entry.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/etw.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/il-analyzer.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/test-embed.exe"

@@ -143,16 +143,12 @@ private:
 	/// Decides which engine runs \p dm and returns the address that engine is
 	/// entered at. This is what the method's thunk is published pointing at.
 	///
-	/// It takes no decision that has to wait for another thread. A method it
-	/// sends to a compiled tier gets the compile entry below, so every thread
-	/// that blocks for a body blocks there.
+	/// A method sent to a compiled tier uses the compile entry below. First-body
+	/// races are coalesced through CompileWork::entry when it is safe to wait.
 	void *policy_entry (DomainState &domain, MonoDomainMethod &dm);
 
-	/// Compiles \p dm on the calling thread and returns where the body landed.
-	///
-	/// The one place a thread waits for a method's code. A method that cannot
-	/// be compiled gets a body that raises, so this always returns somewhere
-	/// the caller can be sent.
+	/// Returns where \p dm's body has landed, compiling it if necessary. A
+	/// method that cannot be compiled gets a body that raises.
 	void *compile_entry (DomainState &domain, MonoDomainMethod &dm);
 
 	/// Points \p dm's entry at a tier-0 body from the classic compiler and
@@ -208,6 +204,8 @@ private:
 		shared_body,
 		/// The C-convention entry native callers arrive at.
 		interop_entry,
+		/// A record's first body, shared by policy_entry () and compile_entry ().
+		entry,
 	};
 
 	/// What a thread that asked to do a record's compile work found.
@@ -217,20 +215,19 @@ private:
 		/// Another thread did it. The record shows what it left, which
 		/// can be nothing.
 		done,
-		/// Another thread is doing it and this one cannot wait, so both
-		/// do it and whichever result lands first is the one published.
+		/// Another thread is doing it and this one cannot wait, so both compile.
 		duplicate,
 	};
 
 	/// Takes this thread's turn at \p work for \p record.
 	///
-	/// A turn this returns as mine must be given back with
-	/// finish_compile_turn (). A thread that finds another already at it waits,
-	/// unless waiting could deadlock, and is then told to go ahead anyway.
+	/// Every outcome but done must be passed to finish_compile_turn () when the
+	/// attempt ends. Waiting is skipped when it could deadlock.
 	CompileTurn take_compile_turn (MonoDomainMethod *record, CompileWork work);
 
-	/// Ends this thread's turn at \p work for \p record and wakes what waits.
-	void finish_compile_turn (MonoDomainMethod *record, CompileWork work);
+	/// Ends an attempt returned by take_compile_turn () and wakes waiters when
+	/// \p turn was mine.
+	void finish_compile_turn (MonoDomainMethod *record, CompileWork work, CompileTurn turn);
 
 	/// Returns the stub \p dm's entry is published as when its shared body
 	/// has no receiver to read a context out of. It writes this
