@@ -439,25 +439,6 @@ struct BuiltinEmitters {
 		return emitter.emit_interlocked_read (builder, call.sig);
 	}
 
-	/// Thread.MemoryBarrier () is ves_icall_System_Threading_Thread_MemoryBarrier
-	/// (mono/metadata/threads.c), which is mono_memory_barrier () and nothing
-	/// else.
-	static BuiltinResult thread_memory_barrier (MethodLLVMEmitter &, llvm::IRBuilder<> &builder,
-	                                            const BuiltinCall &)
-	{
-		builder.CreateFence (llvm::AtomicOrdering::SequentiallyConsistent);
-		return llvm::Error::success ();
-	}
-
-	/// Thread.SpinWait_nop () is ves_icall_System_Threading_Thread_SpinWait_nop
-	/// (mono/metadata/threads.c), an empty function body: the transition itself
-	/// is the whole of what a call here paid for.
-	static BuiltinResult thread_spin_wait_nop (MethodLLVMEmitter &, llvm::IRBuilder<> &,
-	                                           const BuiltinCall &)
-	{
-		return llvm::Error::success ();
-	}
-
 	static bool is_volatile_wide_type (MonoTypeEnum type)
 	{
 		return type == MONO_TYPE_I8 || type == MONO_TYPE_U8 || type == MONO_TYPE_R8;
