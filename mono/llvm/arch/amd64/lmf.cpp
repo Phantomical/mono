@@ -218,6 +218,36 @@ compute_windows_tls_location ()
  * keeps the same property with three loads and an add: still no call, so
  * the same window holds there too.
  */
+/*
+ * One derivation then serves a whole function, where without this a body
+ * repeats the address chain at each transition - nothing else tells the
+ * optimizer that a call cannot write thread-local memory.
+ *
+ * The two address links rest on the Windows loader. Loading a module that
+ * carries TLS replaces a thread's whole vector rather than growing it, and the
+ * replacement is a copy published by one aligned store, with the retired
+ * vector held until the thread exits rather than freed. A thread's block for a
+ * module is never moved once allocated. clang-cl and MSVC cache both across a
+ * call for an ordinary __declspec(thread) read.
+ *
+ * The value rests on mono instead: mono_set_lmf_addr () writes it at attach
+ * and at detach, and a thread may not detach while it holds managed frames.
+ * So a body running managed code reads one value throughout. A path that broke
+ * that rule would leave this body pushing an LMF into a freed jit_tls, and it
+ * would already be unwinding through frames the detach invalidated.
+ */
+llvm::LoadInst *
+load_invariant (llvm::IRBuilderBase &b, llvm::Type *type, llvm::Value *address,
+                llvm::Align align, const llvm::Twine &name = "")
+{
+	llvm::LoadInst *load = b.CreateAlignedLoad (type, address, align, name);
+
+	load->setMetadata (llvm::LLVMContext::MD_invariant_load,
+	                   llvm::MDNode::get (b.getContext (), {}));
+
+	return load;
+}
+
 llvm::Value *
 emit_lmf_address (llvm::IRBuilderBase &b)
 {
@@ -234,14 +264,13 @@ emit_lmf_address (llvm::IRBuilderBase &b)
 
 	llvm::Value *teb_slot = b.CreateIntToPtr (
 		b.getInt64 (0x58), llvm::PointerType::get (ctx, 256));
-	llvm::Value *tls_array = b.CreateAlignedLoad (ptr, teb_slot, align);
-	llvm::Value *block = b.CreateAlignedLoad (
-		ptr,
-		b.CreateConstInBoundsGEP1_32 (ptr, tls_array, location->tls_index),
+	llvm::Value *tls_array = load_invariant (b, ptr, teb_slot, align);
+	llvm::Value *block = load_invariant (
+		b, ptr, b.CreateConstInBoundsGEP1_32 (ptr, tls_array, location->tls_index),
 		align);
 
-	return b.CreateAlignedLoad (
-		ptr,
+	return load_invariant (
+		b, ptr,
 		b.CreateConstInBoundsGEP1_32 (b.getInt8Ty (), block,
 	                                      location->block_offset),
 		align, "lmf_addr");
@@ -255,7 +284,7 @@ emit_lmf_address (llvm::IRBuilderBase &b)
 		b.getInt64 ((uint64_t) (int64_t) *displacement),
 		llvm::PointerType::get (ctx, 257));
 
-	return b.CreateAlignedLoad (ptr, slot, align, "lmf_addr");
+	return load_invariant (b, ptr, slot, align, "lmf_addr");
 #endif
 }
 
