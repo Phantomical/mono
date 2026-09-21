@@ -36,11 +36,23 @@ namespace Mono.Tiering {
 static class Program {
 	static double dv, dv2;
 	static float fv;
+	static int iv, iv2;
+	static uint uv, uv2;
+	static long lv, lv2;
+	static ulong ulv, ulv2;
 
 	static double D (double x) { dv = x; return dv; }
 	/// A second field, so that a two-argument call keeps both operands opaque.
 	static double E (double x) { dv2 = x; return dv2; }
 	static float F (float x) { fv = x; return fv; }
+	static int I (int x) { iv = x; return iv; }
+	static int I2 (int x) { iv2 = x; return iv2; }
+	static uint U (uint x) { uv = x; return uv; }
+	static uint U2 (uint x) { uv2 = x; return uv2; }
+	static long L (long x) { lv = x; return lv; }
+	static long L2 (long x) { lv2 = x; return lv2; }
+	static ulong UL (ulong x) { ulv = x; return ulv; }
+	static ulong UL2 (ulong x) { ulv2 = x; return ulv2; }
 
 	static int fails;
 
@@ -79,6 +91,25 @@ static class Program {
 		NaN (what, (double) got);
 	}
 
+	/// Compare wide integer endpoints without converting them through double.
+	static void SameLong (string what, long got, long want)
+	{
+		if (got == want)
+			return;
+
+		Console.WriteLine ("FAIL: {0} gave {1}, wanted {2}", what, got, want);
+		++fails;
+	}
+
+	static void SameULong (string what, ulong got, ulong want)
+	{
+		if (got == want)
+			return;
+
+		Console.WriteLine ("FAIL: {0} gave {1}, wanted {2}", what, got, want);
+		++fails;
+	}
+
 	static readonly double[] arguments = {
 		double.NaN, double.PositiveInfinity, double.NegativeInfinity,
 		0.0, -0.0, 1.0, -1.0, 2.0, -2.0, 0.5, -0.5, 1.5, 2.5, 4.0, 8.0, -8.0,
@@ -88,6 +119,15 @@ static class Program {
 	static readonly double[] exponents = {
 		0.0, -0.0, 1.0, -1.0, 2.0, 10.0,
 		double.NaN, double.PositiveInfinity, double.NegativeInfinity,
+	};
+
+	static readonly int[] intArguments = {
+		int.MinValue, int.MinValue + 1, -100, -1, 0, 1, 100, int.MaxValue - 1, int.MaxValue,
+	};
+
+	// Keep sampled values within 2^53; CheckPinned () covers the endpoints.
+	static readonly long[] longArguments = {
+		long.MinValue >> 16, -100L, -1L, 0L, 1L, 100L, long.MaxValue >> 16,
 	};
 
 	/*
@@ -120,6 +160,10 @@ static class Program {
 		got.Add (Math.Pow (2.0, 10.0));
 		got.Add (Math.Atan2 (0.0, -1.0));
 		got.Add (Math.Atan2 (-0.0, -1.0));
+		got.Add (Math.Log (8.0, 2.0));
+		got.Add (Math.Log (8.0, 1.0));
+		got.Add (Math.Log (8.0, 0.0));
+		got.Add (Math.Log (1.0, 0.0));
 		got.Add (MathF.Sqrt (4.0f));
 		got.Add (MathF.Sqrt (-1.0f));
 		got.Add (MathF.Abs (-0.0f));
@@ -213,6 +257,27 @@ static class Program {
 			got.Add (MathF.Pow (F (2.5f), F ((float) y)));
 			got.Add (MathF.Atan2 (F (2.5f), F ((float) y)));
 			got.Add (MathF.IEEERemainder (F (2.5f), F ((float) y)));
+			// The two-argument Log, over managed IL rather than an icall.
+			got.Add (Math.Log (D (8.0), D (y)));
+			got.Add (Math.Log (D (y), D (8.0)));
+			got.Add (MathF.Log (F (8.0f), F ((float) y)));
+			got.Add (MathF.Log (F ((float) y), F (8.0f)));
+		}
+
+		foreach (int x in intArguments) {
+			got.Add (Math.Max (I (x), I2 (7)));
+			got.Add (Math.Max (I (7), I2 (x)));
+			got.Add (Math.Min (I (x), I2 (7)));
+			got.Add (Math.Min (I (7), I2 (x)));
+			got.Add (Math.Max (U (unchecked ((uint) x)), U2 (7)));
+			got.Add (Math.Min (U (unchecked ((uint) x)), U2 (7)));
+		}
+
+		foreach (long x in longArguments) {
+			got.Add (Math.Max (L (x), L2 (7)));
+			got.Add (Math.Min (L (x), L2 (7)));
+			got.Add (Math.Max (UL (unchecked ((ulong) x)), UL2 (7)));
+			got.Add (Math.Min (UL (unchecked ((ulong) x)), UL2 (7)));
 		}
 
 		return got.ToArray ();
@@ -316,10 +381,11 @@ static class Program {
 		NaN ("MathF.Truncate (NaN)", MathF.Truncate (F (float.NaN)));
 
 		/*
-		 * Max and Min do not become an intrinsic, and these are the cases that
-		 * say why. The managed body returns the second operand when the two
-		 * compare equal, so the result depends on the order the signed zeros
-		 * arrive in. llvm.maximum returns +0 for both of the first pair.
+		 * Max and Min do not become an intrinsic over float and double, and
+		 * these are the cases that say why. The managed body returns the
+		 * second operand when the two compare equal, so the result depends
+		 * on the order the signed zeros arrive in. llvm.maximum returns +0
+		 * for both of the first pair.
 		 */
 		Same ("Math.Max (0, -0)", Math.Max (D (0.0), E (-0.0)), -0.0);
 		Same ("Math.Max (-0, 0)", Math.Max (D (-0.0), E (0.0)), 0.0);
@@ -327,6 +393,45 @@ static class Program {
 		Same ("Math.Min (-0, 0)", Math.Min (D (-0.0), E (0.0)), 0.0);
 		NaN ("Math.Max (NaN, 1)", Math.Max (D (double.NaN), E (1.0)));
 		NaN ("Math.Max (1, NaN)", Math.Max (D (1.0), E (double.NaN)));
+
+		/*
+		 * The integer overloads do become an intrinsic, and these are the
+		 * boundary values a wrong width or a wrong signed/unsigned choice
+		 * answers differently.
+		 */
+		Same ("Math.Max (int) (int.MinValue, int.MaxValue)",
+			Math.Max (I (int.MinValue), I2 (int.MaxValue)), int.MaxValue);
+		Same ("Math.Min (int) (int.MinValue, int.MaxValue)",
+			Math.Min (I (int.MinValue), I2 (int.MaxValue)), int.MinValue);
+		Same ("Math.Max (int) (0, -1)", Math.Max (I (0), I2 (-1)), 0);
+		Same ("Math.Min (int) (0, -1)", Math.Min (I (0), I2 (-1)), -1);
+		Same ("Math.Max (uint) (0, uint.MaxValue)",
+			Math.Max (U (0u), U2 (uint.MaxValue)), uint.MaxValue);
+		Same ("Math.Min (uint) (0, uint.MaxValue)",
+			Math.Min (U (0u), U2 (uint.MaxValue)), 0u);
+		SameLong ("Math.Max (long) (long.MinValue, long.MaxValue)",
+			Math.Max (L (long.MinValue), L2 (long.MaxValue)), long.MaxValue);
+		SameLong ("Math.Min (long) (long.MinValue, long.MaxValue)",
+			Math.Min (L (long.MinValue), L2 (long.MaxValue)), long.MinValue);
+		SameULong ("Math.Max (ulong) (0, ulong.MaxValue)",
+			Math.Max (UL (0ul), UL2 (ulong.MaxValue)), ulong.MaxValue);
+		SameULong ("Math.Min (ulong) (0, ulong.MaxValue)",
+			Math.Min (UL (0ul), UL2 (ulong.MaxValue)), 0ul);
+
+		/*
+		 * The two-argument Log short-circuits ahead of the division on each
+		 * of these, so none of them depends on what libm's log () answers.
+		 */
+		NaN ("Math.Log (8, 1)", Math.Log (D (8.0), D (1.0)));
+		NaN ("Math.Log (8, 0)", Math.Log (D (8.0), D (0.0)));
+		NaN ("Math.Log (8, Infinity)",
+			Math.Log (D (8.0), D (double.PositiveInfinity)));
+		NaN ("Math.Log (NaN, 2)", Math.Log (D (double.NaN), D (2.0)));
+		NaN ("Math.Log (2, NaN)", Math.Log (D (2.0), D (double.NaN)));
+		// Log (1) is exactly zero, so these two do not depend on libm either.
+		Same ("Math.Log (1, 0)", Math.Log (D (1.0), D (0.0)), -0.0);
+		Same ("Math.Log (1, Infinity)",
+			Math.Log (D (1.0), D (double.PositiveInfinity)), 0.0);
 
 		/*
 		 * MathF.Round is managed IL rather than an icall, so the intrinsic has
