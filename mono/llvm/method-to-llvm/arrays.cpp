@@ -1500,4 +1500,99 @@ MethodLLVMEmitter::emit_array_dimension (MonoIrBuilder &builder, MonoMethod *acc
 	return llvm::Error::success ();
 }
 
+static constexpr bool array_length_fits_int32 =
+	sizeof (mono_array_size_t) <= sizeof (int32_t);
+
+/// The element class a call to Array.Clear (Array, int32, int32) can memset
+/// over, or null where the operand's own tracked type does not name a
+/// single-dimension, zero-based array with no references in an element.
+///
+/// The parameter's own declared type is System.Array; only the pushed
+/// value's tracked type says what array it names, and array covariance
+/// never changes an element's size or reference layout under that same
+/// tracked type.
+MonoClass *
+MethodLLVMEmitter::array_clear_element_class ()
+{
+	if (!array_length_fits_int32 || stack.size () < 3)
+		return nullptr;
+
+	StackValue array = get_stack (2);
+	StackValue index = get_stack (1);
+	StackValue length = get_stack (0);
+
+	if (stack_type (index.type) != Int32 || stack_type (length.type) != Int32)
+		return nullptr;
+	if (stack_type (array.type) != ObjectRef || array.type->type != MONO_TYPE_SZARRAY)
+		return nullptr;
+
+	MonoClass *klass = mono_class_from_mono_type_internal (array.type);
+
+	if (klass == nullptr || depends_on_context (klass))
+		return nullptr;
+
+	MonoClass *element = m_class_get_element_class (klass);
+
+	return m_class_has_references (element) ? nullptr : element;
+}
+
+/// Clears index..index+length of a single-dimension, zero-based array of
+/// element with one llvm.memset, after a null check and the range checks
+/// Array.Clear itself raises, in that order and against the same exception
+/// types. The caller must already know element holds no references.
+llvm::Error
+MethodLLVMEmitter::emit_array_clear (MonoIrBuilder &builder, MonoClass *element)
+{
+	StackValue array = get_stack (2);
+	StackValue index = get_stack (1);
+	StackValue length = get_stack (0);
+
+	// A null array raises ArgumentNullException here, not the
+	// NullReferenceException a folded dereference would raise, so this
+	// check is not tagged for that fold.
+	emit_cond_exception (builder, builder.CreateIsNull (array.value),
+	                     "ArgumentNullException");
+
+	llvm::Value *length_slot =
+		builder.CreateGEP (builder.getInt8Ty (), array.value,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, max_length)));
+	constexpr unsigned length_bytes = sizeof (mono_array_size_t);
+	llvm::LoadInst *raw_length = builder.CreateAlignedLoad (
+		builder.getIntNTy (length_bytes * 8), length_slot, llvm::Align (length_bytes));
+
+	mark_array_header_load (raw_length);
+
+	llvm::Type *i32 = builder.getInt32Ty ();
+	llvm::Value *idx = index.value;
+	llvm::Value *len = length.value;
+	llvm::Value *total = builder.CreateZExtOrTrunc (raw_length, i32);
+
+	emit_cond_exception (builder, builder.CreateICmpSLT (len, builder.getInt32 (0)),
+	                     "IndexOutOfRangeException");
+	emit_cond_exception (builder, builder.CreateICmpSLT (idx, builder.getInt32 (0)),
+	                     "IndexOutOfRangeException");
+	emit_cond_exception (
+		builder, builder.CreateICmpSGT (idx, builder.CreateSub (total, len)),
+		"IndexOutOfRangeException");
+
+	int32_t size = mono_class_array_element_size (element);
+	llvm::Type *native = builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8);
+	llvm::Value *native_idx = builder.CreateZExt (idx, native);
+	llvm::Value *native_len = builder.CreateZExt (len, native);
+	llvm::Value *vector =
+		builder.CreateGEP (builder.getInt8Ty (), array.value,
+	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, vector)));
+	llvm::Value *at =
+		builder.CreateGEP (builder.getInt8Ty (), vector,
+	                           builder.CreateMul (native_idx,
+	                                              llvm::ConstantInt::get (native, size)));
+	llvm::Value *bytes =
+		builder.CreateMul (native_len, llvm::ConstantInt::get (native, size));
+
+	builder.CreateMemSet (at, builder.getInt8 (0), bytes, llvm::Align (1));
+
+	pop_stack (3);
+	return llvm::Error::success ();
+}
+
 } // namespace mono
