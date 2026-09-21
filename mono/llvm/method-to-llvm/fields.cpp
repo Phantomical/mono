@@ -31,14 +31,12 @@
 
 namespace mono {
 
-namespace {
-
 /// Reads the collector's write-barrier layout, once for the process.
 ///
 /// The collector fixes each address and shift while it starts, before any method
 /// compiles, so a compile can bake them in.
 const GcBarrierLayout &
-write_barrier_layout ()
+MethodLLVMEmitter::write_barrier_layout ()
 {
 	static const GcBarrierLayout layout = [] {
 		GcBarrierLayout read;
@@ -77,8 +75,6 @@ write_barrier_layout ()
 
 	return layout;
 }
-
-} // namespace
 
 /// Records the addresses the card path names, so the engine resolves the
 /// globals the lowering makes. A pass cannot ask for them itself.

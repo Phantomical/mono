@@ -233,6 +233,7 @@ set(MONO_TESTS_CS_SRC
   bug-323114.cs
   bug-Xamarin-5278.cs
   interlocked.cs
+  interlocked-intrinsics.cs
   trivial-inline.cs
   stack-merge-class.cs
   tier2-inline-override.cs

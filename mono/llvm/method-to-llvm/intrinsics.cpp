@@ -174,6 +174,17 @@ struct BuiltinEmitters {
 		return emitter.emit_current_managed_thread_id (builder, call.sig);
 	}
 
+	static BuiltinResult interlocked (MethodLLVMEmitter &emitter,
+	                                  llvm::IRBuilder<> &builder, const BuiltinCall &call)
+	{
+		std::optional<InterlockedCall> op = interlocked_op_for (call.callee, call.sig);
+
+		if (!op)
+			return std::nullopt;
+
+		return emitter.emit_interlocked (builder, call.sig, *op);
+	}
+
 	/// Debugger.Break () has an empty body and a comment where the code goes:
 	/// the JIT gives the call its meaning, and that meaning is the one the break
 	/// instruction has. An embedder can say no through mono_set_break_policy.
@@ -330,6 +341,20 @@ const BuiltinMethod monitor_methods[] = {
 	{ "Exit", 1, Receiver::none, BuiltinEmitters::monitor_exit },
 };
 
+// Every row takes any_params: Exchange and CompareExchange each carry a
+// scalar arity and an all-byref object arity, and CompareExchange's 4-arg
+// shape is either the object overload or the int one with a success flag.
+// interlocked_op_for () is what tells them apart.
+const BuiltinMethod interlocked_methods[] = {
+	{ "Increment", any_params, Receiver::none, BuiltinEmitters::interlocked },
+	{ "Decrement", any_params, Receiver::none, BuiltinEmitters::interlocked },
+	{ "Add", any_params, Receiver::none, BuiltinEmitters::interlocked },
+	{ "Exchange", any_params, Receiver::none, BuiltinEmitters::interlocked },
+	{ "CompareExchange", any_params, Receiver::none, BuiltinEmitters::interlocked },
+	{ "Read", any_params, Receiver::none, BuiltinEmitters::interlocked },
+	{ "MemoryBarrier", any_params, Receiver::none, BuiltinEmitters::interlocked },
+};
+
 const BuiltinMethod environment_methods[] = {
 	{ "get_CurrentManagedThreadId", 0, Receiver::none,
 	  BuiltinEmitters::managed_thread_id },
@@ -409,6 +434,8 @@ class_table ()
 		  runtime_imports_methods },
 		{ { nullptr, "System", "RuntimeTypeHandle" }, nullptr, type_handle_methods },
 		{ { nullptr, "System.Threading", "Monitor" }, nullptr, monitor_methods },
+		{ { nullptr, "System.Threading", "Interlocked" }, nullptr,
+		  interlocked_methods },
 		{ { nullptr, "System", "Environment" }, nullptr, environment_methods },
 		{ { nullptr, "System.Diagnostics", "Debugger" }, nullptr, debugger_methods },
 	};

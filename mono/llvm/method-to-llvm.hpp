@@ -306,6 +306,44 @@ struct BufferCopy {
 	bool may_overlap;
 };
 
+/// What a call to a System.Threading.Interlocked method compiles to in place
+/// of the call.
+struct InterlockedCall {
+	enum class Op {
+		Increment,
+		Decrement,
+		Add,
+		Exchange,
+		CompareExchange,
+		/// The internal 4-arg int overload that also writes whether the
+		/// exchange took place.
+		CompareExchangeSuccess,
+		/// Exchange(ref object, ref object, ref object): location, value and
+		/// result are all by reference.
+		ExchangeObject,
+		/// CompareExchange(ref object, ref object, ref object, ref object):
+		/// location, value, comparand and result are all by reference.
+		CompareExchangeObject,
+		Read,
+		MemoryBarrier,
+	};
+
+	/// The scalar type Op::Increment, Op::Decrement, Op::Add, Op::Exchange,
+	/// Op::CompareExchange and Op::Read name. Meaningless for the other ops,
+	/// which each answer exactly one type.
+	enum class Width {
+		I32,
+		I64,
+		/// IntPtr/UIntPtr, which this backend widens to the same i64 as I64.
+		Native,
+		Single,
+		Double,
+	};
+
+	Op op;
+	Width width;
+};
+
 class MethodLLVMEmitter {
 private:
 	// The built-in registry's emitters (method-to-llvm/intrinsics.cpp), each of
@@ -1019,6 +1057,7 @@ private:
 	llvm::Error emit_refanyval (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_refanytype (MonoIrBuilder &builder);
 
+	static const GcBarrierLayout &write_barrier_layout ();
 	void record_barrier_symbols (const GcBarrierLayout &gc);
 	void emit_reference_store (MonoIrBuilder &builder, llvm::Value *address,
 	                           llvm::Value *value, llvm::Align align,
@@ -1188,6 +1227,8 @@ private:
 	                                    MonoMethodSignature *sig, MonoJitICallId helper);
 	llvm::Error emit_current_managed_thread_id (MonoIrBuilder &builder,
 	                                            MonoMethodSignature *sig);
+	llvm::Error emit_interlocked (MonoIrBuilder &builder, MonoMethodSignature *sig,
+	                              const InterlockedCall &call);
 	llvm::Expected<llvm::Value *> emit_internal_thread (MonoIrBuilder &builder);
 	llvm::Expected<llvm::Value *> thread_static_address (MonoIrBuilder &builder,
 	                                                     uint32_t index, uint32_t offset);
@@ -1426,6 +1467,12 @@ std::optional<MonoJitICallId> monitor_exit_fast_icall (MonoMethod *method,
 /// Whether target is the Environment.CurrentManagedThreadId getter. sig is the
 /// signature the call site was written against.
 bool is_current_managed_thread_id (MonoMethod *target, MonoMethodSignature *sig);
+
+/// What a call to method compiles to, or nothing when method is not one of the
+/// System.Threading.Interlocked icalls this backend answers with atomic IR.
+/// sig is the signature the call site was written against.
+std::optional<InterlockedCall> interlocked_op_for (MonoMethod *method,
+                                                   MonoMethodSignature *sig);
 
 /// The number of sig's parameters that are ordinary ones, which for a vararg
 /// signature means the fixed part ahead of the sentinel.
