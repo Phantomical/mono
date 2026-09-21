@@ -1368,8 +1368,7 @@ mono_arch_unwindinfo_insert_rt_func_in_table(const gpointer code, gsize code_siz
 						*new_rt_func = new_rt_func_data;
 					}
 
-					if (current_rt_funcs[from_index].UnwindData != 0)
-						new_rt_funcs[to_index++] = current_rt_funcs[from_index];
+					new_rt_funcs[to_index++] = current_rt_funcs[from_index];
 				}
 
 				// If we didn't insert by now, put it last in the list.

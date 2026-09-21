@@ -76,7 +76,7 @@ mono_add_unit_test(test-mono-runtime RUNTIME SOURCES
   test-function-pointer.cpp test-detour.cpp test-icall.cpp
   test-unmanaged-callers-only.cpp test-arch-amd64.cpp
   test-unity-pinned-alloc.cpp test-type-init-recursion.cpp test-tier.cpp
-  test-etw-profiler.cpp test-il-analyzer.cpp)
+  test-etw-profiler.cpp test-il-analyzer.cpp test-windows-unwind-table.cpp)
 mono_unit_test_cases(test-mono-runtime test-mono-callspec "Callspec.*")
 mono_unit_test_cases(test-mono-runtime test-mono-string   "MonoStringTest.*")
 mono_unit_test_cases(test-mono-runtime test-path          "MonoPath.*")
@@ -94,6 +94,8 @@ mono_unit_test_cases(test-mono-runtime test-tier          "MethodTier.*")
 mono_unit_test_cases(test-mono-runtime test-etw-profiler
                      "EtwProfiler.*:EtwProfilerNaming.*:EtwProfilerPure.*")
 mono_unit_test_cases(test-mono-runtime test-il-analyzer   "ILAnalyzer.*")
+mono_unit_test_cases(test-mono-runtime test-windows-unwind-table
+                     "WindowsUnwindTable.*")
 
 # One case each, and there cannot be a second. The samples they are built out
 # of run a domain to completion and call mono_jit_cleanup. Nothing in the
