@@ -82,7 +82,8 @@ struct CastModule {
 		BasicBlock *tail = BasicBlock::Create (*context, "tail", caller);
 		IRBuilder<> b (entry);
 		Value *args[] = { caller->getArg (0), klass,  cache,
-		                 wrapper,             remote_wrapper, proxy_class };
+		                 wrapper,             remote_wrapper, proxy_class,
+		                 ConstantInt::get (Type::getInt16Ty (*context), 0) };
 		Function *decl = cast_func_decl (*module, throw_on_fail);
 
 		if (!protect) {

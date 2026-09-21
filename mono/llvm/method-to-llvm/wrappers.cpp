@@ -563,9 +563,26 @@ MethodLLVMEmitter::emit_mono_tls (MonoIrBuilder &builder, uint32_t key)
 
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 	llvm::FunctionType *type = llvm::FunctionType::get (ptr, false);
-	llvm::Value *value = builder.CreateCall (llvm::FunctionCallee (
+	llvm::CallInst *value = builder.CreateCall (llvm::FunctionCallee (
 		type, address_symbol (std::string ("mono_icall_") + info->name,
 	                              const_cast<void *> (info->func))));
+
+	/*
+	 * A getter reads the thread's own slot and writes nothing, and the thread
+	 * a method runs on does not change under it, so one call can serve every
+	 * site in a body. Without this the call reads and writes all memory, and
+	 * it anchors the address of everything reached through it - the
+	 * allocator's TLAB fields among them.
+	 *
+	 * The attributes go on the site rather than the callee: the getter is
+	 * reached through its address rather than a Function, so there is no
+	 * declaration to carry them. That is also why speculatable is missing
+	 * beside them - it is a declaration's attribute, and the verifier
+	 * refuses it on a site. The three below already let a hoist happen.
+	 */
+	value->setDoesNotThrow ();
+	value->addFnAttr (llvm::Attribute::WillReturn);
+	value->setMemoryEffects (llvm::MemoryEffects::none ());
 
 	push_stack (value, m_class_get_byval_arg (mono_defaults.int_class));
 	return llvm::Error::success ();
