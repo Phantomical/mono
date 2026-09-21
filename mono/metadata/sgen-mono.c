@@ -191,7 +191,16 @@ mono_gc_wbarrier_set_arrayref_internal (MonoArray *arr, gpointer slot_ptr, MonoO
 void
 mono_gc_wbarrier_set_field_internal (MonoObject *obj, gpointer field_ptr, MonoObject* value)
 {
-	mono_gc_wbarrier_set_arrayref_internal ((MonoArray*)obj, field_ptr, value);
+	HEAVY_STAT (++stat_wbarrier_set_arrayref);
+	if (sgen_ptr_in_nursery (field_ptr)) {
+		*(void**)field_ptr = value;
+		return;
+	}
+	SGEN_LOG (8, "Adding remset at %p", field_ptr);
+	if (value)
+		sgen_binary_protocol_wbarrier (field_ptr, value, value->vtable);
+
+	sgen_card_table_wbarrier_set_field ((GCObject*)obj, field_ptr, value);
 }
 
 void
