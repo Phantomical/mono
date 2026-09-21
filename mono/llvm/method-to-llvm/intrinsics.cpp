@@ -7,7 +7,9 @@
 
 #include "method-to-llvm.hpp"
 #include "hidden-return.hpp"
+#include "mini-runtime.h"
 
+#include "mono/metadata/class-init.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/image.h"
 #include "mono/metadata/metadata.h"
@@ -172,6 +174,37 @@ struct BuiltinEmitters {
 			return std::nullopt;
 
 		return emitter.emit_current_managed_thread_id (builder, call.sig);
+	}
+
+	/// Fold RuntimeHelpers.IsReferenceOrContainsReferences<T> for concrete T.
+	static BuiltinResult is_reference_or_contains_references (
+		MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder, const BuiltinCall &call)
+	{
+		MonoGenericContext *ctx = mono_method_get_context (call.callee);
+
+		if (ctx == nullptr || ctx->method_inst == nullptr
+		    || ctx->method_inst->type_argc != 1)
+			return std::nullopt;
+
+		MonoType *t = mini_get_underlying_type (ctx->method_inst->type_argv[0]);
+		MonoClass *klass = mono_class_from_mono_type_internal (t);
+
+		if (emitter.depends_on_context (klass))
+			return std::nullopt;
+
+		bool has_references;
+
+		if (MONO_TYPE_IS_REFERENCE (t))
+			has_references = true;
+		else if (MONO_TYPE_IS_PRIMITIVE (t))
+			has_references = false;
+		else {
+			mono_class_init_internal (klass);
+			has_references = m_class_has_references (klass) != 0;
+		}
+
+		return emitter.push_produced (builder, builder.getInt8 (has_references ? 1 : 0),
+		                              call.sig->ret);
 	}
 
 	/// Debugger.Break () has an empty body and a comment where the code goes:
@@ -339,6 +372,11 @@ const BuiltinMethod debugger_methods[] = {
 	{ "Break", 0, Receiver::none, BuiltinEmitters::debugger_break },
 };
 
+const BuiltinMethod runtime_helpers_methods[] = {
+	{ "IsReferenceOrContainsReferences", 0, Receiver::none,
+	  BuiltinEmitters::is_reference_or_contains_references },
+};
+
 /// ByReference`1's row takes every member the class has. One with no lowering
 /// is refused rather than left to run IL that only throws.
 const BuiltinBody core_bodies[] = {
@@ -411,6 +449,8 @@ class_table ()
 		{ { nullptr, "System.Threading", "Monitor" }, nullptr, monitor_methods },
 		{ { nullptr, "System", "Environment" }, nullptr, environment_methods },
 		{ { nullptr, "System.Diagnostics", "Debugger" }, nullptr, debugger_methods },
+		{ { nullptr, "System.Runtime.CompilerServices", "RuntimeHelpers" }, nullptr,
+		  runtime_helpers_methods },
 	};
 
 	return entries;

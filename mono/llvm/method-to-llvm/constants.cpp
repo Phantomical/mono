@@ -372,9 +372,10 @@ MethodLLVMEmitter::eliminate_type_from_handle (MonoIrBuilder &builder, MonoType 
 		return false;
 
 	MonoClass *klass = mono_class_from_mono_type_internal (type);
+	bool shared = depends_on_context (klass);
 	llvm::Value *value = nullptr;
 
-	if (depends_on_context (klass)) {
+	if (shared) {
 		// mini_get_rgctx_entry_slot () takes the class's byval_arg for a slot
 		// that names a class. A byref type has no such spelling, so the site
 		// keeps its call.
@@ -400,7 +401,64 @@ MethodLLVMEmitter::eliminate_type_from_handle (MonoIrBuilder &builder, MonoType 
 	}
 
 	ip = at + 4;
+
+	// Only fold when the instantiation gives us a concrete class.
+	if (!shared) {
+		llvm::Expected<bool> as_is_value_type = eliminate_is_value_type (builder, klass);
+
+		if (!as_is_value_type)
+			return as_is_value_type.takeError ();
+		if (*as_is_value_type)
+			return true;
+	}
+
 	push_stack (value, m_class_get_byval_arg (mono_defaults.systemtype_class));
+	return true;
+}
+
+/// Folds a `Type.get_IsValueType` call chained onto a just-folded typeof.
+llvm::Expected<bool>
+MethodLLVMEmitter::eliminate_is_value_type (MonoIrBuilder &builder, MonoClass *klass)
+{
+	if (code_size - ip < 5)
+		return false;
+
+	const unsigned char *cursor = code + ip;
+	MonoOpcodeEnum next = mono_opcode_value (&cursor, code + code_size);
+
+	if (next != MONO_CEE_CALL && next != MONO_CEE_CALLVIRT)
+		return false;
+
+	// Do not fold a call that is also a branch target.
+	if (blocks.count (ip) != 0)
+		return false;
+
+	if (sym_seq_points && sym_seq_point_offsets.contains (static_cast<uint32_t> (ip)))
+		return false;
+
+	size_t at = static_cast<size_t> (cursor - code) + 1;
+
+	if (code_size - at < 4)
+		return false;
+
+	uint32_t token = static_cast<uint32_t> (code[at])
+	                 | (static_cast<uint32_t> (code[at + 1]) << 8)
+	                 | (static_cast<uint32_t> (code[at + 2]) << 16)
+	                 | (static_cast<uint32_t> (code[at + 3]) << 24);
+	llvm::Expected<MonoMethod *> target = resolve_method (token);
+
+	if (!target) {
+		llvm::consumeError (target.takeError ());
+		return false;
+	}
+
+	if ((*target)->klass != mono_defaults.systemtype_class
+	    || std::string_view ((*target)->name) != "get_IsValueType")
+		return false;
+
+	ip = at + 4;
+	push_stack (builder.getInt32 (m_class_is_valuetype (klass) ? 1 : 0),
+	            mono_get_int32_type ());
 	return true;
 }
 
