@@ -30,6 +30,7 @@
 
 #include <llvm/ADT/StringRef.h>
 #include <llvm/CodeGen/Register.h>
+#include <llvm/CodeGen/TargetInstrInfo.h>
 #include <llvm/IR/DebugLoc.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/Support/Error.h>
@@ -43,7 +44,6 @@ class Function;
 class IRBuilderBase;
 class MachineBasicBlock;
 class Module;
-class TargetInstrInfo;
 class Value;
 } // namespace llvm
 
@@ -142,7 +142,7 @@ llvm::Function *create_mono_entry_thunk (llvm::Module &m, llvm::StringRef name,
 /// wrong jump.
 void write_context_stub (char *at, void *context, void *target);
 
-/// Appends an instruction to the end of \p mbb that reads one byte at
+/// Inserts at \p at, inside \p mbb, an instruction that reads one byte at
 /// [\p pointer + 0] and discards it. A null \p pointer faults there. A
 /// non-null one only sets flags nothing reads. Defines no register, so it
 /// needs no free one to write into at this late a stage.
@@ -150,8 +150,16 @@ void write_context_stub (char *at, void *context, void *target);
 /// \p tii is the function's own TargetInstrInfo, and \p dl becomes the new
 /// instruction's location.
 void emit_faulting_byte_read (llvm::MachineBasicBlock &mbb,
+                              llvm::MachineBasicBlock::iterator at,
                               const llvm::TargetInstrInfo &tii,
                               llvm::Register pointer, llvm::DebugLoc dl);
+
+/// Recognize the compare and branch forms emitted for a null check. Try
+/// TargetInstrInfo::analyzeBranchPredicate () first, then handle the fallback
+/// shape used by tier-1 codegen. Returns false on success.
+bool analyze_null_check_branch (
+	llvm::MachineBasicBlock &mbb, const llvm::TargetInstrInfo &tii,
+	llvm::TargetInstrInfo::MachineBranchPredicate &mbp);
 
 } // namespace mono::arch
 

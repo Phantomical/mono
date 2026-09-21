@@ -28,9 +28,13 @@ using System.Runtime.CompilerServices;
  * three. That is what separates a fold that dispatches wrongly from a
  * translator bug present at every tier.
  *
- * DevirtualizedCall covers a sealed receiver whose call is not inlined. The
- * caller therefore has no receiver dereference for ImplicitNullChecks to use,
- * leaving the post-codegen pass to rewrite the check.
+ * A DevirtualizedCall case is a third shape, alongside Bare and Guarded.
+ * Devirtualizing a callvirt on a sealed receiver removes the vtable read the
+ * fold would have taken. Get () below is marked NoInlining and made large
+ * enough that neither inliner takes its body in either, so nothing in the
+ * caller's own block dereferences the receiver. ImplicitNullChecks declines
+ * such a check at tier 2, and folds no check at all at tier 1. In either case,
+ * MonoNullCheckFaultPass rewrites it into a faulting access.
  */
 
 namespace Mono.Tiering {

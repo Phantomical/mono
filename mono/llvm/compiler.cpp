@@ -1089,8 +1089,8 @@ build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &
 
 	tpc->addMachinePasses ();
 
-	// Rewrite eligible checks that ImplicitNullChecks could not fold.
-	if (tm.getOptLevel () != CodeGenOptLevel::None && fault_null_checks ())
+	// Rewrite eligible checks that ImplicitNullChecks could not fold, at either tier.
+	if (fault_null_checks ())
 		pm->add (new MonoNullCheckFaultPass ());
 
 	/*

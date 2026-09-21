@@ -8,8 +8,9 @@
 namespace mono {
 
 /**
- * Replace eligible checks left by ImplicitNullChecks with a faulting read.
- * The pass runs after the normal machine pipeline and before EH gathering.
+ * Replace eligible checks left standing with a faulting read: mostly a
+ * devirtualized `callvirt` at tier 2, every check at tier 1. The pass runs
+ * after the normal machine pipeline and before EH gathering.
  */
 class MonoNullCheckFaultPass : public llvm::MachineFunctionPass {
 public:
