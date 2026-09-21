@@ -31,6 +31,7 @@ guint8* sgen_get_card_table_configuration (int *shift_bits, gpointer *mask);
 guint8* sgen_get_target_card_table_configuration (int *shift_bits, target_mgreg_t *mask);
 
 void sgen_card_table_init (SgenRememberedSet *remset);
+void sgen_card_table_wbarrier_set_field (GCObject *obj, gpointer field_ptr, GCObject *value);
 
 /*How many bytes a single card covers*/
 #define CARD_BITS 9
