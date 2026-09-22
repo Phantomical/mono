@@ -253,8 +253,11 @@ static MonoOSEvent background_change_event;
 
 static gboolean shutting_down = FALSE;
 
-// Landing pad used when an abort ends a thread started by the runtime.
+#ifndef HOST_WIN32
+// Landing pad used when an abort ends a thread started by the runtime. ExitThread ()
+// unwinds nothing, so a longjmp () on Windows would cause the unwind this avoids.
 static MonoNativeTlsKey thread_exit_jmp_key;
+#endif
 gboolean unity_shutting_down = FALSE;
 
 static gint32 managed_thread_id_counter = 0;
@@ -1374,7 +1377,9 @@ start_wrapper (gpointer data)
 	StartInfo *start_info;
 	MonoThreadInfo *info;
 	gsize res;
+#ifndef HOST_WIN32
 	jmp_buf exit_jmp;
+#endif
 
 	start_info = (StartInfo*) data;
 	g_assert (start_info);
@@ -1382,6 +1387,10 @@ start_wrapper (gpointer data)
 	info = mono_thread_info_attach ();
 	info->runtime_thread = TRUE;
 
+#ifdef HOST_WIN32
+	/* Run the actual main function of the thread */
+	res = start_wrapper_internal (start_info, (gsize*)info->stack_end);
+#else
 	// Leave managed frames behind before pthread_exit (). JIT unwind information
 	// is not in .eh_frame, so libgcc cannot safely unwind through those frames.
 	if (setjmp (exit_jmp) == 0) {
@@ -1394,6 +1403,7 @@ start_wrapper (gpointer data)
 	}
 
 	mono_native_tls_set_value (thread_exit_jmp_key, NULL);
+#endif
 
 	mono_thread_info_exit (res);
 
@@ -1868,7 +1878,9 @@ void
 mono_thread_exit (void)
 {
 	MonoInternalThread *thread = mono_thread_internal_current ();
+#ifndef HOST_WIN32
 	jmp_buf *exit_jmp;
+#endif
 
 	THREAD_DEBUG (g_message ("%s: mono_thread_exit for %p (%" G_GSIZE_FORMAT ")", __func__, thread, (gsize)thread->tid));
 
@@ -1878,9 +1890,11 @@ mono_thread_exit (void)
 	if (mono_thread_get_main () && (thread == mono_thread_get_main ()->internal_thread))
 		exit (mono_environment_exitcode_get ());
 
+#ifndef HOST_WIN32
 	exit_jmp = (jmp_buf *) mono_native_tls_get_value (thread_exit_jmp_key);
 	if (exit_jmp)
 		longjmp (*exit_jmp, 1);
+#endif
 
 	mono_thread_info_exit (0);
 }
@@ -3713,7 +3727,9 @@ mono_thread_callbacks_init (void)
 {
 	MonoThreadInfoCallbacks cb;
 
+#ifndef HOST_WIN32
 	mono_native_tls_alloc (&thread_exit_jmp_key, NULL);
+#endif
 
 	memset (&cb, 0, sizeof(cb));
 	cb.thread_attach = thread_attach;
