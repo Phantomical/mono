@@ -192,6 +192,47 @@ TEST_F (IrDump, DropsTheBodyOfAnotherMethodInTheModule)
 	EXPECT_TRUE (dropped == nullptr || dropped->isDeclaration ()) << text;
 }
 
+/*
+ * A filter reaches its parent's escaped locals through llvm.localrecover,
+ * whose own verifier rejects that argument as anything but a function this
+ * module defines. No translation needed: clone_body_module () works on any
+ * module, and the shape below is what the front end emits for a filter and
+ * its parent.
+ */
+TEST (CloneBodyModule, KeepsAFilterEntrysParentDefined)
+{
+	LLVMContext context;
+	const char *text =
+		"define void @parent() {\n"
+		"  %local = alloca i32\n"
+		"  call void (...) @llvm.localescape(ptr %local)\n"
+		"  ret void\n"
+		"}\n"
+		"define i32 @parent$filter0(ptr %frame) {\n"
+		"  %recovered = call ptr @llvm.localrecover(ptr @parent, ptr %frame, i32 0)\n"
+		"  ret i32 1\n"
+		"}\n"
+		"declare void @llvm.localescape(...)\n"
+		"declare ptr @llvm.localrecover(ptr, ptr, i32)\n";
+	SMDiagnostic problem;
+	std::unique_ptr<Module> module = parseAssemblyString (text, problem, context);
+
+	ASSERT_NE (module, nullptr) << problem.getMessage ().str ();
+
+	std::unique_ptr<Module> copy = clone_body_module (*module, "parent$filter0");
+
+	ASSERT_NE (copy, nullptr);
+
+	Function *parent = copy->getFunction ("parent");
+
+	ASSERT_NE (parent, nullptr);
+	EXPECT_FALSE (parent->isDeclaration ());
+
+	std::string complaint;
+	raw_string_ostream out (complaint);
+	EXPECT_FALSE (verifyModule (*copy, &out)) << complaint;
+}
+
 } // namespace
 } // namespace test
 } // namespace mono

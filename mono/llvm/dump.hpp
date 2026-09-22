@@ -40,6 +40,8 @@ llvm::Error with_dump_stream (DumpPoint point, llvm::StringRef name,
 
 /**
  * Clones \p module, retaining only \p entry and the bodies inlined into it.
+ * Where \p entry is a filter, also retains the parent it recovers its frame
+ * from.
  *
  * Rewrites references to removed definitions so the clone remains valid IR.
  * Returns null when \p entry does not name a function in \p module.

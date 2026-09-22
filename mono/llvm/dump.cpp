@@ -10,6 +10,7 @@
 #include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/InstrTypes.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Module.h>
 #include <llvm/Transforms/Utils/Cloning.h>
@@ -24,10 +25,13 @@ namespace {
 
 constexpr const char *dump_name_key = "mono.dump.name";
 
-/// Collects entry and every local body it reaches through a direct call.
+/// Collects entry and every local body it reaches through a direct call, plus
+/// the parent whose frame a filter entry recovers.
 ///
-/// These are the copies the inliners inlined, and the module publishes no
-/// symbol for one, so a reader has them here or not at all.
+/// A local body is one the inliners inlined. The module publishes no symbol
+/// for it, so a reader has it here or not at all. A filter's llvm.localrecover
+/// calls name its parent as their first argument. The verifier refuses that
+/// argument as anything but a function defined in this module.
 void
 gather_inlined_bodies (Function &entry, SmallPtrSetImpl<Function *> &keep)
 {
@@ -40,12 +44,20 @@ gather_inlined_bodies (Function &entry, SmallPtrSetImpl<Function *> &keep)
 		Function *body = pending.pop_back_val ();
 
 		for (Instruction &instruction : instructions (*body)) {
-			const auto *call = dyn_cast<CallBase> (&instruction);
+			auto *call = dyn_cast<CallBase> (&instruction);
 			Function *callee = call != nullptr ? call->getCalledFunction ()
 			                                  : nullptr;
 
-			if (callee == nullptr || callee->isDeclaration ()
-			    || !callee->hasLocalLinkage ())
+			if (callee == nullptr)
+				continue;
+
+			if (callee->getIntrinsicID () == Intrinsic::localrecover) {
+				if (auto *parent = dyn_cast<Function> (call->getArgOperand (0)))
+					keep.insert (parent);
+				continue;
+			}
+
+			if (callee->isDeclaration () || !callee->hasLocalLinkage ())
 				continue;
 
 			if (keep.insert (callee).second)
