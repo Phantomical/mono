@@ -5542,7 +5542,11 @@ mono_thread_execute_interruption (MonoExceptionHandle *pexc)
 		MONO_HANDLE_GET (exc, thread, abort_exc);
 		if (MONO_HANDLE_IS_NULL (exc)) {
 			ERROR_DECL (error);
+			// The managed constructor can itself be interrupted while this thread
+			// holds its lock. Defer abort delivery until construction completes.
+			mono_threads_begin_abort_protected_block ();
 			exc = mono_exception_new_thread_abort (error);
+			mono_threads_end_abort_protected_block_discard ();
 			mono_error_assert_ok (error); // FIXME
 			// thread->abort_exc = exc;
 			MONO_HANDLE_SET (thread, abort_exc, exc);
