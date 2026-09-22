@@ -803,8 +803,9 @@ static gboolean g_dyn_func_table_inited;
 extern GList* g_dynamic_function_table_begin;
 static GList* g_dynamic_function_table_end;
 
-// Cache the most recently matched chunk. Lookups share the table's read lock,
-// so access this pointer atomically; removals clear it before freeing the node.
+// Cache the most recently matched chunk. Lookups share the table's read
+// lock, so access this pointer atomically. Removals clear it before
+// freeing the node.
 static GList* g_dynamic_function_table_mru_node;
 
 // SRW lock (lightweight read/writer lock) protecting dynamic function table.
@@ -1000,11 +1001,14 @@ find_pc_in_table_no_lock_ex(const gpointer pc)
 		return found_entry;
 
 	// A chunk takes a whole batch's inserts back to back, so the previous
-	// lookup's chunk is the likely answer here too.
+	// lookup's chunk is the likely answer here too. The high end check is
+	// strict because two adjacent chunks can share a boundary pc. The scan
+	// below always resolves that tie toward the chunk starting at pc. An
+	// inclusive match here could instead cache the one ending at pc.
 	GList* mru_node = (GList*)mono_atomic_load_ptr((volatile gpointer*)&g_dynamic_function_table_mru_node);
 	if (mru_node != NULL) {
 		DynamicFunctionTableEntry* mru_entry = (DynamicFunctionTableEntry*)mru_node->data;
-		if (mru_entry->begin_range <= begin_range && mru_entry->end_range >= end_range)
+		if (mru_entry->begin_range <= begin_range && mru_entry->end_range > begin_range)
 			return mru_node;
 	}
 
