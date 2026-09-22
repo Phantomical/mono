@@ -3,6 +3,7 @@
 #include "pipelines.hpp"
 
 #include "analysis/constant-values.hpp"
+#include "class-init-elision.hpp"
 #include "clause-marker.hpp"
 #include "finally-marker.hpp"
 #include "inline-copies.hpp"
@@ -69,7 +70,9 @@ inlinable_site (const CallBase &call)
 {
 	const Function *callee = call.getCalledFunction ();
 
-	return callee != nullptr && !callee->isIntrinsic () && !call.isMustTailCall ();
+	// Keep class-init calls visible to ClassInitGuardPass.
+	return callee != nullptr && !callee->isIntrinsic () && !call.isMustTailCall ()
+	       && !callee->hasFnAttribute (class_init_attribute);
 }
 
 /// The analysis managers a module of the inliner's own is prepared under.

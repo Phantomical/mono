@@ -108,6 +108,9 @@ public:
 	/// Compute this before taking the domain lock to preserve lock ordering.
 	bool needs_wide_vector_register = false;
 
+	/// Whether native code can call this method directly, cached at interning.
+	bool exposed_to_native_code = false;
+
 	/// The tier that owns the entry now.
 	MonoTier tier () const { return tier_.load (std::memory_order_acquire); }
 
@@ -259,6 +262,9 @@ public:
 	/// The jit-info record the thunk was registered under.
 	MonoJitInfo *jinfo = nullptr;
 
+	/// Cached RuntimeInvokeInfo for this method in this domain.
+	std::atomic<void *> runtime_invoke_info{nullptr};
+
 	/* -- The bodies ------------------------------------------------------ */
 
 	/// Records \p code as the body the entry names.
@@ -332,6 +338,9 @@ std::string method_stub_symbol (MonoMethod *method);
 /// the loader lock.
 bool method_needs_wide_vector_register (MonoMethod *method);
 
+/// Returns whether native code can call \p method directly.
+bool method_is_exposed_to_native_code (MonoMethod *method);
+
 /// What \p method's tier-0 counter starts at, or 0 for a method that does not
 /// run at tier 0.
 ///
@@ -354,6 +363,10 @@ llvm::Error attach_interop_entry (MonoDomainMethod &dm);
 /// can compile, and what it compiles can inline this method in, which wants the
 /// record's own lock.
 llvm::Expected<void *> published_entry_of (MonoDomainMethod &dm);
+
+/// Returns a published entry without compiling or publishing a record.
+/// Returns null when the method is not ready for the fast path.
+void *published_entry_if_ready (MonoDomain *domain, MonoMethod *method);
 
 /// The record for \p method in \p domain, or null when nothing has asked for it
 /// yet.
