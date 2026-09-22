@@ -244,7 +244,9 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 		mono_mb_emit_byte (mb, CEE_CONV_I);
 		mono_mb_emit_stloc (mb, size_var);
 	} else if (atype == ATYPE_VECTOR) {
+#if TARGET_SIZEOF_VOID_P == 4 || defined (MONO_BIG_ARRAYS)
 		guint32 pos_leave;
+#endif
 
 		/*
 		 * n > MONO_ARRAY_MAX_INDEX => OutOfMemoryException
@@ -258,8 +260,10 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 		mono_mb_emit_byte (mb, CEE_CONV_U);
 		bounds_branch = mono_mb_emit_branch (mb, CEE_BGT_UN);
 
+#if TARGET_SIZEOF_VOID_P == 4 || defined (MONO_BIG_ARRAYS)
 		clause = (MonoExceptionClause *)mono_image_alloc0 (mono_defaults.corlib, sizeof (MonoExceptionClause));
 		clause->try_offset = mono_mb_get_label (mb);
+#endif
 
 		/* vtable->klass->sizes.element_size */
 		mono_mb_emit_ldarg (mb, 0);
@@ -273,6 +277,7 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 
 		/* * n */
 		mono_mb_emit_ldarg (mb, 1);
+#if TARGET_SIZEOF_VOID_P == 4 || defined (MONO_BIG_ARRAYS)
 		mono_mb_emit_byte (mb, CEE_MUL_OVF_UN);
 		/* + sizeof (MonoArray) */
 		mono_mb_emit_icon (mb, MONO_SIZEOF_MONO_ARRAY);
@@ -282,6 +287,14 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 		pos_leave = mono_mb_emit_branch (mb, CEE_LEAVE);
 		clause->try_len = mono_mb_get_pos (mb) - clause->try_offset;
 		mono_mb_patch_branch (mb, pos_leave);
+#else
+		/* The length bound and uint32 element size prevent overflow on 64-bit. */
+		mono_mb_emit_byte (mb, CEE_MUL);
+		/* + sizeof (MonoArray) */
+		mono_mb_emit_icon (mb, MONO_SIZEOF_MONO_ARRAY);
+		mono_mb_emit_byte (mb, CEE_ADD);
+		mono_mb_emit_stloc (mb, size_var);
+#endif
 	} else if (atype == ATYPE_STRING) {
 		/*
 		 * a string allocator method takes the args: (vtable, len)
@@ -514,7 +527,9 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 	if (atype == ATYPE_VECTOR) {
 		mono_mb_patch_short_branch (mb, overflow_branch);
 		mono_mb_emit_exception_by_token (mb, "OverflowException");
+	}
 
+	if (clause != NULL) {
 		clause->flags = MONO_EXCEPTION_CLAUSE_NONE;
 		clause->data.catch_class = mono_class_load_from_name (mono_defaults.corlib,
 				"System", "OverflowException");
