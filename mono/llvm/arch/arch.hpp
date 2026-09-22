@@ -142,17 +142,18 @@ llvm::Function *create_mono_entry_thunk (llvm::Module &m, llvm::StringRef name,
 /// wrong jump.
 void write_context_stub (char *at, void *context, void *target);
 
-/// Inserts at \p at, inside \p mbb, an instruction that reads one byte at
-/// [\p pointer + 0] and discards it. A null \p pointer faults there. A
-/// non-null one only sets flags nothing reads. Defines no register, so it
-/// needs no free one to write into at this late a stage.
+/// Inserts at \p at, inside \p mbb, a FAULTING_OP that reads one byte at
+/// [\p pointer + 0] and discards it, handing faults to \p handler.
+///
+/// \p handler must already be a successor of \p mbb.
 ///
 /// \p tii is the function's own TargetInstrInfo, and \p dl becomes the new
 /// instruction's location.
 void emit_faulting_byte_read (llvm::MachineBasicBlock &mbb,
                               llvm::MachineBasicBlock::iterator at,
                               const llvm::TargetInstrInfo &tii,
-                              llvm::Register pointer, llvm::DebugLoc dl);
+                              llvm::Register pointer,
+                              llvm::MachineBasicBlock *handler, llvm::DebugLoc dl);
 
 /// Recognize the compare and branch forms emitted for a null check. Try
 /// TargetInstrInfo::analyzeBranchPredicate () first, then handle the fallback

@@ -17,6 +17,7 @@
 #include "../eh-side-channel.hpp"
 #include "../il-line-table.hpp"
 #include "clause-marker.hpp"
+#include "faulting-location.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -435,6 +436,21 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 		chains.push_back (std::move (chain));
 	}
 
+	/* Associate each faulting operation with the clause for its handler. */
+	DenseMap<const MachineBasicBlock *, unsigned> chain_for_block;
+	for (const Invoke &invoke : invokes)
+		chain_for_block[positions[invoke.begin].mbb] = invoke.chain;
+
+	for (unsigned i = 0; i < positions.size (); ++i) {
+		if (positions[i].at->getOpcode () != TargetOpcode::FAULTING_OP)
+			continue;
+
+		std::optional<unsigned> chain = faulting_handler_chain (
+			faulting_op_handler (*positions[i].at), chain_for_block);
+		if (chain)
+			invokes.push_back ({ i, i + 1, *chain });
+	}
+
 	llvm::sort (invokes, [] (const Invoke &a, const Invoke &b) {
 		return a.begin < b.begin;
 	});
@@ -450,18 +466,7 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 		unsigned begin = invoke.begin;
 		unsigned end = invoke.end;
 
-		/*
-		 * The call sits in a try region, so the whole run of code around
-		 * it that belongs to the same region is protected by the same
-		 * clauses. Widening to that run is what covers a fault away from
-		 * a call: a null check LLVM folded into a dereference, or a
-		 * dereference inside a copy the backend expanded inline.
-		 *
-		 * A region of -1 means the IL offset in effect at the call is
-		 * outside every try region, which contradicts the pad it unwinds
-		 * to. The bare invoke range still describes the call, so that is
-		 * what gets published and the widening is skipped.
-		 */
+		/* Include adjacent instructions in the same try region. */
 		if (region >= 0) {
 			while (begin > published && positions[begin - 1].region == region)
 				--begin;
@@ -469,8 +474,7 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 				++end;
 		}
 
-		// Never past the next call's own range, so the ranges stay disjoint
-		// and each one keeps the pad of the call it was grown from.
+		// Keep entries disjoint and preserve the next entry's handler.
 		if (k + 1 < invokes.size ())
 			end = std::min (end, invokes[k + 1].begin);
 

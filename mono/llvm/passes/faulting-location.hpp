@@ -8,7 +8,15 @@
 
 #include <llvm/CodeGen/MachineFunctionPass.h>
 
+namespace llvm {
+class MachineBasicBlock;
+class MachineInstr;
+} // namespace llvm
+
 namespace mono {
+
+/// Return the handler block named by a FAULTING_OP instruction.
+llvm::MachineBasicBlock *faulting_op_handler (const llvm::MachineInstr &mi);
 
 /**
  * Gives each faulting instruction the location LLVM dropped when it folded a

@@ -16,6 +16,7 @@ set(MONO_LLVM_TEST_SOURCES
     harness.cpp translator-tests.cpp jit-tests.cpp compiler-tests.cpp
     compile-queue-tests.cpp perf-eh-frame-tests.cpp
     unwind-records-tests.cpp unwind-transcode-tests.cpp mono-unwind-decode-tests.cpp
+    eh-gather-tests.cpp
     inline-copies-tests.cpp
     profile-counters-tests.cpp profile-counter-promoter-tests.cpp
     rgctx-fetch-tests.cpp rgctx-dedup-tests.cpp clamp-frame-align-tests.cpp
