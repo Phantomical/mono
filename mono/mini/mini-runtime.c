@@ -2873,7 +2873,7 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 {
 	MonoMethod *invoke, *callee;
 	MonoObject *(*runtime_invoke) (MonoObject *this_obj, void **params, MonoObject **exc, void* compiled_method);
-	MonoDomain *domain = mono_domain_get ();
+	MonoDomain *domain = mono_tls_get_domain ();
 	MonoJitDomainInfo *domain_info;
 	RuntimeInvokeInfo *info, *info2;
 	MonoJitInfo *ji = NULL;
@@ -2975,7 +2975,7 @@ have_info:
 	 * We need this here because mono_marshal_get_runtime_invoke can place
 	 * the helper method in System.Object and not the target class.
 	 */
-	if (!mono_runtime_class_init_full (info->vtable, error)) {
+	if (!info->vtable->initialized && !mono_runtime_class_init_full (info->vtable, error)) {
 		if (exc)
 			*exc = (MonoObject*) mono_error_convert_to_exception (error);
 		return NULL;
