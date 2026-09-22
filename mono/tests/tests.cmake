@@ -1158,6 +1158,11 @@ set(MONO_TESTS_INITONLY_NULLNESS_SRC
   initonly-nullness.cs
 )
 
+# Class-init guarding in a shared generic body.
+set(MONO_TESTS_CCTOR_INIT_GSHARED_SRC
+  cctor-init-gshared.cs
+)
+
 # Reading a hash already cached in the object's lock word instead of through
 # the icall. It runs twice, on the default and with the fast path off, and
 # both arms have to answer the same: the fast path only changes how the

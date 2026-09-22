@@ -711,6 +711,11 @@ _mono_exe_list(_initonly_nullness ${MONO_TESTS_INITONLY_NULLNESS_SRC})
 mono_runtime_suite(runtime-initonly-nullness TESTS ${_initonly_nullness}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0")
 
+# Class-init guarding in a shared generic body.
+_mono_exe_list(_cctor_init_gshared ${MONO_TESTS_CCTOR_INIT_GSHARED_SRC})
+mono_runtime_suite(runtime-cctor-init-gshared TESTS ${_cctor_init_gshared}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier1-threshold=0 --llvm-opt=-mono-tier2-threshold=0")
+
 # Object.GetHashCode ()'s fast path. Two arms, on and off, the way
 # runtime-eliminate-delegate has it. The root drives its own compiles, so
 # self-promotion is off: what the test reads is the tier it asked for.
