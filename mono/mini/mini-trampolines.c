@@ -911,14 +911,6 @@ mono_delegate_trampoline (host_mgreg_t *regs, guint8 *code, gpointer *arg, guint
 	delegate = (MonoDelegate *)mono_arch_get_this_arg_from_call (regs, code);
 	g_assert (mono_class_has_parent (mono_object_class (delegate), mono_defaults.multicastdelegate_class));
 
-	/*
-	 * The delegate's target and invocation list do not change after construction.
-	 * Once resolution stores a target-specific trampoline in invoke_impl, reuse it
-	 * instead of repeating the work. The trampoline address is the initial value.
-	 */
-	if (delegate->invoke_impl && delegate->invoke_impl != tramp)
-		return delegate->invoke_impl;
-
 	if (delegate->method) {
 		method = delegate->method;
 

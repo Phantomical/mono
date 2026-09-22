@@ -2328,10 +2328,6 @@ lookup_start:
 	}
 #endif
 
-	/* Reuse a published entry before coordinating a new compilation. */
-	if (!code)
-		code = mono_llvm_jit_lookup_method (method, target_domain);
-
 	if (!code) {
 		code = compile_special (method, target_domain, error);
 
@@ -2447,9 +2443,6 @@ mono_jit_free_method (MonoDomain *domain, MonoMethod *method)
 	mono_tier0_free_method (domain, method);
 
 	mono_debug_remove_method (method, domain);
-
-	/* Clear the cache before removing the entry that owns and frees it. */
-	mono_domain_method_set_runtime_invoke_info (method, domain, NULL);
 
 	mono_domain_lock (domain);
 	g_hash_table_remove (info->jump_trampoline_hash, method);
@@ -2877,7 +2870,7 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 {
 	MonoMethod *invoke, *callee;
 	MonoObject *(*runtime_invoke) (MonoObject *this_obj, void **params, MonoObject **exc, void* compiled_method);
-	MonoDomain *domain = mono_tls_get_domain ();
+	MonoDomain *domain = mono_domain_get ();
 	MonoJitDomainInfo *domain_info;
 	RuntimeInvokeInfo *info, *info2;
 	MonoJitInfo *ji = NULL;
@@ -2893,11 +2886,6 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 	}
 
 	domain_info = domain_jit_info (domain);
-
-	info = (RuntimeInvokeInfo *)mono_domain_method_get_runtime_invoke_info (method, domain);
-
-	if (info)
-		goto have_info;
 
 	info = (RuntimeInvokeInfo *)mono_conc_hashtable_lookup (domain_info->runtime_invoke_hash, method);
 
@@ -2972,14 +2960,11 @@ mono_jit_runtime_invoke (MonoMethod *method, void *obj, void **params, MonoObjec
 		}
 	}
 
-	mono_domain_method_set_runtime_invoke_info (method, domain, info);
-
-have_info:
 	/*
 	 * We need this here because mono_marshal_get_runtime_invoke can place
 	 * the helper method in System.Object and not the target class.
 	 */
-	if (!info->vtable->initialized && !mono_runtime_class_init_full (info->vtable, error)) {
+	if (!mono_runtime_class_init_full (info->vtable, error)) {
 		if (exc)
 			*exc = (MonoObject*) mono_error_convert_to_exception (error);
 		return NULL;

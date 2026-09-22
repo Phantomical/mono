@@ -84,8 +84,7 @@ struct sigcontext {
 #if defined(__APPLE__)
 #define MONO_ARCH_SIGNAL_STACK_SIZE MINSIGSTKSZ
 #else
-/* Leave room for native crash reporting on the alternate signal stack. */
-#define MONO_ARCH_SIGNAL_STACK_SIZE (64 * 1024)
+#define MONO_ARCH_SIGNAL_STACK_SIZE (16 * 1024)
 #endif
 
 
@@ -550,3 +549,4 @@ mono_arch_unwindinfo_validate_size (GSList *unwind_ops, guint max_size)
 CallInfo* mono_arch_get_call_info (MonoMemPool *mp, MonoMethodSignature *sig);
 
 #endif /* __MONO_MINI_AMD64_H__ */  
+

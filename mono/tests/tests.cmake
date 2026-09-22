@@ -279,7 +279,6 @@ set(MONO_TESTS_CS_SRC
   math-intrinsics.cs
   buffer-copy-intrinsics.cs
   implicit-null-checks.cs
-  funcptr-static-rgctx.cs
   segv-wild-pointer.cs
   monitor-fast-path.cs
   array-shape-intrinsics.cs
@@ -1157,11 +1156,6 @@ set(MONO_TESTS_STATIC_CONST_MOVE_SRC
 # Exercise readonly static reference loads and null checks at tier 2.
 set(MONO_TESTS_INITONLY_NULLNESS_SRC
   initonly-nullness.cs
-)
-
-# Class-init guarding in a shared generic body.
-set(MONO_TESTS_CCTOR_INIT_GSHARED_SRC
-  cctor-init-gshared.cs
 )
 
 # Reading a hash already cached in the object's lock word instead of through

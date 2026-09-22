@@ -20,13 +20,9 @@ namespace mono {
 namespace {
 
 /// Return whether the class still needs its constructor run.
-/// The vtable may be an integer when it comes from a shared body's rgctx fetch.
 Value *
 needs_class_init (IRBuilder<> &b, Value *vtable)
 {
-	if (!vtable->getType ()->isPointerTy ())
-		vtable = b.CreateIntToPtr (vtable, b.getPtrTy ());
-
 	Value *flag = b.CreateAlignedLoad (
 		b.getInt8Ty (),
 		b.CreateGEP (b.getInt8Ty (), vtable,
@@ -105,7 +101,7 @@ ClassInitGuardPass::run (Function &f, FunctionAnalysisManager &)
 
 			// Strip conversions introduced by earlier late-stage passes.
 			auto *vtable = const_cast<Value *> (strip_casts (call->getArgOperand (0)));
-			if (!vtable->getType ()->isIntOrPtrTy ())
+			if (!vtable->getType ()->isPointerTy ())
 				continue;
 
 			sites.push_back ({ call, vtable });

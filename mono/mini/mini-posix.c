@@ -366,10 +366,7 @@ add_signal_handler (int signo, MonoSignalHandler handler, int flags)
 #endif
 		sa.sa_flags |= SA_ONSTACK;
 
-		/* Allow the crash handler to detect a fault while it is running. */
-		sa.sa_flags |= SA_NODEFER;
-
-		/*
+		/* 
 		 * libgc will crash when trying to do stack marking for threads which are on
 		 * an altstack, so delay the suspend signal after the signal handler has
 		 * executed.
@@ -382,7 +379,9 @@ add_signal_handler (int signo, MonoSignalHandler handler, int flags)
 		/* 
 		 * Delay abort signals while handling SIGSEGVs since they could go unnoticed.
 		 */
-		sigaddset (&sa.sa_mask, SIGABRT);
+		sigset_t block_mask;
+     
+		sigemptyset (&block_mask);
 	}
 #else
 	sa.sa_handler = (void (*)(int))handler;
