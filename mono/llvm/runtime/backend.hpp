@@ -125,6 +125,9 @@ public:
 	/// held.
 	static llvm::Expected<void *> published_entry (MonoDomainMethod &dm);
 
+	/// Returns a published entry without compiling or publishing a record.
+	static void *published_entry_if_ready (MonoDomain *domain, MonoMethod *method);
+
 private:
 	MonoBackend () = default;
 	MonoBackend (const MonoBackend &) = delete;

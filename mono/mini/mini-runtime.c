@@ -2328,6 +2328,10 @@ lookup_start:
 	}
 #endif
 
+	/* Reuse a published entry before coordinating a new compilation. */
+	if (!code)
+		code = mono_llvm_jit_lookup_method (method, target_domain);
+
 	if (!code) {
 		code = compile_special (method, target_domain, error);
 

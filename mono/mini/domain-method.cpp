@@ -323,18 +323,12 @@ domain_method_intern (MonoDomain *domain, MonoMethod *method)
 	if (MonoDomainMethod *interned = domain_method_find (domain, method))
 		return interned;
 
-	/*
-	 * All three read metadata the loader lock covers: a signature not cached
-	 * yet is parsed from it, naming describes that signature, which resolves
-	 * the classes a custom modifier names, and a tier-0 filter names the method
-	 * to match against. They happen here, above the locks, because a lock held
-	 * across the loader lock deadlocks against a thread in class init, which
-	 * holds the loader lock and then takes the domain lock to build a vtable.
-	 */
+	/* Read loader metadata before taking the domain lock to preserve lock order. */
 	mono_method_signature_internal (method);
 	std::string name = method_stub_symbol (method);
 	int32_t tier0_budget = method_tier0_budget (method);
 	bool needs_wide_vector_register = method_needs_wide_vector_register (method);
+	bool exposed_to_native_code = method_is_exposed_to_native_code (method);
 
 	/*
 	 * The domain lock is the outermost of the three. A mutator can arrive here
@@ -354,6 +348,7 @@ domain_method_intern (MonoDomain *domain, MonoMethod *method)
 	record->name = std::move (name);
 	record->tier_budget.store (tier0_budget, std::memory_order_relaxed);
 	record->needs_wide_vector_register = needs_wide_vector_register;
+	record->exposed_to_native_code = exposed_to_native_code;
 
 	if (llvm::Error err = attach_method_entries (*record))
 		return std::move (err);

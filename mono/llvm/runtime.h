@@ -46,6 +46,10 @@ void *mono_llvm_jit_compile_method (MonoMethod *method, MonoDomain *domain, Mono
 /// Returns NULL and sets the error if the method cannot be published.
 void *mono_llvm_jit_stub_for (MonoMethod *method, MonoDomain *domain, MonoError *error);
 
+/// Returns an already-published entry for p method, or NULL if it is not ready.
+/// This does not compile, block, or publish anything.
+void *mono_llvm_jit_lookup_method (MonoMethod *method, MonoDomain *domain);
+
 /// Enumerates LLVM code stubs that have no MonoJitInfo entry. This lets
 /// profilers discover stubs that were published before they attached.
 void mono_llvm_jit_foreach_stub (MonoDomain *domain,
