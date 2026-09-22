@@ -752,6 +752,16 @@ mono_runtime_suite(runtime-irce TESTS irce-bounds.exe)
 mono_runtime_suite(runtime-irce-off TESTS irce-bounds.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-irce=0")
 
+# The leaves a load of the runtime's own memory carries. Every program here
+# runs with them on as part of the ordinary corpus; this arm takes them off, so
+# a managed store reaches that memory again, which is the answer the leaves have
+# to agree with. Between them the four reach a type test, an array cast and a
+# covariant store, a dispatch that compares a vtable, and an array header.
+mono_runtime_suite(runtime-internal-tbaa-off
+                   TESTS eliminate-cast.exe array-cast.exe
+                         generic-array-iface-set.2.exe irce-bounds.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-internal-tbaa=0")
+
 # The guess GuardDispatchPass takes on a receiver it cannot prove a class
 # for, behind the same array rule's guard. Tier 2 only, same as the array
 # arm above, and the same threshold: this file spends the same shape of

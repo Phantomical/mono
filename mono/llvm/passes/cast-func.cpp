@@ -8,6 +8,8 @@
 #include "builtins.hpp"
 #include "method-symbols.hpp"
 
+#include "mono/llvm/internal-loads.hpp"
+
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-init.h"
 #include "mono/metadata/class-inlines.h"
@@ -91,11 +93,17 @@ tested_class (const CallBase *site)
 	return global != nullptr ? get_class (*global) : nullptr;
 }
 
+/// The leaf alone, and not the invariance `mark_object_vtable_read ()` adds.
+/// The remote arm below calls `mono_object_isinst_remote ()`, which is what
+/// reaches `mono_upgrade_remote_class ()`, and that builds a fresh vtable and
+/// points the proxy at it. This is the one read that can see the word change.
 Value *
 load_vtable (IRBuilder<> &b, Value *object, const Twine &name = "")
 {
-	return b.CreateAlignedLoad (PointerType::get (b.getContext (), 0), object,
-	                            Align (TARGET_SIZEOF_VOID_P), name);
+	return mark_internal_load (
+		b.CreateAlignedLoad (PointerType::get (b.getContext (), 0), object,
+	                             Align (TARGET_SIZEOF_VOID_P), name),
+		object_header_tbaa_leaf, InternalLife::varies);
 }
 
 /// Emits the inline half of a cast: branches to yes when the object's class has
@@ -112,36 +120,41 @@ emit_subtype_test (IRBuilder<> &b, Function *f, Value *depth, Value *obj, Value 
 	Type *ptr = PointerType::get (c, 0);
 
 	Value *vtable = load_vtable (b, obj);
-	Value *its_class = b.CreateAlignedLoad (
-		ptr,
-		b.CreateGEP (b.getInt8Ty (), vtable,
-	                     b.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
-		Align (TARGET_SIZEOF_VOID_P), "obj_class");
+	Value *its_class = mark_internal_load (
+		b.CreateAlignedLoad (ptr,
+	                             b.CreateGEP (b.getInt8Ty (), vtable,
+	                                          b.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
+	                             Align (TARGET_SIZEOF_VOID_P), "obj_class"),
+		vtable_tbaa_leaf, InternalLife::fixed);
 
 	// The supertypes array holds one entry for each level down to the class
 	// itself, so a class shallower than klass cannot hold it and indexing at
-	// klass's depth would read past the end.
-	Value *its_depth = b.CreateAlignedLoad (
-		b.getInt16Ty (),
-		b.CreateGEP (b.getInt8Ty (), its_class,
-	                     b.getInt32 (MONO_STRUCT_OFFSET (MonoClass, idepth))),
-		Align (2), "obj_idepth");
+	// klass's depth would read past the end. A class `mono_class_setup_supertypes
+	// ()` has not reached reads a depth of zero and fails the same test.
+	Value *its_depth = mark_internal_load (
+		b.CreateAlignedLoad (b.getInt16Ty (),
+	                             b.CreateGEP (b.getInt8Ty (), its_class,
+	                                          b.getInt32 (MONO_STRUCT_OFFSET (MonoClass, idepth))),
+	                             Align (2), "obj_idepth"),
+		class_tbaa_leaf, InternalLife::varies);
 
 	BasicBlock *deep_enough = BasicBlock::Create (c, "cast_deep_enough", f);
 
 	b.CreateCondBr (b.CreateICmpUGE (its_depth, depth), deep_enough, otherwise);
 	b.SetInsertPoint (deep_enough);
 
-	Value *supertypes = b.CreateAlignedLoad (
-		ptr,
-		b.CreateGEP (b.getInt8Ty (), its_class,
-	                     b.getInt32 (MONO_STRUCT_OFFSET (MonoClass, supertypes))),
-		Align (TARGET_SIZEOF_VOID_P), "supertypes");
+	Value *supertypes = mark_internal_load (
+		b.CreateAlignedLoad (ptr,
+	                             b.CreateGEP (b.getInt8Ty (), its_class,
+	                                          b.getInt32 (MONO_STRUCT_OFFSET (MonoClass, supertypes))),
+	                             Align (TARGET_SIZEOF_VOID_P), "supertypes"),
+		class_tbaa_leaf, InternalLife::varies);
 	Value *index =
 		b.CreateZExt (b.CreateSub (depth, b.getInt16 (1)), b.getInt32Ty (), "supertype_index");
-	Value *at_depth =
+	Value *at_depth = mark_internal_load (
 		b.CreateAlignedLoad (ptr, b.CreateGEP (ptr, supertypes, index),
-	                             Align (TARGET_SIZEOF_VOID_P), "supertype");
+	                             Align (TARGET_SIZEOF_VOID_P), "supertype"),
+		class_tbaa_leaf, InternalLife::fixed);
 
 	b.CreateCondBr (b.CreateICmpEQ (at_depth, target), yes, otherwise);
 }
@@ -167,25 +180,31 @@ emit_interface_test (IRBuilder<> &b, Function *f, MonoClass *klass, Value *obj,
 
 	// The bitmap holds one bit for each id up to the bound, so a bound below
 	// the target's id means the byte the test wants is past the end.
-	Value *bound = b.CreateAlignedLoad (
-		b.getInt32Ty (),
-		b.CreateGEP (b.getInt8Ty (), vtable,
-	                     b.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, max_interface_id))),
-		Align (4), "max_interface_id");
+	Value *bound = mark_internal_load (
+		b.CreateAlignedLoad (
+			b.getInt32Ty (),
+			b.CreateGEP (b.getInt8Ty (), vtable,
+	                             b.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, max_interface_id))),
+			Align (4), "max_interface_id"),
+		vtable_tbaa_leaf, InternalLife::fixed);
 
 	BasicBlock *in_range = BasicBlock::Create (c, "cast_iface_in_range", f);
 
 	b.CreateCondBr (b.CreateICmpUGE (bound, b.getInt32 (iid)), in_range, otherwise);
 	b.SetInsertPoint (in_range);
 
-	Value *bitmap = b.CreateAlignedLoad (
-		ptr,
-		b.CreateGEP (b.getInt8Ty (), vtable,
-	                     b.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, interface_bitmap))),
-		Align (TARGET_SIZEOF_VOID_P), "interface_bitmap");
-	Value *byte = b.CreateAlignedLoad (
-		b.getInt8Ty (), b.CreateGEP (b.getInt8Ty (), bitmap, b.getInt32 (iid >> 3)),
-		Align (1), "interface_byte");
+	Value *bitmap = mark_internal_load (
+		b.CreateAlignedLoad (
+			ptr,
+			b.CreateGEP (b.getInt8Ty (), vtable,
+	                             b.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, interface_bitmap))),
+			Align (TARGET_SIZEOF_VOID_P), "interface_bitmap"),
+		vtable_tbaa_leaf, InternalLife::fixed);
+	Value *byte = mark_internal_load (
+		b.CreateAlignedLoad (b.getInt8Ty (),
+	                             b.CreateGEP (b.getInt8Ty (), bitmap, b.getInt32 (iid >> 3)),
+	                             Align (1), "interface_byte"),
+		vtable_tbaa_leaf, InternalLife::fixed);
 	Value *bit = b.CreateAnd (byte, b.getInt8 (1 << (iid & 7)));
 
 	b.CreateCondBr (b.CreateIsNotNull (bit), yes, otherwise);
@@ -446,11 +465,13 @@ lower (CallBase *site, bool throw_on_fail)
 			b.CreateBr (done);
 			result->addIncoming (null, remote);
 		} else {
-			Value *its_class = b.CreateAlignedLoad (
-				ptr,
-				b.CreateGEP (b.getInt8Ty (), load_vtable (b, obj),
-			                     b.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
-				Align (TARGET_SIZEOF_VOID_P), "remote_class");
+			Value *its_class = mark_internal_load (
+				b.CreateAlignedLoad (
+					ptr,
+					b.CreateGEP (b.getInt8Ty (), load_vtable (b, obj),
+				                     b.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, klass))),
+					Align (TARGET_SIZEOF_VOID_P), "remote_class"),
+				vtable_tbaa_leaf, InternalLife::fixed);
 
 			BasicBlock *ask = BasicBlock::Create (c, "cast_remote_ask", f);
 			BasicBlock *not_remote = BasicBlock::Create (c, "cast_not_remote", f);

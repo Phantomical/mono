@@ -5,6 +5,8 @@
 
 #include "method-to-llvm.hpp"
 
+#include "../internal-loads.hpp"
+
 #include "mono/metadata/monitor.h"
 
 #include <llvm/IR/BasicBlock.h>
@@ -56,8 +58,11 @@ MethodLLVMEmitter::emit_hash_code_fast_path (MonoIrBuilder &builder, MonoMethod 
 	builder.SetInsertPoint (has_this);
 	llvm::Value *sync_field = builder.CreateGEP (
 		i8_ty, object, builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, synchronisation)));
-	llvm::Value *lock_word = builder.CreateAlignedLoad (
-		word_ty, sync_field, llvm::Align (TARGET_SIZEOF_VOID_P), "lock_word");
+	// A monitor operation and the first hash both write this word.
+	llvm::Value *lock_word = mark_internal_load (
+		builder.CreateAlignedLoad (word_ty, sync_field, llvm::Align (TARGET_SIZEOF_VOID_P),
+	                                   "lock_word"),
+		object_header_tbaa_leaf, InternalLife::varies);
 
 	llvm::Value *has_hash = builder.CreateICmpNE (
 		builder.CreateAnd (lock_word, llvm::ConstantInt::get (word_ty, LOCK_WORD_HAS_HASH)),

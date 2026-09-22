@@ -8,6 +8,7 @@
  */
 
 #include "method-to-llvm.hpp"
+#include "mono/llvm/internal-loads.hpp"
 #include "mono/metadata/class-inlines.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
@@ -59,7 +60,7 @@ MethodLLVMEmitter::tbaa_coarse_scalar_node ()
 	llvm::MDBuilder md (context ());
 
 	return md.createTBAANode ("mono managed scalar",
-	                          md.createTBAARoot ("mono managed memory"));
+	                          md.createTBAARoot (managed_memory_tbaa_root));
 }
 
 llvm::MDNode *
@@ -192,9 +193,10 @@ MethodLLVMEmitter::type_descriptor (MonoClass *klass, bool statics)
  *
  *     "mono managed memory"                 root
  *     |- "mono managed reference"           every reference access
- *     \- "mono managed scalar"              coarse: an access we cannot place
- *        |- "mono scalar 8f"                the nodes a type descriptor names
- *        \- "mono element 8f[2]"            one leaf per scalar array element
+ *     |- "mono managed scalar"              coarse: an access we cannot place
+ *     |  |- "mono scalar 8f"                the nodes a type descriptor names
+ *     |  \- "mono element 8f[2]"            one leaf per scalar array element
+ *     \- the leaves internal-loads.hpp names, for the runtime's own memory
  *
  * Type descriptors sit beside that tree, one for a class's instance fields and
  * one for its static block, naming the "mono scalar" nodes.
@@ -220,7 +222,7 @@ MethodLLVMEmitter::tbaa_tag (const ManagedAccess &access, bool is_reference)
 	if (is_reference) {
 		llvm::MDNode *leaf =
 			md.createTBAANode ("mono managed reference",
-			                   md.createTBAARoot ("mono managed memory"));
+			                   md.createTBAARoot (managed_memory_tbaa_root));
 
 		return md.createTBAAStructTagNode (leaf, leaf, 0);
 	}

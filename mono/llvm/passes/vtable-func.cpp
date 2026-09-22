@@ -16,6 +16,8 @@
 
 #include "builtins.hpp"
 
+#include "mono/llvm/internal-loads.hpp"
+
 #include "mini-runtime.h"
 
 #include "mono/metadata/abi-details.h"
@@ -101,9 +103,7 @@ vtable_gfunc_decl (Module &m)
 LoadInst *
 mark_object_vtable_read (LoadInst *load)
 {
-	load->setMetadata (LLVMContext::MD_invariant_group,
-	                   MDNode::get (load->getContext (), {}));
-	return load;
+	return mark_internal_load (load, object_header_tbaa_leaf, InternalLife::per_object);
 }
 
 namespace {
@@ -233,10 +233,8 @@ lower (CallBase *site, int64_t first_word, int64_t slot_bias)
 /// Rewrites site into the load of the field at \p offset, as wide as the site's
 /// own result.
 ///
-/// The load is `!invariant.load`, which is the same claim the declaration's
-/// `memory(none)` makes: the field takes its value while
-/// `mono_class_create_runtime_vtable ()` builds the vtable it sits in, which is
-/// before compiled code can hold that vtable.
+/// The field is fixed for the same reason the declaration claims
+/// `memory(none)`.
 void
 lower_field (CallBase *site, int64_t offset)
 {
@@ -246,11 +244,11 @@ lower_field (CallBase *site, int64_t offset)
 	Type *held = site->getType ();
 	Value *at =
 		b.CreateGEP (b.getInt8Ty (), site->getArgOperand (0), b.getInt64 (offset));
-	LoadInst *value = b.CreateAlignedLoad (
-		held, at, site->getModule ()->getDataLayout ().getABITypeAlign (held));
+	LoadInst *value = mark_internal_load (
+		b.CreateAlignedLoad (held, at,
+		                     site->getModule ()->getDataLayout ().getABITypeAlign (held)),
+		vtable_tbaa_leaf, InternalLife::fixed);
 
-	value->setMetadata (LLVMContext::MD_invariant_load,
-	                    MDNode::get (site->getContext (), {}));
 	site->replaceAllUsesWith (value);
 	site->eraseFromParent ();
 }

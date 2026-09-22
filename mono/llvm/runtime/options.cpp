@@ -107,6 +107,11 @@ llvm::cl::opt<bool> HashCodeFastPathOpt (
 	llvm::cl::desc ("Read Object.GetHashCode's cached hash out of the lock word "
 	                "instead of through the icall"));
 
+llvm::cl::opt<bool> InternalTbaaOpt (
+	"mono-internal-tbaa", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Give an access to an object or array header, a MonoVTable or a "
+	                "MonoClass a `!tbaa` leaf disjoint from the managed ones"));
+
 llvm::cl::opt<bool> TagNonPointerInvariantGroupOpt (
 	"mono-invariant-group-nonptr", llvm::cl::Hidden, llvm::cl::init (false),
 	llvm::cl::desc ("Tag a non-pointer array-header read with !invariant.group"));
@@ -423,6 +428,12 @@ bool
 hash_code_fast_path ()
 {
 	return HashCodeFastPathOpt;
+}
+
+bool
+internal_tbaa ()
+{
+	return InternalTbaaOpt;
 }
 
 bool

@@ -527,6 +527,14 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   eligible; unmanaged pointers and byrefs are not. The implicit-null-check tests
   cover all tiers, and `runtime-fault-null-checks-off` runs them with the rewrite
   disabled.
+- `--llvm-opt=-mono-internal-tbaa=<0|false|empty>` (`runtime/options.cpp`) — give every
+  access to the runtime's own memory — an object or array header, a MonoVTable, a
+  MonoClass — a `!tbaa` leaf beside the managed leaves rather than none at all. On by
+  default. `internal-loads.hpp` holds the leaves and the argument for each, which rests
+  on no IL opcode naming any of that memory, so no store the translator tags reaches it.
+  Off leaves them untagged and a managed store reaching them again, which separates a
+  wrong answer from a wrong claim of disjointness, and is the negative control for what
+  the leaves are worth. What invariance such a load also carries is not this switch's.
 - `--llvm-opt=-mono-invariant-group-nonptr=<1|true>` (`runtime/options.cpp`) — tag a
   non-pointer array-header read (`max_length`, a dimension's length or lower bound) with
   `!invariant.group`, the same as the bounds pointer always carries. Off by default,
