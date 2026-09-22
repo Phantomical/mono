@@ -14,9 +14,8 @@ public class C
 		var contSuccess = task.ContinueWith (t => {}, TaskContinuationOptions.OnlyOnRanToCompletion);
 
 		mre.Set ();
-		contSuccess.Wait (100);
 
-		if (!contSuccess.IsCompleted)
+		if (!contSuccess.Wait (60000))
 			return 1;
 
 		return 0;
