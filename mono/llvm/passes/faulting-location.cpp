@@ -15,9 +15,18 @@
 using namespace llvm;
 
 namespace mono {
+namespace {
 
+/**
+ * The block a faulting instruction hands control to when it faults.
+ *
+ * That is the block the explicit check branched to when the pointer was null,
+ * so it holds the throw the check made, at the IL offset of the dereference the
+ * check protected. ImplicitNullChecks writes it as the one machine-block operand
+ * of the instruction.
+ */
 MachineBasicBlock *
-faulting_op_handler (const MachineInstr &mi)
+handler_of (const MachineInstr &mi)
 {
 	for (const MachineOperand &mo : mi.operands ())
 		if (mo.isMBB ())
@@ -25,8 +34,6 @@ faulting_op_handler (const MachineInstr &mi)
 
 	report_fatal_error ("mono: FAULTING_OP names no handler block - LLVM invariant broken");
 }
-
-namespace {
 
 /**
  * The block the check branched to when the pointer was not null.
@@ -71,7 +78,7 @@ MonoFaultingLocationPass::runOnMachineFunction (MachineFunction &mf)
 			if (mi.getOpcode () != TargetOpcode::FAULTING_OP || mi.getDebugLoc ())
 				continue;
 
-			MachineBasicBlock *handler = faulting_op_handler (mi);
+			MachineBasicBlock *handler = handler_of (mi);
 			DebugLoc loc = opening_location (not_null_of (mi, handler));
 
 			/*
