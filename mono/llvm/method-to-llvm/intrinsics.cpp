@@ -204,6 +204,12 @@ struct BuiltinEmitters {
 		return emitter.emit_thread_spin_wait_nop (builder);
 	}
 
+	static BuiltinResult assume (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                             const BuiltinCall &call)
+	{
+		return emitter.emit_assume (builder, call.sig);
+	}
+
 	static BuiltinResult enum_has_flag (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
 	                                    const BuiltinCall &call)
 	{
@@ -601,6 +607,10 @@ const BuiltinMethod runtime_helpers_methods[] = {
 	  BuiltinEmitters::offset_to_string_data },
 };
 
+const BuiltinMethod jit_hints_methods[] = {
+	{ "Assume", 1, Receiver::none, BuiltinEmitters::assume },
+};
+
 /// ByReference`1's row takes every member the class has. One with no lowering
 /// is refused rather than left to run IL that only throws.
 const BuiltinBody core_bodies[] = {
@@ -685,6 +695,7 @@ class_table ()
 		{ { nullptr, "System.Diagnostics", "Debugger" }, nullptr, debugger_methods },
 		{ { nullptr, "System.Runtime.CompilerServices", "RuntimeHelpers" }, nullptr,
 		  runtime_helpers_methods },
+		{ { nullptr, "Mono", "JitHints" }, nullptr, jit_hints_methods },
 	};
 
 	return entries;

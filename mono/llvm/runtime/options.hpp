@@ -208,6 +208,10 @@ bool fault_null_checks ();
 /// differ in one pass.
 bool cond_card_mark ();
 
+/// Whether Mono.JitHints.Assume () lowers to llvm.assume. Disabling it drops
+/// the hint, which is useful for diagnosing an invalid assumption.
+bool assume_hints ();
+
 /// The fast-math flags the float operations a method asks for carry.
 ///
 /// Empty unless --ffast-math is on the command line, which is the only way to

@@ -33,6 +33,7 @@ Mono/CertificateImportFlags.cs
 Mono/DependencyInjector.cs
 Mono/ISystemCertificateProvider.cs
 Mono/ISystemDependencyProvider.cs
+Mono/JitHints.cs
 Mono/Runtime.cs
 Mono/RuntimeHandles.cs
 Mono/RuntimeMarshal.cs
@@ -1775,7 +1776,8 @@ System.Runtime.Intrinsics/X86/Popcnt.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/ListDictionaryInternal.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/DictionaryEntry.cs
 
-../../../external/corefx/src/Common/src/CoreLib/System/Collections/Generic/*.cs:NonRandomizedStringEqualityComparer.cs
+../../../external/corefx/src/Common/src/CoreLib/System/Collections/Generic/*.cs:NonRandomizedStringEqualityComparer.cs,List.cs
+../../../external/corefx-bugfix/src/Common/src/CoreLib/System/Collections/Generic/List.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/ObjectModel/Collection.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/ObjectModel/ReadOnlyCollection.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/Generic/Dictionary.cs
