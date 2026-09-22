@@ -185,6 +185,16 @@ bool thread_static_fast_path ();
 /// Whether the Object.GetHashCode fast path is on.
 bool hash_code_fast_path ();
 
+/// Whether a load or store of the runtime's own memory — an object or array
+/// header, a MonoVTable, a MonoClass — carries a `!tbaa` leaf of its own.
+///
+/// A false value leaves every one of them untagged, so a managed store reaches
+/// them again, which is what separates a wrong answer from a wrong claim of
+/// disjointness. It is the negative control for what the leaves are worth as
+/// well. The invariance such a load also carries is not this switch's, because
+/// that is a claim about one location rather than about the tree.
+bool internal_tbaa ();
+
 /// Whether a non-pointer array-header read — `max_length`, or a dimension's
 /// length or lower bound — is tagged `!invariant.group`.
 ///

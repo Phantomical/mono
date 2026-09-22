@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "analysis/operand-class.hpp"
 #include "runtime-error.hpp"
+#include "../internal-loads.hpp"
 #include "../passes/alloc-func.hpp"
 #include "../passes/array-address.hpp"
 #include "../passes/array-shape.hpp"
@@ -566,11 +567,13 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 		// LLVM CSEs this load across the stores of an initializer. A
 		// call through the array's stelemref vtable slot, which is how
 		// mini answers this, is opaque to it.
-		wanted = builder.CreateAlignedLoad (
-			ptr,
-			builder.CreateGEP (builder.getInt8Ty (), array_class,
-		                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, element_class))),
-			llvm::Align (TARGET_SIZEOF_VOID_P), "element_class");
+		wanted = mark_internal_load (
+			builder.CreateAlignedLoad (
+				ptr,
+				builder.CreateGEP (builder.getInt8Ty (), array_class,
+			                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, element_class))),
+				llvm::Align (TARGET_SIZEOF_VOID_P), "element_class"),
+			class_tbaa_leaf, InternalLife::fixed);
 		trace_stelem_check (method, "tests the array's element class");
 	}
 
@@ -623,18 +626,22 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 		mono_class_setup_supertypes (element);
 		wanted_idepth = builder.getInt16 (m_class_get_idepth (element));
 	} else {
-		wanted_idepth = builder.CreateAlignedLoad (
-			builder.getInt16Ty (),
-			builder.CreateGEP (builder.getInt8Ty (), wanted,
-		                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, idepth))),
-			llvm::Align (2), "wanted_idepth");
+		wanted_idepth = mark_internal_load (
+			builder.CreateAlignedLoad (
+				builder.getInt16Ty (),
+				builder.CreateGEP (builder.getInt8Ty (), wanted,
+			                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, idepth))),
+				llvm::Align (2), "wanted_idepth"),
+			class_tbaa_leaf, InternalLife::varies);
 	}
 
-	llvm::Value *value_idepth = builder.CreateAlignedLoad (
-		builder.getInt16Ty (),
-		builder.CreateGEP (builder.getInt8Ty (), value_class,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, idepth))),
-		llvm::Align (2), "value_idepth");
+	llvm::Value *value_idepth = mark_internal_load (
+		builder.CreateAlignedLoad (
+			builder.getInt16Ty (),
+			builder.CreateGEP (builder.getInt8Ty (), value_class,
+		                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, idepth))),
+			llvm::Align (2), "value_idepth"),
+		class_tbaa_leaf, InternalLife::varies);
 
 	llvm::BasicBlock *deep_enough =
 		llvm::BasicBlock::Create (context (), "stelem_subclass_deep", function);
@@ -642,16 +649,19 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 	builder.CreateCondBr (builder.CreateICmpUGE (value_idepth, wanted_idepth), deep_enough, ask);
 	builder.SetInsertPoint (deep_enough);
 
-	llvm::Value *value_supertypes = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), value_class,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, supertypes))),
-		llvm::Align (TARGET_SIZEOF_VOID_P), "value_supertypes");
+	llvm::Value *value_supertypes = mark_internal_load (
+		builder.CreateAlignedLoad (
+			ptr,
+			builder.CreateGEP (builder.getInt8Ty (), value_class,
+		                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoClass, supertypes))),
+			llvm::Align (TARGET_SIZEOF_VOID_P), "value_supertypes"),
+		class_tbaa_leaf, InternalLife::varies);
 	llvm::Value *index = builder.CreateZExt (
 		builder.CreateSub (wanted_idepth, builder.getInt16 (1)), builder.getInt32Ty ());
-	llvm::Value *at_depth = builder.CreateAlignedLoad (
-		ptr, builder.CreateGEP (ptr, value_supertypes, index),
-		llvm::Align (TARGET_SIZEOF_VOID_P), "value_supertype");
+	llvm::Value *at_depth = mark_internal_load (
+		builder.CreateAlignedLoad (ptr, builder.CreateGEP (ptr, value_supertypes, index),
+	                                   llvm::Align (TARGET_SIZEOF_VOID_P), "value_supertype"),
+		class_tbaa_leaf, InternalLife::fixed);
 
 	builder.CreateCondBr (builder.CreateICmpEQ (at_depth, wanted), done, ask);
 
@@ -1270,12 +1280,14 @@ MethodLLVMEmitter::emit_string_alloc (MonoIrBuilder &builder, llvm::Value *lengt
 	// declares inaccessible, so a plain load after the call cannot see it.
 	// This store, at the width emit_string_length () loads, is what a later
 	// load forwards from instead.
-	builder.CreateAlignedStore (
-		builder.CreateSExtOrTrunc (count, builder.getInt32Ty ()),
-		builder.CreateGEP (
-			builder.getInt8Ty (), created,
-			builder.getInt32 (MONO_STRUCT_OFFSET (MonoString, length))),
-		llvm::Align (4));
+	mark_internal_store (
+		builder.CreateAlignedStore (
+			builder.CreateSExtOrTrunc (count, builder.getInt32Ty ()),
+			builder.CreateGEP (
+				builder.getInt8Ty (), created,
+				builder.getInt32 (MONO_STRUCT_OFFSET (MonoString, length))),
+			llvm::Align (4)),
+		object_header_tbaa_leaf);
 
 	return created;
 }

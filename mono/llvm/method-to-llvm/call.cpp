@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "analysis/operand-class.hpp"
 #include "hidden-return.hpp"
+#include "internal-loads.hpp"
 #include "intrinsics.hpp"
 #include "method-symbols.hpp"
 #include "mini-runtime.h"
@@ -1232,8 +1233,9 @@ MethodLLVMEmitter::emit_string_length (MonoIrBuilder &builder)
 	llvm::Value *slot =
 		builder.CreateGEP (builder.getInt8Ty (), receiver.value,
 	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoString, length)));
-	llvm::Value *length =
-		builder.CreateAlignedLoad (builder.getInt32Ty (), slot, llvm::Align (4));
+	llvm::Value *length = mark_internal_load (
+		builder.CreateAlignedLoad (builder.getInt32Ty (), slot, llvm::Align (4)),
+		object_header_tbaa_leaf, InternalLife::per_object);
 
 	pop_stack (1);
 	push_stack (length, mono_get_int32_type ());

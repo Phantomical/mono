@@ -1,6 +1,7 @@
 #include "method-to-llvm.hpp"
 #include "analysis/operand-class.hpp"
 #include "runtime-error.hpp"
+#include "../internal-loads.hpp"
 #include "../passes/alloc-func.hpp"
 #include "../passes/vtable-func.hpp"
 #include "mini-runtime.h"
@@ -99,12 +100,14 @@ void
 MethodLLVMEmitter::store_object_vtable (MonoIrBuilder &builder, llvm::Value *object,
                                         llvm::Value *vtable)
 {
-	llvm::StoreInst *header = builder.CreateAlignedStore (
-		vtable,
-		builder.CreateGEP (
-			builder.getInt8Ty (), object,
-			builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
-		llvm::Align (TARGET_SIZEOF_VOID_P));
+	llvm::StoreInst *header = mark_internal_store (
+		builder.CreateAlignedStore (
+			vtable,
+			builder.CreateGEP (
+				builder.getInt8Ty (), object,
+				builder.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+			llvm::Align (TARGET_SIZEOF_VOID_P)),
+		object_header_tbaa_leaf);
 
 	// mark_object_vtable_read () (passes/vtable-func.hpp) reads this store back
 	// through `!invariant.group`.
@@ -242,17 +245,14 @@ MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, Mono
 	                     "InvalidCastException");
 
 	llvm::Value *cls = builder.CreateCall (vtable_klass_decl (*module), { vtable });
-	llvm::LoadInst *element = builder.CreateAlignedLoad (
-		ptr,
-		builder.CreateGEP (builder.getInt8Ty (), cls,
-	                           builder.getInt32 (static_cast<int32_t> (
-					   m_class_offsetof_element_class ()))),
-		llvm::Align (TARGET_SIZEOF_VOID_P));
-
-	// element_class is initialized before the class's vtable is exposed and
-	// never changes afterward.
-	element->setMetadata (llvm::LLVMContext::MD_invariant_load,
-	                      llvm::MDNode::get (context (), {}));
+	llvm::LoadInst *element = mark_internal_load (
+		builder.CreateAlignedLoad (
+			ptr,
+			builder.CreateGEP (builder.getInt8Ty (), cls,
+		                           builder.getInt32 (static_cast<int32_t> (
+					           m_class_offsetof_element_class ()))),
+			llvm::Align (TARGET_SIZEOF_VOID_P)),
+		class_tbaa_leaf, InternalLife::fixed);
 
 	emit_cond_exception (
 		builder,
