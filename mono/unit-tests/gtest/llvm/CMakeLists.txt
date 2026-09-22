@@ -19,6 +19,7 @@ set(MONO_LLVM_TEST_SOURCES
     inline-copies-tests.cpp
     profile-counters-tests.cpp profile-counter-promoter-tests.cpp
     rgctx-fetch-tests.cpp rgctx-dedup-tests.cpp clamp-frame-align-tests.cpp
+    lmf-dedup-tests.cpp
     array-address-tests.cpp array-shape-tests.cpp ir-dump-tests.cpp
     cast-func-tests.cpp eliminate-delegate-tests.cpp eliminate-cast-tests.cpp inline-heat-tests.cpp
     inline-cost-dom-chain-tests.cpp sink-keep-alive-tests.cpp lower-keepalive-tests.cpp
