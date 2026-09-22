@@ -46,7 +46,7 @@ namespace {
 /// Reads one field of the array header.
 ///
 /// Both bounds fields are scalar typedefs, so the size alone is the layout.
-Value *
+LoadInst *
 load_field (IRBuilder<> &b, Value *base, int32_t offset, unsigned bytes)
 {
 	Value *slot = b.CreateInBoundsGEP (b.getInt8Ty (), base, b.getInt64 (offset));
@@ -124,22 +124,22 @@ lower_call (CallBase *site, bool lower_bound)
 	Value *without_bounds =
 		lower_bound ? static_cast<Value *> (fb.getInt32 (0))
 		            : fb.CreateZExtOrTrunc (
-				      load_field (fb, array,
-	                                          MONO_STRUCT_OFFSET (MonoArray, max_length),
-	                                          sizeof (mono_array_size_t)),
+				      mark_array_length_load (load_field (
+					      fb, array, MONO_STRUCT_OFFSET (MonoArray, max_length),
+					      sizeof (mono_array_size_t))),
 				      i32);
 
 	fb.CreateBr (cont);
 
 	IRBuilder<> sb (shaped);
-	Value *held = load_field (
+	LoadInst *held = load_field (
 		sb, bounds,
 		lower_bound ? MONO_STRUCT_OFFSET (MonoArrayBounds, lower_bound)
 		            : MONO_STRUCT_OFFSET (MonoArrayBounds, length),
 		lower_bound ? sizeof (mono_array_lower_bound_t) : sizeof (mono_array_size_t));
 	// A lower bound is signed and a length is not.
 	Value *first = lower_bound ? sb.CreateSExtOrTrunc (held, i32)
-	                           : sb.CreateZExtOrTrunc (held, i32);
+	                           : sb.CreateZExtOrTrunc (mark_array_length_load (held), i32);
 
 	sb.CreateBr (cont);
 

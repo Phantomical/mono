@@ -82,7 +82,7 @@ parse_spec (const Function &decl)
 ///
 /// Every field it is asked for is a scalar typedef, so the size alone is the
 /// layout.
-Value *
+LoadInst *
 load_field (IRBuilder<> &b, Value *base, uint64_t offset, unsigned bytes)
 {
 	Value *slot = b.CreateInBoundsGEP (b.getInt8Ty (), base, b.getInt64 (offset));
@@ -188,9 +188,9 @@ lower_call (CallBase *site, const AddressSpec &spec)
 		if (spec.bounded)
 			linear = subtract_lower_bound (b, array, linear, cont);
 
-		Value *length = load_field (b, array,
-		                            MONO_STRUCT_OFFSET (MonoArray, max_length),
-		                            sizeof (mono_array_size_t));
+		Value *length = mark_array_length_load (
+			load_field (b, array, MONO_STRUCT_OFFSET (MonoArray, max_length),
+		                    sizeof (mono_array_size_t)));
 
 		check (b.CreateICmpUGE (b.CreateZExt (linear, b.getInt64Ty ()),
 		                        b.CreateZExtOrTrunc (length, b.getInt64Ty ())));
@@ -207,9 +207,9 @@ lower_call (CallBase *site, const AddressSpec &spec)
 			                    sizeof (mono_array_lower_bound_t)),
 				i32);
 			Value *length = b.CreateZExtOrTrunc (
-				load_field (b, bounds,
-			                    at + MONO_STRUCT_OFFSET (MonoArrayBounds, length),
-			                    sizeof (mono_array_size_t)),
+				mark_array_length_load (load_field (
+					b, bounds, at + MONO_STRUCT_OFFSET (MonoArrayBounds, length),
+					sizeof (mono_array_size_t))),
 				i32);
 			Value *relative =
 				b.CreateSub (site->getArgOperand (1 + (unsigned) dim), lower);
@@ -266,6 +266,18 @@ lower_call (CallBase *site, const AddressSpec &spec)
 }
 
 } // namespace
+
+LoadInst *
+mark_array_length_load (LoadInst *load)
+{
+	unsigned bits = load->getType ()->getIntegerBitWidth ();
+
+	load->setMetadata (LLVMContext::MD_range,
+	                   MDBuilder (load->getContext ())
+	                           .createRange (APInt (bits, 0),
+	                                         APInt (bits, (uint64_t) MONO_ARRAY_MAX_INDEX + 1)));
+	return load;
+}
 
 bool
 lower_array_addresses (Module &m)
