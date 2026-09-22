@@ -43,13 +43,6 @@ int32_t *mono_tier0_counter_address (MonoMethod *method, MonoDomain *domain);
 /// out. Re-arms that counter when the request is refused.
 void mono_tier0_spent (MonoMethod *method, MonoDomain *domain);
 
-/// Returns the method's cached RuntimeInvokeInfo in domain, or NULL if none exists.
-void *mono_domain_method_get_runtime_invoke_info (MonoMethod *method, MonoDomain *domain);
-
-/// Caches value as the method's RuntimeInvokeInfo in domain. A no-op if no
-/// record exists. Pass NULL to clear a stale cache entry.
-void mono_domain_method_set_runtime_invoke_info (MonoMethod *method, MonoDomain *domain, void *value);
-
 /// Hands the address a method is entered at to native code at \p target.
 ///
 /// Every caller that goes through the entry reaches \p target from here on. The

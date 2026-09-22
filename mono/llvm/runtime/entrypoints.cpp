@@ -122,12 +122,6 @@ mono_llvm_jit_stub_for (MonoMethod *method, MonoDomain *target_domain, MonoError
 }
 
 void *
-mono_llvm_jit_lookup_method (MonoMethod *method, MonoDomain *domain)
-{
-	return mono::published_entry_if_ready (domain, method);
-}
-
-void *
 mono_llvm_jit_thunk_for (MonoMethod *method, MonoDomain *target_domain, MonoError *error)
 {
 	error_init (error);

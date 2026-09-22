@@ -980,6 +980,13 @@ find_range_in_table_no_lock_ex(const gpointer code_block, gsize block_size)
 	return found_entry;
 }
 
+static DynamicFunctionTableEntry*
+find_range_in_table_no_lock(const gpointer code_block, gsize block_size)
+{
+	GList* found_entry = find_range_in_table_no_lock_ex(code_block, block_size);
+	return (found_entry != NULL) ? (DynamicFunctionTableEntry*)found_entry->data : NULL;
+}
+
 static GList*
 find_pc_in_table_no_lock_ex(const gpointer pc)
 {
@@ -1057,22 +1064,17 @@ validate_table_no_lock(void)
 // Forward declare.
 static PRUNTIME_FUNCTION MONO_GET_RUNTIME_FUNCTION_CALLBACK(DWORD64 ControlPc, IN PVOID Context);
 
-static DynamicFunctionTableEntry*
-insert_range_in_table_no_lock(const gpointer code_block, gsize block_size, gboolean dedup)
+DynamicFunctionTableEntry*
+mono_arch_unwindinfo_insert_range_in_table(const gpointer code_block, gsize block_size)
 {
 	DynamicFunctionTableEntry* new_entry = NULL;
 
 	gsize begin_range = (gsize)code_block;
 	gsize end_range = begin_range + block_size;
 
-	if (dedup) {
-		GList* found_entry = find_range_in_table_no_lock_ex(code_block, block_size);
-		new_entry = (found_entry != NULL) ? (DynamicFunctionTableEntry*)found_entry->data : NULL;
-	} else {
-		/* A chunk's entry is removed before its memory is released. */
-		g_assert_checked(find_range_in_table_no_lock_ex(code_block, block_size) == NULL);
-	}
-
+	AcquireSRWLockExclusive(&g_dynamic_function_table_lock);
+	init_table_no_lock();
+	new_entry = find_range_in_table_no_lock(code_block, block_size);
 	if (new_entry == NULL && block_size != 0) {
 		// Allocate new entry.
 		new_entry = g_new0(DynamicFunctionTableEntry, 1);
@@ -1162,18 +1164,6 @@ insert_range_in_table_no_lock(const gpointer code_block, gsize block_size, gbool
 			}
 		}
 	}
-
-	return new_entry;
-}
-
-DynamicFunctionTableEntry*
-mono_arch_unwindinfo_insert_range_in_table(const gpointer code_block, gsize block_size)
-{
-	DynamicFunctionTableEntry* new_entry;
-
-	AcquireSRWLockExclusive(&g_dynamic_function_table_lock);
-	init_table_no_lock();
-	new_entry = insert_range_in_table_no_lock(code_block, block_size, TRUE);
 	ReleaseSRWLockExclusive(&g_dynamic_function_table_lock);
 
 	return new_entry;
@@ -1444,10 +1434,7 @@ MONO_GET_RUNTIME_FUNCTION_CALLBACK(DWORD64 ControlPc, IN PVOID Context)
 void
 mono_arch_code_chunk_new(void* chunk, int size)
 {
-	AcquireSRWLockExclusive(&g_dynamic_function_table_lock);
-	init_table_no_lock();
-	insert_range_in_table_no_lock(chunk, size, FALSE);
-	ReleaseSRWLockExclusive(&g_dynamic_function_table_lock);
+	mono_arch_unwindinfo_insert_range_in_table(chunk, size);
 }
 
 void mono_arch_code_chunk_destroy(void* chunk)
@@ -1456,3 +1443,4 @@ void mono_arch_code_chunk_destroy(void* chunk)
 }
 
 #endif // #ifdef MONO_ARCH_HAVE_UNWIND_TABLE
+

@@ -6,7 +6,6 @@
  */
 #include "icalls/icalls.h"
 #include <mono/metadata/marshal.h>
-#include "../../llvm/runtime.h"
 
 void*
 mono_ldftn (MonoMethod *method)
@@ -19,10 +18,16 @@ mono_ldftn (MonoMethod *method)
 	if (method->iflags & METHOD_IMPL_ATTRIBUTE_SYNCHRONIZED)
 		method = mono_marshal_get_synchronized_wrapper (method);
 
-	/* The backend entry already includes any required rgctx context stub. */
-	addr = mono_llvm_jit_stub_for (method, mono_domain_get (), error);
+	/*
+	 * mono_create_jump_trampoline ()'s stub is callable but is not the
+	 * method's published thunk. mono_compile_method_checked () resolves that
+	 * thunk directly, the way GetFunctionPointer () already does, so ldftn's
+	 * product agrees with it.
+	 */
+	addr = mono_compile_method_checked (method, error);
 	mono_error_assert_ok (error);
 	g_assert (addr);
 
+	addr = mini_add_method_trampoline (method, addr, FALSE);
 	return addr;
 }

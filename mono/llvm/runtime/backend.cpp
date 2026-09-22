@@ -622,12 +622,6 @@ method_needs_wide_vector_register (MonoMethod *method)
 	return false;
 }
 
-bool
-method_is_exposed_to_native_code (MonoMethod *method)
-{
-	return is_exposed_to_native_code (method);
-}
-
 llvm::Error
 attach_interop_entry (MonoDomainMethod &dm)
 {
@@ -638,12 +632,6 @@ llvm::Expected<void *>
 published_entry_of (MonoDomainMethod &dm)
 {
 	return MonoBackend::published_entry (dm);
-}
-
-void *
-published_entry_if_ready (MonoDomain *domain, MonoMethod *method)
-{
-	return MonoBackend::published_entry_if_ready (domain, method);
 }
 
 /*
@@ -1964,7 +1952,7 @@ MonoBackend::compile (MonoMethod *method, MonoDomain *domain)
 llvm::Expected<void *>
 MonoBackend::published_entry (MonoDomainMethod &dm)
 {
-	if (!dm.exposed_to_native_code)
+	if (!is_exposed_to_native_code (dm.method))
 		return dm.thunk.code ();
 
 	if (!mono_method_is_unmanaged_callers_only (dm.method))
@@ -1986,28 +1974,6 @@ MonoBackend::published_entry (MonoDomainMethod &dm)
 		return runtime_error (metadata_error);
 
 	return (*backend)->compile (wrapper, dm.domain);
-}
-
-void *
-MonoBackend::published_entry_if_ready (MonoDomain *domain, MonoMethod *method)
-{
-	if (!instance)
-		return nullptr;
-
-	MonoDomainMethod *dm = domain_method_find (domain, method);
-
-	if (dm == nullptr || dm->tier () == MonoTier::none)
-		return nullptr;
-
-	/* Methods marked for retranslation must use the ordinary path. */
-	if (recompiling (method))
-		return nullptr;
-
-	if (!dm->exposed_to_native_code)
-		return dm->thunk.code ();
-
-	/* An interop entry is returned only after its wrapper is published. */
-	return dm->interop_entry_if_ready ();
 }
 
 llvm::Expected<void *>
