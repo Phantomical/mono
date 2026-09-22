@@ -40,6 +40,7 @@
 #include <mono/utils/mono-time.h>
 #include <mono/utils/mono-threads.h>
 #include <mono/utils/mono-threads-coop.h>
+#include <setjmp.h>
 #include <mono/utils/mono-tls.h>
 #include <mono/utils/atomic.h>
 #include <mono/utils/mono-memory-model.h>
@@ -251,6 +252,9 @@ gint32 mono_thread_interruption_request_flag;
 static MonoOSEvent background_change_event;
 
 static gboolean shutting_down = FALSE;
+
+// Landing pad used when an abort ends a thread started by the runtime.
+static MonoNativeTlsKey thread_exit_jmp_key;
 gboolean unity_shutting_down = FALSE;
 
 static gint32 managed_thread_id_counter = 0;
@@ -1370,6 +1374,7 @@ start_wrapper (gpointer data)
 	StartInfo *start_info;
 	MonoThreadInfo *info;
 	gsize res;
+	jmp_buf exit_jmp;
 
 	start_info = (StartInfo*) data;
 	g_assert (start_info);
@@ -1377,8 +1382,18 @@ start_wrapper (gpointer data)
 	info = mono_thread_info_attach ();
 	info->runtime_thread = TRUE;
 
-	/* Run the actual main function of the thread */
-	res = start_wrapper_internal (start_info, (gsize*)info->stack_end);
+	// Leave managed frames behind before pthread_exit (). JIT unwind information
+	// is not in .eh_frame, so libgcc cannot safely unwind through those frames.
+	if (setjmp (exit_jmp) == 0) {
+		mono_native_tls_set_value (thread_exit_jmp_key, &exit_jmp);
+
+		/* Run the actual main function of the thread */
+		res = start_wrapper_internal (start_info, (gsize*)info->stack_end);
+	} else {
+		res = 0;
+	}
+
+	mono_native_tls_set_value (thread_exit_jmp_key, NULL);
 
 	mono_thread_info_exit (res);
 
@@ -1853,6 +1868,7 @@ void
 mono_thread_exit (void)
 {
 	MonoInternalThread *thread = mono_thread_internal_current ();
+	jmp_buf *exit_jmp;
 
 	THREAD_DEBUG (g_message ("%s: mono_thread_exit for %p (%" G_GSIZE_FORMAT ")", __func__, thread, (gsize)thread->tid));
 
@@ -1861,6 +1877,10 @@ mono_thread_exit (void)
 	/* we could add a callback here for embedders to use. */
 	if (mono_thread_get_main () && (thread == mono_thread_get_main ()->internal_thread))
 		exit (mono_environment_exitcode_get ());
+
+	exit_jmp = (jmp_buf *) mono_native_tls_get_value (thread_exit_jmp_key);
+	if (exit_jmp)
+		longjmp (*exit_jmp, 1);
 
 	mono_thread_info_exit (0);
 }
@@ -3692,6 +3712,8 @@ void
 mono_thread_callbacks_init (void)
 {
 	MonoThreadInfoCallbacks cb;
+
+	mono_native_tls_alloc (&thread_exit_jmp_key, NULL);
 
 	memset (&cb, 0, sizeof(cb));
 	cb.thread_attach = thread_attach;
