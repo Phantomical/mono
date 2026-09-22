@@ -2,11 +2,9 @@
 
 #include "arch/arch.hpp"
 
-#include <llvm/CodeGen/FaultMaps.h>
 #include <llvm/CodeGen/MachineBasicBlock.h>
 #include <llvm/CodeGen/MachineInstrBuilder.h>
 #include <llvm/CodeGen/TargetInstrInfo.h>
-#include <llvm/CodeGen/TargetOpcodes.h>
 #include <llvm/Support/ErrorHandling.h>
 
 using namespace llvm;
@@ -34,15 +32,10 @@ cmp8mi_opcode (const TargetInstrInfo &tii)
 
 void
 emit_faulting_byte_read (MachineBasicBlock &mbb, MachineBasicBlock::iterator at,
-                         const TargetInstrInfo &tii, Register pointer,
-                         MachineBasicBlock *handler, DebugLoc dl)
+                         const TargetInstrInfo &tii, Register pointer, DebugLoc dl)
 {
-	/* FAULTING_OP carries the handler and the wrapped compare operands. */
-	BuildMI (mbb, at, dl, tii.get (TargetOpcode::FAULTING_OP))
-		.addReg (0, RegState::Define)
-		.addImm (FaultMaps::FaultingLoad)
-		.addMBB (handler)
-		.addImm (cmp8mi_opcode (tii))
+	// The unused index, displacement, and segment operands are encoded as zero.
+	BuildMI (mbb, at, dl, tii.get (cmp8mi_opcode (tii)))
 		.addReg (pointer)
 		.addImm (1)
 		.addReg (0)
