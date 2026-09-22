@@ -1945,8 +1945,10 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 			pending_save_last_error = true;
 			return llvm::Error::success ();
 
-		// A hint that the branch it precedes is the unlikely one.
+		// A hint that the block it starts is the unlikely one, so
+		// finish_function's layout pass moves it out of the hot path's way.
 		case MONO_CEE_MONO_NOT_TAKEN:
+			cold_blocks.push_back (builder.GetInsertBlock ());
 			return llvm::Error::success ();
 
 		// Bracketing marks around a call out to native code. Every wrapper that
