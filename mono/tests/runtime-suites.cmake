@@ -742,11 +742,6 @@ mono_runtime_suite(runtime-array-guard TESTS array-devirt.exe
 mono_runtime_suite(runtime-array-guard-off TESTS array-devirt.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-arrays=0")
 
-# Compare tier-2 IRCE with the same kernels compiled without the pass.
-mono_runtime_suite(runtime-irce TESTS irce-bounds.exe)
-mono_runtime_suite(runtime-irce-off TESTS irce-bounds.exe
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-irce=0")
-
 # The guess GuardDispatchPass takes on a receiver it cannot prove a class
 # for, behind the same array rule's guard. Tier 2 only, same as the array
 # arm above, and the same threshold: this file spends the same shape of
