@@ -528,6 +528,7 @@ set(MONO_TESTS_CS_SRC
   thread6.cs
   thread7.cs
   appdomain-threadpool-unload.cs
+  thread-abort-reset-race.cs
   process-unref-race.cs
   bug-46661.cs
   w32message.cs
