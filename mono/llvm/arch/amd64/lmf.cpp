@@ -291,22 +291,18 @@ emit_lmf_capture_registers (llvm::IRBuilderBase &b, llvm::Value *slot)
 	llvm::Align align (TARGET_SIZEOF_VOID_P);
 	llvm::Value *name = llvm::MetadataAsValue::get (
 		ctx, llvm::MDNode::get (ctx, llvm::MDString::get (ctx, "rbp")));
-	llvm::MDNode *marker = llvm::MDNode::get (ctx, {});
 
-	llvm::StoreInst *rbp_store = b.CreateAlignedStore (
+	b.CreateAlignedStore (
 		b.CreateIntrinsic (llvm::Intrinsic::read_register, { b.getInt64Ty () },
 	                           { name }),
 		b.CreateConstInBoundsGEP1_32 (i8, slot,
 	                                      MONO_STRUCT_OFFSET (MonoLMF, rbp)),
 		align);
-	llvm::StoreInst *rsp_store = b.CreateAlignedStore (
+	b.CreateAlignedStore (
 		b.CreatePtrToInt (b.CreateStackSave (), b.getInt64Ty ()),
 		b.CreateConstInBoundsGEP1_32 (i8, slot,
 	                                      MONO_STRUCT_OFFSET (MonoLMF, rsp)),
 		align);
-
-	rbp_store->setMetadata ("mono.lmf.capture", marker);
-	rsp_store->setMetadata ("mono.lmf.capture", marker);
 }
 
 } // namespace mono::arch

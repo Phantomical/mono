@@ -16,7 +16,6 @@
 #include "passes/eliminate-empty-finally.hpp"
 #include "passes/initonly-nullness.hpp"
 #include "passes/inline-copies.hpp"
-#include "passes/lmf-dedup.hpp"
 #include "passes/lower-keepalive.hpp"
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
@@ -691,9 +690,6 @@ MonoPassBuilder::buildTier2Pipeline ()
 	 */
 	if (dump_point_enabled (DumpPoint::tier2_inlined_ir))
 		MPM.addPass (mono::DumpIRPass (DumpPoint::tier2_inlined_ir));
-
-	/* Fold duplicate captures introduced by inlining before optimization. */
-	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::LmfDedupPass ()));
 
 	/*
 	 * Behind the inliner and GuardDispatchPass, both of which read the vtable

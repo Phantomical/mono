@@ -123,9 +123,7 @@ MethodLLVMEmitter::emit_pop_lmf (MonoIrBuilder &builder)
 			MONO_STRUCT_OFFSET (MonoLMF, previous_lmf)),
 		align);
 
-	llvm::StoreInst *release = builder.CreateAlignedStore (previous, lmf_addr, align);
-
-	release->setMetadata ("mono.lmf.release", llvm::MDNode::get (context (), {}));
+	builder.CreateAlignedStore (previous, lmf_addr, align);
 }
 
 /// Whether the icall was registered with no wrapper in front of it.
