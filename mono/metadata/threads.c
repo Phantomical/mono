@@ -5988,9 +5988,14 @@ async_abort_critical (MonoThreadInfo *info, gpointer ud)
 
 	if (!protected_wrapper && running_managed) {
 		/*We are in managed code*/
-		/*Set the thread to call */
-		if (data->install_async_abort)
-			mono_thread_info_setup_async_call (info, self_interrupt_thread, NULL);
+		if (data->install_async_abort) {
+			// The target may reset its abort after request_thread_abort () releases
+			// the lock. Do not install an async call for a request that is gone.
+			if (thread->state & ThreadState_AbortRequested)
+				mono_thread_info_setup_async_call (info, self_interrupt_thread, NULL);
+			else
+				data->thread_will_abort = FALSE;
+		}
 		return MonoResumeThread;
 	} else {
 		/* 
