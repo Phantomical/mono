@@ -242,11 +242,8 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 		mono_mb_emit_byte (mb, CEE_CONV_I);
 		mono_mb_emit_stloc (mb, size_var);
 	} else if (atype == ATYPE_VECTOR) {
-		ERROR_DECL (error);
 		MonoExceptionClause *clause;
 		int pos, pos_leave, pos_error;
-		MonoClass *oom_exc_class;
-		MonoMethod *ctor;
 
 		/*
 		 * n > MONO_ARRAY_MAX_INDEX => OutOfMemoryException
@@ -265,9 +262,9 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 		mono_mb_emit_ldarg (mb, 1);
 		mono_mb_emit_icon (mb, 0);
 		pos_error = mono_mb_emit_short_branch (mb, CEE_BLT_S);
-		mono_mb_emit_exception (mb, "OutOfMemoryException", NULL);
+		mono_mb_emit_exception_by_token (mb, "OutOfMemoryException");
 		mono_mb_patch_short_branch (mb, pos_error);
-		mono_mb_emit_exception (mb, "OverflowException", NULL);
+		mono_mb_emit_exception_by_token (mb, "OverflowException");
 
 		mono_mb_patch_short_branch (mb, pos);
 
@@ -301,15 +298,8 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 				"System", "OverflowException");
 		clause->handler_offset = mono_mb_get_label (mb);
 
-		oom_exc_class = mono_class_load_from_name (mono_defaults.corlib,
-				"System", "OutOfMemoryException");
-		ctor = mono_class_get_method_from_name_checked (oom_exc_class, ".ctor", 0, 0, error);
-		mono_error_assert_ok (error);
-		g_assert (ctor);
-
 		mono_mb_emit_byte (mb, CEE_POP);
-		mono_mb_emit_op (mb, CEE_NEWOBJ, ctor);
-		mono_mb_emit_byte (mb, CEE_THROW);
+		mono_mb_emit_exception_by_token (mb, "OutOfMemoryException");
 
 		clause->handler_len = mono_mb_get_pos (mb) - clause->handler_offset;
 		mono_mb_set_clauses (mb, 1, clause);
@@ -342,7 +332,7 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 
 		mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
 		mono_mb_emit_byte (mb, CEE_MONO_NOT_TAKEN);
-		mono_mb_emit_exception (mb, "OutOfMemoryException", NULL);
+		mono_mb_emit_exception_by_token (mb, "OutOfMemoryException");
 		mono_mb_patch_short_branch (mb, pos);
 #endif
 
@@ -462,7 +452,7 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 	/* if (ret == NULL) throw OOM; */
 	mono_mb_emit_byte (mb, CEE_DUP);
 	no_oom_branch = mono_mb_emit_branch (mb, CEE_BRTRUE);
-	mono_mb_emit_exception (mb, "OutOfMemoryException", NULL);
+	mono_mb_emit_exception_by_token (mb, "OutOfMemoryException");
 
 	mono_mb_patch_branch (mb, no_oom_branch);
 	mono_mb_emit_byte (mb, CEE_RET);

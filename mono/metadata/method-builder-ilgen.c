@@ -15,6 +15,7 @@
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/metadata-internals.h"
 #include "mono/metadata/domain-internals.h"
+#include "mono/metadata/tokentype.h"
 #include <string.h>
 #include <errno.h>
 #include "class-init.h"
@@ -579,6 +580,18 @@ void
 mono_mb_emit_exception (MonoMethodBuilder *mb, const char *exc_name, const char *msg)
 {
 	mono_mb_emit_exception_full (mb, "System", exc_name, msg);
+}
+
+/* Emit the unwind-aware builtin for a named corlib exception. */
+void
+mono_mb_emit_exception_by_token (MonoMethodBuilder *mb, const char *exc_name)
+{
+	MonoClass *klass = mono_class_load_from_name (mono_defaults.corlib, "System", exc_name);
+	guint32 token = m_class_get_type_token (klass) - MONO_TOKEN_TYPE_DEF;
+
+	mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
+	mono_mb_emit_byte (mb, CEE_MONO_THROW_BUILTIN);
+	mono_mb_emit_i4 (mb, (gint32) token);
 }
 
 /**

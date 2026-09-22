@@ -1109,6 +1109,7 @@ private:
 	llvm::Error emit_mono_vtaddr (MonoIrBuilder &builder);
 	llvm::Error emit_mono_get_sp (MonoIrBuilder &builder);
 	llvm::Error emit_mono_rethrow (MonoIrBuilder &builder);
+	llvm::Error emit_mono_throw_builtin (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_mono_newobj (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_mono_ldnativeobj (MonoIrBuilder &builder, uint32_t token);
 	llvm::Error emit_mono_retobj (MonoIrBuilder &builder, uint32_t token);
