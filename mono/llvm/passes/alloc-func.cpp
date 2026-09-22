@@ -17,7 +17,6 @@
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
-#include <llvm/Support/CommandLine.h>
 #include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/ModRef.h>
 
@@ -25,12 +24,6 @@ using namespace llvm;
 
 namespace mono {
 namespace {
-
-// Keep the option next to the pass it controls.
-llvm::cl::opt<bool> InlineAllocator (
-	"mono-inline-allocator", llvm::cl::Hidden, llvm::cl::init (false),
-	llvm::cl::desc ("Resolve a marked allocator's call early enough for the "
-	                "tier-2 cost model to weigh inlining its own body"));
 
 StringRef
 name_of (AllocShape shape, bool erasable)
@@ -193,46 +186,6 @@ lower_allocations (Module &m)
 		}
 
 	return changed;
-}
-
-/* Resolve marked allocators before tier-2 inlining so their bodies are visible
- * to the cost model. The critical-region bookkeeping remains valid when the
- * allocator is inlined because SGen checks the thread flag through its runtime
- * callback and retries threads caught in the region. */
-bool
-materialize_allocator_calls (Function &f)
-{
-	if (!InlineAllocator)
-		return false;
-
-	bool changed = false;
-
-	for (AllocShape shape : { AllocShape::object, AllocShape::vector, AllocShape::string })
-		for (bool erasable : { true, false })
-			for (CallBase *site : builtin_sites (f, name_of (shape, erasable))) {
-				auto *allocator =
-					cast<Function> (site->getArgOperand (2)->stripPointerCasts ());
-
-				if (allocator->hasFnAttribute (alloc_wrapper_attribute)) {
-					lower (site);
-					changed = true;
-				}
-			}
-
-	return changed;
-}
-
-PreservedAnalyses
-MaterializeAllocatorCallsPass::run (Function &f, FunctionAnalysisManager &)
-{
-	if (!materialize_allocator_calls (f))
-		return PreservedAnalyses::all ();
-
-	PreservedAnalyses preserved;
-
-	// lower () replaces a call without changing the CFG.
-	preserved.preserveSet<CFGAnalyses> ();
-	return preserved;
 }
 
 } // namespace mono

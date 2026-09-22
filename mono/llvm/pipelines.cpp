@@ -4,7 +4,7 @@
 #include "arch/arch.hpp"
 #include "compile-state.hpp"
 #include "jit.hpp"
-#include "passes/alloc-func.hpp"
+#include "passes/alloc-inline.hpp"
 #include "passes/builtins.hpp"
 #include "passes/clamp-frame-align.hpp"
 #include "passes/class-init-elision.hpp"
@@ -666,22 +666,17 @@ MonoPassBuilder::buildTier2Pipeline ()
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
 		mono::EliminateDelegateAndGuardDispatchPass ()));
 
-	/* Resolve marked allocator calls before the first inlining round. */
-	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (
-		mono::MaterializeAllocatorCallsPass ()));
-
 	/*
-	 * Both eliminations run again between the inliner's rounds. Most of what they
-	 * find there is not in the caller's own code: it arrives with an inline.
+	 * The elimination runs again between the inliner's rounds. Most of what it
+	 * finds there is not in the caller's own code: it arrives with an inline.
 	 * An inlined `MoveNext` or `get_Current` carries its own delegate calls and
 	 * array dispatches into the caller. Neither reached those sites before
-	 * the inline happened. The round after each pass then reads what it named
+	 * the inline happened. The round after the pass then reads what it named
 	 * as an ordinary call site.
 	 */
 	llvm::FunctionPassManager between;
 
 	between.addPass (mono::EliminateDelegateAndGuardDispatchPass ());
-	between.addPass (mono::MaterializeAllocatorCallsPass ());
 	between.addPass (buildTier2FunctionSimplificationPipeline ());
 
 	MPM.addPass (mono::TopDownInlinerPass (*TM, buildTier2MaterializePipeline (),
@@ -759,6 +754,21 @@ MonoPassBuilder::buildTier2Pipeline ()
 
 	// Remove vtable stores made redundant by the real allocator call.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::EraseDeadVtableStorePass ()));
+
+	/* Keep this after vtable-store elimination and before ABI lowering. */
+	if (mono::allocation_inlining_enabled ()) {
+		MPM.addPass (mono::AllocationInlinerPass (*TM, buildTier2MaterializePipeline (),
+		                                          buildTier2FunctionSimplificationPipeline (),
+		                                          *ProfileFS));
+
+		// Remove copies materialized by this pass.
+		MPM.addPass (mono::StripInlineCopiesPass ());
+
+		// Lower builtins introduced while materializing allocator bodies.
+		MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
+		MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_optimization));
+		MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::EraseDeadVtableStorePass ()));
+	}
 
 	llvm::FunctionPassManager FPM;
 
