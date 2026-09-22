@@ -803,6 +803,11 @@ static gboolean g_dyn_func_table_inited;
 extern GList* g_dynamic_function_table_begin;
 static GList* g_dynamic_function_table_end;
 
+// Cache the most recently matched chunk. Lookups share the table's read
+// lock, so access this pointer atomically. Removals clear it before
+// freeing the node.
+static GList* g_dynamic_function_table_mru_node;
+
 // SRW lock (lightweight read/writer lock) protecting dynamic function table.
 extern SRWLOCK g_dynamic_function_table_lock;
 
@@ -889,6 +894,7 @@ terminate_table_no_lock(void)
 			g_list_free(g_dynamic_function_table_begin);
 			g_dynamic_function_table_begin = NULL;
 			g_dynamic_function_table_end = NULL;
+			mono_atomic_store_ptr((volatile gpointer*)&g_dynamic_function_table_mru_node, NULL);
 		}
 
 		g_rtl_delete_growable_function_table = NULL;
@@ -994,6 +1000,18 @@ find_pc_in_table_no_lock_ex(const gpointer pc)
 	if (found_entry || continue_search == FALSE)
 		return found_entry;
 
+	// A chunk takes a whole batch's inserts back to back, so the previous
+	// lookup's chunk is the likely answer here too. The high end check is
+	// strict because two adjacent chunks can share a boundary pc. The scan
+	// below always resolves that tie toward the chunk starting at pc. An
+	// inclusive match here could instead cache the one ending at pc.
+	GList* mru_node = (GList*)mono_atomic_load_ptr((volatile gpointer*)&g_dynamic_function_table_mru_node);
+	if (mru_node != NULL) {
+		DynamicFunctionTableEntry* mru_entry = (DynamicFunctionTableEntry*)mru_node->data;
+		if (mru_entry->begin_range <= begin_range && mru_entry->end_range > begin_range)
+			return mru_node;
+	}
+
 	// Scan table for a entry including range.
 	for (GList* node = g_dynamic_function_table_begin; node; node = node->next) {
 		DynamicFunctionTableEntry* current_entry = (DynamicFunctionTableEntry*)node->data;
@@ -1005,6 +1023,9 @@ find_pc_in_table_no_lock_ex(const gpointer pc)
 			break;
 		}
 	}
+
+	if (found_entry != NULL)
+		mono_atomic_store_ptr((volatile gpointer*)&g_dynamic_function_table_mru_node, found_entry);
 
 	return found_entry;
 }
@@ -1185,6 +1206,9 @@ remove_range_in_table_no_lock(GList* entry)
 	if (entry != NULL) {
 		if (entry == g_dynamic_function_table_end)
 			g_dynamic_function_table_end = entry->prev;
+
+		if (entry == (GList*)mono_atomic_load_ptr((volatile gpointer*)&g_dynamic_function_table_mru_node))
+			mono_atomic_store_ptr((volatile gpointer*)&g_dynamic_function_table_mru_node, NULL);
 
 		g_dynamic_function_table_begin = g_list_remove_link(g_dynamic_function_table_begin, entry);
 		DynamicFunctionTableEntry* removed_entry = (DynamicFunctionTableEntry*)entry->data;
