@@ -246,6 +246,7 @@ set(MONO_TESTS_CS_SRC
   array-devirt.cs
   array-native-int-cast.cs
   array-clear-memset.cs
+  irce-bounds.cs
   unbox-element-class.cs
   class-devirt.cs
   shared-cast-depth.cs
