@@ -3595,7 +3595,9 @@ static const MonoDebugFlagOption debug_flag_options[] = {
 	{ "init-stacks", &mini_debug_options.init_stacks, TRUE, TRUE },
 	{ "casts", &mini_debug_options.better_cast_details, TRUE, TRUE },
 	{ "soft-breakpoints", &mini_debug_options.soft_breakpoints, TRUE, FALSE },
-	{ "check-pinvoke-callconv", &mini_debug_options.check_pinvoke_callconv, TRUE, TRUE },
+	// Keep this opt-in: the extra checks can exhaust tier-0 register allocation
+	// while compiling the first native wrapper during startup.
+	{ "check-pinvoke-callconv", &mini_debug_options.check_pinvoke_callconv, TRUE, FALSE },
 	{ "use-fallback-tls", &mini_debug_options.use_fallback_tls, TRUE, FALSE },
 	{ "align-small-structs", &mono_align_small_structs, TRUE, FALSE },
 	{ "native-debugger-break", &mini_debug_options.native_debugger_break, TRUE, FALSE },
