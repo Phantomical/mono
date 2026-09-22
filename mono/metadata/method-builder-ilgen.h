@@ -83,6 +83,9 @@ void
 mono_mb_emit_exception (MonoMethodBuilder *mb, const char *exc_name, const char *msg);
 
 void
+mono_mb_emit_exception_by_token (MonoMethodBuilder *mb, const char *exc_name);
+
+void
 mono_mb_emit_exception_full (MonoMethodBuilder *mb, const char *exc_nspace, const char *exc_name, const char *msg);
 
 void

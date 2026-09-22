@@ -1882,6 +1882,7 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 	case MONO_CEE_MONO_VTADDR:
 	case MONO_CEE_MONO_GET_SP:
 	case MONO_CEE_MONO_RETHROW:
+	case MONO_CEE_MONO_THROW_BUILTIN:
 	case MONO_CEE_MONO_NEWOBJ:
 	case MONO_CEE_MONO_LDNATIVEOBJ:
 	case MONO_CEE_MONO_RETOBJ:
@@ -1920,6 +1921,8 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 			return emit_mono_get_sp (builder);
 		case MONO_CEE_MONO_RETHROW:
 			return emit_mono_rethrow (builder);
+		case MONO_CEE_MONO_THROW_BUILTIN:
+			return emit_mono_throw_builtin (builder, static_cast<uint32_t> (operand));
 		case MONO_CEE_MONO_NEWOBJ:
 			return emit_mono_newobj (builder, static_cast<uint32_t> (operand));
 		case MONO_CEE_MONO_LDNATIVEOBJ:
@@ -2024,6 +2027,15 @@ MethodLLVMEmitter::emit_throw_corlib_exception (MonoIrBuilder &builder, const ch
 
 	emit_unwinding_call (builder, throw_corlib_exception_decl (module),
 	                     { builder.getInt32 (token) });
+}
+
+/* Throw the corlib exception identified by the TypeDef row in the operand. */
+llvm::Error
+MethodLLVMEmitter::emit_mono_throw_builtin (MonoIrBuilder &builder, uint32_t token)
+{
+	emit_unwinding_call (builder, throw_corlib_exception_decl (module),
+	                     { builder.getInt32 (token) });
+	return llvm::Error::success ();
 }
 
 /// Numbers the checks one instruction asks for, from zero at each instruction.
