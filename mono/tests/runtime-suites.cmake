@@ -757,6 +757,11 @@ mono_runtime_suite(runtime-class-guard TESTS class-devirt.exe
 mono_runtime_suite(runtime-class-guard-off TESTS class-devirt.exe
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-classes=0")
 
+# Exercise List<T> indexers with the bounds-check hint enabled and disabled.
+mono_runtime_suite(runtime-list-bounds-hint TESTS list-bounds-hint.exe)
+mono_runtime_suite(runtime-list-bounds-hint-off TESTS list-bounds-hint.exe
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-assume-hints=0")
+
 # The faulting-access rewrite MonoNullCheckFaultPass makes of a null check
 # ImplicitNullChecks itself declined to fold. implicit-null-checks.cs drives
 # its own tiers through PromoteNow, so this needs no threshold of its own,

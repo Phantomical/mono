@@ -121,6 +121,11 @@ llvm::cl::opt<bool> CondCardMarkOpt (
 	llvm::cl::desc ("Test a card's byte before storing it, skipping the store where "
 	                "it already reads 1"));
 
+llvm::cl::opt<bool> AssumeHintsOpt (
+	"mono-assume-hints", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Lower Mono.JitHints.Assume () to llvm.assume instead of "
+	                "dropping it"));
+
 llvm::cl::opt<unsigned> Tier1ThresholdOpt (
 	"mono-tier1-threshold", llvm::cl::Hidden, llvm::cl::init (5000000),
 	llvm::cl::desc ("What a tier-0 body spends before it asks for tier 1"));
@@ -436,6 +441,12 @@ bool
 cond_card_mark ()
 {
 	return CondCardMarkOpt;
+}
+
+bool
+assume_hints ()
+{
+	return AssumeHintsOpt;
 }
 
 llvm::FastMathFlags

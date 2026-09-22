@@ -1201,6 +1201,7 @@ private:
 	                                            MonoMethodSignature *sig);
 	llvm::Error emit_thread_memory_barrier (MonoIrBuilder &builder);
 	llvm::Error emit_thread_spin_wait_nop (MonoIrBuilder &builder);
+	llvm::Error emit_assume (MonoIrBuilder &builder, MonoMethodSignature *sig);
 	llvm::Expected<llvm::Value *> emit_internal_thread (MonoIrBuilder &builder);
 	llvm::Expected<llvm::Value *> thread_static_address (MonoIrBuilder &builder,
 	                                                     uint32_t index, uint32_t offset);

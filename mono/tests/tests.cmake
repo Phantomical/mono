@@ -249,6 +249,7 @@ set(MONO_TESTS_CS_SRC
   irce-bounds.cs
   unbox-element-class.cs
   class-devirt.cs
+  list-bounds-hint.cs
   shared-cast-depth.cs
   gshared-boehm-alloc-shape.cs
   boehm-domain-alloc-shape.cs

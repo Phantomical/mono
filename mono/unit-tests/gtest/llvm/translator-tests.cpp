@@ -730,6 +730,14 @@ TEST_F (TranslatorTest, ElementAccessIsBoundsChecked)
 	EXPECT_GE (t.count ("icmp uge"), 1u);
 }
 
+TEST_F (TranslatorTest, JitHintsAssumeLowersToLlvmAssume)
+{
+	const Translation &t = translate ("arrays", "Arrays:AssumeThenGetInt");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_GE (t.count ("call void @llvm.assume"), 1u);
+}
+
 /* ------------------------------------------------------------- exceptions */
 
 TEST_F (TranslatorTest, ACatchGetsALandingPadAndAPersonality)

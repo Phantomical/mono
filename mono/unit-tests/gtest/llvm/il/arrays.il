@@ -35,6 +35,21 @@
 		ret
 	}
 
+	.method public static int32 AssumeThenGetInt (int32[] a, int32 i) cil managed
+	{
+		.maxstack 3
+		ldarg.1
+		ldarg.0
+		ldlen
+		conv.i4
+		clt.un
+		call void [mscorlib]Mono.JitHints::Assume (bool)
+		ldarg.0
+		ldarg.1
+		ldelem.i4
+		ret
+	}
+
 	.method public static int32 GetByte (unsigned int8[] a, int32 i) cil managed
 	{
 		.maxstack 2
