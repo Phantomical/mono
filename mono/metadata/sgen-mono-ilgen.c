@@ -191,7 +191,12 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 #ifdef MANAGED_ALLOCATION
 	int p_var, size_var, real_size_var, thread_var G_GNUC_UNUSED;
 	int tlab_next_addr_var, new_next_var;
-	guint32 fastpath_branch, max_size_branch, no_oom_branch;
+	guint32 tlab_miss_branch = 0, fallback_branch = 0, fastpath_done_branch = 0;
+	guint32 bounds_branch = 0, overflow_branch = 0;
+	guint32 oom_branch [2];
+	int oom_branches = 0;
+	MonoExceptionClause *clause = NULL;
+	int i;
 
 	if (slowpath) {
 		switch (atype) {
@@ -218,13 +223,10 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 
 	MonoType *int_type;
 	int_type = mono_get_int_type ();
-	/*
-	 * Tls access might call foreign code or code without jinfo. This can
-	 * only happen if we are outside of the critical region.
-	 */
-	EMIT_TLS_ACCESS_VAR (mb, thread_var);
 
 	size_var = mono_mb_add_local (mb, int_type);
+	p_var = mono_mb_add_local (mb, int_type);
+
 	if (atype == ATYPE_SMALL) {
 		/* size_var = size_arg */
 		mono_mb_emit_ldarg (mb, 1);
@@ -242,8 +244,7 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 		mono_mb_emit_byte (mb, CEE_CONV_I);
 		mono_mb_emit_stloc (mb, size_var);
 	} else if (atype == ATYPE_VECTOR) {
-		MonoExceptionClause *clause;
-		int pos, pos_leave, pos_error;
+		guint32 pos_leave;
 
 		/*
 		 * n > MONO_ARRAY_MAX_INDEX => OutOfMemoryException
@@ -255,18 +256,7 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 		mono_mb_emit_ldarg (mb, 1);
 		mono_mb_emit_icon (mb, MONO_ARRAY_MAX_INDEX);
 		mono_mb_emit_byte (mb, CEE_CONV_U);
-		pos = mono_mb_emit_short_branch (mb, CEE_BLE_UN_S);
-
-		mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
-		mono_mb_emit_byte (mb, CEE_MONO_NOT_TAKEN);
-		mono_mb_emit_ldarg (mb, 1);
-		mono_mb_emit_icon (mb, 0);
-		pos_error = mono_mb_emit_short_branch (mb, CEE_BLT_S);
-		mono_mb_emit_exception_by_token (mb, "OutOfMemoryException");
-		mono_mb_patch_short_branch (mb, pos_error);
-		mono_mb_emit_exception_by_token (mb, "OverflowException");
-
-		mono_mb_patch_short_branch (mb, pos);
+		bounds_branch = mono_mb_emit_branch (mb, CEE_BGT_UN);
 
 		clause = (MonoExceptionClause *)mono_image_alloc0 (mono_defaults.corlib, sizeof (MonoExceptionClause));
 		clause->try_offset = mono_mb_get_label (mb);
@@ -290,21 +280,8 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 		mono_mb_emit_stloc (mb, size_var);
 
 		pos_leave = mono_mb_emit_branch (mb, CEE_LEAVE);
-
-		/* catch */
-		clause->flags = MONO_EXCEPTION_CLAUSE_NONE;
 		clause->try_len = mono_mb_get_pos (mb) - clause->try_offset;
-		clause->data.catch_class = mono_class_load_from_name (mono_defaults.corlib,
-				"System", "OverflowException");
-		clause->handler_offset = mono_mb_get_label (mb);
-
-		mono_mb_emit_byte (mb, CEE_POP);
-		mono_mb_emit_exception_by_token (mb, "OutOfMemoryException");
-
-		clause->handler_len = mono_mb_get_pos (mb) - clause->handler_offset;
-		mono_mb_set_clauses (mb, 1, clause);
 		mono_mb_patch_branch (mb, pos_leave);
-		/* end catch */
 	} else if (atype == ATYPE_STRING) {
 		/*
 		 * a string allocator method takes the args: (vtable, len)
@@ -324,16 +301,9 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 		 * never reach the maximum size.
 		 */
 #if TARGET_SIZEOF_VOID_P == 4
-		int pos;
-
 		mono_mb_emit_ldarg (mb, 1);
 		mono_mb_emit_icon (mb, (INT32_MAX - (SGEN_ALLOC_ALIGN - 1) - MONO_STRUCT_OFFSET (MonoString, chars)) / 2 - 1);
-		pos = mono_mb_emit_short_branch (mb, MONO_CEE_BLE_UN_S);
-
-		mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
-		mono_mb_emit_byte (mb, CEE_MONO_NOT_TAKEN);
-		mono_mb_emit_exception_by_token (mb, "OutOfMemoryException");
-		mono_mb_patch_short_branch (mb, pos);
+		oom_branch [oom_branches++] = mono_mb_emit_branch (mb, CEE_BGT_UN);
 #endif
 
 		mono_mb_emit_ldarg (mb, 1);
@@ -347,14 +317,6 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 	} else {
 		g_assert_not_reached ();
 	}
-
-#ifdef MANAGED_ALLOCATOR_CAN_USE_CRITICAL_REGION
-	EMIT_TLS_ACCESS_IN_CRITICAL_REGION_ADDR (mb, thread_var);
-	mono_mb_emit_byte (mb, CEE_LDC_I4_1);
-	mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
-	mono_mb_emit_byte (mb, CEE_MONO_ATOMIC_STORE_I4);
-	mono_mb_emit_i4 (mb, MONO_MEMORY_BARRIER_NONE);
-#endif
 
 	if (sgen_nursery_canaries_enabled ()) {
 		real_size_var = mono_mb_add_local (mb, int_type);
@@ -377,8 +339,22 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 	if (atype != ATYPE_SMALL) {
 		mono_mb_emit_ldloc (mb, size_var);
 		mono_mb_emit_icon (mb, SGEN_MAX_SMALL_OBJ_SIZE);
-		max_size_branch = mono_mb_emit_short_branch (mb, MONO_CEE_BGT_UN_S);
+		fallback_branch = mono_mb_emit_branch (mb, CEE_BGT_UN);
 	}
+
+	/*
+	 * Tls access might call foreign code or code without jinfo. This can
+	 * only happen if we are outside of the critical region.
+	 */
+	EMIT_TLS_ACCESS_VAR (mb, thread_var);
+
+#ifdef MANAGED_ALLOCATOR_CAN_USE_CRITICAL_REGION
+	EMIT_TLS_ACCESS_IN_CRITICAL_REGION_ADDR (mb, thread_var);
+	mono_mb_emit_byte (mb, CEE_LDC_I4_1);
+	mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
+	mono_mb_emit_byte (mb, CEE_MONO_ATOMIC_STORE_I4);
+	mono_mb_emit_i4 (mb, MONO_MEMORY_BARRIER_NONE);
+#endif
 
 	/*
 	 * We need to modify tlab_next, but the JIT only supports reading, so we read
@@ -391,11 +367,10 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 	mono_mb_emit_stloc (mb, tlab_next_addr_var);
 
 	/* p = (void**)tlab_next; */
-	p_var = mono_mb_add_local (mb, int_type);
 	mono_mb_emit_ldloc (mb, tlab_next_addr_var);
 	mono_mb_emit_byte (mb, CEE_LDIND_I);
 	mono_mb_emit_stloc (mb, p_var);
-	
+
 	/* new_next = (char*)p + size; */
 	new_next_var = mono_mb_add_local (mb, int_type);
 	mono_mb_emit_ldloc (mb, p_var);
@@ -409,56 +384,10 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 	}
 	mono_mb_emit_stloc (mb, new_next_var);
 
-	/* if (G_LIKELY (new_next < tlab_temp_end)) */
+	/* if (new_next >= tlab_temp_end) goto slowpath */
 	mono_mb_emit_ldloc (mb, new_next_var);
 	EMIT_TLS_ACCESS_TEMP_END (mb, thread_var);
-	fastpath_branch = mono_mb_emit_short_branch (mb, MONO_CEE_BLT_UN_S);
-
-	/* Slowpath */
-	if (atype != ATYPE_SMALL)
-		mono_mb_patch_short_branch (mb, max_size_branch);
-
-	mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
-	mono_mb_emit_byte (mb, CEE_MONO_NOT_TAKEN);
-	/*
-	 * We are no longer in a critical section. We need to do this before calling
-	 * to unmanaged land in order to avoid stw deadlocks since unmanaged code
-	 * might take locks.
-	 */
-#ifdef MANAGED_ALLOCATOR_CAN_USE_CRITICAL_REGION
-	EMIT_TLS_ACCESS_IN_CRITICAL_REGION_ADDR (mb, thread_var);
-	mono_mb_emit_byte (mb, CEE_LDC_I4_0);
-	mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
-	mono_mb_emit_byte (mb, CEE_MONO_ATOMIC_STORE_I4);
-	mono_mb_emit_i4 (mb, MONO_MEMORY_BARRIER_NONE);
-	EMIT_CRITICAL_REGION_WAIT_NOTIFY (mb);
-#endif
-
-	/* FIXME: mono_gc_alloc_obj takes a 'size_t' as an argument, not an int32 */
-	mono_mb_emit_ldarg (mb, 0);
-	mono_mb_emit_ldloc (mb, real_size_var);
-	if (atype == ATYPE_NORMAL || atype == ATYPE_SMALL) {
-		mono_mb_emit_icall (mb, mono_gc_alloc_obj);
-	} else if (atype == ATYPE_VECTOR) {
-		mono_mb_emit_ldarg (mb, 1);
-		mono_mb_emit_icall (mb, mono_gc_alloc_vector);
-	} else if (atype == ATYPE_STRING) {
-		mono_mb_emit_ldarg (mb, 1);
-		mono_mb_emit_icall (mb, mono_gc_alloc_string);
-	} else {
-		g_assert_not_reached ();
-	}
-
-	/* if (ret == NULL) throw OOM; */
-	mono_mb_emit_byte (mb, CEE_DUP);
-	no_oom_branch = mono_mb_emit_branch (mb, CEE_BRTRUE);
-	mono_mb_emit_exception_by_token (mb, "OutOfMemoryException");
-
-	mono_mb_patch_branch (mb, no_oom_branch);
-	mono_mb_emit_byte (mb, CEE_RET);
-
-	/* Fastpath */
-	mono_mb_patch_short_branch (mb, fastpath_branch);
+	tlab_miss_branch = mono_mb_emit_branch (mb, CEE_BGE_UN);
 
 	/* FIXME: Memory barrier */
 
@@ -519,6 +448,84 @@ emit_managed_allocator_ilgen (MonoMethodBuilder *mb, gboolean slowpath, gboolean
 
 	/* return p */
 	mono_mb_emit_ldloc (mb, p_var);
+	fastpath_done_branch = mono_mb_emit_branch (mb, CEE_BR);
+
+	/* Slowpath */
+	mono_mb_patch_branch (mb, tlab_miss_branch);
+	mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
+	mono_mb_emit_byte (mb, CEE_MONO_NOT_TAKEN);
+	/*
+	 * We are no longer in a critical section. We need to do this before calling
+	 * to unmanaged land in order to avoid stw deadlocks since unmanaged code
+	 * might take locks.
+	 */
+#ifdef MANAGED_ALLOCATOR_CAN_USE_CRITICAL_REGION
+	EMIT_TLS_ACCESS_IN_CRITICAL_REGION_ADDR (mb, thread_var);
+	mono_mb_emit_byte (mb, CEE_LDC_I4_0);
+	mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
+	mono_mb_emit_byte (mb, CEE_MONO_ATOMIC_STORE_I4);
+	mono_mb_emit_i4 (mb, MONO_MEMORY_BARRIER_NONE);
+	EMIT_CRITICAL_REGION_WAIT_NOTIFY (mb);
+#endif
+
+	/* Oversized allocations skip the critical region. */
+	if (atype != ATYPE_SMALL)
+		mono_mb_patch_branch (mb, fallback_branch);
+
+	/* FIXME: mono_gc_alloc_obj takes a 'size_t' as an argument, not an int32 */
+	mono_mb_emit_ldarg (mb, 0);
+	mono_mb_emit_ldloc (mb, real_size_var);
+	if (atype == ATYPE_NORMAL || atype == ATYPE_SMALL) {
+		mono_mb_emit_icall (mb, mono_gc_alloc_obj);
+	} else if (atype == ATYPE_VECTOR) {
+		mono_mb_emit_ldarg (mb, 1);
+		mono_mb_emit_icall (mb, mono_gc_alloc_vector);
+	} else if (atype == ATYPE_STRING) {
+		mono_mb_emit_ldarg (mb, 1);
+		mono_mb_emit_icall (mb, mono_gc_alloc_string);
+	} else {
+		g_assert_not_reached ();
+	}
+	mono_mb_emit_stloc (mb, p_var);
+
+	/* if (ret == NULL) throw OOM; */
+	mono_mb_emit_ldloc (mb, p_var);
+	oom_branch [oom_branches++] = mono_mb_emit_branch (mb, CEE_BRFALSE);
+
+	/* The icall raises the allocation event itself, so this return skips the profiler tail. */
+	mono_mb_emit_ldloc (mb, p_var);
+	mono_mb_emit_byte (mb, CEE_RET);
+
+	if (atype == ATYPE_VECTOR) {
+		mono_mb_patch_branch (mb, bounds_branch);
+		mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
+		mono_mb_emit_byte (mb, CEE_MONO_NOT_TAKEN);
+		mono_mb_emit_ldarg (mb, 1);
+		mono_mb_emit_icon (mb, 0);
+		overflow_branch = mono_mb_emit_short_branch (mb, CEE_BLT_S);
+	}
+
+	for (i = 0; i < oom_branches; ++i)
+		mono_mb_patch_branch (mb, oom_branch [i]);
+	mono_mb_emit_byte (mb, MONO_CUSTOM_PREFIX);
+	mono_mb_emit_byte (mb, CEE_MONO_NOT_TAKEN);
+	mono_mb_emit_exception_by_token (mb, "OutOfMemoryException");
+
+	if (atype == ATYPE_VECTOR) {
+		mono_mb_patch_short_branch (mb, overflow_branch);
+		mono_mb_emit_exception_by_token (mb, "OverflowException");
+
+		clause->flags = MONO_EXCEPTION_CLAUSE_NONE;
+		clause->data.catch_class = mono_class_load_from_name (mono_defaults.corlib,
+				"System", "OverflowException");
+		clause->handler_offset = mono_mb_get_label (mb);
+		mono_mb_emit_byte (mb, CEE_POP);
+		mono_mb_emit_exception_by_token (mb, "OutOfMemoryException");
+		clause->handler_len = mono_mb_get_pos (mb) - clause->handler_offset;
+		mono_mb_set_clauses (mb, 1, clause);
+	}
+
+	mono_mb_patch_branch (mb, fastpath_done_branch);
 
  done:
 
