@@ -35,3 +35,11 @@ public class ReentrantEntry
 		Callee ();
 	}
 }
+
+/* Keep a method whose record starts unpublished for the lookup test. */
+public class LookupFastPath
+{
+	public static void Target ()
+	{
+	}
+}

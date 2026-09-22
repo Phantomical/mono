@@ -141,3 +141,22 @@ TEST_F (RaceEntry, ReentrantCctorDuringFirstCompileDoesNotDeadlock)
 	mono_runtime_invoke_checked (caller, nullptr, nullptr, error);
 	mono_error_assert_ok (error);
 }
+
+TEST_F (RaceEntry, PublishedEntryIfReadyMatchesTheCompiledAddress)
+{
+	MonoMethod *target = method_named_in ("LookupFastPath", "Target", 0);
+
+	ASSERT_NE (nullptr, target);
+
+	MonoDomain *domain = mono_domain_get ();
+
+	EXPECT_EQ (nullptr, mono::published_entry_if_ready (domain, target));
+
+	ERROR_DECL (error);
+	void *compiled = mono_llvm_jit_compile_method (target, domain, error);
+
+	mono_error_assert_ok (error);
+	ASSERT_NE (nullptr, compiled);
+
+	EXPECT_EQ (compiled, mono::published_entry_if_ready (domain, target));
+}
