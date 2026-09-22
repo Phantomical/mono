@@ -35,6 +35,13 @@ using System.Runtime.CompilerServices;
  * caller's own block dereferences the receiver. ImplicitNullChecks declines
  * such a check at tier 2, and folds no check at all at tier 1. In either case,
  * MonoNullCheckFaultPass rewrites it into a faulting access.
+ *
+ * A Split case is a fourth shape, and it must not throw. A select on a
+ * user-level null test sits in the same block as a tagged check on another
+ * object, and x86 lowers the select by splitting the machine block, so the
+ * piece ending in the select's own compare and branch shares the check's IR
+ * block. A rewrite that takes that compare for the check faults on the null
+ * the select was written to accept.
  */
 
 namespace Mono.Tiering {
@@ -160,6 +167,36 @@ static class Program {
 	static int BareDevirtualizedCall (Leaf leaf)
 	{
 		return leaf.Get ();
+	}
+
+	// The split arm. A select ahead of the check, in the check's own block.
+
+	static double fp_sink;
+	static bool bool_sink;
+
+	/// x86 has no floating-point cmov, so the block splits at the select.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SplitFloatSelect (object absent, Holder holder)
+	{
+		fp_sink = absent == null ? 1.0 : 2.0;
+		return holder.Virtual ();
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SplitFloatSelectNe (object absent, Holder holder)
+	{
+		fp_sink = absent != null ? 2.0 : 1.0;
+		return holder.Virtual ();
+	}
+
+	/// A bool set on a type test is an i8 select, which splits the same way.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SplitBoolOnTypeTest (object other, Holder holder, bool flag)
+	{
+		if (other is Leaf)
+			flag = true;
+		bool_sink = flag;
+		return holder.Virtual ();
 	}
 
 	// The guarded arm. A clause protects the site.
@@ -310,6 +347,16 @@ static class Program {
 		Fail (what, tier, "raised nothing");
 	}
 
+	/// Runs one split case, whose null feeds a select and is never dereferenced.
+	static void ExpectNoThrow (string what, string tier, Action body)
+	{
+		try {
+			body ();
+		} catch (Exception e) {
+			Fail (what, tier, "raised " + e.GetType ().Name);
+		}
+	}
+
 	static void ExpectInner (string what, string tier, Result got)
 	{
 		if (got.Where != Caught.Inner)
@@ -350,6 +397,11 @@ static class Program {
 		leaf.Value = 11;
 		if (BareDevirtualizedCall (leaf) != leaf.Get ())
 			Fail ("BareDevirtualizedCall", tier, "read the wrong value");
+
+		ExpectNoThrow ("SplitFloatSelect", tier, () => SplitFloatSelect (null, present));
+		ExpectNoThrow ("SplitFloatSelectNe", tier, () => SplitFloatSelectNe (null, present));
+		ExpectNoThrow ("SplitBoolOnTypeTest", tier,
+			() => SplitBoolOnTypeTest (present, present, false));
 	}
 
 	/// Calls each case without checking it, to give the tier-2 compile counts
@@ -371,6 +423,12 @@ static class Program {
 		GuardedVirtualCall (null);
 		GuardedDevirtualizedCall (null);
 		unsafe { GuardedBlockCopy (null); }
+
+		Holder present = new Holder ();
+
+		try { SplitFloatSelect (null, present); } catch (NullReferenceException) { }
+		try { SplitFloatSelectNe (null, present); } catch (NullReferenceException) { }
+		try { SplitBoolOnTypeTest (present, present, false); } catch (NullReferenceException) { }
 	}
 
 	static readonly string[] cases = {
@@ -378,7 +436,8 @@ static class Program {
 		"BareArrayLength", "BareArrayElement", "BareVirtualCall",
 		"BareLoadFarField", "BareDevirtualizedCall", "GuardedLoadField",
 		"GuardedStoreField", "GuardedArrayElement", "GuardedVirtualCall",
-		"GuardedDevirtualizedCall", "GuardedBlockCopy",
+		"GuardedDevirtualizedCall", "GuardedBlockCopy", "SplitFloatSelect",
+		"SplitFloatSelectNe", "SplitBoolOnTypeTest",
 	};
 
 	static bool Promote (int tier, string tier_name)
