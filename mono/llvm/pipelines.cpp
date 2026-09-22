@@ -72,6 +72,7 @@
 #include <llvm/Transforms/Scalar/DFAJumpThreading.h>
 #include <llvm/Transforms/Scalar/DeadStoreElimination.h>
 #include <llvm/Transforms/Scalar/GVN.h>
+#include <llvm/Transforms/Scalar/InductiveRangeCheckElimination.h>
 #include <llvm/Transforms/Scalar/JumpThreading.h>
 #include <llvm/Transforms/Scalar/LoopInstSimplify.h>
 #include <llvm/Transforms/Scalar/LoopSimplifyCFG.h>
@@ -107,6 +108,11 @@ llvm::cl::opt<bool> EliminateEmptyFinally (
 	"mono-eliminate-empty-finally", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Erase a finally's body markers and thread-abort check "
 	                "once nothing survives between them"));
+
+llvm::cl::opt<bool> InductiveRangeChecks (
+	"mono-irce", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Version a counted loop so its main body runs without the "
+	                "bounds checks its induction variable settles"));
 
 /// Where buildPgoUsePipeline () mounts the counts for the reader to open.
 constexpr const char *profile_file = "/mono.profdata";
@@ -724,9 +730,14 @@ MonoPassBuilder::buildTier2Pipeline ()
 	 * and SLP covers the split with an insertelement gather. SinkingPass asks
 	 * alias analysis instead. LLVM's O3 pipeline does not run it, so this
 	 * extension point puts it in front of the vectorizers.
+	 *
+	 * IRCE runs once after inlining and before the vectorizers, so they see the
+	 * versioned main loop without redundant bounds checks.
 	 */
 	registerVectorizerStartEPCallback (
 		[] (llvm::FunctionPassManager &FPM, llvm::OptimizationLevel) {
+			if (InductiveRangeChecks)
+				FPM.addPass (llvm::IRCEPass ());
 			FPM.addPass (llvm::SinkingPass ());
 		});
 
