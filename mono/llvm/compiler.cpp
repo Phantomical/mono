@@ -42,6 +42,7 @@
 #include "passes/null-check-fault.hpp"
 #include "runtime/options.hpp"
 
+#include <llvm/ADT/ScopeExit.h>
 #include <llvm/Analysis/RuntimeLibcallInfo.h>
 #include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/BinaryFormat/COFF.h>
@@ -76,9 +77,11 @@
 #include <llvm/MC/MCWin64EH.h>
 #include <llvm/MC/MCWinEH.h>
 #include <llvm/MC/TargetRegistry.h>
+#include <llvm/Support/ErrorHandling.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/FormattedStream.h>
 #include <llvm/Support/Path.h>
+#include <llvm/Support/raw_ostream.h>
 #include <llvm/Support/SmallVectorMemoryBuffer.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Utils/Cloning.h>
@@ -87,6 +90,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -1222,12 +1226,38 @@ mark_external_imports (Module &m)
 			mark (f);
 }
 
+/// Read by report_codegen_fatal_error () below, since codegen's own verifier
+/// calls LLVM's report_fatal_error () directly rather than going through
+/// report_broken_ir () in jit.cpp.
+thread_local const Module *g_codegen_module = nullptr;
+
+/// LLVM's fatal-error handler, installed once by run_object_pipeline ()
+/// below. Installing one replaces LLVM's own stderr print of \p reason, so
+/// this reprints it, then the module that g_codegen_module names.
+void
+report_codegen_fatal_error (void *, const char *reason, bool)
+{
+	errs () << "mono: " << reason << "\n";
+
+	if (g_codegen_module != nullptr)
+		errs () << "mono: module " << g_codegen_module->getModuleIdentifier ()
+		        << ":\n" << *g_codegen_module;
+}
+
 /// Runs the pipeline over m, which codegen consumes. The triple is the target
 /// machine's: a module reaching codegen need not carry one of its own.
 void
 run_object_pipeline (ObjectPipeline &p, Module &m, const Triple &triple)
 {
 	timing::Scope timed_run (timing::Phase::cgrun);
+
+	static std::once_flag installed_handler;
+	std::call_once (installed_handler, [] {
+		install_fatal_error_handler (report_codegen_fatal_error, nullptr);
+	});
+
+	g_codegen_module = &m;
+	llvm::scope_exit clear_codegen_module ([] { g_codegen_module = nullptr; });
 
 	if (triple.isOSBinFormatCOFF ())
 		mark_external_imports (m);
