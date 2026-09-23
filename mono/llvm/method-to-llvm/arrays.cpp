@@ -177,7 +177,7 @@ MethodLLVMEmitter::array_length (MonoIrBuilder &builder, StackValue array)
 		builder.CreateAlignedLoad (builder.getIntNTy (bytes * 8), slot, llvm::Align (bytes));
 
 	mark_array_header_load (length);
-	return length;
+	return mark_array_length_load (length);
 }
 
 llvm::Expected<llvm::Value *>
@@ -1563,6 +1563,7 @@ MethodLLVMEmitter::emit_array_clear (MonoIrBuilder &builder, MonoClass *element)
 		builder.getIntNTy (length_bytes * 8), length_slot, llvm::Align (length_bytes));
 
 	mark_array_header_load (raw_length);
+	mark_array_length_load (raw_length);
 
 	llvm::Type *i32 = builder.getInt32Ty ();
 	llvm::Value *idx = index.value;
