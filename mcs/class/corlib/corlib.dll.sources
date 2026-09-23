@@ -1760,7 +1760,7 @@ System.Runtime.Intrinsics/X86/Popcnt.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Buffers/TlsOverPerCoreLockedStacksArrayPool.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Buffers/Utilities.cs
 
-../../../external/corefx/src/Common/src/CoreLib/System/Collections/HashHelpers.cs
+../../../external/corefx-bugfix/src/Common/src/CoreLib/System/Collections/HashHelpers.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/Comparer.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/DictionaryEntry.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/ICollection.cs
@@ -1776,11 +1776,11 @@ System.Runtime.Intrinsics/X86/Popcnt.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/ListDictionaryInternal.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/DictionaryEntry.cs
 
-../../../external/corefx/src/Common/src/CoreLib/System/Collections/Generic/*.cs:NonRandomizedStringEqualityComparer.cs,List.cs
+../../../external/corefx/src/Common/src/CoreLib/System/Collections/Generic/*.cs:NonRandomizedStringEqualityComparer.cs,List.cs,Dictionary.cs
 ../../../external/corefx-bugfix/src/Common/src/CoreLib/System/Collections/Generic/List.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/ObjectModel/Collection.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/ObjectModel/ReadOnlyCollection.cs
-../../../external/corefx/src/Common/src/CoreLib/System/Collections/Generic/Dictionary.cs
+../../../external/corefx-bugfix/src/Common/src/CoreLib/System/Collections/Generic/Dictionary.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/Generic/IDictionaryDebugView.cs
 ../../../external/corefx/src/Common/src/CoreLib/System/Collections/Generic/KeyValuePair.cs
 
