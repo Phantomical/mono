@@ -381,6 +381,9 @@ private:
 	/// A jump to \p addr in that same memory. Null when there is none left.
 	void *code_stub (void *addr);
 
+	/// Selects direct encodings for registered symbols outside rel32 range.
+	void bind_far_references (llvm::Module &m);
+
 	/// \p size bytes of it, aligned and executable.
 	void *reachable_bytes (size_t size);
 

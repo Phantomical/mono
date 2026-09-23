@@ -933,6 +933,18 @@ cl::opt<uint64_t> ProfileEntryCountOpt (
 	cl::desc ("The entry count every tier-2 body's profile is normalized to; "
 	          "0 leaves the counts as they were counted"));
 
+/// Tier 2 only: use an absolute address for far data. FastISel cannot select
+/// this form, so keep the option configurable for performance comparisons.
+cl::opt<bool> FarDataImmediates (
+	"mono-far-data-immediates", cl::Hidden, cl::init (true),
+	cl::desc ("Reach runtime data out of rel32 range from a tier-2 body with a "
+	          "64-bit immediate rather than a GOT load"));
+
+cl::opt<bool> FarCallsThroughGot (
+	"mono-far-calls-through-got", cl::Hidden, cl::init (true),
+	cl::desc ("Call a helper out of rel32 range through its GOT entry rather "
+	          "than through a linker stub"));
+
 } // namespace
 
 bool
@@ -1805,6 +1817,58 @@ MonoJit::register_code_symbol (StringRef name, void *addr)
 	return register_symbol (name, addr);
 }
 
+void
+MonoJit::bind_far_references (Module &m)
+{
+	// X86 instruction selection otherwise folds an absolute symbol into a
+	// 32-bit memory displacement. PE targets already use __imp_ pointers.
+	if (!triple ().isOSBinFormatELF ())
+		return;
+
+	auto is_far = [&] (const GlobalValue &g) {
+		if (!g.isDeclaration () || !g.hasDefaultVisibility ())
+			return false;
+
+		std::lock_guard<std::mutex> lock (named_symbols_mutex_);
+		auto it = named_symbols_.find (g.getName ().str ());
+
+		return it != named_symbols_.end () && !within_displacement (it->second);
+	};
+
+	if (FarDataImmediates && m.getModuleFlag ("mono.tier2") != nullptr) {
+		LLVMContext &ctx = m.getContext ();
+		Metadata *all_ones = ConstantAsMetadata::get (
+			ConstantInt::getAllOnesValue (Type::getInt64Ty (ctx)));
+		MDNode *anywhere = MDNode::get (ctx, { all_ones, all_ones });
+
+		// Keep called globals on the call path; SelectionDAG cannot encode the
+		// GOT relocation it would use for a large called global.
+		auto is_called = [] (const GlobalVariable &g) {
+			return any_of (g.users (), [&] (const User *u) {
+				auto *call = dyn_cast<CallBase> (u);
+
+				return call != nullptr && call->getCalledOperand () == &g;
+			});
+		};
+
+		for (GlobalVariable &g : m.globals ())
+			if (is_far (g) && !is_called (g)) {
+				g.setMetadata (LLVMContext::MD_absolute_symbol, anywhere);
+				g.setCodeModel (CodeModel::Large);
+			}
+	}
+
+	if (FarCallsThroughGot) {
+		// Every libcall is registered at a C library's address, and codegen
+		// adds the calls after this has run.
+		m.setRtLibUseGOT ();
+
+		for (Function &f : m)
+			if (!f.isIntrinsic () && is_far (f))
+				f.addFnAttr (Attribute::NonLazyBind);
+	}
+}
+
 /// Adds \p name to \p symbols, with the `__imp_` pointer a PE target reaches
 /// it through where the target is one.
 Error
@@ -1939,6 +2003,8 @@ MonoJit::compile_batch (ThreadSafeModule tsm, ArrayRef<StringRef> entries,
 	tsm.withModuleDo ([&] (Module &m) {
 		if (m.getDataLayout ().isDefault ())
 			m.setDataLayout (jit_->getDataLayout ());
+
+		bind_far_references (m);
 	});
 
 	// A dylib per module, linked against mono.helpers. It is bare because
