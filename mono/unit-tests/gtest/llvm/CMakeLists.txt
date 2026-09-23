@@ -18,7 +18,7 @@ set(MONO_LLVM_TEST_SOURCES
     unwind-records-tests.cpp unwind-transcode-tests.cpp mono-unwind-decode-tests.cpp
     eh-gather-tests.cpp
     inline-copies-tests.cpp
-    profile-counters-tests.cpp profile-counter-promoter-tests.cpp
+    profile-counters-tests.cpp profile-counter-promoter-tests.cpp receiver-profile-tests.cpp
     rgctx-fetch-tests.cpp rgctx-dedup-tests.cpp clamp-frame-align-tests.cpp
     array-address-tests.cpp array-shape-tests.cpp ir-dump-tests.cpp
     cast-func-tests.cpp eliminate-delegate-tests.cpp eliminate-cast-tests.cpp inline-heat-tests.cpp

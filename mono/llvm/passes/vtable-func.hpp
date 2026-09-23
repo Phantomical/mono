@@ -14,6 +14,7 @@
 #include <llvm/ADT/StringRef.h>
 
 namespace llvm {
+class CallBase;
 class Function;
 class LoadInst;
 class Module;
@@ -71,6 +72,10 @@ llvm::Function *vtable_rank_decl (llvm::Module &m);
 /// Rewrites every call to the declarations named above into the load it stands
 /// for, erases the declarations, and says whether it changed anything.
 bool lower_vtable_reads (llvm::Module &m);
+
+/// The call that reads \p site's answer, or null where the answer does not
+/// reach exactly one call in the callee position.
+llvm::CallBase *dispatch_call (llvm::CallBase *site);
 
 /*
  * A read off an object is an ordinary load, where each read off a vtable above

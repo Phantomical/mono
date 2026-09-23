@@ -21,6 +21,7 @@
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
 #include "passes/promote-alloc.hpp"
+#include "passes/receiver-profile.hpp"
 #include "passes/restore-tail-position.hpp"
 #include "passes/rgctx-dedup.hpp"
 #include "passes/rgctx-fetch.hpp"
@@ -518,6 +519,11 @@ MonoPassBuilder::buildTier1Pipeline ()
 
 	MPM.addPass (MarkPastPgoHashPass ());
 
+	// In front of the lowering below, which takes away the dispatch sites this
+	// finds.
+	if (PTO.EnablePGO && PTO.EnablePromotion)
+		MPM.addPass (mono::ReceiverProfilePass ());
+
 	MPM.addPass (mono::MonoBuiltinLower (mono::LowerStage::post_inline));
 
 	// Beside the stage above rather than behind an optimization pipeline, which
@@ -565,6 +571,10 @@ MonoPassBuilder::buildTier1Pipeline ()
 	if (PTO.EnablePromotion)
 		MPM.addPass (mono::TierCounterPass ());
 
+	// Behind the tier counter, which then weighs a record as one call rather
+	// than as the blocks the lowering writes.
+	MPM.addPass (mono::LowerReceiverProfilePass ());
+
 	// Run after class-init elision and tier-1 instrumentation so the new
 	// guard is not itself instrumented.
 	MPM.addPass (llvm::createModuleToFunctionPassAdaptor (mono::ClassInitGuardPass ()));
@@ -598,6 +608,8 @@ MonoPassBuilder::buildTier2SimplificationPipeline ()
 		MPM.addPass (buildPgoUsePipeline ());
 
 	MPM.addPass (MarkPastPgoHashPass ());
+
+	MPM.addPass (mono::AnnotateReceiversPass ());
 
 	// Behind the counts, so that the tier the profile was gathered at and the
 	// tier reading it back hash the same CFG. A check this drops sits on an

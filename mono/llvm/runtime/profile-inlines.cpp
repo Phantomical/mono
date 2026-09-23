@@ -5,6 +5,7 @@
 #include "backend.hpp"
 #include "domain-method.hpp"
 #include "externals.hpp"
+#include "il-line-table.hpp"
 #include "method-symbols.hpp"
 #include "minimal-compile.hpp"
 #include "naming.hpp"
@@ -210,8 +211,11 @@ ProfileInliner::materialize (Function &decl, Module &into, std::optional<SiteHea
 	bool rebuild = already_inlined (scope_, callee);
 
 	if (rebuild) {
-		if (callee == scope_.root)
+		if (callee == scope_.root
+		    || il_debug_translated_from (call, (uint64_t) (uintptr_t) callee)) {
+			trace_refusal (scope_, callee, "it would inline into a copy of itself");
 			return nullptr;
+		}
 
 		// A copy standing beside the root is what the site should reach.
 		// Without one, fall through and build one into the candidate's module.

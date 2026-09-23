@@ -1150,6 +1150,12 @@ set(MONO_TESTS_ELIMINATE_DELEGATE_SRC
   eliminate-delegate.cs
 )
 
+# Guarding a dispatch on the receiver classes tier 1 recorded at it. It runs
+# with the guard on and off, and reads the variable to know which arm it is in.
+set(MONO_TESTS_PROFILE_DEVIRT_SRC
+  profile-devirt.cs
+)
+
 # Whether a readonly static's folded bytes survive the collector moving what
 # they name. It runs once per compiled tier, and reads the variable to know
 # which tier to ask its readers to compile at.

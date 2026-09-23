@@ -513,6 +513,19 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   `mono/tests/class-devirt.cs` is the program that tells the arms apart, because its
   negative control changes what the guessed field holds after the compile has already
   guessed it.
+- `--llvm-opt=-mono-guard-profile=<0|false|empty>` (`runtime/options.cpp`) — turn the
+  recorded-class dispatch guard off. Tier 1 still records, so the two arms run on the
+  same profile and differ in one pass, which separates a wrong record from a wrong
+  compare. On by default, and tier 2 only. `runtime-profile-guard-off` is the negative
+  control, and the array and class guard suites pin it off so that each keeps isolating
+  its own rule. `-mono-guard-profile-classes=<n>` (default 2) bounds the methods one site
+  calls directly, `-mono-guard-profile-min-share=<pct>` (default 30) is the share of the
+  recorded receivers one method needs, and `-mono-guard-profile-min-samples=<n>`
+  (default 32) is how many receivers a record needs before it is read at all. None of
+  the three is calibrated yet.
+- `--llvm-opt=-mono-receiver-profile=<0|false|empty>` (`runtime/options.cpp`) — turn the
+  tier-1 receiver record off, which is the negative control for what recording costs at
+  tier 1, where nearly all code stays.
 - `--llvm-opt=-mono-thread-static-fast-path=<0|false|empty>` (`runtime/options.cpp`) —
   turn the thread-static fast path off, so every thread static reads back through
   `mono_domain_get ()` and the `mono_class_static_field_address` icall. On by default.
@@ -920,12 +933,12 @@ so the failure mode is a site left alone rather than a site left wrong. No later
 assembly load invalidates one.
 
 **One site is taken on a class it cannot prove, and a compare is what makes it safe.**
-`GuardDispatchPass` (`passes/devirtualize.cpp`) writes that compare, and it asks two
+`GuardDispatchPass` (`passes/devirtualize.cpp`) writes that compare, and it asks three
 rules for the class to compare against. The array rule is asked first and answers from
-the class the slot's declared type sets. The guess rule follows and answers from a class
-an allocation or an initonly static read states outright, on a site the array rule
-leaves alone. Neither class is one the compile can prove the receiver holds, so both
-rules stand behind the same compare.
+the class the slot's declared type sets. The record rule follows and answers from the
+receivers tier 1 saw at the site. The guess rule is last and answers from a class
+an allocation or an initonly static read states outright. None of these classes is one
+the compile can prove the receiver holds, so every rule stands behind the same compare.
 
 An array slot admits every array of its rank with the same cast class, so an `int[]`
 parameter also holds a `uint[]` and an array of an enum over int, each with a vtable of
@@ -963,8 +976,36 @@ target and a wrong compare one pass apart. `mono/tests/class-devirt.cs` gates it
 `runtime-class-guard-off` runs the same file with the guess off, which is the answer the
 guess has to agree with.
 
-Type profiling and class-hierarchy analysis stay out of scope beyond the two rules
-above. Check with the user before speculating past them.
+A third rule answers from what tier 1 saw, between the array rule and the guess.
+`ReceiverProfilePass` (`passes/receiver-profile.cpp`) gives every dispatch in an
+instrumented tier-1 body a record of the receiver vtables it meets, in the object's
+`.mono_receivers` section. The record is four entries kept by Space-Saving: a class that
+finds them all taken replaces the entry with the lowest count and inherits that count,
+which the entry notes so that tier 2 reads only what the class itself was seen. A class
+above a quarter of the receivers therefore keeps an entry however late it arrives. The
+lowered code compares the receiver against the entry it tracks as hottest and bumps it
+inline, and calls `mono_llvm_jit_record_receiver ()` otherwise. A site is keyed by the
+IL that wrote it — the method and the offset its debug location names — rather than by
+where it sits in the CFG, because the two tiers inline different bodies. At tier 2,
+`AnnotateReceiversPass` puts the record on the dispatch site as `!prof` value-profile
+metadata of kind `IPVK_VTableTarget`, reading the root's own record first and the
+record of the method the site's IL belongs to otherwise. `InlineFunction` scales that
+metadata with the rest of an inlined body's profile, so a site the cost model brings in
+arrives with its counts. The guard then groups the recorded classes by the method each
+enters, keeps each method that at least `-mono-guard-profile-min-share` percent of the
+receivers enter, at most `-mono-guard-profile-classes` of them, and writes a chain of
+compares with the counts as the weights. A record where no method clears the share is
+megamorphic, and such a site is left dispatching without asking the guess.
+`mono/tests/profile-devirt.cs` gates it, and `MONO_LLVM_JIT_TRACE=1` prints each
+recorded guard with its shares.
+
+LLVM's own value profiling stays off (`-disable-vp`). Its visitor only finds a vtable
+behind a `load`, which a dispatch here is not until after instrumentation, and its
+indirect-call promotion resolves targets by the MD5 of a PGO name, which a thunk has
+none of.
+
+Class-hierarchy analysis stays out of scope. Check with the user before speculating
+past the three rules above.
 
 ### Inlining
 

@@ -743,9 +743,9 @@ mono_runtime_suite(runtime-simd-semantics-off TESTS simd-semantics.exe
 # reaches it names one of its own. The off arm leaves every such site
 # dispatching, which is the answer the guard has to agree with.
 mono_runtime_suite(runtime-array-guard TESTS array-devirt.exe
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-profile=0")
 mono_runtime_suite(runtime-array-guard-off TESTS array-devirt.exe
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-arrays=0")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-arrays=0 --llvm-opt=-mono-guard-profile=0")
 
 # Compare tier-2 IRCE with the same kernels compiled without the pass.
 mono_runtime_suite(runtime-irce TESTS irce-bounds.exe)
@@ -768,9 +768,20 @@ mono_runtime_suite(runtime-internal-tbaa-off
 # calls array-devirt.cs does to reach it. The off arm leaves every such site
 # dispatching, which is the answer the guess has to agree with.
 mono_runtime_suite(runtime-class-guard TESTS class-devirt.exe
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-profile=0")
 mono_runtime_suite(runtime-class-guard-off TESTS class-devirt.exe
-                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-classes=0")
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=10000 --llvm-opt=-mono-guard-classes=0 --llvm-opt=-mono-guard-profile=0")
+
+# The guard on the classes tier 1 recorded at a dispatch. The root drives its
+# own compiles, as runtime-eliminate-delegate's does. The off arm records the
+# same receivers and leaves every site dispatching, which is the answer the
+# guard has to agree with.
+_mono_exe_list(_profile_devirt ${MONO_TESTS_PROFILE_DEVIRT_SRC})
+mono_runtime_suite(runtime-profile-guard TESTS ${_profile_devirt}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0")
+mono_runtime_suite(runtime-profile-guard-off TESTS ${_profile_devirt}
+                   ENV "MONO_GUARD_PROFILE=off"
+                       "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-guard-profile=0")
 
 # Exercise List<T> indexers with the bounds-check hint enabled and disabled.
 mono_runtime_suite(runtime-list-bounds-hint TESTS list-bounds-hint.exe)

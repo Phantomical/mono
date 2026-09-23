@@ -94,6 +94,29 @@ llvm::cl::opt<bool> GuardClassDispatchOpt (
 	llvm::cl::desc ("Guard a dispatch on a guessed receiver class with a vtable "
 	                "compare"));
 
+llvm::cl::opt<bool> ReceiverProfileOpt (
+	"mono-receiver-profile", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Record the receiver classes each tier-1 dispatch site sees"));
+
+llvm::cl::opt<bool> GuardProfileDispatchOpt (
+	"mono-guard-profile", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Guard a dispatch on the receiver classes tier 1 recorded at it "
+	                "with a vtable compare"));
+
+llvm::cl::opt<unsigned> GuardProfileClassesOpt (
+	"mono-guard-profile-classes", llvm::cl::Hidden, llvm::cl::init (2),
+	llvm::cl::desc ("Most methods one recorded dispatch calls directly"));
+
+llvm::cl::opt<unsigned> GuardProfileMinShareOpt (
+	"mono-guard-profile-min-share", llvm::cl::Hidden, llvm::cl::init (30),
+	llvm::cl::desc ("Percent of a dispatch's recorded receivers that have to enter "
+	                "one method before the dispatch calls it directly"));
+
+llvm::cl::opt<unsigned> GuardProfileMinSamplesOpt (
+	"mono-guard-profile-min-samples", llvm::cl::Hidden, llvm::cl::init (32),
+	llvm::cl::desc ("Receivers a dispatch has to have recorded before its record "
+	                "is read"));
+
 llvm::cl::opt<bool> InlineClauseBearingCalleesOpt (
 	"mono-inline-clauses", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Let the tier-2 cost model translate a clause-bearing callee"));
@@ -410,6 +433,36 @@ bool
 guard_class_dispatch ()
 {
 	return GuardClassDispatchOpt;
+}
+
+bool
+receiver_profile ()
+{
+	return ReceiverProfileOpt;
+}
+
+bool
+guard_profile_dispatch ()
+{
+	return GuardProfileDispatchOpt;
+}
+
+unsigned
+guard_profile_classes ()
+{
+	return GuardProfileClassesOpt;
+}
+
+unsigned
+guard_profile_min_share ()
+{
+	return GuardProfileMinShareOpt;
+}
+
+uint64_t
+guard_profile_min_samples ()
+{
+	return GuardProfileMinSamplesOpt;
 }
 
 bool

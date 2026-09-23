@@ -15,7 +15,11 @@
 #ifndef MONO_LLVM_COMPILE_STATE_HPP
 #define MONO_LLVM_COMPILE_STATE_HPP
 
+#include "passes/receiver-profile.hpp"
+
 #include <llvm/ADT/STLFunctionalExtras.h>
+
+#include <optional>
 
 typedef struct _MonoClass MonoClass;
 typedef struct _MonoDomain MonoDomain;
@@ -59,6 +63,13 @@ struct CompileState {
 	/// Resolves the symbol for \p klass's `MonoClass` in \p m, or returns null
 	/// if the class cannot be named.
 	llvm::function_ref<llvm::Constant *(llvm::Module &m, MonoClass *klass)> class_of;
+
+	/// Returns what tier 1 recorded at the dispatch site \p key names, or empty
+	/// when no tier-1 body in this domain recorded that site.
+	llvm::function_ref<std::optional<ReceiverCounts> (const ReceiverSiteKey &key)> receivers;
+
+	/// Returns the class represented by a recorded receiver vtable.
+	llvm::function_ref<MonoClass *(uint64_t vtable)> vtable_class;
 
 	/// Whether this compile's pipeline is past the point where
 	/// PGOInstrumentationGen or PGOInstrumentationUse took the module's CFG

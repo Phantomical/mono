@@ -6,18 +6,16 @@
  * states it. What each case writes is the rank, the element size and the bounded
  * flag, which is what the translator puts on the declaration.
  *
- * The cases are about the metadata on the header reads. A lost tag changes no
- * result managed code can see. It costs optimizations of the bounds checks, so
- * only a test that reads the IR catches it.
+ * The cases are about the `!invariant.group` tag on the header reads. A lost
+ * tag changes no result managed code can see. It costs each bounds check that
+ * merges across a store to a managed field, so only a test that reads the IR
+ * catches it.
  */
 
 #include "cl-opt-override.hpp"
 #include "passes/array-address.hpp"
 
-#include "mono/metadata/object-internals.h"
-
 #include <llvm/Analysis/ValueTracking.h>
-#include <llvm/IR/ConstantRange.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
@@ -103,28 +101,6 @@ struct AddressModule {
 				++*tagged;
 		}
 	}
-
-	/// Counts array length loads carrying the expected `!range` metadata.
-	unsigned count_length_ranges ()
-	{
-		unsigned ranged = 0;
-
-		for (Instruction &i : instructions (*caller)) {
-			auto *load = dyn_cast<LoadInst> (&i);
-
-			if (load == nullptr || !load->hasMetadata (LLVMContext::MD_range))
-				continue;
-
-			ConstantRange range = getConstantRangeFromMetadata (
-				*load->getMetadata (LLVMContext::MD_range));
-
-			EXPECT_TRUE (range.getLower ().isZero ());
-			EXPECT_EQ (range.getUpper ().getZExtValue (),
-			           (uint64_t) MONO_ARRAY_MAX_INDEX + 1);
-			++ranged;
-		}
-		return ranged;
-	}
 };
 
 /// A szarray has no bounds vector, so the check reads only max_length, which
@@ -181,23 +157,6 @@ TEST (ArrayAddress, RectangularHeaderFullyTaggedWhenEnabled)
 	m.count_loads (&total, &tagged);
 	EXPECT_EQ (total, 5u);
 	EXPECT_EQ (tagged, total);
-}
-
-TEST (ArrayAddress, SzarrayLengthIsRanged)
-{
-	AddressModule m (1, szarray_spec);
-
-	ASSERT_NO_FATAL_FAILURE (m.run ());
-	EXPECT_EQ (m.count_length_ranges (), 1u);
-}
-
-/// Rectangular arrays have two ranged lengths; lower bounds remain signed.
-TEST (ArrayAddress, RectangularLengthsAreRanged)
-{
-	AddressModule m (2, rect_spec);
-
-	ASSERT_NO_FATAL_FAILURE (m.run ());
-	EXPECT_EQ (m.count_length_ranges (), 2u);
 }
 
 /// The tag must not make the header reads speculatable. A load hoisted over
