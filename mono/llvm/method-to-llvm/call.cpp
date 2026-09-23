@@ -27,6 +27,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Metadata.h>
 #include <llvm/IR/Type.h>
 
@@ -1233,9 +1234,15 @@ MethodLLVMEmitter::emit_string_length (MonoIrBuilder &builder)
 	llvm::Value *slot =
 		builder.CreateGEP (builder.getInt8Ty (), receiver.value,
 	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoString, length)));
-	llvm::Value *length = mark_internal_load (
+	llvm::LoadInst *length = mark_internal_load (
 		builder.CreateAlignedLoad (builder.getInt32Ty (), slot, llvm::Align (4)),
 		object_header_tbaa_leaf, InternalLife::per_object);
+
+	// String lengths are validated as nonnegative when the runtime creates them.
+	length->setMetadata (llvm::LLVMContext::MD_range,
+	                     llvm::MDBuilder (builder.getContext ())
+	                             .createRange (llvm::APInt (32, 0),
+	                                           llvm::APInt (32, (uint64_t) G_MAXINT32 + 1)));
 
 	pop_stack (1);
 	push_stack (length, mono_get_int32_type ());
