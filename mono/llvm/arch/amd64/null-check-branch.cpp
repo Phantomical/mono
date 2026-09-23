@@ -84,7 +84,11 @@ match_zero_compare_branch (MachineBasicBlock &mbb, const TargetInstrInfo &tii,
 	MachineInstr *condition_def = nullptr;
 	bool single_use = true;
 
-	for (MachineInstr &mi : llvm::drop_begin (llvm::reverse (mbb))) {
+	// A conditional branch may be followed by an unconditional branch.
+	for (MachineInstr &mi : llvm::reverse (mbb)) {
+		if (mi.isTerminator ())
+			continue;
+
 		if (mi.modifiesRegister (eflags, &tri)) {
 			condition_def = &mi;
 			break;

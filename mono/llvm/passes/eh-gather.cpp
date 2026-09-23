@@ -16,6 +16,7 @@
 
 #include "../eh-side-channel.hpp"
 #include "../il-line-table.hpp"
+#include "analysis/try-region.hpp"
 #include "clause-marker.hpp"
 #include "faulting-location.hpp"
 
@@ -51,13 +52,6 @@ namespace mono {
 
 namespace {
 
-/// One IL clause's try region, as the method declared it.
-struct ILClause {
-	int index = -1;
-	std::uint32_t try_offset = 0;
-	std::uint32_t try_len = 0;
-};
-
 /// One instruction in layout order, and the try region its IL offset lies in.
 struct Position {
 	MachineBasicBlock *mbb;
@@ -74,86 +68,6 @@ struct Invoke {
 };
 
 } // namespace
-
-/// Reads the try regions the front end recorded as `!mono.clauses`
-/// (emit_clause_geometry (), method-to-llvm/exceptions.cpp) back off the
-/// function.
-static std::vector<ILClause>
-decode_clause_geometry (const Function &f)
-{
-	std::vector<ILClause> geometry;
-	const MDNode *list = f.getMetadata ("mono.clauses");
-
-	if (list == nullptr)
-		return geometry;
-
-	geometry.reserve (list->getNumOperands ());
-	for (const MDOperand &operand : list->operands ()) {
-		const auto *node = dyn_cast_or_null<MDNode> (operand.get ());
-
-		/*
-		 * The front end writes this list and this reads it back, in one
-		 * compile. A shape it does not decode means our own emission or our
-		 * own reader is wrong, not that the input did something we do not
-		 * support.
-		 */
-		if (node == nullptr || node->getNumOperands () != 4)
-			report_fatal_error ("mono: a !mono.clauses entry is not four words - our own emission or reader is wrong");
-
-		std::uint64_t words[4];
-
-		for (unsigned i = 0; i < 4; ++i) {
-			const auto *word =
-				mdconst::dyn_extract<ConstantInt> (node->getOperand (i));
-
-			if (word == nullptr)
-				report_fatal_error ("mono: a !mono.clauses word is not a constant - our own emission or reader is wrong");
-
-			words[i] = word->getZExtValue ();
-		}
-
-		ILClause clause;
-
-		clause.index = (int) words[0];
-		clause.try_offset = (std::uint32_t) words[2];
-		clause.try_len = (std::uint32_t) words[3];
-		geometry.push_back (clause);
-	}
-
-	return geometry;
-}
-
-/**
- * The clause innermost_try () (method-to-llvm/exceptions.cpp) names for an IL
- * offset, or -1 where no try region covers it.
- *
- * This makes the same choice that function did, because that is what decided
- * which pad the method's protected calls unwind to. So it reads the regions in
- * clause-index order and takes a strictly smaller one, which leaves the first of
- * a set of siblings the answer.
- */
-static int
-innermost_try (const std::vector<ILClause> &geometry, int il)
-{
-	int found = -1;
-	std::uint32_t narrowest = 0;
-
-	if (il < 0)
-		return -1;
-
-	for (const ILClause &clause : geometry) {
-		if ((std::uint32_t) il < clause.try_offset
-		    || (std::uint32_t) il - clause.try_offset >= clause.try_len)
-			continue;
-
-		if (found < 0 || clause.try_len < narrowest) {
-			found = clause.index;
-			narrowest = clause.try_len;
-		}
-	}
-
-	return found;
-}
 
 /// Plants a label at \p at that emits no code, so it can sit anywhere in a
 /// block.
@@ -207,7 +121,7 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 	}
 
 	const std::vector<const GlobalValue *> &type_infos = mf.getTypeInfos ();
-	const std::vector<ILClause> geometry = decode_clause_geometry (mf.getFunction ());
+	const TryRegions regions (mf.getFunction ());
 
 	MonoEHFunctionClauses fn;
 	fn.function = mf.getName ().str ();
@@ -247,21 +161,10 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 			if (it->isMetaInstruction ())
 				continue;
 
-			/*
-			 * An inlined body's location carries the callee's IL offset,
-			 * which says nothing about this method's try regions. The
-			 * outermost location of the chain names the call site the
-			 * body was inlined at, which is the offset IlLineHandler
-			 * records as well (compiler.cpp).
-			 */
-			if (const DILocation *loc = it->getDebugLoc ().get ()) {
-				while (loc->getInlinedAt () != nullptr)
-					loc = loc->getInlinedAt ();
+			if (const DILocation *loc = it->getDebugLoc ().get ())
+				il = TryRegions::il_offset (loc);
 
-				il = (int) loc->getLine () - (int) IL_OFFSET_LINE_BIAS;
-			}
-
-			positions.push_back ({ &mbb, it, innermost_try (geometry, il) });
+			positions.push_back ({ &mbb, it, regions.innermost (il) });
 		}
 	}
 

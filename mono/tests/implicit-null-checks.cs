@@ -42,6 +42,9 @@ using System.Runtime.CompilerServices;
  * piece ending in the select's own compare and branch shares the check's IR
  * block. A rewrite that takes that compare for the check faults on the null
  * the select was written to accept.
+ *
+ * BesideTry cases dereference immediately outside a try; those faults must
+ * bypass the adjacent catch.
  */
 
 namespace Mono.Tiering {
@@ -197,6 +200,38 @@ static class Program {
 			flag = true;
 		bool_sink = flag;
 		return holder.Virtual ();
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void Touch ()
+	{
+	}
+
+	/// The dereference is before the try; its exception must bypass the catch.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int BesideTryBefore (int[] array)
+	{
+		int length = array.Length;
+
+		try {
+			Touch ();
+		} catch (NullReferenceException) {
+			return -1;
+		}
+
+		return length;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int BesideTryAfter (int[] array)
+	{
+		try {
+			Touch ();
+		} catch (NullReferenceException) {
+			return -1;
+		}
+
+		return array.Length;
 	}
 
 	// The guarded arm. A clause protects the site.
@@ -376,6 +411,8 @@ static class Program {
 		ExpectThrow ("BareVirtualCall", tier, () => BareVirtualCall (null));
 		ExpectThrow ("BareLoadFarField", tier, () => BareLoadFarField (null));
 		ExpectThrow ("BareDevirtualizedCall", tier, () => BareDevirtualizedCall (null));
+		ExpectThrow ("BesideTryBefore", tier, () => BesideTryBefore (null));
+		ExpectThrow ("BesideTryAfter", tier, () => BesideTryAfter (null));
 
 		ExpectInner ("GuardedLoadField", tier, GuardedLoadField (null));
 		ExpectInner ("GuardedStoreField", tier, GuardedStoreField (null));
@@ -402,6 +439,13 @@ static class Program {
 		ExpectNoThrow ("SplitFloatSelectNe", tier, () => SplitFloatSelectNe (null, present));
 		ExpectNoThrow ("SplitBoolOnTypeTest", tier,
 			() => SplitBoolOnTypeTest (present, present, false));
+
+		int[] eleven = new int[11];
+
+		if (BesideTryBefore (eleven) != 11)
+			Fail ("BesideTryBefore", tier, "read the wrong length");
+		if (BesideTryAfter (eleven) != 11)
+			Fail ("BesideTryAfter", tier, "read the wrong length");
 	}
 
 	/// Calls each case without checking it, to give the tier-2 compile counts
@@ -416,6 +460,8 @@ static class Program {
 		try { BareVirtualCall (null); } catch (NullReferenceException) { }
 		try { BareLoadFarField (null); } catch (NullReferenceException) { }
 		try { BareDevirtualizedCall (null); } catch (NullReferenceException) { }
+		try { BesideTryBefore (null); } catch (NullReferenceException) { }
+		try { BesideTryAfter (null); } catch (NullReferenceException) { }
 
 		GuardedLoadField (null);
 		GuardedStoreField (null);
@@ -434,7 +480,8 @@ static class Program {
 	static readonly string[] cases = {
 		"BareLoadField", "BareStoreField", "BareStoreReference",
 		"BareArrayLength", "BareArrayElement", "BareVirtualCall",
-		"BareLoadFarField", "BareDevirtualizedCall", "GuardedLoadField",
+		"BareLoadFarField", "BareDevirtualizedCall", "BesideTryBefore",
+		"BesideTryAfter", "GuardedLoadField",
 		"GuardedStoreField", "GuardedArrayElement", "GuardedVirtualCall",
 		"GuardedDevirtualizedCall", "GuardedBlockCopy", "SplitFloatSelect",
 		"SplitFloatSelectNe", "SplitBoolOnTypeTest",
