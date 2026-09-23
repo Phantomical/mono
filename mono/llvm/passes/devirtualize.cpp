@@ -28,6 +28,7 @@
 #include "mono/metadata/class-init.h"
 #include "mono/metadata/class-inlines.h"
 #include "mono/metadata/class-internals.h"
+#include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/marshal.h"
 #include "mono/metadata/metadata.h"
 #include "mono/metadata/object-internals.h"
@@ -44,9 +45,12 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Module.h>
+#include <llvm/ProfileData/InstrProf.h>
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstdint>
+#include <cstdio>
 #include <optional>
 
 using namespace llvm;
@@ -546,57 +550,33 @@ guardable_array (MonoClass *klass)
 	       || shared == mono_defaults.char_class || shared == mono_defaults.boolean_class;
 }
 
-/**
- * The class a receiver reaching \p site can be compared against, or null where
- * the IR gives none a guard pays for.
- *
- * Two rules answer, and they read different evidence. The array rule reads the
- * class the slot is declared with, which bounds a set every member of which
- * `guardable_array ()` says reaches the same implementation. The guess reads a
- * class an allocation states, which bounds nothing: it is one class the
- * receiver is known to reach, and the compare is what covers the rest.
- *
- * The array rule is asked first, because a declared array class answers for
- * every array in the slot's set while a guess answers for one of them.
- */
-MonoClass *
-guarded_class (CallBase *site, const Function &f, const ConstantValues &values)
+/// A class a guard compares a receiver against, and how often tier 1 saw it.
+struct Candidate {
+	MonoClass *klass;
+	uint64_t count;
+};
+
+/// Returns the classes tier 1 recorded at \p site and the total receiver count,
+/// or empty if the site has no record with enough samples.
+std::optional<std::pair<SmallVector<Candidate, 4>, uint64_t>>
+recorded_classes (const CallBase *site, const CompileState &compile)
 {
-	Value *object = object_vtable_read (site->getArgOperand (0));
+	if (!guard_profile_dispatch () || !compile.vtable_class)
+		return std::nullopt;
 
-	if (object == nullptr || site->getMetadata (guarded_md) != nullptr)
-		return nullptr;
+	uint64_t total = 0;
+	SmallVector<InstrProfValueData, 4> seen =
+		getValueProfDataFromInst (*site, IPVK_VTableTarget, UINT32_MAX, total);
 
-	// A class exact_class () answers needs no guard: eliminate_object_vtables ()
-	// replaces the read with that class's vtable, and the elimination above
-	// takes the site from there. Asking it rather than reading `exact` below is
-	// what keeps the two in step, since it has a rule of its own for a bound on
-	// a sealed class.
-	if (exact_class (object, f, values) != nullptr)
-		return nullptr;
+	if (seen.empty () || total < guard_profile_min_samples ())
+		return std::nullopt;
 
-	auto [klass, exact] = operand_class (object, f, values);
+	SmallVector<Candidate, 4> classes;
 
-	if (klass != nullptr && guard_array_dispatch () && guardable_array (klass))
-		return klass;
+	for (const InstrProfValueData &value : seen)
+		classes.push_back ({ compile.vtable_class (value.Value), value.Count });
 
-	return guard_class_dispatch () ? guessed_class (object, f, values) : nullptr;
-}
-
-/// The call that reads \p site's answer, or null where the answer does not
-/// reach exactly one call in the callee position.
-///
-/// The guard writes that call again on an arm of its own, so a site several
-/// calls read is one it leaves alone.
-CallBase *
-sole_call (CallBase *site)
-{
-	if (!site->hasOneUse ())
-		return nullptr;
-
-	auto *call = dyn_cast<CallBase> (site->user_back ());
-
-	return call != nullptr && call->getCalledOperand () == site ? call : nullptr;
+	return std::make_pair (classes, total);
 }
 
 /**
@@ -630,54 +610,148 @@ guard_fits (CallBase *call)
 	return unwinds->getNormalDest ()->getUniquePredecessor () == call->getParent ();
 }
 
-/// A dispatch a guard can take, with the weights that guard will carry.
+/// One direct call a guard writes: the classes whose receivers take it, the
+/// method they all enter, and the weight of its edge.
+struct Arm {
+	SmallVector<MonoClass *, 2> classes;
+	Dispatched entered;
+	uint64_t count;
+};
+
+/// A dispatch a guard can take, with the arms that guard will write.
 struct Guardable {
 	CallBase *site;
 	CallBase *call;
-	MonoClass *klass;
-	Dispatched entered;
+	SmallVector<Arm, 2> arms;
+	/// The weight of the edge to the dispatch the guard keeps.
+	uint64_t missed;
 	bool drops_key;
-	MDNode *weights;
+	/// Whether the arms come from what tier 1 recorded.
+	bool recorded = false;
 };
 
-/// Collects the sites in \p f that call \p name and that a guard can take.
+/// Adds an arm for \p klass to \p at, or adds \p klass to the arm that enters
+/// the same method. Returns false where \p klass does not settle what the site
+/// enters.
+bool
+add_arm (Guardable &at, MonoClass *klass, uint64_t count, Lookup lookup,
+         const ConstantValues &values)
+{
+	std::optional<Dispatched> entered = dispatched_at (at.site, klass, lookup, values);
+
+	if (!entered)
+		return false;
+
+	for (Arm &arm : at.arms) {
+		if (arm.entered.target == entered->target && arm.entered.shape == entered->shape) {
+			arm.classes.push_back (klass);
+			arm.count += count;
+			return true;
+		}
+	}
+
+	at.arms.push_back ({ { klass }, *entered, count });
+	return true;
+}
+
+/**
+ * Collects the sites in \p f that call \p name and that a guard can take.
+ *
+ * Three rules name classes, asked in this order. The array rule reads the class
+ * the slot is declared with, which bounds a set every member of which
+ * `guardable_array ()` says reaches the same implementation. The record rule
+ * reads the classes tier 1 saw at the site. The guess reads a class an
+ * allocation states. Neither of the last two bounds anything, so the compare is
+ * what covers the rest.
+ */
 void
 collect_guardable (Function &f, StringRef name, Lookup lookup, BlockFrequencyInfo &counts,
-                   const ConstantValues &values, SmallVectorImpl<Guardable> &into)
+                   const ConstantValues &values, const CompileState &compile,
+                   SmallVectorImpl<Guardable> &into)
 {
 	for (CallBase *site : builtin_sites (f, name)) {
-		CallBase *call = sole_call (site);
+		// The guard writes the call again on an arm of its own, so a site
+		// several calls read is one it leaves alone.
+		CallBase *call = dispatch_call (site);
 
 		if (call == nullptr || !guard_fits (call))
 			continue;
 
-		MonoClass *klass = guarded_class (site, f, values);
+		Value *object = object_vtable_read (site->getArgOperand (0));
 
-		if (klass == nullptr)
+		if (object == nullptr || site->getMetadata (guarded_md) != nullptr)
 			continue;
 
-		std::optional<Dispatched> entered =
-			dispatched_at (site, klass, lookup, values);
-
-		if (!entered)
+		// A class exact_class () answers needs no guard: eliminate_object_vtables ()
+		// replaces the read with that class's vtable, and the elimination above
+		// takes the site from there. Asking it rather than reading `exact` below is
+		// what keeps the two in step, since it has a rule of its own for a bound on
+		// a sealed class.
+		if (exact_class (object, f, values) != nullptr)
 			continue;
 
 		/*
-		 * The zero on the other edge is the point: the site's whole count goes
-		 * to the direct call, which is what a cost model reading block counts
-		 * weighs the target at. The dispatching arm is a call nothing can
-		 * inline, so splitting the count with it buys nothing.
+		 * The zero on the other edge of a guard without a record is the point:
+		 * the site's whole count goes to the direct call, which is what a cost
+		 * model reading block counts weighs the target at. The dispatching arm
+		 * is a call nothing can inline, so splitting the count with it buys
+		 * nothing.
 		 */
-		MDBuilder md (f.getContext ());
 		uint64_t hot = std::max<uint64_t> (
-			counts.getBlockProfileCount (call->getParent ())
-				.value_or (unprofiled_guard_weight),
+			counts.getBlockProfileCount (call->getParent ()).value_or (unprofiled_guard_weight),
 			1);
+		Guardable at { site, call, {}, 0, lookup != Lookup::vtable };
+		MonoClass *declared = operand_class (object, f, values).first;
 
-		into.push_back ({ site, call, klass, *entered, lookup != Lookup::vtable,
-		                  md.createBranchWeights (
-				          (uint32_t) std::min<uint64_t> (hot, UINT32_MAX), 0) });
+		if (declared != nullptr && guard_array_dispatch () && guardable_array (declared)) {
+			add_arm (at, declared, hot, lookup, values);
+		} else if (auto recorded = recorded_classes (site, compile)) {
+			auto [classes, total] = *recorded;
+
+			for (const Candidate &seen : classes)
+				add_arm (at, seen.klass, seen.count, lookup, values);
+
+			// The share is the method's rather than the class's, so two
+			// classes that enter one method count together.
+			std::sort (at.arms.begin (), at.arms.end (),
+			           [] (const Arm &a, const Arm &b) { return a.count > b.count; });
+
+			while (!at.arms.empty ()
+			       && (at.arms.size () > guard_profile_classes ()
+			           || at.arms.back ().count * 100 < total * guard_profile_min_share ()))
+				at.arms.pop_back ();
+
+			uint64_t covered = 0;
+
+			for (const Arm &arm : at.arms)
+				covered += arm.count;
+
+			// A record no method dominates is a site a guess would miss as
+			// well, so the guess is not asked.
+			at.missed = total - covered;
+			at.recorded = true;
+		} else if (guard_class_dispatch ()) {
+			if (MonoClass *guess = guessed_class (object, f, values))
+				add_arm (at, guess, hot, lookup, values);
+		}
+
+		if (!at.arms.empty ())
+			into.push_back (std::move (at));
 	}
+}
+
+/// Branch weights for an edge taken \p taken times against one taken
+/// \p other times, scaled down together until both fit.
+MDNode *
+guard_weights (LLVMContext &c, uint64_t taken, uint64_t other)
+{
+	while (taken > UINT32_MAX || other > UINT32_MAX) {
+		taken >>= 1;
+		other >>= 1;
+	}
+
+	return MDBuilder (c).createBranchWeights ((uint32_t) std::max<uint64_t> (taken, 1),
+	                                          (uint32_t) other);
 }
 
 /// Adds an incoming for \p arm to every phi in \p block that has one for
@@ -696,10 +770,18 @@ share_phis_with (BasicBlock *block, BasicBlock *had, BasicBlock *arm)
 	}
 }
 
-/// Sends \p at's call through a compare of the receiver's vtable against
-/// \p vtable, with a call of \p entry on the arm that matches.
+/// An arm with its compares and its callee named in the module.
+struct NamedArm {
+	SmallVector<Constant *, 2> vtables;
+	Function *entry;
+	MonoMethod *target;
+	uint64_t count;
+};
+
+/// Sends \p at's call through a compare of the receiver's vtable against each
+/// arm's vtables in turn, with a call of that arm's entry where one matches.
 void
-guard_dispatch (const Guardable &at, Constant *vtable, Function *entry)
+guard_dispatch (const Guardable &at, ArrayRef<NamedArm> arms, uint64_t missed)
 {
 	CallBase &call = *at.call;
 	LLVMContext &c = call.getContext ();
@@ -712,8 +794,6 @@ guard_dispatch (const Guardable &at, Constant *vtable, Function *entry)
 	                           ? unwinds->getNormalDest ()
 	                           : head->splitBasicBlock (call.getIterator (), "guard_done");
 	BasicBlock *pad = unwinds != nullptr ? unwinds->getUnwindDest () : nullptr;
-
-	BasicBlock *fast = BasicBlock::Create (c, "guard_direct", f, tail);
 	BasicBlock *slow = BasicBlock::Create (c, "guard_dispatch", f, tail);
 
 	// The call and the site it reads its callee from move into the dispatching
@@ -725,33 +805,47 @@ guard_dispatch (const Guardable &at, Constant *vtable, Function *entry)
 	at.site->insertInto (slow, slow->begin ());
 	at.site->setMetadata (guarded_md, MDNode::get (c, {}));
 
-	IRBuilder<> b (fast);
+	SmallVector<std::pair<BasicBlock *, CallBase *>, 2> directs;
 
-	b.SetCurrentDebugLocation (call.getDebugLoc ());
+	for (const NamedArm &arm : arms) {
+		BasicBlock *fast = BasicBlock::Create (c, "guard_direct", f, slow);
+		IRBuilder<> b (fast);
 
-	CallBase *direct = direct_call (b, call, entry, publishes_unbox_entry (at.entered.target),
-	                                at.drops_key, tail);
+		b.SetCurrentDebugLocation (call.getDebugLoc ());
+
+		CallBase *direct = direct_call (b, call, arm.entry,
+		                                publishes_unbox_entry (arm.target), at.drops_key,
+		                                tail);
+
+		if (unwinds == nullptr)
+			b.CreateBr (tail);
+		directs.emplace_back (fast, direct);
+	}
 
 	if (unwinds == nullptr) {
-		b.CreateBr (tail);
 		IRBuilder<> (slow).CreateBr (tail);
 	} else {
-		// Both arms reach the pad and the continuation now, where the one invoke
-		// reached each of them from the block above.
+		// Every arm reaches the pad and the continuation now, where the one
+		// invoke reached each of them from the block above.
 		tail->replacePhiUsesWith (head, slow);
-		share_phis_with (tail, slow, fast);
 		pad->replacePhiUsesWith (head, slow);
-		share_phis_with (pad, slow, fast);
+
+		for (auto [fast, direct] : directs) {
+			share_phis_with (tail, slow, fast);
+			share_phis_with (pad, slow, fast);
+		}
 	}
 
 	if (!call.getType ()->isVoidTy ()) {
-		PHINode *merged = PHINode::Create (call.getType (), 2, "guard_result",
-		                                   tail->getFirstNonPHIIt ());
+		PHINode *merged = PHINode::Create (call.getType (), directs.size () + 1,
+		                                   "guard_result", tail->getFirstNonPHIIt ());
 
 		// Before the incoming values name it, so that replacing the call's uses
 		// does not reach into the phi's own operand for the dispatched answer.
 		call.replaceAllUsesWith (merged);
-		merged->addIncoming (direct, fast);
+
+		for (auto [fast, direct] : directs)
+			merged->addIncoming (direct, fast);
 		merged->addIncoming (&call, slow);
 	}
 
@@ -760,11 +854,54 @@ guard_dispatch (const Guardable &at, Constant *vtable, Function *entry)
 	if (Instruction *stale = head->getTerminatorOrNull ())
 		stale->eraseFromParent ();
 
-	IRBuilder<> guard (head);
+	uint64_t rest = missed;
 
-	guard.SetCurrentDebugLocation (call.getDebugLoc ());
-	guard.CreateCondBr (guard.CreateICmpEQ (read, vtable, "guard_hit"), fast, slow)
-		->setMetadata (LLVMContext::MD_prof, at.weights);
+	for (const NamedArm &arm : arms)
+		rest += arm.count;
+
+	BasicBlock *test = head;
+
+	for (size_t i = 0; i < arms.size (); i++) {
+		rest -= arms[i].count;
+
+		BasicBlock *next = i + 1 < arms.size ()
+		                           ? BasicBlock::Create (c, "guard_next", f, directs[i + 1].first)
+		                           : slow;
+		IRBuilder<> guard (test);
+		Value *hit = nullptr;
+
+		guard.SetCurrentDebugLocation (call.getDebugLoc ());
+
+		for (Constant *vtable : arms[i].vtables) {
+			Value *same = guard.CreateICmpEQ (read, vtable, "guard_hit");
+
+			hit = hit != nullptr ? guard.CreateOr (hit, same) : same;
+		}
+
+		guard.CreateCondBr (hit, directs[i].first, next)
+			->setMetadata (LLVMContext::MD_prof, guard_weights (c, arms[i].count, rest));
+		test = next;
+	}
+}
+
+void
+trace_guard (const Function &f, ArrayRef<NamedArm> arms, uint64_t missed)
+{
+	uint64_t total = missed;
+
+	for (const NamedArm &arm : arms)
+		total += arm.count;
+
+	fprintf (stderr, "[llvm-jit] guarding a recorded dispatch in %s:", f.getName ().str ().c_str ());
+
+	for (const NamedArm &arm : arms) {
+		char *name = mono_method_full_name (arm.target, TRUE);
+
+		fprintf (stderr, " %s (%" PRIu64 "/%" PRIu64 ")", name, arm.count, total);
+		g_free (name);
+	}
+
+	fprintf (stderr, "\n");
 }
 
 } // namespace
@@ -776,8 +913,7 @@ guard_dispatch_sites (Function &f, BlockFrequencyInfo &counts, const ConstantVal
 
 	// The classes ride as pointers into this process, and the vtable the compare
 	// reads is a symbol resolved against this compile's domain.
-	if (compile.domain == nullptr || !compile.publish || !compile.vtable_of
-	    || !guard_array_dispatch ())
+	if (compile.domain == nullptr || !compile.publish || !compile.vtable_of)
 		return false;
 
 	if (builtin_sites (f, vtable_func_name).empty ()
@@ -790,26 +926,41 @@ guard_dispatch_sites (Function &f, BlockFrequencyInfo &counts, const ConstantVal
 	// Every weight is read before the first split, because a block this pass
 	// makes has no count of its own and the analysis is stale the moment one
 	// appears.
-	collect_guardable (f, vtable_func_name, Lookup::vtable, counts, values, pending);
-	collect_guardable (f, imt_func_name, Lookup::imt, counts, values, pending);
+	collect_guardable (f, vtable_func_name, Lookup::vtable, counts, values, compile, pending);
+	collect_guardable (f, imt_func_name, Lookup::imt, counts, values, compile, pending);
 	collect_guardable (f, vtable_gfunc_name, Lookup::generic_virtual, counts, values,
-	                   pending);
+	                   compile, pending);
 
 	bool changed = false;
 
 	for (const Guardable &at : pending) {
-		Constant *vtable = compile.vtable_of (*f.getParent (), at.klass);
+		SmallVector<NamedArm, 2> arms;
+		uint64_t missed = at.missed;
 
-		if (vtable == nullptr)
+		for (const Arm &arm : at.arms) {
+			NamedArm named { {}, nullptr, arm.entered.target, arm.count };
+
+			for (MonoClass *klass : arm.classes)
+				if (Constant *vtable = compile.vtable_of (*f.getParent (), klass))
+					named.vtables.push_back (vtable);
+
+			if (!named.vtables.empty ())
+				named.entry = entry_for (*f.getParent (), arm.entered.target,
+				                         arm.entered.shape, compile);
+
+			if (named.entry != nullptr)
+				arms.push_back (std::move (named));
+			else
+				missed += arm.count;
+		}
+
+		if (arms.empty ())
 			continue;
 
-		Function *entry = entry_for (*f.getParent (), at.entered.target,
-		                             at.entered.shape, compile);
+		if (at.recorded && is_jit_trace_enabled ())
+			trace_guard (f, arms, missed);
 
-		if (entry == nullptr)
-			continue;
-
-		guard_dispatch (at, vtable, entry);
+		guard_dispatch (at, arms, missed);
 		changed = true;
 	}
 

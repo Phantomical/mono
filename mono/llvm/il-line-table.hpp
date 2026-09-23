@@ -25,6 +25,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <utility>
 
 #include <llvm/ADT/DenseMap.h>
 #include <llvm/IR/IRBuilder.h>
@@ -75,6 +77,16 @@ private:
 /// A subprogram some other producer created has no entry.
 llvm::DenseMap<const llvm::DISubprogram *, uint64_t>
 il_debug_subprogram_ids (const llvm::Module &m);
+
+/// Returns the id and IL offset of the innermost body \p inst was translated
+/// from, or empty if its location has no matching entry in \p ids.
+std::optional<std::pair<uint64_t, uint32_t>>
+il_debug_origin (const llvm::Instruction &inst,
+                 const llvm::DenseMap<const llvm::DISubprogram *, uint64_t> &ids);
+
+/// Whether \p inst was translated from the body \p id names, directly or inside
+/// a body inlined into it.
+bool il_debug_translated_from (const llvm::Instruction &inst, uint64_t id);
 
 /// Attributes everything builder emits from here on to il_offset within scope.
 void il_debug_set_location (IlDebugScope *scope, llvm::IRBuilder<> *builder, uint32_t il_offset);

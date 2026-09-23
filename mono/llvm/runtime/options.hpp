@@ -166,6 +166,27 @@ bool guard_array_dispatch ();
 /// pass.
 bool guard_class_dispatch ();
 
+/// Whether a tier-1 body records the receiver classes its dispatch sites see.
+bool receiver_profile ();
+
+/// Whether the recorded-class dispatch guard is on.
+///
+/// A false value leaves every dispatch the guard would take reading its callee
+/// out of the receiver's vtable, and still records at tier 1. So the two arms
+/// run the same profile, and differ in one pass.
+bool guard_profile_dispatch ();
+
+/// The most methods one recorded dispatch calls directly.
+unsigned guard_profile_classes ();
+
+/// The percent of a dispatch's recorded receivers that have to enter one method
+/// before the dispatch calls that method directly.
+unsigned guard_profile_min_share ();
+
+/// How many receivers a dispatch needs to have recorded before its record is
+/// read at all.
+uint64_t guard_profile_min_samples ();
+
 /// Whether the tier-2 cost model can translate a clause-bearing callee at
 /// all.
 ///

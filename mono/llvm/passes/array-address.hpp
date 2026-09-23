@@ -47,9 +47,6 @@ mark_array_header_load (llvm::LoadInst *load)
 	mark_internal_load (load, array_header_tbaa_leaf, InternalLife::per_object);
 }
 
-/// Marks an array length load with the range [0, MONO_ARRAY_MAX_INDEX].
-llvm::LoadInst *mark_array_length_load (llvm::LoadInst *load);
-
 /// Rewrites every call to a `mono.array.address.*` declaration into the
 /// bounds-checked element address computation, and says whether it changed
 /// anything. A failed check throws the corlib exception the site names.

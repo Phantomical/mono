@@ -147,6 +147,44 @@ il_debug_subprogram_ids (const llvm::Module &m)
 	return ids;
 }
 
+std::optional<std::pair<uint64_t, uint32_t>>
+il_debug_origin (const llvm::Instruction &inst,
+                 const llvm::DenseMap<const llvm::DISubprogram *, uint64_t> &ids)
+{
+	const llvm::DILocation *loc = inst.getDebugLoc ().get ();
+
+	if (loc == nullptr || loc->getLine () < IL_OFFSET_LINE_BIAS)
+		return std::nullopt;
+
+	auto id = ids.find (loc->getScope ()->getSubprogram ());
+
+	if (id == ids.end ())
+		return std::nullopt;
+
+	return std::make_pair (id->second, loc->getLine () - IL_OFFSET_LINE_BIAS);
+}
+
+bool
+il_debug_translated_from (const llvm::Instruction &inst, uint64_t id)
+{
+	const llvm::Module *m = inst.getModule ();
+
+	if (m == nullptr)
+		return false;
+
+	llvm::DenseMap<const llvm::DISubprogram *, uint64_t> ids = il_debug_subprogram_ids (*m);
+
+	for (const llvm::DILocation *loc = inst.getDebugLoc ().get (); loc != nullptr;
+	     loc = loc->getInlinedAt ()) {
+		auto found = ids.find (loc->getScope ()->getSubprogram ());
+
+		if (found != ids.end () && found->second == id)
+			return true;
+	}
+
+	return false;
+}
+
 void
 il_debug_set_location (IlDebugScope *scope, llvm::IRBuilder<> *builder, uint32_t il_offset)
 {

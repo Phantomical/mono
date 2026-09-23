@@ -3,6 +3,7 @@
 #include "backend.hpp"
 #include "runtime.h"
 #include "domain-method.hpp"
+#include "passes/receiver-profile.hpp"
 #include "mini.h"
 #include "mono/metadata/appdomain.h"
 #include "mono/metadata/gc-internals.h"
@@ -53,6 +54,61 @@ mono_llvm_jit_tier2_promote (mono::MonoDomainMethod *dm)
 	dm->promote ();
 }
 
+/*
+ * What a tier-1 dispatch calls when its receiver's vtable is not the one its
+ * record's hot entry holds.
+ *
+ * A full record is kept by Space-Saving: the receiver replaces the entry with
+ * the lowest count and starts from that count plus one.
+ */
+void
+mono_llvm_jit_record_receiver (mono::ReceiverRecord *record, MonoVTable *vtable)
+{
+	using Entry = mono::ReceiverRecord::Entry;
+
+	uint64_t key = (uint64_t) (uintptr_t) vtable;
+	Entry *least = nullptr;
+	uint64_t least_held = 0;
+	uint64_t least_count = UINT64_MAX;
+
+	auto counted = [record] (Entry &entry, uint64_t count) {
+		uint64_t at = (uint64_t) ((char *) &entry - (char *) record->seen);
+		uint64_t hot = record->hot.load (std::memory_order_relaxed);
+		const Entry &current = *(const Entry *) ((char *) record->seen + hot);
+
+		if (at != hot && count > current.count.load (std::memory_order_relaxed))
+			record->hot.store (at, std::memory_order_relaxed);
+	};
+
+	for (Entry &entry : record->seen) {
+		uint64_t held = entry.vtable.load (std::memory_order_relaxed);
+
+		if (held == 0 && entry.vtable.compare_exchange_strong (held, key, std::memory_order_relaxed))
+			held = key;
+
+		if (held == key) {
+			counted (entry, entry.count.fetch_add (1, std::memory_order_relaxed) + 1);
+			return;
+		}
+
+		uint64_t count = entry.count.load (std::memory_order_relaxed);
+
+		if (count < least_count) {
+			least = &entry;
+			least_held = held;
+			least_count = count;
+		}
+	}
+
+	// A receiver that loses the race to another replacing the same entry goes
+	// uncounted.
+	if (least->vtable.compare_exchange_strong (least_held, key, std::memory_order_relaxed)) {
+		least->inherited.store (least_count, std::memory_order_relaxed);
+		least->count.store (least_count + 1, std::memory_order_relaxed);
+		counted (*least, least_count + 1);
+	}
+}
+
 MonoObject *
 mono_llvm_load_error_exception (MonoErrorBoxed *failure)
 {
@@ -82,6 +138,7 @@ get_runtime_builtins (std::vector<MonoBuiltin> &builtins)
 	std::initializer_list<MonoBuiltin> array = {
 		{"mono_domain_get", (void *) &mono_domain_get},
 		{"mono_llvm_jit_tier2_promote", (void *) &mono_llvm_jit_tier2_promote},
+		{"mono_llvm_jit_record_receiver", (void *) &mono_llvm_jit_record_receiver},
 		{"mono_marshal_set_last_error", (void *) &mono_marshal_set_last_error},
 		{"mono_gc_wbarrier_generic_nostore_internal",
 	         (void *) &mono_gc_wbarrier_generic_nostore_internal},

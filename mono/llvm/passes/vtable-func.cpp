@@ -266,6 +266,17 @@ lower_all (Module &m, StringRef name, function_ref<void (CallBase *)> rewrite)
 
 } // namespace
 
+CallBase *
+dispatch_call (CallBase *site)
+{
+	if (!site->hasOneUse ())
+		return nullptr;
+
+	auto *call = dyn_cast<CallBase> (site->user_back ());
+
+	return call != nullptr && call->getCalledOperand () == site ? call : nullptr;
+}
+
 bool
 lower_vtable_reads (Module &m)
 {

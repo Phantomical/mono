@@ -558,6 +558,10 @@ public:
 		/// The `__llvm_prf_data` records, one per instrumented function.
 		const uint8_t *profile_data = nullptr;
 		size_t profile_data_size = 0;
+		/// The receiver records of every instrumented function in this
+		/// object, and how many there are.
+		const ReceiverRecord *receivers = nullptr;
+		size_t receiver_count = 0;
 		/// The object as a debugger sees it, section addresses filled in.
 		/// Empty unless gdbjit::enabled ().
 		std::vector<char> debug_object;
@@ -692,6 +696,11 @@ public:
 					extents.profile_data =
 						range.getStart ().toPtr<const uint8_t *> ();
 					extents.profile_data_size = range.getSize ();
+				} else if (section.getName () == receiver_section) {
+					extents.receivers =
+						range.getStart ().toPtr<const ReceiverRecord *> ();
+					extents.receiver_count =
+						range.getSize () / sizeof (ReceiverRecord);
 				} else if (is_linker_stub_section (section)) {
 					extents.linker_stubs.emplace_back (
 						range.getStart ().toPtr<const uint8_t *> (),
@@ -1884,14 +1893,24 @@ MonoJit::optimize (Module &m, JitTier tier, ArrayRef<uint8_t> profile,
 	// Emptied first: the passes append, and this thread's last compile left its
 	// own sites behind.
 	profile_sites ().clear ();
+	receiver_sites ().clear ();
 	run_tier1_pipeline (m);
 
 	std::vector<ProfileCounters> layout;
 
 	// One per body that can promote, which is one per method the module holds.
-	for (const ProfileSite &site : profile_sites ())
-		layout.push_back (ProfileCounters { site.function, site.name, site.hash,
-		                                    nullptr, site.counters });
+	for (const ProfileSite &site : profile_sites ()) {
+		ProfileCounters counters { site.function, site.name, site.hash, nullptr,
+			                   site.counters };
+
+		for (ReceiverSites &sites : receiver_sites ())
+			if (sites.function == site.function) {
+				counters.receiver_keys = std::move (sites.keys);
+				counters.first_receiver = sites.first;
+			}
+
+		layout.push_back (std::move (counters));
+	}
 
 	return layout;
 }
@@ -1999,6 +2018,18 @@ MonoJit::compile_batch (ThreadSafeModule tsm, ArrayRef<StringRef> entries,
 	std::vector<ProfileCounters> profiles =
 		locate_counters (layout, extents->counters, extents->counter_slots,
 		                 extents->profile_data, extents->profile_data_size);
+
+	for (ProfileCounters &counters : profiles) {
+		if (counters.receiver_keys.empty ())
+			continue;
+
+		// A section that does not hold every record the layout promises is one
+		// whose layout this does not understand, so the keys go unread.
+		if (counters.first_receiver + counters.receiver_keys.size () > extents->receiver_count)
+			counters.receiver_keys.clear ();
+		else
+			counters.receivers = extents->receivers + counters.first_receiver;
+	}
 	std::vector<CompiledMethod> results;
 	auto object_code =
 		std::make_shared<std::vector<std::pair<const uint8_t *, size_t>>> ();

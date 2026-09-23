@@ -10,6 +10,8 @@
 #ifndef MONO_LLVM_JIT_HPP
 #define MONO_LLVM_JIT_HPP
 
+#include "passes/receiver-profile.hpp"
+
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
@@ -119,6 +121,14 @@ struct ProfileCounters {
 	uint64_t hash = 0;
 	const uint64_t *counters = nullptr;
 	uint32_t count = 0;
+
+	/// The dispatch sites the function records receivers at, in the order their
+	/// records sit.
+	std::vector<ReceiverSiteKey> receiver_keys;
+	/// The index of the first of those records in the object's record section.
+	uint32_t first_receiver = 0;
+	/// Those records, in live code memory like the counters.
+	const ReceiverRecord *receivers = nullptr;
 };
 
 /// Which of the two IR pipelines a module is compiled through.

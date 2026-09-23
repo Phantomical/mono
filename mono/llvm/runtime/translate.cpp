@@ -14,6 +14,7 @@
 #include "options.hpp"
 #include "passes/inline-copies.hpp"
 #include "profile-inlines.hpp"
+#include "receivers.hpp"
 #include "timing.hpp"
 #include "trivial-inlines.hpp"
 
@@ -350,8 +351,19 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 		return symbol;
 	};
 
-	CompileScope compiling (
-		{ target.domain, publish_declaration, name_vtable, name_class });
+	RecordedReceivers recorded (target.domain, method);
+	auto receivers_at = [&] (const ReceiverSiteKey &key) { return recorded.at (key); };
+	auto vtable_class = [] (uint64_t vtable) {
+		return reinterpret_cast<MonoVTable *> (static_cast<uintptr_t> (vtable))->klass;
+	};
+	CompileState state { target.domain, publish_declaration, name_vtable, name_class };
+
+	if (target.tier == JitTier::tier2) {
+		state.receivers = receivers_at;
+		state.vtable_class = vtable_class;
+	}
+
+	CompileScope compiling (state);
 
 	std::vector<ProfileCounters> layout = MonoJit::optimize (
 		*module, target.tier, target.profile,
