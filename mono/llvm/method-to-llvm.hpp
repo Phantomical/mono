@@ -846,6 +846,7 @@ private:
 	void finish_function ();
 	void mark_for_tier2_instrumentation ();
 	llvm::Error seed_handler_entry_stacks (MonoIrBuilder &builder);
+	void mark_not_taken ();
 	llvm::BasicBlock *create_cold_block (const llvm::Twine &name);
 	llvm::CallInst *emit_stackmap_marker (MonoIrBuilder &builder, uint64_t id,
 	                                      llvm::ArrayRef<llvm::Value *> vars);
