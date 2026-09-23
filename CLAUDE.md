@@ -799,13 +799,10 @@ frames through the pads.
 that first calls it, through `mono_tier0_compile ()` (`tier0/driver.c`), under a fixed
 optimization mask of `MONO_OPT_FLOAT32 | MONO_OPT_GSHARED` — the two bits that decide
 correctness rather than speed: an R4's width on the evaluation stack, and whether a
-shared generic body can be built at all. `runs_at_tier0 ()` refuses the methods that
-would be wrong there rather than merely slow: no IL of its own, most wrappers, or a body
-this backend writes itself (`builtin_body_replaces_il ()`, which is `ByReference<T>`,
-whose IL only throws). A `MONO_WRAPPER_DYNAMIC_METHOD` is the one wrapper it accepts,
-because it carries IL of its own from Reflection.Emit and `create_delegate_method_ptr ()`
-otherwise compiles it on the thread that makes the delegate over it. A method tier 0
-refuses, or fails to compile, goes to the backend at tier 1.
+shared generic body can be built at all. `runs_at_tier0 ()` refuses what would be wrong
+there rather than merely slow, and `wrapper_runs_at_tier0 ()` decides the wrapper kinds —
+a denylist, so an icall wrapper runs at tier 0 and gathers no profile counts. A method
+tier 0 refuses, or fails to compile, goes to the backend at tier 1.
 
 A reference instantiation of a generic enters the shared form's record, the way the
 compiled tiers do (`enter_shared_body ()`): the shared body is compiled once, the

@@ -17,6 +17,7 @@
 #include "mono/metadata/tokentype.h"
 #include "mono/utils/mono-threads.h"
 #include <llvm/IR/BasicBlock.h>
+#include <llvm/IR/CFG.h>
 #include <llvm/IR/InlineAsm.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/IRBuilder.h>
@@ -1318,6 +1319,42 @@ MethodLLVMEmitter::finish_function ()
 			block->moveAfter (&function->back ());
 }
 
+/// Marks a MONO_NOT_TAKEN block as unlikely on each conditional predecessor.
+/// Tier 1 uses the cold-block placement; tier 2 needs the branch weights,
+/// including when an inlined body has no profile counts.
+void
+MethodLLVMEmitter::mark_not_taken ()
+{
+	// Every emitter of the opcode puts it first in its IL block.
+	auto found = blocks.find (offset);
+
+	if (found == blocks.end ())
+		return;
+
+	llvm::BasicBlock *block = found->second.block;
+	llvm::MDBuilder md (context ());
+
+	for (llvm::BasicBlock *pred : llvm::predecessors (block)) {
+		auto *branch = llvm::dyn_cast<llvm::CondBrInst> (pred->getTerminator ());
+
+		if (branch == nullptr)
+			continue;
+
+		bool on_true = branch->getSuccessor (0) == block;
+		bool on_false = branch->getSuccessor (1) == block;
+
+		// If both edges land here, there is no unlikely edge to mark.
+		if (on_true == on_false)
+			continue;
+
+		branch->setMetadata (llvm::LLVMContext::MD_prof,
+		                     on_true ? md.createBranchWeights (1, 1000)
+		                             : md.createBranchWeights (1000, 1));
+	}
+
+	cold_blocks.push_back (block);
+}
+
 /// Creates a block for a path that runs only when something goes wrong.
 ///
 /// The block is not laid out where it is made. finish_function () moves these
@@ -1945,10 +1982,9 @@ MethodLLVMEmitter::emit_instruction (MonoIrBuilder &builder)
 			pending_save_last_error = true;
 			return llvm::Error::success ();
 
-		// A hint that the block it starts is the unlikely one, so
-		// finish_function's layout pass moves it out of the hot path's way.
+		// Mark the block as cold for tier 1 and its incoming edges as unlikely.
 		case MONO_CEE_MONO_NOT_TAKEN:
-			cold_blocks.push_back (builder.GetInsertBlock ());
+			mark_not_taken ();
 			return llvm::Error::success ();
 
 		// Bracketing marks around a call out to native code. Every wrapper that
