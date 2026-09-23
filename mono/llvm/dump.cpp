@@ -1,9 +1,8 @@
 #include "dump.hpp"
 
-#include <cstdio>
-
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/ADT/SmallPtrSet.h>
+#include <llvm/ADT/SmallString.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Function.h>
 #include <llvm/IR/GlobalAlias.h>
@@ -168,19 +167,11 @@ Error
 with_dump_stream (DumpPoint point, StringRef name,
                   function_ref<Error (raw_pwrite_stream &)> body)
 {
-	DumpDestination destination (point, name.str ().c_str ());
-
-	if (destination.stream () == nullptr)
-		return Error::success ();
-
-	// Anything already buffered on this stream was printed first, so it has to
-	// reach the file first. Only this stream writes past here.
-	fflush (destination.stream ());
-
-	raw_fd_ostream out (fileno (destination.stream ()), /*shouldClose=*/false);
+	SmallString<0> text;
+	raw_svector_ostream out (text);
 	Error result = body (out);
 
-	out.flush ();
+	write_dump (point, name.str ().c_str (), std::string (text.str ()));
 	return result;
 }
 

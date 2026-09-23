@@ -79,6 +79,7 @@
 #include "llvm-runtime.h"
 #include "aot-runtime.h"
 #include "mini-runtime.h"
+#include "jit-dump.h"
 #include "mono/metadata/unity-utils.h"
 
 #ifndef MONO_ARCH_CONTEXT_DEF
@@ -4153,6 +4154,10 @@ mono_handle_native_crash (const char *signal, MonoContext *mctx, MONO_SIG_HANDLE
 		mono_walk_stack_full (print_stack_frame_signal_safe, mctx, mono_domain_get (), jit_tls, mono_get_lmf (), MONO_UNWIND_LOOKUP_IL_OFFSET, NULL, TRUE);
 		g_async_safe_printf ("=================================================================\n");
 	}
+
+	/* The crashing method's dump is often still queued. After the report,
+	 * because writing files is not async-safe. */
+	mono_jit_dump_flush ();
 
 	mono_post_native_crash_handler (signal, mctx, info, mono_do_crash_chaining);
 }

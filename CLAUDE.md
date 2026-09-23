@@ -277,7 +277,7 @@ Tracing:
 
 Dumping. Both compiled tiers print through `mono/mini/jit-dump.hpp`, so one variable
 selects the stages and one filter selects the methods. The classic tier-0 compiler is C,
-so it crosses into that C++ code through the small boundary `mono/mini/jit-dump-tier0.h`
+so it crosses into that C++ code through the small boundary `mono/mini/jit-dump.h`
 declares, the same shape `runtime.h` gives the backend:
 - `MONO_JIT_DUMP=<points>` — the stages to print, separated by `;` or `,`. `all` names
   every one. A name nothing matches is reported on stderr with the list of names. The
@@ -291,6 +291,11 @@ declares, the same shape `runtime.h` gives the backend:
   A name's first dump in a run overwrites whatever an earlier run left there. A second
   dump under that name inside the same run - two threads racing, or a method recompiled
   - takes a counted suffix instead, so each still keeps a dump of its own.
+  The compiling thread only renders the dump into memory. One writer thread opens and
+  writes the files, so a file can land after the compile that produced it. The queue
+  is drained at exit and in the native crash handler, so a crashing method's dump is
+  still on disk afterwards. A crash that kills the process before that handler runs can
+  lose the most recent dumps.
 
 What each point prints:
 - `il` — the method's CIL, inside the class and signature it is declared with. It prints
