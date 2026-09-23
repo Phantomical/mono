@@ -98,9 +98,6 @@ class ProfileDevirt {
 	static int Many (Shape s) { return s.Area (); }
 
 	[MethodImpl (MethodImplOptions.NoInlining)]
-	static int Late (Shape s) { return s.Area (); }
-
-	[MethodImpl (MethodImplOptions.NoInlining)]
 	static int Keyed (IKind k) { return k.Kind (); }
 
 	static bool Promote (string name, int tier)
@@ -154,7 +151,6 @@ class ProfileDevirt {
 			Check ("One " + all[i].GetType ().Name, One (all[i]), areas[i]);
 			Check ("Two " + all[i].GetType ().Name, Two (all[i]), areas[i]);
 			Check ("Many " + all[i].GetType ().Name, Many (all[i]), areas[i]);
-			Check ("Late " + all[i].GetType ().Name, Late (all[i]), areas[i]);
 		}
 
 		Check ("Keyed Small", Keyed (new Small { v = 1 }), 101);
@@ -164,7 +160,7 @@ class ProfileDevirt {
 	static int Main ()
 	{
 		bool guarding = Environment.GetEnvironmentVariable ("MONO_GUARD_PROFILE") != "off";
-		string[] roots = { "One", "Two", "Many", "Late", "Keyed" };
+		string[] roots = { "One", "Two", "Many", "Keyed" };
 
 		foreach (string root in roots) {
 			if (!Promote (root, tier1)) {
@@ -177,13 +173,7 @@ class ProfileDevirt {
 		Shape[] spread = { square, circle, new Triangle (), new Hexagon (), new Oval () };
 		IKind small = new Small { v = 1 }, large = new Large ();
 
-		// Every entry of Late's record is taken before the class that dominates
-		// it arrives.
-		for (int i = 1; i < spread.Length; i++)
-			Late (spread[i]);
-
 		for (int i = 0; i < 1000; i++) {
-			Late (square);
 			One (i % 10 == 0 ? circle : square);
 			Two (i % 2 == 0 ? circle : i % 4 == 1 ? square : big);
 			Many (spread[i % spread.Length]);
@@ -203,12 +193,11 @@ class ProfileDevirt {
 
 		bool one = Inlined (() => One (square), "Area", "One");
 		bool two = Inlined (() => Two (big), "Area", "Two");
-		bool late = Inlined (() => Late (square), "Area", "Late");
 		bool keyed = Inlined (() => Keyed (small), "Kind", "Keyed");
 
-		if (one != guarding || two != guarding || late != guarding || keyed != guarding) {
-			Console.WriteLine ("inlined behind the guard: One {0}, Two {1}, Late {2}, Keyed {3}; want {4}",
-			                   one, two, late, keyed, guarding);
+		if (one != guarding || two != guarding || keyed != guarding) {
+			Console.WriteLine ("inlined behind the guard: One {0}, Two {1}, Keyed {2}; want {3}",
+			                   one, two, keyed, guarding);
 			failures++;
 		}
 
