@@ -983,15 +983,12 @@ guess has to agree with.
 
 A third rule answers from what tier 1 saw, between the array rule and the guess.
 `ReceiverProfilePass` (`passes/receiver-profile.cpp`) gives every dispatch in an
-instrumented tier-1 body a record of the receiver vtables it meets, in the object's
-`.mono_receivers` section. The record is four entries kept by Space-Saving: a class that
-finds them all taken replaces the entry with the lowest count and inherits that count,
-which the entry notes so that tier 2 reads only what the class itself was seen. A class
-above a quarter of the receivers therefore keeps an entry however late it arrives. The
-lowered code compares the receiver against the entry it tracks as hottest and bumps it
-inline, and calls `mono_llvm_jit_record_receiver ()` otherwise. A site is keyed by the
-IL that wrote it — the method and the offset its debug location names — rather than by
-where it sits in the CFG, because the two tiers inline different bodies. At tier 2,
+instrumented tier-1 body a record of the receiver vtables it meets: four entries and an
+overflow count, in the object's `.mono_receivers` section. The lowered code compares the
+receiver against the first entry and bumps its count inline, and calls
+`mono_llvm_jit_record_receiver ()` otherwise. A site is keyed by the IL that wrote it —
+the method and the offset its debug location names — rather than by where it sits in
+the CFG, because the two tiers inline different bodies. At tier 2,
 `AnnotateReceiversPass` puts the record on the dispatch site as `!prof` value-profile
 metadata of kind `IPVK_VTableTarget`, reading the root's own record first and the
 record of the method the site's IL belongs to otherwise. `InlineFunction` scales that

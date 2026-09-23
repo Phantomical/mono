@@ -39,26 +39,20 @@ struct ReceiverSiteKey {
 /// mono_llvm_jit_record_receiver () both write it while the process runs.
 ///
 /// A vtable of zero is an entry nothing has claimed yet. A receiver that finds
-/// every entry claimed by another class takes over the entry with the lowest
-/// count, count included, and notes that count in inherited: so count minus
-/// inherited is what the class itself was seen. A class above a quarter of the
-/// receivers therefore cannot be pushed out.
+/// every entry claimed by another class counts in other.
 struct ReceiverRecord {
 	static constexpr unsigned entries = 4;
 
 	struct Entry {
 		std::atomic<uint64_t> vtable;
 		std::atomic<uint64_t> count;
-		std::atomic<uint64_t> inherited;
 	};
 
 	Entry seen[entries];
-	/// The byte offset into seen of the entry the lowered code compares
-	/// against, kept close to the highest count.
-	std::atomic<uint64_t> hot;
+	std::atomic<uint64_t> other;
 };
 
-static_assert (sizeof (ReceiverRecord) == (3 * ReceiverRecord::entries + 1) * sizeof (uint64_t),
+static_assert (sizeof (ReceiverRecord) == (2 * ReceiverRecord::entries + 1) * sizeof (uint64_t),
                "the pass lays the record out as plain i64s");
 
 /// Where one function's records start in its object's record section, and
@@ -82,7 +76,6 @@ constexpr llvm::StringRef receiver_section = ".mono_receivers";
 struct ReceiverCounts {
 	/// Each vtable seen, with its count, in no order.
 	llvm::SmallVector<std::pair<uint64_t, uint64_t>, 4> seen;
-	/// Receivers counted under no vtable in seen.
 	uint64_t other = 0;
 
 	/// Adds what \p record holds so far.

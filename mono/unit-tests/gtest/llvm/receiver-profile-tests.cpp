@@ -24,7 +24,6 @@
 
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -170,71 +169,25 @@ TEST (ReceiverProfileTest, TheLoweringLeavesOnlyTheHelper)
 	EXPECT_EQ (ir.calls_to ("caller", "mono_llvm_jit_record_receiver"), 2u);
 }
 
-void
-record (ReceiverRecord &into, uintptr_t vtable, unsigned times = 1)
+TEST (ReceiverProfileTest, TheHelperClaimsAnEntryPerClassThenCountsTheRest)
 {
-	for (unsigned i = 0; i < times; i++)
-		mono_llvm_jit_record_receiver (&into, reinterpret_cast<void *> (vtable));
-}
+	ReceiverRecord record;
 
-TEST (ReceiverProfileTest, TheHelperClaimsAnEntryPerClassThenReplacesTheLeastCounted)
-{
-	ReceiverRecord seen;
+	std::memset (&record, 0, sizeof (record));
 
-	std::memset (&seen, 0, sizeof (seen));
+	for (uintptr_t vtable = 1; vtable <= ReceiverRecord::entries + 1; vtable++)
+		mono_llvm_jit_record_receiver (&record, reinterpret_cast<void *> (vtable * 16));
+	mono_llvm_jit_record_receiver (&record, reinterpret_cast<void *> (16));
 
-	for (uintptr_t vtable = 1; vtable <= ReceiverRecord::entries; vtable++)
-		record (seen, vtable * 16);
-	record (seen, 16);
-	record (seen, 80);
+	EXPECT_EQ (record.seen[0].vtable.load (), 16u);
+	EXPECT_EQ (record.seen[0].count.load (), 2u);
 
-	EXPECT_EQ (seen.seen[0].vtable.load (), 16u);
-	EXPECT_EQ (seen.seen[0].count.load (), 2u);
-	EXPECT_EQ (seen.seen[1].vtable.load (), 80u);
-	EXPECT_EQ (seen.seen[1].count.load (), 2u);
-	EXPECT_EQ (seen.seen[1].inherited.load (), 1u);
-
-	for (unsigned i = 2; i < ReceiverRecord::entries; i++) {
-		EXPECT_EQ (seen.seen[i].vtable.load (), (i + 1) * 16u);
-		EXPECT_EQ (seen.seen[i].count.load (), 1u);
-	}
-}
-
-TEST (ReceiverProfileTest, TheHotEntryFollowsTheHighestCount)
-{
-	ReceiverRecord seen;
-
-	std::memset (&seen, 0, sizeof (seen));
-	record (seen, 16);
-	record (seen, 32, 2);
-
-	EXPECT_EQ (seen.hot.load (), sizeof (ReceiverRecord::Entry));
-}
-
-TEST (ReceiverProfileTest, AClassArrivingAfterTheRecordFillsStillCounts)
-{
-	ReceiverRecord seen;
-
-	std::memset (&seen, 0, sizeof (seen));
-
-	for (uintptr_t vtable = 1; vtable <= ReceiverRecord::entries; vtable++)
-		record (seen, vtable * 16);
-	for (unsigned i = 0; i < 100; i++) {
-		record (seen, 0x1000);
-		if (i % 10 == 0)
-			record (seen, 0x2000 + i * 16);
+	for (unsigned i = 1; i < ReceiverRecord::entries; i++) {
+		EXPECT_EQ (record.seen[i].vtable.load (), (i + 1) * 16u);
+		EXPECT_EQ (record.seen[i].count.load (), 1u);
 	}
 
-	ReceiverCounts counts;
-
-	counts.add (seen);
-
-	auto late = std::find_if (counts.seen.begin (), counts.seen.end (),
-	                          [] (const auto &s) { return s.first == 0x1000; });
-
-	ASSERT_NE (late, counts.seen.end ());
-	EXPECT_EQ (late->second, 100u);
-	EXPECT_EQ (counts.total (), ReceiverRecord::entries + 110);
+	EXPECT_EQ (record.other.load (), 1u);
 }
 
 TEST (ReceiverProfileTest, CountsFromTwoRecordsOfOneSiteAddUp)
@@ -248,8 +201,8 @@ TEST (ReceiverProfileTest, CountsFromTwoRecordsOfOneSiteAddUp)
 	b.seen[0].vtable = 32;
 	b.seen[0].count = 1;
 	b.seen[1].vtable = 16;
-	b.seen[1].count = 7;
-	b.seen[1].inherited = 5;
+	b.seen[1].count = 2;
+	b.other = 5;
 
 	ReceiverCounts counts;
 
