@@ -56,26 +56,57 @@ mono_llvm_jit_tier2_promote (mono::MonoDomainMethod *dm)
 
 /*
  * What a tier-1 dispatch calls when its receiver's vtable is not the one its
- * record's first entry holds.
+ * record's hot entry holds.
+ *
+ * A full record is kept by Space-Saving: the receiver replaces the entry with
+ * the lowest count and starts from that count plus one.
  */
 void
 mono_llvm_jit_record_receiver (mono::ReceiverRecord *record, MonoVTable *vtable)
 {
-	uint64_t key = (uint64_t) (uintptr_t) vtable;
+	using Entry = mono::ReceiverRecord::Entry;
 
-	for (mono::ReceiverRecord::Entry &entry : record->seen) {
+	uint64_t key = (uint64_t) (uintptr_t) vtable;
+	Entry *least = nullptr;
+	uint64_t least_held = 0;
+	uint64_t least_count = UINT64_MAX;
+
+	auto counted = [record] (Entry &entry, uint64_t count) {
+		uint64_t at = (uint64_t) ((char *) &entry - (char *) record->seen);
+		uint64_t hot = record->hot.load (std::memory_order_relaxed);
+		const Entry &current = *(const Entry *) ((char *) record->seen + hot);
+
+		if (at != hot && count > current.count.load (std::memory_order_relaxed))
+			record->hot.store (at, std::memory_order_relaxed);
+	};
+
+	for (Entry &entry : record->seen) {
 		uint64_t held = entry.vtable.load (std::memory_order_relaxed);
 
 		if (held == 0 && entry.vtable.compare_exchange_strong (held, key, std::memory_order_relaxed))
 			held = key;
 
 		if (held == key) {
-			entry.count.fetch_add (1, std::memory_order_relaxed);
+			counted (entry, entry.count.fetch_add (1, std::memory_order_relaxed) + 1);
 			return;
+		}
+
+		uint64_t count = entry.count.load (std::memory_order_relaxed);
+
+		if (count < least_count) {
+			least = &entry;
+			least_held = held;
+			least_count = count;
 		}
 	}
 
-	record->other.fetch_add (1, std::memory_order_relaxed);
+	// A receiver that loses the race to another replacing the same entry goes
+	// uncounted.
+	if (least->vtable.compare_exchange_strong (least_held, key, std::memory_order_relaxed)) {
+		least->inherited.store (least_count, std::memory_order_relaxed);
+		least->count.store (least_count + 1, std::memory_order_relaxed);
+		counted (*least, least_count + 1);
+	}
 }
 
 MonoObject *

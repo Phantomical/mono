@@ -18,6 +18,7 @@
 #include <llvm/ProfileData/InstrProf.h>
 
 #include <algorithm>
+#include <cstddef>
 
 using namespace llvm;
 
@@ -30,7 +31,11 @@ constexpr StringRef count_receiver_name = "mono.profile.receiver";
 
 constexpr StringRef record_receiver_helper = "mono_llvm_jit_record_receiver";
 
-constexpr unsigned record_words = 2 * ReceiverRecord::entries + 1;
+constexpr unsigned record_words = sizeof (ReceiverRecord) / sizeof (uint64_t);
+constexpr unsigned hot_word = offsetof (ReceiverRecord, hot) / sizeof (uint64_t);
+
+static_assert (offsetof (ReceiverRecord, seen) == 0 && offsetof (ReceiverRecord::Entry, count) == 8,
+               "the lowered code reads the record as plain i64s");
 
 /// A dispatch site's call, the vtable it dispatches on, and the key naming
 /// where its IL wrote it.
@@ -81,6 +86,11 @@ ReceiverCounts::add (const ReceiverRecord &record)
 	for (const ReceiverRecord::Entry &entry : record.seen) {
 		uint64_t vtable = entry.vtable.load (std::memory_order_relaxed);
 		uint64_t count = entry.count.load (std::memory_order_relaxed);
+		// The two are written apart while the process runs.
+		uint64_t inherited = std::min (count, entry.inherited.load (std::memory_order_relaxed));
+
+		other += inherited;
+		count -= inherited;
 
 		if (vtable == 0 || count == 0)
 			continue;
@@ -93,8 +103,6 @@ ReceiverCounts::add (const ReceiverRecord &record)
 		else
 			seen.emplace_back (vtable, count);
 	}
-
-	other += record.other.load (std::memory_order_relaxed);
 }
 
 uint64_t
@@ -204,18 +212,25 @@ LowerReceiverProfilePass::run (Module &m, ModuleAnalysisManager &)
 
 		b.SetCurrentDebugLocation (site->getDebugLoc ());
 
-		// Monotonic, because mono_llvm_jit_record_receiver () claims an entry
-		// on another thread. Two threads bumping one count lose an increment,
-		// which only skews the shares.
-		LoadInst *first = b.CreateAlignedLoad (i64, record, Align (8));
+		// Monotonic, because mono_llvm_jit_record_receiver () rewrites the
+		// record on another thread. Two threads bumping one count lose an
+		// increment. An entry replaced between the compare and the store takes
+		// the count the old class had, which the replacement does anyway.
+		LoadInst *hot = b.CreateAlignedLoad (
+			i64, b.CreateConstInBoundsGEP1_64 (i64, record, hot_word), Align (8));
 
-		first->setAtomic (AtomicOrdering::Monotonic);
-		b.CreateCondBr (b.CreateICmpEQ (first, b.CreatePtrToInt (vtable, i64)), hit, miss,
+		hot->setAtomic (AtomicOrdering::Monotonic);
+
+		Value *entry = b.CreateInBoundsGEP (b.getInt8Ty (), record, hot);
+		LoadInst *held = b.CreateAlignedLoad (i64, entry, Align (8));
+
+		held->setAtomic (AtomicOrdering::Monotonic);
+		b.CreateCondBr (b.CreateICmpEQ (held, b.CreatePtrToInt (vtable, i64)), hit, miss,
 		                mostly_hit);
 
 		b.SetInsertPoint (hit);
 
-		Value *slot = b.CreateConstInBoundsGEP1_64 (i64, record, 1);
+		Value *slot = b.CreateConstInBoundsGEP1_64 (i64, entry, 1);
 		LoadInst *counted = b.CreateAlignedLoad (i64, slot, Align (8));
 
 		counted->setAtomic (AtomicOrdering::Monotonic);
