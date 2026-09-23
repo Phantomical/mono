@@ -89,6 +89,22 @@ namespace System.Collections
         // This is the maximum prime smaller than Array.MaxArrayLength
         public const int MaxPrimeArrayLength = 0x7FEFFFFD;
 
+        /// <summary>Returns the reciprocal multiplier used by <see cref="FastMod"/>.</summary>
+        public static ulong GetFastModMultiplier(uint divisor) =>
+            ulong.MaxValue / divisor + 1;
+
+        /// <summary>Returns value % divisor using the reciprocal multiplier computed
+        /// by <see cref="GetFastModMultiplier"/>.</summary>
+        // This is the 32-bit form of Lemire's fast modulo reduction.
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static uint FastMod(uint value, uint divisor, ulong multiplier)
+        {
+            Debug.Assert(divisor <= int.MaxValue);
+            uint highbits = (uint)(((((multiplier * value) >> 32) + 1) * divisor) >> 32);
+            Debug.Assert(highbits == value % divisor);
+            return highbits;
+        }
+
 
         // Used by Hashtable and Dictionary's SeralizationInfo .ctor's to store the SeralizationInfo
         // object until OnDeserialization is called.

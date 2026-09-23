@@ -56,6 +56,7 @@ namespace System.Collections.Generic
         private KeyCollection _keys;
         private ValueCollection _values;
         private object _syncRoot;
+        private ulong _fastModMultiplier;
 
         // constants for serialization
         private const string VersionName = "Version"; // Do not rename (binary serialization)
@@ -391,7 +392,7 @@ namespace System.Collections.Generic
                 {
                     int hashCode = key.GetHashCode() & 0x7FFFFFFF;
                     // Value in _buckets is 1-based
-                    i = buckets[hashCode % buckets.Length] - 1;
+                    i = buckets[GetBucketIndex(hashCode, buckets)] - 1;
                     if (default(TKey) != null)
                     {
                         // ValueType: Devirtualize with EqualityComparer<TValue>.Default intrinsic
@@ -444,7 +445,7 @@ namespace System.Collections.Generic
                 {
                     int hashCode = comparer.GetHashCode(key) & 0x7FFFFFFF;
                     // Value in _buckets is 1-based
-                    i = buckets[hashCode % buckets.Length] - 1;
+                    i = buckets[GetBucketIndex(hashCode, buckets)] - 1;
                     do
                     {
                         // Should be a while loop https://github.com/dotnet/coreclr/issues/15476
@@ -477,9 +478,14 @@ namespace System.Collections.Generic
             _freeList = -1;
             _buckets = new int[size];
             _entries = new Entry[size];
+            _fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)size);
 
             return size;
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int GetBucketIndex(int hashCode, int[] buckets) =>
+            (int)HashHelpers.FastMod((uint)hashCode, (uint)buckets.Length, _fastModMultiplier);
 
         private bool TryInsert(TKey key, TValue value, InsertionBehavior behavior)
         {
@@ -500,7 +506,7 @@ namespace System.Collections.Generic
             int hashCode = ((comparer == null) ? key.GetHashCode() : comparer.GetHashCode(key)) & 0x7FFFFFFF;
 
             int collisionCount = 0;
-            ref int bucket = ref _buckets[hashCode % _buckets.Length];
+            ref int bucket = ref _buckets[GetBucketIndex(hashCode, _buckets)];
             // Value in _buckets is 1-based
             int i = bucket - 1;
 
@@ -649,7 +655,7 @@ namespace System.Collections.Generic
                 entries = _entries;
             }
 
-            ref int targetBucket = ref resized ? ref _buckets[hashCode % _buckets.Length] : ref bucket;
+            ref int targetBucket = ref resized ? ref _buckets[GetBucketIndex(hashCode, _buckets)] : ref bucket;
             ref Entry entry = ref entries[index];
 
             if (updateFreeList)
@@ -751,11 +757,12 @@ namespace System.Collections.Generic
                 }
             }
 
+            _fastModMultiplier = HashHelpers.GetFastModMultiplier((uint)newSize);
             for (int i = 0; i < count; i++)
             {
                 if (entries[i].hashCode >= 0)
                 {
-                    int bucket = entries[i].hashCode % newSize;
+                    int bucket = GetBucketIndex(entries[i].hashCode, buckets);
                     // Value in _buckets is 1-based
                     entries[i].next = buckets[bucket] - 1;
                     // Value in _buckets is 1-based
@@ -780,7 +787,7 @@ namespace System.Collections.Generic
             if (_buckets != null)
             {
                 int hashCode = (_comparer?.GetHashCode(key) ?? key.GetHashCode()) & 0x7FFFFFFF;
-                int bucket = hashCode % _buckets.Length;
+                int bucket = GetBucketIndex(hashCode, _buckets);
                 int last = -1;
                 // Value in _buckets is 1-based
                 int i = _buckets[bucket] - 1;
@@ -836,7 +843,7 @@ namespace System.Collections.Generic
             if (_buckets != null)
             {
                 int hashCode = (_comparer?.GetHashCode(key) ?? key.GetHashCode()) & 0x7FFFFFFF;
-                int bucket = hashCode % _buckets.Length;
+                int bucket = GetBucketIndex(hashCode, _buckets);
                 int last = -1;
                 // Value in _buckets is 1-based
                 int i = _buckets[bucket] - 1;
@@ -1021,7 +1028,7 @@ namespace System.Collections.Generic
                 {
                     ref Entry entry = ref entries[count];
                     entry = oldEntries[i];
-                    int bucket = hashCode % newSize;
+                    int bucket = GetBucketIndex(hashCode, buckets);
                     // Value in _buckets is 1-based
                     entry.next = buckets[bucket] - 1;
                     // Value in _buckets is 1-based
