@@ -888,10 +888,13 @@ for each instruction it runs and five thousand for each call — is compiled aga
 the counts it gathered, at O3 with an optimizing selector. `TierCounterPass` puts that
 counter in: every body takes a constant off at its entry, and a body with a loop adds the
 turns up in a register on top and takes that total off at each exit. Such a body also gets
-a fault clause over the whole of it, if it calls anything that can unwind. That clause's
-pad charges the turns when a callee's exception unwinds through the frame. The calls that
-can unwind become invokes on to the pad, and `mono_lsda.cpp` reads the set back as one
-clause, so what the runtime holds does not grow with the calls.
+a fault clause, if it calls anything that can unwind. That clause's pad charges the turns
+when a callee's exception unwinds through the frame. The calls that can unwind become
+invokes on to the pad, and `mono_lsda.cpp` publishes the clause over every protected range
+the body has, touching ranges merged. Never over the whole body: the runtime enters a pad
+on the stack pointer of the point that raised, which a prologue or an epilogue has not
+finished setting, so a thread abort landing there ran the pad on the wrong stack
+(`mono/tests/thread-abort-reset-race.cs`).
 
 **A type test is one call until late.** `emit_cast ()` writes `mono.cast.isinst` or
 `mono.cast.castclass` carrying the class, the site's cache and the wrapper behind it, and

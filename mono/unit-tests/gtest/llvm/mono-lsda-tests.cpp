@@ -711,6 +711,43 @@ TEST_F (MonoLsdaBuild, ResumePadOnlyAccepts)
 }
 
 /*
+ * The tier counter's pad covers the protected calls, the IL clause's among them,
+ * and nothing between them. A range reaching offset 0 would take in the prologue,
+ * where an asynchronous abort enters the pad on a stack pointer that is not its
+ * frame's.
+ */
+TEST_F (MonoLsdaBuild, TierUnwindCoversOnlyProtectedRanges)
+{
+	std::vector<MonoLsdaEntry> ents = {
+		{ 0x10, 0x08, 0xc0, 0, mono::MONO_LSDA_KIND_TIER_UNWIND },
+		{ 0x18, 0x08, 0xc0, 0, mono::MONO_LSDA_KIND_TIER_UNWIND },
+		{ 0x40, 0x08, 0xc0, 0, mono::MONO_LSDA_KIND_TIER_UNWIND },
+		{ 0x60, 0x10, 0x90, 0 },
+	};
+	std::vector<MonoJitExceptionInfo> out;
+
+	ASSERT_TRUE (mono::build_ex_info (ents, clauses, 2, base, code_len, out));
+	ASSERT_EQ (out.size (), 4u);
+
+	EXPECT_EQ (out[0].clause_index, 0);
+	EXPECT_EQ (out[0].try_start, at (0x60));
+
+	const std::pair<std::uint32_t, std::uint32_t> want[] = {
+		{ 0x10, 0x20 }, { 0x40, 0x48 }, { 0x60, 0x70 },
+	};
+
+	for (std::size_t i = 0; i < 3; ++i) {
+		const MonoJitExceptionInfo &ei = out[i + 1];
+
+		EXPECT_EQ (ei.flags, (guint32) MONO_EXCEPTION_CLAUSE_FAULT);
+		EXPECT_EQ (ei.clause_index, 2);
+		EXPECT_EQ (ei.try_start, at (want[i].first));
+		EXPECT_EQ (ei.try_end, at (want[i].second));
+		EXPECT_EQ (ei.handler_start, at (0xc0));
+	}
+}
+
+/*
  * SIBLING CATCHES: try { } catch(A) catch(B) is one landing pad with two TypeIds
  * over ONE invoke range, so the writer emits two entries with the SAME range and
  * DIFFERENT clause_index. Both must publish (equal-or-disjoint invariant) - mono

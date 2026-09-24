@@ -125,8 +125,8 @@ bool parse_mono_lsda (const std::uint8_t *sec, std::size_t size, const void *cod
  *
  * An empty \p entries, or one holding only marker entries, publishes no
  * protected-region entry of the method's own and succeeds. A tier-unwind marker
- * publishes one fault clause over the whole method. The guard entries are still
- * appended.
+ * publishes a fault clause over every protected range, never over a prologue or
+ * an epilogue. The guard entries are still appended.
  */
 bool build_ex_info (const std::vector<MonoLsdaEntry> &entries,
                     const MonoExceptionClause *clauses, int num_clauses,

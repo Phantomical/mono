@@ -362,12 +362,14 @@ record_resume_pad (const MonoLsdaEntry &e, OwnerHeaders &headers,
 
 /*
  * Appends the fault clause the tier counter's pad is the handler of, if the
- * section named one. Its try range is the whole body, so an exception that
- * unwinds out of the frame from any point reaches it.
+ * section named one, over \p ranges: every range the section protects, the
+ * IL clauses' included, so an exception an IL clause does not catch still
+ * reaches the pad. Touching ranges publish as one entry.
  *
- * The section carries one entry for each call that unwinds to the pad, and they
- * all name the same pad. This reads their handler off and ignores their ranges:
- * one clause covers the lot.
+ * Never the whole body. The runtime enters a pad with the stack pointer of the
+ * point that raised, and the pad addresses its frame off it. In a prologue or
+ * an epilogue that is not the frame's, so an asynchronous abort there would run
+ * the pad on the wrong stack.
  *
  * The clause index is past the IL clauses, where handler_il_offset () reads it as
  * no clause of the method's and answers -1. It goes last, so a clause the IL
@@ -376,32 +378,45 @@ record_resume_pad (const MonoLsdaEntry &e, OwnerHeaders &headers,
  */
 static void
 append_tier_unwind (std::uint32_t handler_off, bool present, int num_clauses,
-                    const std::uint8_t *native_code, std::uint32_t code_len,
+                    const std::uint8_t *native_code, std::vector<RangeOff> ranges,
                     std::vector<MonoJitExceptionInfo> &out)
 {
 	if (!present)
 		return;
 
-	MonoJitExceptionInfo ei;
-	memset (&ei, 0, sizeof (ei));
-	ei.flags = MONO_EXCEPTION_CLAUSE_FAULT;
-	ei.clause_index = num_clauses;
-	ei.try_start = (gpointer) native_code;
-	ei.try_end = (gpointer) (native_code + code_len);
-	ei.handler_start = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + handler_off);
+	std::sort (ranges.begin (), ranges.end (),
+	           [] (const RangeOff &a, const RangeOff &b) { return a.start < b.start; });
 
-	out.push_back (ei);
+	for (std::size_t i = 0; i < ranges.size (); ) {
+		std::uint64_t start = ranges[i].start;
+		std::uint64_t end = ranges[i].end;
+
+		for (++i; i < ranges.size () && ranges[i].start <= end; ++i)
+			end = std::max (end, ranges[i].end);
+
+		MonoJitExceptionInfo ei;
+		memset (&ei, 0, sizeof (ei));
+		ei.flags = MONO_EXCEPTION_CLAUSE_FAULT;
+		ei.clause_index = num_clauses;
+		ei.try_start = (gpointer) (native_code + start);
+		ei.try_end = (gpointer) (native_code + end);
+		ei.handler_start = (gpointer) MINI_ADDR_TO_FTNPTR (native_code + handler_off);
+
+		out.push_back (ei);
+	}
 }
 
 static bool
 build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries, OwnerHeaders &headers,
                        const std::uint8_t *native_code, std::uint32_t code_len,
                        std::vector<MonoJitExceptionInfo> &out,
-                       std::uint32_t &tier_unwind_off, bool &tier_unwind)
+                       std::uint32_t &tier_unwind_off, bool &tier_unwind,
+                       std::vector<RangeOff> &protected_ranges)
 {
 	out.clear ();
 	tier_unwind_off = 0;
 	tier_unwind = false;
+	protected_ranges.clear ();
 
 	// An empty list here means every protected call was optimized to one that
 	// cannot unwind, not that the section is missing. A method whose gather
@@ -453,6 +468,8 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries, OwnerHeaders &
 		if (e.kind == MONO_LSDA_KIND_TIER_UNWIND) {
 			tier_unwind_off = e.handler_off;
 			tier_unwind = true;
+			protected_ranges.push_back ({ e.try_start_off,
+			                              static_cast<std::uint64_t> (e.try_start_off) + e.try_len });
 			continue;
 		}
 
@@ -586,6 +603,7 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries, OwnerHeaders &
 		i = end;
 	}
 
+	protected_ranges.insert (protected_ranges.end (), ranges.begin (), ranges.end ());
 	return ranges_equal_or_disjoint (ranges);
 }
 
@@ -599,10 +617,11 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 {
 	std::uint32_t tier_unwind_off = 0;
 	bool tier_unwind = false;
+	std::vector<RangeOff> protected_ranges;
 	OwnerHeaders headers (clauses, num_clauses, owner_header);
 
 	if (!build_ex_info_entries (entries, headers, native_code, code_len, out,
-	                            tier_unwind_off, tier_unwind))
+	                            tier_unwind_off, tier_unwind, protected_ranges))
 		return false;
 
 	if (!append_finally_guards (guards, headers, native_code, code_len, out))
@@ -610,7 +629,8 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 
 	// The tier-unwind fault is the root's own instrumentation pad, never an
 	// inlined body's, so it stays keyed to owner 0's own num_clauses.
-	append_tier_unwind (tier_unwind_off, tier_unwind, num_clauses, native_code, code_len, out);
+	append_tier_unwind (tier_unwind_off, tier_unwind, num_clauses, native_code,
+	                    std::move (protected_ranges), out);
 	return true;
 }
 

@@ -63,13 +63,10 @@ constexpr std::uint32_t MONO_LSDA_KIND_FINALLY_BODY = 0x10001;
 /*
  * The entry's landing pad is where the tier counter charges what a body's loops
  * spent, and not a clause the IL declared. The body publishes one entry for each
- * call that unwinds to the pad, all naming the pad in handler_off. The reader
- * takes no range from them: what it publishes covers the whole body.
+ * call that unwinds to the pad, all naming the pad in handler_off.
  *
  * TierCounterPass (passes/tier-counter.cpp) writes the pad into a body that adds
  * its loop turns up in a register and calls something that can unwind.
- * mono_lsda.cpp reads the set back as one fault clause over the whole body, so
- * what the runtime holds does not grow with the calls.
  */
 constexpr std::uint32_t MONO_LSDA_KIND_TIER_UNWIND = 0x10002;
 

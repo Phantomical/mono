@@ -55,8 +55,8 @@ namespace {
  * an exit of any kind.
  *
  * The accumulator needs an exit of its own there, and that is the pad below. A
- * body with a loop and a call that can unwind gets a fault clause over the whole
- * of it. Its handler charges the turns, then calls mono_llvm_resume_unwind ().
+ * body with a loop and a call that can unwind gets a fault clause over its
+ * protected calls. Its handler charges the turns, then calls mono_llvm_resume_unwind ().
  * Each call collect_unwinding_calls () takes becomes an invoke on to that pad,
  * which is what makes the clause table cover it.
  *
@@ -323,8 +323,8 @@ collect_unwinding_calls (Function &f, SmallVectorImpl<CallInst *> &calls)
 
 /// Makes the global that stands for the pad's clause in the exception tables.
 ///
-/// eh-gather.cpp reads the kind word back and mono_lsda.cpp publishes one fault
-/// clause over the whole body from it, so the clause index is unused.
+/// eh-gather.cpp reads the kind word back and mono_lsda.cpp publishes the fault
+/// clause from it, past the IL clauses, so the clause index is unused.
 GlobalVariable *
 unwind_marker (Function &f)
 {
