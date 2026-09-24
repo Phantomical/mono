@@ -5972,6 +5972,28 @@ mono_jit_info_match (MonoJitInfo *ji, gpointer ip)
 	return ji->code_start <= ip && (char*)ip < (char*)ji->code_start + ji->code_size;
 }
 
+/*
+ * Whether an exception raised at IP, in the frame JI describes, would enter one
+ * of that frame's LLVM landing pads. A pad's state holds only at the calls that
+ * unwind to it, and a protected range also covers the code between them, so a
+ * pad entered from IP can read a value no instruction has written yet.
+ */
+static gboolean
+raise_enters_llvm_pad (MonoJitInfo *ji, gpointer ip)
+{
+	if (!ji->from_llvm)
+		return FALSE;
+
+	for (int i = 0; i < ji->num_clauses; ++i) {
+		MonoJitExceptionInfo *ei = &ji->clauses [i];
+
+		if (ei->try_start <= ip && ip < ei->try_end)
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
 static gboolean
 last_managed (MonoStackFrameInfo *frame, MonoContext *ctx, gpointer data)
 {
@@ -6001,10 +6023,15 @@ typedef struct {
 	/* inputs */
 	MonoInternalThread *thread;
 	gboolean install_async_abort;
+	gboolean last_attempt;
 	/* outputs */
 	gboolean thread_will_abort;
+	gboolean retry;
 	MonoThreadInfoInterruptToken *interrupt_token;
 } AbortThreadData;
+
+/* Tries async_abort_internal () makes to find the thread outside an LLVM pad's range. */
+#define ASYNC_ABORT_ATTEMPTS 100
 
 static SuspendThreadResult
 async_abort_critical (MonoThreadInfo *info, gpointer ud)
@@ -6027,6 +6054,19 @@ async_abort_critical (MonoThreadInfo *info, gpointer ud)
 	ji = mono_thread_info_get_last_managed (info);
 	protected_wrapper = ji && !ji->is_trampoline && !ji->async && mono_threads_is_critical_method (mono_jit_info_get_method (ji));
 	running_managed = mono_jit_info_match (ji, MONO_CONTEXT_GET_IP (&mono_thread_info_get_suspend_state (info)->ctx));
+
+	// Raised here, the abort would enter a pad in the wrong state. The caller
+	// resumes the thread and tries again. Past the last try the request stays set
+	// and is raised at the thread's next interruption checkpoint, which is a call.
+	if (data->install_async_abort && running_managed &&
+	    raise_enters_llvm_pad (ji, MONO_CONTEXT_GET_IP (&mono_thread_info_get_suspend_state (info)->ctx))) {
+		if (!data->last_attempt) {
+			mono_thread_clear_interruption_requested (thread);
+			data->retry = TRUE;
+			return MonoResumeThread;
+		}
+		running_managed = FALSE;
+	}
 
 	if (!protected_wrapper && running_managed) {
 		/*We are in managed code*/
@@ -6070,11 +6110,20 @@ async_abort_internal (MonoInternalThread *thread, gboolean install_async_abort)
 	g_assert (thread != mono_thread_internal_current ());
 
 	data.thread = thread;
-	data.thread_will_abort = FALSE;
 	data.install_async_abort = install_async_abort;
-	data.interrupt_token = NULL;
 
-	mono_thread_info_safe_suspend_and_run (thread_get_tid (thread), TRUE, async_abort_critical, &data);
+	for (int attempt = 1; ; ++attempt) {
+		data.thread_will_abort = FALSE;
+		data.interrupt_token = NULL;
+		data.last_attempt = attempt == ASYNC_ABORT_ATTEMPTS;
+		data.retry = FALSE;
+
+		mono_thread_info_safe_suspend_and_run (thread_get_tid (thread), TRUE, async_abort_critical, &data);
+		if (!data.retry)
+			break;
+		mono_thread_info_yield ();
+	}
+
 	if (data.interrupt_token)
 		mono_thread_info_finish_interrupt (data.interrupt_token);
 	/*FIXME we need to wait for interruption to complete -- figure out how much into interruption we should wait for here*/
