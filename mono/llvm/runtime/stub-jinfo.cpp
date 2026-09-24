@@ -2,6 +2,8 @@
 
 #include "naming.hpp"
 
+#include "../util/never-destroyed.hpp"
+
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/ADT/StringRef.h>
 
@@ -18,7 +20,7 @@ namespace {
 llvm::ArrayRef<uint8_t>
 stub_unwind_info ()
 {
-	static const std::vector<uint8_t> encoded = [] {
+	static const std::vector<uint8_t> &encoded = never_destroyed ([] {
 		// A stub is a bare jump and pushes nothing, so the frame at any
 		// point inside it is still the caller's. That is exactly what
 		// the arch CIE describes on its own.
@@ -30,7 +32,7 @@ stub_unwind_info ()
 		g_free (bytes);
 		mono_free_unwind_info (ops);
 		return program;
-	}();
+	}());
 
 	return encoded;
 }

@@ -23,6 +23,7 @@
 #include "passes/restore-tail-position.hpp"
 #include "passes/top-down-inline.hpp"
 #include "timing.hpp"
+#include "util/never-destroyed.hpp"
 
 #include "mono/utils/mono-mmap.h"
 
@@ -979,7 +980,7 @@ profile_entry_count ()
 static JITTargetMachineBuilder
 host_target_machine_builder ()
 {
-	static const JITTargetMachineBuilder jtmb = [] {
+	static const JITTargetMachineBuilder &jtmb = never_destroyed ([] {
 		ensure_native_target ();
 
 		auto b = cantFail (JITTargetMachineBuilder::detectHost ());
@@ -999,7 +1000,7 @@ host_target_machine_builder ()
 				feature_vec.push_back ((Twine ("+") + kv.first ()).str ());
 		b.addFeatures (feature_vec);
 		return b;
-	}();
+	}());
 	return jtmb;
 }
 

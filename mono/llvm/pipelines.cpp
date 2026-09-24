@@ -29,6 +29,7 @@
 #include "passes/tier-counter.hpp"
 #include "passes/top-down-inline.hpp"
 #include "passes/trap-unreachable.hpp"
+#include "util/never-destroyed.hpp"
 #include <llvm/IR/PassManager.h>
 #include <llvm/ADT/Statistic.h>
 #include <llvm/IR/ProfileSummary.h>
@@ -246,14 +247,14 @@ public:
 llvm::StringRef
 profile_with_no_records ()
 {
-	static const std::string bytes = [] {
+	static const std::string &bytes = never_destroyed ([] {
 		llvm::InstrProfWriter writer;
 
 		// The reader checks this against what the instrumentation wrote.
 		llvm::consumeError (writer.mergeProfileKind (llvm::InstrProfKind::IRInstrumentation));
 
 		return writer.writeBuffer ()->getBuffer ().str ();
-	}();
+	}());
 
 	return bytes;
 }

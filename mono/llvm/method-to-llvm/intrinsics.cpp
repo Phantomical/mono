@@ -10,6 +10,7 @@
 #include "mini-runtime.h"
 
 #include "../runtime/options.hpp"
+#include "../util/never-destroyed.hpp"
 
 #include "mono/metadata/class-init.h"
 #include "mono/metadata/class-internals.h"
@@ -639,7 +640,7 @@ const BuiltinBody vector_hwaccel_body = {
 llvm::ArrayRef<BuiltinMethod>
 math_methods ()
 {
-	static const std::vector<BuiltinMethod> entries = [] {
+	static const std::vector<BuiltinMethod> &entries = never_destroyed ([] {
 		std::vector<BuiltinMethod> made;
 
 		for (const MathBuiltin &name : math_builtins ())
@@ -647,7 +648,7 @@ math_methods ()
 			                  BuiltinEmitters::math });
 
 		return made;
-	} ();
+	} ());
 
 	return entries;
 }
@@ -655,7 +656,7 @@ math_methods ()
 const std::vector<BuiltinBody> &
 body_table ()
 {
-	static const std::vector<BuiltinBody> entries = [] {
+	static const std::vector<BuiltinBody> &entries = never_destroyed ([] {
 		std::vector<BuiltinBody> made (std::begin (core_bodies),
 		                               std::end (core_bodies));
 
@@ -666,7 +667,7 @@ body_table ()
 		             simd_vector_t_bodies ().end ());
 		made.insert (made.end (), simd_x86_bodies ().begin (), simd_x86_bodies ().end ());
 		return made;
-	} ();
+	} ());
 
 	return entries;
 }
@@ -674,7 +675,7 @@ body_table ()
 const std::vector<BuiltinClass> &
 class_table ()
 {
-	static const std::vector<BuiltinClass> entries = {
+	static const auto &entries = never_destroyed (std::vector<BuiltinClass> {
 		{ { nullptr, "System", "Array" }, &mono_defaults.array_class, array_methods },
 		{ { nullptr, "System", "String" }, &mono_defaults.string_class,
 		  string_methods },
@@ -696,7 +697,7 @@ class_table ()
 		{ { nullptr, "System.Runtime.CompilerServices", "RuntimeHelpers" }, nullptr,
 		  runtime_helpers_methods },
 		{ { nullptr, "Mono", "JitHints" }, nullptr, jit_hints_methods },
-	};
+	});
 
 	return entries;
 }
@@ -705,14 +706,15 @@ class_table ()
 const llvm::StringMap<llvm::SmallVector<const BuiltinClass *, 1>> &
 class_index ()
 {
-	static const llvm::StringMap<llvm::SmallVector<const BuiltinClass *, 1>> index = [] {
-		llvm::StringMap<llvm::SmallVector<const BuiltinClass *, 1>> made;
+	static const llvm::StringMap<llvm::SmallVector<const BuiltinClass *, 1>> &index =
+		never_destroyed ([] {
+			llvm::StringMap<llvm::SmallVector<const BuiltinClass *, 1>> made;
 
-		for (const BuiltinClass &entry : class_table ())
-			made[entry.klass.name].push_back (&entry);
+			for (const BuiltinClass &entry : class_table ())
+				made[entry.klass.name].push_back (&entry);
 
-		return made;
-	} ();
+			return made;
+		} ());
 
 	return index;
 }
@@ -721,7 +723,7 @@ class_index ()
 const std::vector<std::string_view> &
 builtin_assemblies ()
 {
-	static const std::vector<std::string_view> names = [] {
+	static const std::vector<std::string_view> &names = never_destroyed ([] {
 		std::vector<std::string_view> made;
 
 		for (const BuiltinClass &entry : class_table ())
@@ -732,7 +734,7 @@ builtin_assemblies ()
 				made.push_back (entry.klass.assembly);
 
 		return made;
-	} ();
+	} ());
 
 	return names;
 }

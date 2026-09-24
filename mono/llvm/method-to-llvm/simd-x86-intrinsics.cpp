@@ -6,6 +6,7 @@
 #include "intrinsics.hpp"
 
 #include "../runtime/options.hpp"
+#include "../util/never-destroyed.hpp"
 #include "method-to-llvm.hpp"
 #include "simd-emit.hpp"
 
@@ -4048,7 +4049,7 @@ const BuiltinBody fma_table[] = {
 llvm::ArrayRef<BuiltinBody>
 simd_x86_bodies ()
 {
-	static const std::vector<BuiltinBody> all = [] {
+	static const std::vector<BuiltinBody> &all = never_destroyed ([] {
 		std::vector<BuiltinBody> made (std::begin (sse_table), std::end (sse_table));
 		made.insert (made.end (), std::begin (sse2_table), std::end (sse2_table));
 		made.insert (made.end (), std::begin (sse3_table), std::end (sse3_table));
@@ -4065,7 +4066,7 @@ simd_x86_bodies ()
 		made.insert (made.end (), std::begin (pclmulqdq_table), std::end (pclmulqdq_table));
 		made.insert (made.end (), std::begin (fma_table), std::end (fma_table));
 		return made;
-	} ();
+	} ());
 
 	return all;
 }
