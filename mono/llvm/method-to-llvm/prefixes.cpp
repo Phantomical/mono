@@ -213,10 +213,15 @@ MethodLLVMEmitter::emit_prefix (int opcode, uint64_t operand)
 }
 
 llvm::Align
-MethodLLVMEmitter::access_alignment (MonoType *location)
+MethodLLVMEmitter::access_alignment (MonoType *location, const ManagedAccess &access)
 {
-	return prefixes.unaligned != 0 ? llvm::Align (prefixes.unaligned)
-	                               : type_alignment (location);
+	// Static storage is naturally aligned regardless of `Pack`.
+	bool is_static = access.kind == ManagedAccess::Kind::field
+	                 && (access.field->type->attrs & FIELD_ATTRIBUTE_STATIC);
+	llvm::Align assumed = is_static ? type_alignment (location) : assumed_alignment (location);
+
+	return prefixes.unaligned != 0 ? std::min (assumed, llvm::Align (prefixes.unaligned))
+	                               : assumed;
 }
 
 /// Whether one access of this type at this alignment can be an LLVM atomic
@@ -248,7 +253,7 @@ llvm::Value *
 MethodLLVMEmitter::emit_memory_load (MonoIrBuilder &builder, llvm::Type *type, llvm::Value *address,
                                      MonoType *location, ManagedAccess access)
 {
-	llvm::Align align = access_alignment (location);
+	llvm::Align align = access_alignment (location, access);
 	llvm::LoadInst *value = builder.CreateAlignedLoad (type, address, align);
 
 	if (llvm::MDNode *tag = tbaa_tag (access, mini_type_is_reference (location)))
@@ -286,7 +291,7 @@ MethodLLVMEmitter::emit_memory_store (MonoIrBuilder &builder, llvm::Value *value
                                       llvm::Value *address, MonoType *location,
                                       ManagedAccess access)
 {
-	llvm::Align align = access_alignment (location);
+	llvm::Align align = access_alignment (location, access);
 	/*
 	 * A reference carries the write barrier with it, and a value class is a copy
 	 * rather than one instruction. Neither is a single access that can hold an
@@ -389,10 +394,7 @@ MethodLLVMEmitter::push_from_location (MonoIrBuilder &builder, llvm::Value *addr
 	if (!slot)
 		return slot.takeError ();
 
-	llvm::Align source = prefixes.unaligned != 0 ? llvm::Align (prefixes.unaligned)
-	                                             : type_alignment (t, native);
-
-	builder.CreateMemCpyInline (*slot, type_alignment (t, native), address, source,
+	builder.CreateMemCpyInline (*slot, type_alignment (t, native), address, access_alignment (t, access),
 	                            builder.getInt64 (vtype_size (t, native)),
 	                            prefixes.volatile_);
 	/*

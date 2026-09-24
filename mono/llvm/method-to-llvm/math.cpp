@@ -394,7 +394,7 @@ MethodLLVMEmitter::emit_math_call (MonoIrBuilder &builder, const MathIntrinsic &
 			builder.CreateIntrinsic (math.intrinsic, { type }, { (*args)[0] }));
 
 		builder.CreateAlignedStore (builder.CreateExtractValue (halves, 1),
-		                            (*args)[1], type_alignment (sig->ret));
+		                            (*args)[1], assumed_alignment (sig->ret));
 		result = builder.CreateExtractValue (halves, 0);
 		break;
 	}

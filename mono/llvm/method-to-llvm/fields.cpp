@@ -498,7 +498,7 @@ MethodLLVMEmitter::push_guarded_static_read (MonoIrBuilder &builder, MonoClassFi
 			return slot.takeError ();
 
 		llvm::Align dest_align = type_alignment (ftype);
-		llvm::Align src_align = access_alignment (ftype);
+		llvm::Align src_align = access_alignment (ftype, ManagedAccess::of_field (field));
 		llvm::ConstantInt *size = builder.getInt64 (vtype_size (ftype, /*native=*/false));
 
 		llvm::BasicBlock *invariant_bb = llvm::BasicBlock::Create (context (), "sfld_invariant", func);

@@ -1262,9 +1262,8 @@ TEST_F (TranslatorTest, BlockOpsBecomeTheIntrinsics)
 // on it because atomic alone does not promise the access survives.
 TEST_F (TranslatorTest, VolatileScalarAccessesCarryTheirOrdering)
 {
-	const Translation &read = translate ("prefixed", "Prefixed:VolatileRead");
-	const Translation &write = translate ("prefixed", "Prefixed:VolatileWrite");
-	const Translation &statics = translate ("prefixed", "Prefixed:VolatileStatic");
+	const Translation &read = translate ("prefixed", "Prefixed:VolatileStatic");
+	const Translation &write = translate ("prefixed", "Prefixed:VolatileWriteStatic");
 
 	ASSERT_NE (read.function, nullptr) << read.error;
 	EXPECT_EQ (read.count ("load atomic volatile i32"), 1u) << read.text ();
@@ -1275,21 +1274,29 @@ TEST_F (TranslatorTest, VolatileScalarAccessesCarryTheirOrdering)
 	EXPECT_EQ (write.count ("store atomic volatile i32"), 1u) << write.text ();
 	EXPECT_EQ (write.count ("release"), 1u);
 	EXPECT_EQ (write.count ("fence"), 0u);
-
-	ASSERT_NE (statics.function, nullptr) << statics.error;
-	EXPECT_EQ (statics.count ("load atomic volatile i32"), 1u) << statics.text ();
-	EXPECT_EQ (statics.count ("fence"), 0u);
 }
 
 // An access no single atomic instruction covers keeps the older shape: a plain
 // volatile access with a fence beside it. A reference carries a barrier, a value
-// class is a copy, and an access the unaligned. prefix gave up the alignment of
-// cannot be atomic at all.
+// class is a copy, and an access through a pointer or under the unaligned. prefix
+// has no alignment to make it atomic with.
 TEST_F (TranslatorTest, VolatileFallsBackToAFence)
 {
 	const Translation &ref = translate ("prefixed", "Prefixed:VolatileWriteRef");
 	const Translation &vtype = translate ("prefixed", "Prefixed:VolatileReadStruct");
 	const Translation &loose = translate ("prefixed", "Prefixed:UnalignedVolatileRead");
+	const Translation &read = translate ("prefixed", "Prefixed:VolatileRead");
+	const Translation &write = translate ("prefixed", "Prefixed:VolatileWrite");
+
+	ASSERT_NE (read.function, nullptr) << read.error;
+	EXPECT_EQ (read.count ("load volatile i32"), 1u) << read.text ();
+	EXPECT_EQ (read.count ("fence acquire"), 1u);
+	EXPECT_EQ (read.count ("atomic"), 0u);
+
+	ASSERT_NE (write.function, nullptr) << write.error;
+	EXPECT_EQ (write.count ("store volatile i32"), 1u) << write.text ();
+	EXPECT_EQ (write.count ("fence release"), 1u);
+	EXPECT_EQ (write.count ("atomic"), 0u);
 
 	ASSERT_NE (ref.function, nullptr) << ref.error;
 	EXPECT_EQ (ref.count ("fence release"), 1u) << ref.text ();
@@ -1311,7 +1318,30 @@ TEST_F (TranslatorTest, UnalignedLowersTheAccessAlignment)
 	const Translation &t = translate ("prefixed", "Prefixed:UnalignedRead");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count (", align 1"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("load ptr, ptr %1, align 1"), 1u) << t.text ();
+}
+
+// Packed and explicit layouts can under-align fields. An external address can
+// therefore claim only reference alignment, which the loader guarantees.
+TEST_F (TranslatorTest, APointerClaimsOnlyWhatTheLoaderEnforces)
+{
+	const Translation &scalar = translate ("prefixed", "Prefixed:ReadThroughPointer");
+	const Translation &reference = translate ("prefixed", "Prefixed:ReadReference");
+
+	ASSERT_NE (scalar.function, nullptr) << scalar.error;
+	EXPECT_EQ (scalar.count ("load i32, ptr %1, align 1"), 1u) << scalar.text ();
+
+	ASSERT_NE (reference.function, nullptr) << reference.error;
+	EXPECT_EQ (reference.count ("load ptr, ptr %1, align 8"), 1u) << reference.text ();
+}
+
+TEST_F (TranslatorTest, AnObjectIsPointerAligned)
+{
+	const Translation &t = translate ("prefixed", "Prefixed:PassObject");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (t.count ("define align 8"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("ptr align 8 dereferenceable_or_null(16) %arg_o"), 1u);
 }
 
 // constrained. on a reference type dereferences the pointer and dispatches as usual;

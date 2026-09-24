@@ -716,6 +716,13 @@ private:
 
 	llvm::Align type_alignment (MonoType *t, bool native = false);
 
+	/// Alignment guaranteed for an externally supplied address holding t.
+	///
+	/// type_alignment () applies to storage allocated by this method. An
+	/// external address can refer to a field made unaligned by `Pack` or
+	/// explicit layout.
+	llvm::Align assumed_alignment (MonoType *t);
+
 	/// Return parameter i in the form expected by a generated method body.
 	llvm::Value *written_body_parameter (unsigned i);
 
@@ -821,7 +828,8 @@ private:
 
 	llvm::Error emit_instruction (MonoIrBuilder &builder);
 	llvm::Error emit_prefix (int opcode, uint64_t operand);
-	llvm::Align access_alignment (MonoType *location);
+	llvm::Align access_alignment (MonoType *location,
+	                              const ManagedAccess &access = ManagedAccess::untagged ());
 	bool can_access_atomically (llvm::Type *type, llvm::Align align);
 	llvm::Value *emit_memory_load (MonoIrBuilder &builder, llvm::Type *type,
 	                               llvm::Value *address, MonoType *location,
