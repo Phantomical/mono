@@ -10,6 +10,7 @@
 #include "intrinsics.hpp"
 
 #include "../runtime/options.hpp"
+#include "../util/never-destroyed.hpp"
 #include "float-convert.hpp"
 #include "method-to-llvm.hpp"
 #include "simd-emit.hpp"
@@ -1312,7 +1313,7 @@ const struct {
 llvm::ArrayRef<BuiltinBody>
 simd_bodies ()
 {
-	static const std::vector<BuiltinBody> rows = [] {
+	static const std::vector<BuiltinBody> &rows = never_destroyed ([] {
 		std::vector<BuiltinBody> made (std::begin (simd_table),
 		                               std::end (simd_table));
 
@@ -1322,7 +1323,7 @@ simd_bodies ()
 				                  simd_lowering, entry.emit });
 
 		return made;
-	} ();
+	} ());
 
 	return rows;
 }

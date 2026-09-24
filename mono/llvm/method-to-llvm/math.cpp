@@ -6,6 +6,8 @@
 #include "method-to-llvm.hpp"
 #include "intrinsics.hpp"
 
+#include "../util/never-destroyed.hpp"
+
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/metadata.h"
 
@@ -277,7 +279,7 @@ int_minmax_intrinsic_for (std::string_view name, Body body, MonoMethodSignature 
 llvm::ArrayRef<MathBuiltin>
 math_builtins ()
 {
-	static const std::vector<MathBuiltin> names = [] {
+	static const std::vector<MathBuiltin> &names = never_destroyed ([] {
 		std::vector<MathBuiltin> made;
 
 		for (const MathTableEntry &entry : math_table)
@@ -288,7 +290,7 @@ math_builtins ()
 		made.push_back ({ "Max", 2 });
 
 		return made;
-	} ();
+	} ());
 
 	return names;
 }
