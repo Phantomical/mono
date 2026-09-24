@@ -11,8 +11,6 @@
 #define MONO_MINI_JIT_DUMP_HPP
 
 #include <cstdint>
-#include <cstdio>
-#include <mutex>
 #include <string>
 
 typedef struct _MonoMethod MonoMethod;
@@ -66,48 +64,22 @@ bool dumping (DumpPoint point, const char *name);
 std::string dump_name (MonoMethod *method);
 
 /**
- * Where one dump goes: stdout, or a file under MONO_JIT_DUMP_DIR.
+ * Writes one whole dump to stdout, or to a file under MONO_JIT_DUMP_DIR.
  *
- * With no directory set this hands back stdout. With one set it creates
- * `<dir>/<point>/` and opens `<method>.<extension>` inside it. The first
- * dump of a name in a run overwrites whatever an earlier run left under it.
- * A second dump under that name inside the same run - two threads dumping
- * at once, or a method recompiled - takes a counted suffix instead. Each
- * still gets a file of its own.
+ * Pass the whole dump in one call. Two compiles can dump at once, and only a
+ * whole dump is kept in one piece on stdout.
  *
- * `stream ()` is null when the file did not open. The reason goes to stderr and
- * the caller prints nothing.
- *
- * **Hold one for the whole of a dump.** Promotions compile on several worker
- * threads, so two methods reach a point at once. Going to stdout, this holds a
- * lock for as long as it lives, which is what keeps one method's dump in one
- * piece. A caller that opens and closes one for each line gets a dump the other
- * thread interleaves with. Going to a directory, each dump has a file to itself
- * and takes no lock.
+ * With a directory set, a writer thread writes the file after this returns.
+ * mono_jit_dump_flush () waits for it. The file is
+ * `<dir>/<point>/<method>.<extension>`. The first dump of a name in a run
+ * overwrites whatever an earlier run left under it. A second dump under that
+ * name inside the same run takes a counted suffix instead. A file that does not
+ * open is reported on stderr.
  */
-class DumpDestination {
-public:
-	DumpDestination (DumpPoint point, const char *name);
-	~DumpDestination ();
-
-	DumpDestination (const DumpDestination &) = delete;
-	DumpDestination &operator= (const DumpDestination &) = delete;
-
-	FILE *stream () const { return stream_; }
-
-	/// Whether the dump goes to a file of its own rather than to stdout.
-	/// A caller that prints a heading to separate its dump from the next one
-	/// can leave it out when this is true.
-	bool is_file () const { return owned_; }
-
-private:
-	FILE *stream_ = nullptr;
-	bool owned_ = false;
-	std::unique_lock<std::mutex> shared_stream_;
-};
+void write_dump (DumpPoint point, const char *name, std::string text);
 
 /**
- * Prints a method's CIL to \p out, inside the class and the signature it is
+ * Returns a method's CIL, inside the class and the signature it is
  * declared with.
  *
  * The shape is ilasm's, so that a reader can tell an argument from a local
@@ -116,7 +88,7 @@ private:
  * dynamic method carry no metadata tokens, so every operand of one prints as
  * the raw value. So does a token that fails to load.
  */
-void dump_il (FILE *out, MonoMethod *method, MonoMethodHeader *header);
+std::string dump_il (MonoMethod *method, MonoMethodHeader *header);
 
 } // namespace mono
 

@@ -1,14 +1,13 @@
 /**
  * \file
- * \brief Reads MONO_JIT_DUMP, MONO_JIT_DUMP_DIR and MONO_JIT_DUMP_FILTER, and
- * opens the destination a dump writes to.
+ * \brief Reads the MONO_JIT_DUMP settings and writes the selected dumps.
  */
 
 #include "config.h"
 
 #include "jit-dump.hpp"
 
-#include "jit-dump-tier0.h"
+#include "jit-dump.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -23,12 +22,18 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cinttypes>
+#include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <mutex>
+#include <thread>
 #include <unordered_set>
 
 #include <glib.h>
@@ -148,12 +153,6 @@ enabled_points ()
 	return enabled;
 }
 
-/// Serializes the dumps that share stdout. Promotions compile on several worker
-/// threads, and a dump runs to many lines, so without this two methods print
-/// into each other and neither is readable. A dump with a file of its own does
-/// not take it.
-std::mutex stdout_lock;
-
 /// What MONO_JIT_DUMP_FILTER holds, or null when every method is dumped.
 const char *
 filter ()
@@ -232,19 +231,20 @@ file_stem (const char *name)
 	return stem.empty () ? std::string ("method") : stem;
 }
 
+// Keep this alive until process exit so the atexit flush can use it.
 std::mutex &
 claimed_this_run_lock ()
 {
-	static std::mutex m;
-	return m;
+	static auto *m = new std::mutex;
+	return *m;
 }
 
 /// The paths open_dump_file () has already claimed this run.
 std::unordered_set<std::string> &
 claimed_this_run ()
 {
-	static std::unordered_set<std::string> paths;
-	return paths;
+	static auto *paths = new std::unordered_set<std::string>;
+	return *paths;
 }
 
 /// Opens the file a dump goes to, or reports on stderr and returns null.
@@ -304,6 +304,129 @@ open_dump_file (DumpPoint point, const char *name)
 	fprintf (stderr, "MONO_JIT_DUMP_DIR: %s already holds 10000 files named for %s\n",
 	         dir.c_str (), stem.c_str ());
 	return nullptr;
+}
+
+struct QueuedDump {
+	DumpPoint point;
+	std::string name;
+	std::string text;
+};
+
+void
+write_dump_file (const QueuedDump &dump)
+{
+	FILE *file = open_dump_file (dump.point, dump.name.c_str ());
+
+	if (file == nullptr)
+		return;
+
+	fwrite (dump.text.data (), 1, dump.text.size (), file);
+	fclose (file);
+}
+
+/// Writes directory dumps on a worker so compilation does not wait for I/O.
+class DumpWriter {
+public:
+	void push (QueuedDump dump);
+	void flush ();
+
+private:
+	void run ();
+
+	/// Removes the oldest dump and marks it in flight. The caller holds `lock_`.
+	QueuedDump take ();
+
+	std::mutex lock_;
+	std::condition_variable queued_;
+	std::deque<QueuedDump> queue_;
+	std::atomic<unsigned> in_flight_{ 0 };
+	bool started_ = false;
+};
+
+// Keep the writer alive until the final flush.
+DumpWriter &
+writer ()
+{
+	static auto *instance = new DumpWriter;
+	return *instance;
+}
+
+void
+DumpWriter::push (QueuedDump dump)
+{
+	{
+		std::lock_guard<std::mutex> held (lock_);
+
+		queue_.push_back (std::move (dump));
+
+		if (!started_) {
+			started_ = true;
+			std::thread ([this] { run (); }).detach ();
+			atexit ([] { writer ().flush (); });
+		}
+	}
+
+	queued_.notify_one ();
+}
+
+QueuedDump
+DumpWriter::take ()
+{
+	QueuedDump dump = std::move (queue_.front ());
+
+	queue_.pop_front ();
+	in_flight_++;
+	return dump;
+}
+
+void
+DumpWriter::run ()
+{
+	for (;;) {
+		std::unique_lock<std::mutex> held (lock_);
+
+		queued_.wait (held, [this] { return !queue_.empty (); });
+
+		QueuedDump dump = take ();
+
+		held.unlock ();
+		write_dump_file (dump);
+		in_flight_--;
+	}
+}
+
+void
+DumpWriter::flush ()
+{
+	using clock = std::chrono::steady_clock;
+	constexpr auto patience = std::chrono::seconds (5);
+	auto give_up = clock::now () + patience;
+
+	// The writer may be gone before a DLL's atexit handler runs. Drain the queue
+	// here as well, without blocking on a lock held by a crashing thread.
+	while (clock::now () < give_up) {
+		std::unique_lock<std::mutex> held (lock_, std::try_to_lock);
+
+		if (held.owns_lock ()) {
+			if (!queue_.empty ()) {
+				QueuedDump dump = take ();
+
+				held.unlock ();
+				write_dump_file (dump);
+				in_flight_--;
+				give_up = clock::now () + patience;
+				continue;
+			}
+
+			if (in_flight_ == 0)
+				return;
+		}
+
+		held = {};
+		std::this_thread::sleep_for (std::chrono::milliseconds (1));
+	}
+
+	fprintf (stderr, "MONO_JIT_DUMP_DIR: gave up waiting for queued dumps to be written\n");
 }
 
 /*
@@ -502,32 +625,22 @@ dump_name (MonoMethod *method)
 	return name;
 }
 
-DumpDestination::DumpDestination (DumpPoint point, const char *name)
+void
+write_dump (DumpPoint point, const char *name, std::string text)
 {
-	if (dump_directory () == nullptr) {
-		shared_stream_ = std::unique_lock<std::mutex> (stdout_lock);
-		stream_ = stdout;
+	if (dump_directory () != nullptr) {
+		writer ().push (QueuedDump { point, name, std::move (text) });
 		return;
 	}
 
-	stream_ = open_dump_file (point, name);
-	owned_ = stream_ != nullptr;
+	fwrite (text.data (), 1, text.size (), stdout);
+	fflush (stdout);
 }
 
-DumpDestination::~DumpDestination ()
+std::string
+dump_il (MonoMethod *method, MonoMethodHeader *header)
 {
-	if (stream_ == nullptr)
-		return;
-
-	if (owned_)
-		fclose (stream_);
-	else
-		fflush (stream_);
-}
-
-void
-dump_il (FILE *out, MonoMethod *method, MonoMethodHeader *header)
-{
+	GString *out = g_string_new (nullptr);
 	MonoMethodSignature *sig = mono_method_signature_internal (method);
 	char *class_name = mono_type_full_name (m_class_get_byval_arg (method->klass));
 	char *return_type = sig != nullptr
@@ -537,30 +650,30 @@ dump_il (FILE *out, MonoMethod *method, MonoMethodHeader *header)
 	                ? mono_signature_get_desc (sig, TRUE)
 	                : g_strdup ("");
 
-	fprintf (out, ".class %s\n{\n", class_name);
-	fprintf (out, "  .method %s%s %s::%s (%s) cil managed\n  {\n",
-	         sig != nullptr && sig->hasthis ? "instance " : "static ",
-	         return_type, class_name, method->name, arguments);
+	g_string_append_printf (out, ".class %s\n{\n", class_name);
+	g_string_append_printf (out, "  .method %s%s %s::%s (%s) cil managed\n  {\n",
+	                        sig != nullptr && sig->hasthis ? "instance " : "static ",
+	                        return_type, class_name, method->name, arguments);
 
 	uint32_t size;
 	uint32_t max_stack;
 	const uint8_t *code = mono_method_header_get_code (header, &size, &max_stack);
 	uint32_t locals = header->num_locals;
 
-	fprintf (out, "    .maxstack %u\n", max_stack);
+	g_string_append_printf (out, "    .maxstack %u\n", max_stack);
 
 	if (locals != 0) {
-		fprintf (out, "    .locals %s(\n", header->init_locals ? "init " : "");
+		g_string_append_printf (out, "    .locals %s(\n", header->init_locals ? "init " : "");
 
 		for (uint32_t i = 0; i < locals; i++) {
 			char *type = mono_type_full_name (header->locals[i]);
 
-			fprintf (out, "      [%u] %s%s\n", i, type,
-			         i + 1 < locals ? "," : "");
+			g_string_append_printf (out, "      [%u] %s%s\n", i, type,
+			                        i + 1 < locals ? "," : "");
 			g_free (type);
 		}
 
-		fprintf (out, "    )\n");
+		g_string_append_printf (out, "    )\n");
 	}
 
 	char *il = mono_disasm_code (&resolving_helper, method, code, code + size);
@@ -574,52 +687,46 @@ dump_il (FILE *out, MonoMethod *method, MonoMethodHeader *header)
 			length--;
 
 		if (length != 0)
-			fprintf (out, "    %.*s\n", (int) length, line);
+			g_string_append_printf (out, "    %.*s\n", (int) length, line);
 
 		if (end == nullptr)
 			break;
 		line = end + 1;
 	}
 
-	fprintf (out, "  }\n}\n");
+	g_string_append_printf (out, "  }\n}\n");
 
 	g_free (il);
 	g_free (arguments);
 	g_free (return_type);
 	g_free (class_name);
+
+	std::string text (out->str, out->len);
+
+	g_string_free (out, TRUE);
+	return text;
 }
 
 } // namespace mono
 
-MonoTier0AsmDump *
-mono_tier0_asm_dump_open (MonoMethod *method)
+gboolean
+mono_tier0_asm_dump_wanted (MonoMethod *method)
 {
-	if (!mono::any_dump_point_enabled ())
-		return nullptr;
+	if (!mono::dump_point_enabled (mono::DumpPoint::tier0_asm))
+		return FALSE;
 
-	std::string name = mono::dump_name (method);
-
-	if (!mono::dumping (mono::DumpPoint::tier0_asm, name.c_str ()))
-		return nullptr;
-
-	auto *destination = new mono::DumpDestination (mono::DumpPoint::tier0_asm, name.c_str ());
-
-	if (destination->stream () == nullptr) {
-		delete destination;
-		return nullptr;
-	}
-
-	return reinterpret_cast<MonoTier0AsmDump *> (destination);
-}
-
-FILE *
-mono_tier0_asm_dump_stream (MonoTier0AsmDump *dump)
-{
-	return reinterpret_cast<mono::DumpDestination *> (dump)->stream ();
+	return mono::dumping (mono::DumpPoint::tier0_asm, mono::dump_name (method).c_str ());
 }
 
 void
-mono_tier0_asm_dump_close (MonoTier0AsmDump *dump)
+mono_tier0_asm_dump_write (MonoMethod *method, const char *text)
 {
-	delete reinterpret_cast<mono::DumpDestination *> (dump);
+	mono::write_dump (mono::DumpPoint::tier0_asm, mono::dump_name (method).c_str (), text);
+}
+
+void
+mono_jit_dump_flush (void)
+{
+	if (mono::dump_directory () != nullptr)
+		mono::writer ().flush ();
 }

@@ -2,10 +2,9 @@
  * \file
  * \brief What the backend's dump points write through.
  *
- * `mono/mini/jit-dump.hpp` decides whether a dump happens and opens where it
- * goes. This turns that destination into the stream LLVM prints to. It also
- * carries the method's dump name on the function, so that codegen can name the
- * method a body came from.
+ * `mono/mini/jit-dump.hpp` decides whether a dump happens and writes it. This
+ * gives LLVM a stream for the dump and carries the method name on the function
+ * so codegen can name the body it came from.
  */
 
 #ifndef MONO_LLVM_DUMP_HPP
@@ -29,11 +28,10 @@ class Module;
 namespace mono {
 
 /**
- * Runs \p body with the stream this dump goes to, then closes it.
+ * Runs \p body on a buffer, then hands the buffer to write_dump ().
  *
- * Does nothing and reports success when the destination did not open. The
- * caller has already decided the dump happens: this does not test the point or
- * the filter again.
+ * The caller has already decided the dump happens: this does not test the
+ * point or the filter again.
  */
 llvm::Error with_dump_stream (DumpPoint point, llvm::StringRef name,
                               llvm::function_ref<llvm::Error (llvm::raw_pwrite_stream &)> body);
@@ -52,9 +50,8 @@ std::unique_ptr<llvm::Module> clone_body_module (const llvm::Module &module,
 /**
  * Prints the module one body needs, so that the dump parses on its own.
  *
- * Does nothing when the destination did not open, or when \p entry names no
- * function. The caller has already decided the dump happens: this does not test
- * the point or the filter again.
+ * Does nothing when \p entry names no function. The caller has already decided
+ * that the dump happens; this does not test the point or filter again.
  */
 llvm::Error dump_body_module (DumpPoint point, const llvm::Module &module,
                               llvm::StringRef entry, llvm::StringRef name);

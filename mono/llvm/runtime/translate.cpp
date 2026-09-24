@@ -234,12 +234,8 @@ translate_body (const TranslationTarget &target, MonoMethod *method,
 	if (!dumped.empty ())
 		set_dump_name (**function, dumped);
 
-	if (dumping (DumpPoint::il, dumped.c_str ())) {
-		DumpDestination destination (DumpPoint::il, dumped.c_str ());
-
-		if (destination.stream () != nullptr)
-			dump_il (destination.stream (), method, cfg->get ()->header);
-	}
+	if (dumping (DumpPoint::il, dumped.c_str ()))
+		write_dump (DumpPoint::il, dumped.c_str (), dump_il (method, cfg->get ()->header));
 
 	/*
 	 * Laying out a class to create its vtable is the other place metadata gets
@@ -644,13 +640,9 @@ translate_and_compile_batch (llvm::ArrayRef<const TranslationTarget *> targets,
 		if (!member->dumped.empty ())
 			set_dump_name (*member->body, member->dumped);
 
-		if (dumping (DumpPoint::il, member->dumped.c_str ())) {
-			DumpDestination destination (DumpPoint::il, member->dumped.c_str ());
-
-			if (destination.stream () != nullptr)
-				dump_il (destination.stream (), member->method,
-				         member->cfg->get ()->header);
-		}
+		if (dumping (DumpPoint::il, member->dumped.c_str ()))
+			write_dump (DumpPoint::il, member->dumped.c_str (),
+			            dump_il (member->method, member->cfg->get ()->header));
 
 		dump_ir (DumpPoint::unopt_ir, *module, member->entry, member->dumped);
 
