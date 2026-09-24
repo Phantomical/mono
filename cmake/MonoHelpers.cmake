@@ -116,9 +116,9 @@ function(mono_gtest_tests target)
 
     set(_disc_timeout "")
     if(WIN32)
-      # Windows Defender can delay the first launch beyond CMake's five-second
-      # default. A discovery timeout aborts CTest before it schedules any tests.
-      set(_disc_timeout DISCOVERY_TIMEOUT 60)
+      # Windows can delay a newly built executable's first launch. A discovery
+      # timeout aborts CTest before it schedules any tests.
+      set(_disc_timeout DISCOVERY_TIMEOUT 300)
     endif()
 
     # PRE_TEST runs the discovery where the cases run.  test-mono-callspec.cpp
