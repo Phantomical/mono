@@ -31,6 +31,7 @@
 #include "passes/top-down-inline.hpp"
 #include "passes/trap-unreachable.hpp"
 #include "util/never-destroyed.hpp"
+#include "runtime/options.hpp"
 #include <llvm/IR/PassManager.h>
 #include <llvm/ADT/Statistic.h>
 #include <llvm/IR/ProfileSummary.h>
@@ -712,13 +713,26 @@ MonoPassBuilder::buildTier2Pipeline ()
 	if (dump_point_enabled (DumpPoint::tier2_inlined_ir))
 		MPM.addPass (mono::DumpIRPass (DumpPoint::tier2_inlined_ir));
 
-	// Run after guard creation and before vtable-read lowering. LoopSimplify
-	// provides the preheaders used for hoisting.
+	// Hoist guarded-dispatch vtable comparisons before lowering removes their
+	// vtable-read declarations. Then run LICM and non-trivial unswitching so
+	// the new invariant comparison can version the loop.
 	{
 		llvm::FunctionPassManager hoist;
 
 		hoist.addPass (llvm::LoopSimplifyPass ());
 		hoist.addPass (mono::HoistGuardVtablePass ());
+
+		if (unswitch_nontrivial ()) {
+			llvm::LoopPassManager version;
+
+			version.addPass (llvm::LICMPass (PTO.LicmMssaOptCap,
+			                                 PTO.LicmMssaNoAccForPromotionCap,
+			                                 /* AllowSpeculation = */ true));
+			version.addPass (llvm::SimpleLoopUnswitchPass (/* NonTrivial = */ true));
+			hoist.addPass (llvm::createFunctionToLoopPassAdaptor (std::move (version),
+			                                                      /* UseMemorySSA = */ true));
+		}
+
 		MPM.addPass (llvm::createModuleToFunctionPassAdaptor (std::move (hoist)));
 	}
 
@@ -891,16 +905,7 @@ MonoPassBuilder::buildTier2FunctionSimplificationPipeline ()
 	LPM1.addPass (llvm::LICMPass (PTO.LicmMssaOptCap, PTO.LicmMssaNoAccForPromotionCap,
 	                              /* AllowSpeculation = */ true));
 
-	/*
-	 * Not NonTrivial. Turning it off cleared a real crash, isolated
-	 * empirically rather than traced in SimpleLoopUnswitchPass's own source:
-	 * a self-recursive method with many parameters and a loop of more than
-	 * one latch compiled to a body that read null in an argument the caller
-	 * had passed a real reference for. Trivial unswitching, which never
-	 * clones a loop, still runs — the common O1 pipeline above adds it, and
-	 * both tiers share that call.
-	 */
-	LPM1.addPass (llvm::SimpleLoopUnswitchPass ());
+	LPM1.addPass (llvm::SimpleLoopUnswitchPass (unswitch_nontrivial ()));
 
 	LPM2.addPass (llvm::LoopIdiomRecognizePass ());
 	LPM2.addPass (llvm::IndVarSimplifyPass ());
