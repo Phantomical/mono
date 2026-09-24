@@ -3,19 +3,8 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 
 /*
- * A branch inside a loop, on a condition the loop's own turns never change,
- * with both arms staying in the loop and the Tag switch giving the loop more
- * than one latch. Only SimpleLoopUnswitchPass's non-trivial mode reaches a
- * branch like this: trivial unswitching only takes one whose arms leave the
- * loop on one side.
- *
- * This checks that tier 2 answers correctly here, not that it once did not.
- * A prior fix (task #299) found real corruption from non-trivial unswitching
- * on a much larger, self-recursive method, but no reduction of that case
- * down to something this small has reproduced it. Isolating
- * SimpleLoopUnswitchPass on the captured IR converges to identical output
- * whether or not non-trivial unswitching runs, so whatever the real defect
- * needed is not present here. Reverting the fix does not fail this test.
+ * Exercise non-trivial loop unswitching with an invariant branch whose arms
+ * remain in a multi-latch loop.
  */
 abstract class Node {
 	protected int tag;

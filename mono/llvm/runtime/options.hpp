@@ -191,6 +191,9 @@ uint64_t guard_profile_min_samples ();
 /// in front of the loop.
 bool hoist_guard_vtable ();
 
+/// Whether tier 2's loop unswitching may clone a loop.
+bool unswitch_nontrivial ();
+
 /// Whether the tier-2 cost model can translate a clause-bearing callee at
 /// all.
 ///
