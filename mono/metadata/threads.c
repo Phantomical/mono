@@ -6173,6 +6173,12 @@ async_suspend_critical (MonoThreadInfo *info, gpointer ud)
 	protected_wrapper = ji && !ji->is_trampoline && !ji->async && mono_threads_is_critical_method (mono_jit_info_get_method (ji));
 	running_managed = mono_jit_info_match (ji, MONO_CONTEXT_GET_IP (&mono_thread_info_get_suspend_state (info)->ctx));
 
+	// A pending abort raised here could enter a landing pad before its state is
+	// initialized. Suspend at the next interruption checkpoint instead.
+	if (running_managed && mono_threads_are_safepoints_enabled () &&
+	    raise_enters_llvm_pad (ji, MONO_CONTEXT_GET_IP (&mono_thread_info_get_suspend_state (info)->ctx)))
+		running_managed = FALSE;
+
 	if (running_managed && !protected_wrapper) {
 		if (mono_threads_are_safepoints_enabled ()) {
 			mono_thread_info_setup_async_call (info, self_interrupt_thread, NULL);
