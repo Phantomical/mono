@@ -1003,6 +1003,11 @@ finalize_domain_objects (void)
 static void
 mono_runtime_do_background_work (void)
 {
+	/* Do this before running potentially long-lived finalizers. */
+	MONO_ENTER_GC_SAFE;
+	mono_gc_free_deferred_memory ();
+	MONO_EXIT_GC_SAFE;
+
 	mono_threads_perform_thread_dump ();
 
 	mono_console_handle_async_ops ();

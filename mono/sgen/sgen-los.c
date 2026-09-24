@@ -130,6 +130,47 @@ static LOSFreeChunks *los_fast_free_lists [LOS_NUM_FAST_SIZES]; /* 0 is for larg
 static mword los_num_objects = 0;
 static int los_num_sections = 0;
 
+/* Regions are unmapped off the GC critical path. The node occupies their first page. */
+typedef struct _LOSDeferredFree LOSDeferredFree;
+struct _LOSDeferredFree {
+	LOSDeferredFree *next;
+	size_t size;
+};
+
+static LOSDeferredFree * volatile los_deferred_frees = NULL;
+
+static void
+defer_free_os_memory (void *addr, size_t size)
+{
+	LOSDeferredFree *node = (LOSDeferredFree *)addr;
+	LOSDeferredFree *head;
+
+	node->size = size;
+	do {
+		head = los_deferred_frees;
+		node->next = head;
+	} while (mono_atomic_cas_ptr ((volatile gpointer *)&los_deferred_frees, node, head) != head);
+}
+
+/* Unmap all regions deferred by the sweep. */
+void
+sgen_los_free_deferred (void)
+{
+	LOSDeferredFree *node = (LOSDeferredFree *)mono_atomic_xchg_ptr ((volatile gpointer *)&los_deferred_frees, NULL);
+
+	while (node) {
+		LOSDeferredFree *next = node->next;
+		sgen_free_os_memory (node, node->size, SGEN_ALLOC_HEAP, MONO_MEM_ACCOUNT_SGEN_LOS);
+		node = next;
+	}
+}
+
+gboolean
+sgen_los_has_deferred_frees (void)
+{
+	return los_deferred_frees != NULL;
+}
+
 //#define USE_MALLOC
 //#define LOS_CONSISTENCY_CHECK
 //#define LOS_DUMMY
@@ -315,6 +356,10 @@ get_los_section_memory (size_t size)
 	}
 
 	section = (LOSSection *)sgen_alloc_os_memory_aligned (LOS_SECTION_SIZE, LOS_SECTION_SIZE, (SgenAllocFlags)(SGEN_ALLOC_HEAP | SGEN_ALLOC_ACTIVATE), NULL, MONO_MEM_ACCOUNT_SGEN_LOS);
+	if (!section && sgen_los_has_deferred_frees ()) {
+		sgen_los_free_deferred ();
+		section = (LOSSection *)sgen_alloc_os_memory_aligned (LOS_SECTION_SIZE, LOS_SECTION_SIZE, (SgenAllocFlags)(SGEN_ALLOC_HEAP | SGEN_ALLOC_ACTIVATE), NULL, MONO_MEM_ACCOUNT_SGEN_LOS);
+	}
 
 	if (!section)
 		return NULL;
@@ -392,7 +437,7 @@ sgen_los_free_object (LOSObject *obj)
 		int pagesize = mono_pagesize ();
 		size += sizeof (LOSObject);
 		size = SGEN_ALIGN_UP_TO (size, pagesize);
-		sgen_free_os_memory ((gpointer)SGEN_ALIGN_DOWN_TO ((mword)obj, pagesize), size, SGEN_ALLOC_HEAP, MONO_MEM_ACCOUNT_SGEN_LOS);
+		defer_free_os_memory ((gpointer)SGEN_ALIGN_DOWN_TO ((mword)obj, pagesize), size);
 		sgen_los_memory_usage_total -= size;
 		sgen_memgov_release_space (size, SPACE_LOS);
 	} else {
@@ -460,6 +505,10 @@ sgen_los_alloc_large_inner (GCVTable vtable, size_t size)
 		size_t alloc_size = SGEN_ALIGN_UP_TO (obj_size, pagesize);
 		if (sgen_memgov_try_alloc_space (alloc_size, SPACE_LOS)) {
 			obj = (LOSObject *)sgen_alloc_os_memory (alloc_size, (SgenAllocFlags)(SGEN_ALLOC_HEAP | SGEN_ALLOC_ACTIVATE), NULL, MONO_MEM_ACCOUNT_SGEN_LOS);
+			if (!obj && sgen_los_has_deferred_frees ()) {
+				sgen_los_free_deferred ();
+				obj = (LOSObject *)sgen_alloc_os_memory (alloc_size, (SgenAllocFlags)(SGEN_ALLOC_HEAP | SGEN_ALLOC_ACTIVATE), NULL, MONO_MEM_ACCOUNT_SGEN_LOS);
+			}
 			if (obj) {
 				sgen_los_memory_usage_total += alloc_size;
 				obj = randomize_los_object_start (obj, obj_size, alloc_size, pagesize);
@@ -508,6 +557,9 @@ sgen_los_sweep (void)
 	int i;
 	int num_sections = 0;
 
+	/* Drain regions that the finalizer thread has not processed. */
+	sgen_los_free_deferred ();
+
 	/* sweep the big objects list */
 	FOREACH_LOS_OBJECT_NO_LOCK (obj) {
 		SGEN_ASSERT (0, !SGEN_OBJECT_IS_PINNED (obj->data), "Who pinned a LOS object?");
@@ -547,7 +599,7 @@ sgen_los_sweep (void)
 				prev->next = next;
 			else
 				los_sections = next;
-			sgen_free_os_memory (section, LOS_SECTION_SIZE, SGEN_ALLOC_HEAP, MONO_MEM_ACCOUNT_SGEN_LOS);
+			defer_free_os_memory (section, LOS_SECTION_SIZE);
 			sgen_memgov_release_space (LOS_SECTION_SIZE, SPACE_LOS);
 			section = next;
 			--los_num_sections;

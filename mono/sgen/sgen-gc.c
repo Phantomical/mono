@@ -2621,7 +2621,7 @@ major_finish_collection (SgenGrayQueue *gc_thread_gray_queue, const char *reason
 
 	sgen_debug_dump_heap ("major", mono_atomic_load_i32 (&mono_gc_stats.major_gc_count) - 1, reason);
 
-	if (sgen_have_pending_finalizers ()) {
+	if (sgen_have_pending_finalizers () || sgen_los_has_deferred_frees ()) {
 		SGEN_LOG (4, "Finalizer-thread wakeup");
 		sgen_client_finalize_notify ();
 	}

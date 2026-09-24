@@ -1294,6 +1294,11 @@ mono_gc_invoke_finalizers (void)
 	return count;
 }
 
+void
+mono_gc_free_deferred_memory (void)
+{
+}
+
 MonoBoolean
 mono_gc_pending_finalizers (void)
 {

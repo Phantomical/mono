@@ -434,6 +434,9 @@ gboolean mono_gc_is_disabled (void);
  */
 gboolean mono_gc_is_null (void);
 
+/* Free memory deferred by a collection. Call in GC-safe mode. */
+void mono_gc_free_deferred_memory (void);
+
 void mono_gc_set_string_length (MonoString *str, gint32 new_length);
 
 #if defined(__MACH__)
