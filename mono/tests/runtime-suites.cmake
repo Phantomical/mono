@@ -783,6 +783,14 @@ mono_runtime_suite(runtime-profile-guard-off TESTS ${_profile_devirt}
                    ENV "MONO_GUARD_PROFILE=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-guard-profile=0")
 
+# The recorded guard's vtable read moved in front of its loop. The off arm
+# leaves the read in the loop, and gives the same answers.
+_mono_exe_list(_guard_vtable_hoist ${MONO_TESTS_GUARD_VTABLE_HOIST_SRC})
+mono_runtime_suite(runtime-guard-vtable-hoist TESTS ${_guard_vtable_hoist}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0")
+mono_runtime_suite(runtime-guard-vtable-hoist-off TESTS ${_guard_vtable_hoist}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-hoist-guard-vtable=0")
+
 # Exercise List<T> indexers with the bounds-check hint enabled and disabled.
 mono_runtime_suite(runtime-list-bounds-hint TESTS list-bounds-hint.exe)
 mono_runtime_suite(runtime-list-bounds-hint-off TESTS list-bounds-hint.exe

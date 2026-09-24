@@ -187,6 +187,10 @@ unsigned guard_profile_min_share ();
 /// read at all.
 uint64_t guard_profile_min_samples ();
 
+/// Whether a guard compare in a loop reads a loop-invariant receiver's vtable
+/// in front of the loop.
+bool hoist_guard_vtable ();
+
 /// Whether the tier-2 cost model can translate a clause-bearing callee at
 /// all.
 ///
