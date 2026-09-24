@@ -82,10 +82,10 @@ enum class LowerStage {
 /// the value it stands for. Says whether it changed anything.
 bool eliminate_type_tests (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
-/// Replaces each Enum.HasFlag () site in \p f whose two operands are provably
-/// the same enum class with the bit test it stands for. Says whether it
-/// changed anything.
-bool eliminate_enum_has_flag (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+/// Replaces each System.Enum builtin site in \p f whose receiver is a
+/// provably boxed enum with the arithmetic on its value that the site stands
+/// for. Says whether it changed anything.
+bool eliminate_enum_builtins (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
 /// Replaces each object vtable read in \p f whose class the IR settles with
 /// that class's own vtable symbol. Says whether it changed anything.

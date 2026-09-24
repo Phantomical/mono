@@ -1207,8 +1207,9 @@ private:
 	llvm::Error emit_hash_code_fast_path (MonoIrBuilder &builder, MonoMethod *callee_method,
 	                                      MonoMethodSignature *sig);
 	llvm::Error emit_hash_code_pointer_fast_path (MonoIrBuilder &builder, MonoMethodSignature *sig);
-	llvm::Error emit_enum_has_flag (MonoIrBuilder &builder, MonoMethod *callee_method,
-	                                MonoMethodSignature *sig);
+	/// \p name is one of the `mono.enum.*` declaration names.
+	llvm::Error emit_enum_builtin (MonoIrBuilder &builder, llvm::StringRef name,
+	                               MonoMethod *callee_method, MonoMethodSignature *sig);
 	llvm::Error emit_current_managed_thread_id (MonoIrBuilder &builder,
 	                                            MonoMethodSignature *sig);
 	llvm::Error emit_thread_memory_barrier (MonoIrBuilder &builder);

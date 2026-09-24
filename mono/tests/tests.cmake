@@ -1152,6 +1152,12 @@ set(MONO_TESTS_ELIMINATE_DELEGATE_SRC
   eliminate-delegate.cs
 )
 
+# System.Enum's operations over each underlying type, on the default and with
+# the eliminations off. Every value it asserts holds in both.
+set(MONO_TESTS_ELIMINATE_ENUM_SRC
+  eliminate-enum.cs
+)
+
 # Guarding a dispatch on the receiver classes tier 1 recorded at it. It runs
 # with the guard on and off, and reads the variable to know which arm it is in.
 set(MONO_TESTS_PROFILE_DEVIRT_SRC

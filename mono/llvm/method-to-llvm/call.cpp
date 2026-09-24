@@ -1437,6 +1437,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	MonoClass *constrained = nullptr;
 	bool direct_this = false;
 	bool box_receiver = false;
+	bool boxed_impl = false;
 
 	if (prefixes.constrained != 0) {
 		// The prefix is only defined ahead of callvirt (III.2.1). Its one other
@@ -1480,6 +1481,13 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 				direct_this = true;
 			} else {
 				box_receiver = true;
+
+				// The box below is an instance of constrained and nothing
+				// else, so impl is what a dispatch on it reaches.
+				if (impl != nullptr && !(impl->flags & METHOD_ATTRIBUTE_ABSTRACT)) {
+					callee_method = impl;
+					boxed_impl = true;
+				}
 			}
 		}
 	}
@@ -1575,14 +1583,11 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	}
 
 	/*
-	 * Asked of the method the IL named, ahead of the wrapper swap below: the
-	 * wrapper is what each lowering replaces, so the match has to see the icall
-	 * the IL named.
+	 * Asked ahead of the wrapper swap below: the wrapper is what each lowering
+	 * replaces, so the match has to see the icall itself.
 	 *
-	 * Asked after the box above, because Object:GetType () reads the boxed
-	 * receiver. It is the only entry a boxed receiver reaches: the prefix boxes
-	 * only for a method the value type leaves to a base class, and GetType ()
-	 * is the one such method the registry answers.
+	 * Asked after the box above, because an entry a boxed receiver reaches,
+	 * such as Object:GetType () or Enum:CompareTo (), reads the box.
 	 */
 	if (BuiltinResult lowered = emit_builtin_call (
 		    *this, builder, { callee_method, sig, method, constrained, box_receiver }))
@@ -1617,6 +1622,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	// put in the slot.
 	bool devirtualized = !is_virtual
 	                     || direct_this
+	                     || boxed_impl
 	                     || exact_receiver
 	                     || !(callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
 	                     || (callee_method->flags & METHOD_ATTRIBUTE_FINAL);
@@ -1747,9 +1753,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		// Only a method that can still be overridden needs a lookup. A final
 		// or non-virtual one is already the answer, and a callvirt on it is a
 		// null check with a direct call behind it, as is one a constrained.
-		// prefix already resolved to the value type's own implementation, and
-		// one whose receiver has a class the IL settled.
-		bool overridable = !direct_this && !exact_receiver
+		// prefix already resolved, and one whose receiver has a class the IL
+		// settled.
+		bool overridable = !direct_this && !boxed_impl && !exact_receiver
 		                   && (callee_method->flags & METHOD_ATTRIBUTE_VIRTUAL)
 		                   && !(callee_method->flags & METHOD_ATTRIBUTE_FINAL);
 

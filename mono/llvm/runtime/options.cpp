@@ -75,10 +75,10 @@ llvm::cl::opt<bool> EliminateDelegatesOpt (
 	"mono-eliminate-delegates", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Eliminate a delegate Invoke whose target the translator can name"));
 
-llvm::cl::opt<bool> EliminateEnumHasFlagOpt (
-	"mono-eliminate-enum-hasflag", llvm::cl::Hidden, llvm::cl::init (true),
-	llvm::cl::desc ("Answer an Enum.HasFlag () site both of whose operands "
-	                "the translator can settle to one class"));
+llvm::cl::opt<bool> EliminateEnumsOpt (
+	"mono-eliminate-enums", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Compute a System.Enum operation inline where the translator "
+	                "can settle its receiver to one enum class"));
 
 llvm::cl::opt<bool> SimdLoweringOpt (
 	"mono-simd", llvm::cl::Hidden, llvm::cl::init (true),
@@ -412,9 +412,9 @@ eliminate_delegates ()
 }
 
 bool
-eliminate_enum_has_flag_option ()
+eliminate_enums ()
 {
-	return EliminateEnumHasFlagOpt;
+	return EliminateEnumsOpt;
 }
 
 bool
