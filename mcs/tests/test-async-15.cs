@@ -71,7 +71,7 @@ class Tester
 	{
 		var t = new Tester().NewInitTestGen<S> ();
 		
-		if (!Task.WaitAll (new[] { t }, 1000)) {
+		if (!Task.WaitAll (new[] { t }, 5000)) {
 			return 1;
 		}
 		

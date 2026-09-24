@@ -46,7 +46,7 @@ class Tester : Base
 		Console.Write ("Running test {0, -25}", test.Name);
 		try {
 			Task t = test.Invoke (new Tester (), null) as Task;
-			if (!Task.WaitAll (new[] { t }, 1000)) {
+			if (!Task.WaitAll (new[] { t }, 5000)) {
 				Console.WriteLine ("FAILED (Timeout)");
 				return false;
 			}

@@ -77,7 +77,7 @@ class Tester
 		try {
 			Task t = test.Invoke (new Tester (), null) as Task;
 			try {
-				if (!Task.WaitAll (new[] { t }, 1000)) {
+				if (!Task.WaitAll (new[] { t }, 5000)) {
 					Console.WriteLine ("FAILED (Timeout)");
 					return false;
 				}

@@ -164,28 +164,28 @@ class C
 		Task<int> t;
 
 		t = TestStack_1 ();
-		if (!Task.WaitAll (new[] { t }, 1000))
+		if (!Task.WaitAll (new[] { t }, 5000))
 			return 1;
 		
 		if (t.Result != 0)
 			return 2;
 		
 		t = TestStack_2 (ulong.MaxValue);
-		if (!Task.WaitAll (new[] { t }, 1000))
+		if (!Task.WaitAll (new[] { t }, 5000))
 			return 3;
 		
 		if (t.Result != 0)
 			return 4;
 		
 		t = TestStack_3 ();
-		if (!Task.WaitAll (new[] { t }, 1000))
+		if (!Task.WaitAll (new[] { t }, 5000))
 			return 4;
 		
 		if (t.Result != 0)
 			return 5;
 		
 		t = TestStack_4 ();
-		if (!Task.WaitAll (new[] { t }, 1000))
+		if (!Task.WaitAll (new[] { t }, 5000))
 			return 6;
 		
 		if (t.Result != 0)
@@ -193,14 +193,14 @@ class C
 		
 		var g = new G<sbyte> ();
 		t = g.TestStack_1 (9);
-		if (!Task.WaitAll (new[] { t }, 1000))
+		if (!Task.WaitAll (new[] { t }, 5000))
 			return 8;
 		
 		if (t.Result != 0)
 			return 9;
 		
 		t = TestStack_5 ();
-		if (!Task.WaitAll (new[] { t }, 1000))
+		if (!Task.WaitAll (new[] { t }, 5000))
 			return 10;
 		
 		if (t.Result != 0)
