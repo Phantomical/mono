@@ -657,8 +657,9 @@ namespace System.Diagnostics
 			if (IsWindows) {
 				const int DUPLICATE_SAME_ACCESS = 0x00000002;
 				var tmp = writeDirection ? write : read;
+				var current_process = NativeMethods.GetCurrentProcess ();
 
-				if (!MonoIO.DuplicateHandle (Process.GetCurrentProcess ().Handle, tmp, Process.GetCurrentProcess ().Handle, out tmp, 0, 0, DUPLICATE_SAME_ACCESS, out error))
+				if (!MonoIO.DuplicateHandle (current_process, tmp, current_process, out tmp, 0, 0, DUPLICATE_SAME_ACCESS, out error))
 					throw MonoIO.GetException (error);
 
 				if (writeDirection) {
