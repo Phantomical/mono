@@ -889,9 +889,11 @@ the counts it gathered, at O3 with an optimizing selector. `TierCounterPass` put
 counter in: every body takes a constant off at its entry, and a body with a loop adds the
 turns up in a register on top and takes that total off at each exit. Such a body also gets
 a fault clause, if it calls anything that can unwind. That clause's pad charges the turns
-when a callee's exception unwinds through the frame. The calls that can unwind become
-invokes on to the pad, and `mono_lsda.cpp` publishes the clause over every protected range
-the body has, touching ranges merged. Never over the whole body: the runtime enters a pad
+when a callee's exception unwinds through the frame. The plain calls that can unwind become
+invokes on to the pad, and `mono_lsda.cpp` publishes the clause over their ranges alone,
+touching ranges merged. Never over a call an IL clause protects: the pad's loop count is a
+value only its own invokes set, so an exception that passes an untaken catch of the
+method's own leaves uncharged. Never over the whole body either: the runtime enters a pad
 on the stack pointer of the point that raised, which a prologue or an epilogue has not
 finished setting, so a thread abort landing there ran the pad on the wrong stack
 (`mono/tests/thread-abort-reset-race.cs`).

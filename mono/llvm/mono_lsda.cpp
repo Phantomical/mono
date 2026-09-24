@@ -362,9 +362,13 @@ record_resume_pad (const MonoLsdaEntry &e, OwnerHeaders &headers,
 
 /*
  * Appends the fault clause the tier counter's pad is the handler of, if the
- * section named one, over \p ranges: every range the section protects, the
- * IL clauses' included, so an exception an IL clause does not catch still
- * reaches the pad. Touching ranges publish as one entry.
+ * section named one, over \p ranges: the ranges of the calls that unwind to
+ * that pad. Touching ranges publish as one entry.
+ *
+ * Never over a call an IL clause protects. The pad reads the loop turns from a
+ * register that only the calls unwinding to it set, so entered from any other
+ * call it charges a value that is not the count. An exception that passes a
+ * catch of the method's own without being taken therefore leaves uncharged.
  *
  * Never the whole body. The runtime enters a pad with the stack pointer of the
  * point that raised, and the pad addresses its frame off it. In a prologue or
@@ -411,12 +415,12 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries, OwnerHeaders &
                        const std::uint8_t *native_code, std::uint32_t code_len,
                        std::vector<MonoJitExceptionInfo> &out,
                        std::uint32_t &tier_unwind_off, bool &tier_unwind,
-                       std::vector<RangeOff> &protected_ranges)
+                       std::vector<RangeOff> &tier_ranges)
 {
 	out.clear ();
 	tier_unwind_off = 0;
 	tier_unwind = false;
-	protected_ranges.clear ();
+	tier_ranges.clear ();
 
 	// An empty list here means every protected call was optimized to one that
 	// cannot unwind, not that the section is missing. A method whose gather
@@ -468,8 +472,8 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries, OwnerHeaders &
 		if (e.kind == MONO_LSDA_KIND_TIER_UNWIND) {
 			tier_unwind_off = e.handler_off;
 			tier_unwind = true;
-			protected_ranges.push_back ({ e.try_start_off,
-			                              static_cast<std::uint64_t> (e.try_start_off) + e.try_len });
+			tier_ranges.push_back ({ e.try_start_off,
+			                         static_cast<std::uint64_t> (e.try_start_off) + e.try_len });
 			continue;
 		}
 
@@ -603,7 +607,6 @@ build_ex_info_entries (const std::vector<MonoLsdaEntry> &entries, OwnerHeaders &
 		i = end;
 	}
 
-	protected_ranges.insert (protected_ranges.end (), ranges.begin (), ranges.end ());
 	return ranges_equal_or_disjoint (ranges);
 }
 
@@ -617,11 +620,11 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 {
 	std::uint32_t tier_unwind_off = 0;
 	bool tier_unwind = false;
-	std::vector<RangeOff> protected_ranges;
+	std::vector<RangeOff> tier_ranges;
 	OwnerHeaders headers (clauses, num_clauses, owner_header);
 
 	if (!build_ex_info_entries (entries, headers, native_code, code_len, out,
-	                            tier_unwind_off, tier_unwind, protected_ranges))
+	                            tier_unwind_off, tier_unwind, tier_ranges))
 		return false;
 
 	if (!append_finally_guards (guards, headers, native_code, code_len, out))
@@ -630,7 +633,7 @@ build_ex_info (const std::vector<MonoLsdaEntry> &entries,
 	// The tier-unwind fault is the root's own instrumentation pad, never an
 	// inlined body's, so it stays keyed to owner 0's own num_clauses.
 	append_tier_unwind (tier_unwind_off, tier_unwind, num_clauses, native_code,
-	                    std::move (protected_ranges), out);
+	                    std::move (tier_ranges), out);
 	return true;
 }
 

@@ -711,12 +711,12 @@ TEST_F (MonoLsdaBuild, ResumePadOnlyAccepts)
 }
 
 /*
- * The tier counter's pad covers the protected calls, the IL clause's among them,
- * and nothing between them. A range reaching offset 0 would take in the prologue,
- * where an asynchronous abort enters the pad on a stack pointer that is not its
- * frame's.
+ * The tier counter's pad covers the calls that unwind to it and nothing else.
+ * Over the IL catch's call, the runtime would enter the pad from a call that
+ * never set its loop count. Over offset 0, an asynchronous abort in the prologue
+ * would enter it on a stack pointer that is not its frame's.
  */
-TEST_F (MonoLsdaBuild, TierUnwindCoversOnlyProtectedRanges)
+TEST_F (MonoLsdaBuild, TierUnwindCoversOnlyItsOwnRanges)
 {
 	std::vector<MonoLsdaEntry> ents = {
 		{ 0x10, 0x08, 0xc0, 0, mono::MONO_LSDA_KIND_TIER_UNWIND },
@@ -727,16 +727,16 @@ TEST_F (MonoLsdaBuild, TierUnwindCoversOnlyProtectedRanges)
 	std::vector<MonoJitExceptionInfo> out;
 
 	ASSERT_TRUE (mono::build_ex_info (ents, clauses, 2, base, code_len, out));
-	ASSERT_EQ (out.size (), 4u);
+	ASSERT_EQ (out.size (), 3u);
 
 	EXPECT_EQ (out[0].clause_index, 0);
 	EXPECT_EQ (out[0].try_start, at (0x60));
 
 	const std::pair<std::uint32_t, std::uint32_t> want[] = {
-		{ 0x10, 0x20 }, { 0x40, 0x48 }, { 0x60, 0x70 },
+		{ 0x10, 0x20 }, { 0x40, 0x48 },
 	};
 
-	for (std::size_t i = 0; i < 3; ++i) {
+	for (std::size_t i = 0; i < 2; ++i) {
 		const MonoJitExceptionInfo &ei = out[i + 1];
 
 		EXPECT_EQ (ei.flags, (guint32) MONO_EXCEPTION_CLAUSE_FAULT);
