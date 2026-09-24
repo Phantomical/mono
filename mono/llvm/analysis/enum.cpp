@@ -7,6 +7,9 @@
 
 #include <llvm/IR/Value.h>
 
+#include <algorithm>
+#include <cstring>
+
 namespace mono {
 
 MonoClass *
@@ -52,6 +55,37 @@ enum_scalar (MonoClass *klass)
 	default:
 		return std::nullopt;
 	}
+}
+
+std::optional<std::vector<uint64_t>>
+enum_literal_values (MonoClass *klass, EnumScalar scalar)
+{
+	std::vector<uint64_t> literals;
+	gpointer iter = nullptr;
+
+	while (MonoClassField *field = mono_class_get_fields_internal (klass, &iter)) {
+		if (!(field->type->attrs & FIELD_ATTRIBUTE_STATIC) || mono_field_is_deleted (field))
+			continue;
+
+		if (!(field->type->attrs & FIELD_ATTRIBUTE_HAS_DEFAULT))
+			return std::nullopt;
+
+		MonoTypeEnum def_type;
+		const char *blob = mono_class_get_field_default_value (field, &def_type);
+
+		if (blob == nullptr)
+			return std::nullopt;
+
+		mono_metadata_decode_blob_size (blob, &blob);
+
+		uint64_t literal = 0;
+		memcpy (&literal, blob, scalar.bits / 8);
+		literals.push_back (literal);
+	}
+
+	std::sort (literals.begin (), literals.end ());
+	literals.erase (std::unique (literals.begin (), literals.end ()), literals.end ());
+	return literals;
 }
 
 } // namespace mono

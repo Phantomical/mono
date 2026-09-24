@@ -23,6 +23,23 @@ enum S32 { Min = int.MinValue, Neg = -1, Zero = 0, Max = int.MaxValue }
 enum U32 : uint { Zero = 0, Mid = 0x7fffffff, High = 0x80000000, Max = uint.MaxValue }
 enum S64 : long { Min = long.MinValue, Neg = -1, Zero = 0, Max = long.MaxValue }
 enum U64 : ulong { Zero = 0, Mid = 0x7fffffffffffffff, High = 0x8000000000000000, Max = ulong.MaxValue }
+enum Empty { }
+enum Aliased { One = 1, Uno = 1, Three = 3 }
+enum Run { A, B, C, D }
+enum RunThroughZero : sbyte { MinusTwo = -2, MinusOne = -1, Zero = 0, One = 1 }
+enum Runs32 {
+	R0 = 0, R1 = 2, R2 = 4, R3 = 6, R4 = 8, R5 = 10, R6 = 12, R7 = 14, R8 = 16, R9 = 18,
+	R10 = 20, R11 = 22, R12 = 24, R13 = 26, R14 = 28, R15 = 30, R16 = 32, R17 = 34, R18 = 36, R19 = 38,
+	R20 = 40, R21 = 42, R22 = 44, R23 = 46, R24 = 48, R25 = 50, R26 = 52, R27 = 54, R28 = 56, R29 = 58,
+	R30 = 60, R31 = 62, R31b = 63
+}
+enum Runs33 {
+	R0 = 0, R1 = 2, R2 = 4, R3 = 6, R4 = 8, R5 = 10, R6 = 12, R7 = 14, R8 = 16, R9 = 18,
+	R10 = 20, R11 = 22, R12 = 24, R13 = 26, R14 = 28, R15 = 30, R16 = 32, R17 = 34, R18 = 36, R19 = 38,
+	R20 = 40, R21 = 42, R22 = 44, R23 = 46, R24 = 48, R25 = 50, R26 = 52, R27 = 54, R28 = 56, R29 = 58,
+	R30 = 60, R31 = 62, R32 = 64
+}
+enum RunThroughMax : ulong { Zero = 0, MaxMinusOne = ulong.MaxValue - 1, Max = ulong.MaxValue }
 
 class Program {
 	const int tier1 = 3;
@@ -82,6 +99,20 @@ class Program {
 	[MethodImpl (MethodImplOptions.NoInlining)] static object BoxU8 (int v) => Enum.ToObject (typeof (U8), v);
 	[MethodImpl (MethodImplOptions.NoInlining)] static object BoxU64 (ulong v) => Enum.ToObject (typeof (U64), v);
 	[MethodImpl (MethodImplOptions.NoInlining)] static object BoxNotEnum (int v) => Enum.ToObject (typeof (int), v);
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedS8 (S8 v) => Enum.IsDefined (typeof (S8), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedU64 (U64 v) => Enum.IsDefined (typeof (U64), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedU8Byte (byte v) => Enum.IsDefined (typeof (U8), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedS16Int (int v) => Enum.IsDefined (typeof (S16), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedS32OtherEnum (S16 v) => Enum.IsDefined (typeof (S32), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedEmpty (Empty v) => Enum.IsDefined (typeof (Empty), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedAliased (Aliased v) => Enum.IsDefined (typeof (Aliased), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedRun (Run v) => Enum.IsDefined (typeof (Run), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedRunThroughZero (RunThroughZero v) => Enum.IsDefined (typeof (RunThroughZero), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedRunThroughMax (RunThroughMax v) => Enum.IsDefined (typeof (RunThroughMax), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedRuns32 (Runs32 v) => Enum.IsDefined (typeof (Runs32), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedRuns33 (Runs33 v) => Enum.IsDefined (typeof (Runs33), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool DefinedName (string v) => Enum.IsDefined (typeof (S8), v);
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static long ValueS32 (S32 v) => Convert.ToInt64 (v);
 	[MethodImpl (MethodImplOptions.NoInlining)] static string ValueU32 (U32 v) => v.ToString ("D");
@@ -214,6 +245,45 @@ class Program {
 		}
 		Check (tier, "BoxNotEnum throws", threw, true);
 
+		for (int a = sbyte.MinValue; a <= sbyte.MaxValue; a++)
+			Check (tier, "DefinedS8 " + a, DefinedS8 ((S8) a), a == sbyte.MinValue || a == -1 || a == 0 || a == sbyte.MaxValue);
+		foreach (ulong a in new ulong [] { 0, 1, 0x7fffffffffffffff, 0x8000000000000000, 0xfffffffffffffffe, ulong.MaxValue })
+			Check (tier, "DefinedU64 " + a, DefinedU64 ((U64) a), a != 1 && a != 0xfffffffffffffffe);
+		foreach (int a in new int [] { int.MinValue, -1, 0, 3, 4, int.MaxValue })
+			Check (tier, "DefinedRun " + a, DefinedRun ((Run) a), a >= 0 && a <= 3);
+		for (int a = sbyte.MinValue; a <= sbyte.MaxValue; a++)
+			Check (tier, "DefinedRunThroughZero " + a, DefinedRunThroughZero ((RunThroughZero) a), a >= -2 && a <= 1);
+		foreach (ulong a in new ulong [] { 0, 1, 2, 0x8000000000000000, ulong.MaxValue - 2, ulong.MaxValue - 1, ulong.MaxValue })
+			Check (tier, "DefinedRunThroughMax " + a, DefinedRunThroughMax ((RunThroughMax) a), a == 0 || a >= ulong.MaxValue - 1);
+		for (int a = -1; a <= 66; a++) {
+			Check (tier, "DefinedRuns32 " + a, DefinedRuns32 ((Runs32) a), a >= 0 && a <= 63 && (a % 2 == 0 || a == 63));
+			Check (tier, "DefinedRuns33 " + a, DefinedRuns33 ((Runs33) a), a >= 0 && a <= 64 && a % 2 == 0);
+		}
+		Check (tier, "DefinedU8Byte (0x80)", DefinedU8Byte (0x80), true);
+		Check (tier, "DefinedU8Byte (0x81)", DefinedU8Byte (0x81), false);
+		Check (tier, "DefinedEmpty (0)", DefinedEmpty (0), false);
+		Check (tier, "DefinedAliased (1)", DefinedAliased (Aliased.Uno), true);
+		Check (tier, "DefinedAliased (2)", DefinedAliased ((Aliased) 2), false);
+		Check (tier, "DefinedAliased (3)", DefinedAliased (Aliased.Three), true);
+		Check (tier, "DefinedName (Max)", DefinedName ("Max"), true);
+		Check (tier, "DefinedName (Neither)", DefinedName ("Neither"), false);
+
+		threw = false;
+		try {
+			DefinedS16Int (-1);
+		} catch (ArgumentException) {
+			threw = true;
+		}
+		Check (tier, "DefinedS16Int throws", threw, true);
+
+		threw = false;
+		try {
+			DefinedS32OtherEnum (S16.Neg);
+		} catch (ArgumentException) {
+			threw = true;
+		}
+		Check (tier, "DefinedS32OtherEnum throws", threw, true);
+
 		Check (tier, "ValueS32 (Min)", ValueS32 (S32.Min), (long) int.MinValue);
 		Check (tier, "ValueU32 (Max)", ValueU32 (U32.Max), "4294967295");
 		Check (tier, "ValueIConvertibleS16 (Neg)", ValueIConvertibleS16 (S16.Neg), -1);
@@ -254,7 +324,8 @@ class Program {
 
 		foreach (MethodInfo m in typeof (Program).GetMethods (BindingFlags.Static | BindingFlags.NonPublic)) {
 			if (m.Name.StartsWith ("Hash") || m.Name.StartsWith ("Cmp") || m.Name.StartsWith ("Eq")
-			    || m.Name.StartsWith ("Type") || m.Name.StartsWith ("Box") || m.Name.StartsWith ("Value")) {
+			    || m.Name.StartsWith ("Type") || m.Name.StartsWith ("Box") || m.Name.StartsWith ("Value")
+			    || m.Name.StartsWith ("Defined")) {
 				MethodInfo target = m.IsGenericMethodDefinition ? null : m;
 
 				if (target != null)

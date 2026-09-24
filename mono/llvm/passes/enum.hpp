@@ -33,6 +33,7 @@ namespace mono {
  *   ptr @mono.type.basetype       (ptr type,      ptr fallback)  RuntimeTypeHandle.GetBaseType ()
  *   i8  @mono.type.isgenericvar   (ptr type,      ptr fallback)  RuntimeTypeHandle.IsGenericVariable ()
  *   i32 @mono.type.attributes     (ptr type,      ptr fallback)  RuntimeTypeHandle.GetAttributes ()
+ *   i8  @mono.type.enumdefined    (ptr type, ptr value, ptr fallback)  Enum.IsDefined ()
  *
  * A `type` operand is a System.RuntimeType, which analysis/type-info.hpp
  * settles where it is a constant.
@@ -51,6 +52,7 @@ constexpr llvm::StringRef type_enum_box_name = "mono.type.enumbox";
 constexpr llvm::StringRef type_base_name = "mono.type.basetype";
 constexpr llvm::StringRef type_is_generic_var_name = "mono.type.isgenericvar";
 constexpr llvm::StringRef type_attributes_name = "mono.type.attributes";
+constexpr llvm::StringRef type_enum_defined_name = "mono.type.enumdefined";
 
 /// The declaration named \p name in \p m, created on first use. \p name must be
 /// one of the names above.
