@@ -969,6 +969,8 @@ void sgen_los_free_object (LOSObject *obj);
 void* sgen_los_alloc_large_inner (GCVTable vtable, size_t size)
 	MONO_PERMIT (need (sgen_gc_locked, sgen_stop_world));
 void sgen_los_sweep (void);
+void sgen_los_free_deferred (void);
+gboolean sgen_los_has_deferred_frees (void);
 gboolean sgen_ptr_is_in_los (char *ptr, char **start);
 void sgen_los_iterate_objects (IterateObjectCallbackFunc cb, void *user_data);
 void sgen_los_iterate_objects_free (IterateObjectResultCallbackFunc cb, void *user_data);
