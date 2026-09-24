@@ -560,7 +560,76 @@ box_enum (CallBase *site, MonoClass *klass, const ObjectAlloc &alloc, Value *val
 struct TypeSite {
 	CallBase *site;
 	TypeInfo info;
+	/// The known class of an Enum.IsDefined argument, if any.
+	MonoClass *value_class;
 };
+
+/// Maximum number of literal runs that enum_defined () compares.
+constexpr size_t max_literal_runs = 32;
+
+/// `count` consecutive literals from `first`, wrapping past the largest value
+/// of the width to 0.
+struct LiteralRun {
+	uint64_t first;
+	uint64_t count;
+};
+
+/// \p literals as runs of consecutive \p bits-wide integers, counting modulo
+/// 2^bits so that a run may pass from the largest to 0. \p literals must be
+/// ascending, distinct and non-empty.
+SmallVector<LiteralRun, 4>
+literal_runs (ArrayRef<uint64_t> literals, unsigned bits)
+{
+	uint64_t mask = bits == 64 ? ~uint64_t (0) : (uint64_t (1) << bits) - 1;
+	size_t n = literals.size ();
+	SmallVector<size_t, 4> starts;
+
+	for (size_t i = 0; i < n; i++)
+		if (((literals [i] - literals [(i + n - 1) % n]) & mask) != 1)
+			starts.push_back (i);
+
+	// Every value of the width is a literal.
+	if (starts.empty ())
+		return { { literals.front (), n } };
+
+	SmallVector<LiteralRun, 4> runs;
+
+	for (size_t k = 0; k < starts.size (); k++) {
+		size_t next = starts [(k + 1) % starts.size ()];
+		size_t count = (next + n - starts [k]) % n;
+		runs.push_back ({ literals [starts [k]], count == 0 ? n : count });
+	}
+
+	return runs;
+}
+
+/// Returns whether \p value, a boxed enum or underlying value, is in
+/// \p literals. Emits one `(value - first) u<= count - 1` comparison per run,
+/// or nothing when there are more than max_literal_runs runs.
+Value *
+enum_defined (CallBase *site, Value *value, EnumScalar scalar, ArrayRef<uint64_t> literals)
+{
+	IRBuilder<> b (site);
+
+	if (literals.empty ())
+		return b.getInt8 (0);
+
+	SmallVector<LiteralRun, 4> runs = literal_runs (literals, scalar.bits);
+
+	if (runs.size () > max_literal_runs)
+		return nullptr;
+
+	Value *held = load_enum_value (b, value, scalar);
+	Value *named = b.getFalse ();
+
+	for (const LiteralRun &run : runs) {
+		Value *offset = b.CreateSub (held, b.getIntN (scalar.bits, run.first));
+		named = b.CreateOr (named,
+		                    b.CreateICmpULE (offset, b.getIntN (scalar.bits, run.count - 1)));
+	}
+
+	return b.CreateZExt (named, b.getInt8Ty ());
+}
 
 /// The value \p at's site stands for, written in front of it, or null where
 /// the mark does not settle it.
@@ -588,9 +657,33 @@ type_site_value (const TypeSite &at)
 		return at.info.base;
 
 	MonoClass *klass = mono_class_from_mono_type_internal (type);
+
+	if (!m_class_is_enumtype (klass))
+		return nullptr;
+
 	std::optional<EnumScalar> scalar = enum_scalar (klass);
 
-	if (at.info.box.vtable == nullptr || !scalar)
+	if (!scalar)
+		return nullptr;
+
+	if (name == type_enum_defined_name) {
+		// Enum.IsDefined throws for other enum and integer types, and accepts
+		// strings by name.
+		MonoClass *underlying =
+			mono_class_from_mono_type_internal (mono_class_enum_basetype_internal (klass));
+
+		if (at.value_class != klass && at.value_class != underlying)
+			return nullptr;
+
+		std::optional<std::vector<uint64_t>> literals = enum_literal_values (klass, *scalar);
+
+		if (!literals)
+			return nullptr;
+
+		return enum_defined (site, site->getArgOperand (1), *scalar, *literals);
+	}
+
+	if (at.info.box.vtable == nullptr)
 		return nullptr;
 
 	return box_enum (site, klass, at.info.box, site->getArgOperand (1), *scalar);
@@ -607,7 +700,8 @@ eliminate_type_builtins (Function &f, FunctionAnalysisManager &fam)
 	SmallVector<CallBase *, 8> sites;
 
 	for (StringRef name : { type_enum_underlying_name, type_enum_box_name, type_base_name,
-	                        type_is_generic_var_name, type_attributes_name })
+	                        type_is_generic_var_name, type_attributes_name,
+	                        type_enum_defined_name })
 		sites.append (builtin_sites (f, name));
 
 	if (sites.empty ())
@@ -623,8 +717,22 @@ eliminate_type_builtins (Function &f, FunctionAnalysisManager &fam)
 		if (global == nullptr)
 			continue;
 
-		if (std::optional<TypeInfo> info = type_info (*global))
-			settled.push_back ({ site, *info });
+		std::optional<TypeInfo> info = type_info (*global);
+
+		if (!info)
+			continue;
+
+		MonoClass *value_class = nullptr;
+
+		if (site->getCalledFunction ()->getName () == type_enum_defined_name) {
+			std::pair<MonoClass *, bool> held =
+				operand_class (site->getArgOperand (1), f, values);
+
+			if (held.second)
+				value_class = held.first;
+		}
+
+		settled.push_back ({ site, *info, value_class });
 	}
 
 	bool changed = false;

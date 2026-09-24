@@ -31,6 +31,7 @@ const StringRef enum_builtin_names[] = {
 	type_base_name,
 	type_is_generic_var_name,
 	type_attributes_name,
+	type_enum_defined_name,
 };
 
 } // namespace
@@ -44,7 +45,7 @@ enum_builtin_decl (Module &m, StringRef name)
 	Type *i32 = Type::getInt32Ty (c);
 	FunctionType *shape;
 
-	if (name == enum_hasflag_name || name == enum_equals_name)
+	if (name == enum_hasflag_name || name == enum_equals_name || name == type_enum_defined_name)
 		shape = FunctionType::get (i8, { ptr, ptr, ptr }, false);
 	else if (name == enum_compare_name)
 		shape = FunctionType::get (i32, { ptr, ptr, ptr }, false);

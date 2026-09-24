@@ -595,6 +595,7 @@ const BuiltinMethod enum_methods[] = {
 	{ "InternalGetUnderlyingType", 1, Receiver::none,
 	  BuiltinEmitters::enum_builtin<type_enum_underlying_name> },
 	{ "InternalBoxEnum", 2, Receiver::none, BuiltinEmitters::enum_builtin<type_enum_box_name> },
+	{ "IsDefined", 2, Receiver::none, BuiltinEmitters::enum_builtin<type_enum_defined_name> },
 };
 
 // Enum.Equals () forwards here. Any other value type's site stays the call.
