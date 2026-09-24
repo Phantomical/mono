@@ -43,7 +43,8 @@ static class Program {
 	static object[] slots = new string[4];
 
 	/* What the last ArrayTypeMismatchException's trace said. */
-	static int frames, inner_offset, root_offset;
+	static int frames;
+	static long inner_at, root_at;
 	static bool caught;
 
 	static void Record (Exception e)
@@ -51,10 +52,10 @@ static class Program {
 		StackTrace st = new StackTrace (e, false);
 
 		frames = st.FrameCount;
-		inner_offset = root_offset = -1;
+		inner_at = root_at = -1;
 
 		if (frames > 0)
-			inner_offset = st.GetFrame (0).GetNativeOffset ();
+			inner_at = CodeAddress (st.GetFrame (0));
 
 		for (int i = 0; i < frames; i++) {
 			StackFrame f = st.GetFrame (i);
@@ -62,8 +63,18 @@ static class Program {
 
 			if (m != null && m.DeclaringType != null
 			    && m.DeclaringType.Name == "Program" && m.Name == "Root")
-				root_offset = f.GetNativeOffset ();
+				root_at = CodeAddress (f);
 		}
+	}
+
+	static readonly MethodInfo method_address =
+		typeof (StackFrame).GetMethod ("GetMethodAddress", BindingFlags.NonPublic | BindingFlags.Instance);
+
+	/// Where a frame is executing. A native offset alone is relative to its
+	/// own body, so frames in two bodies can share one.
+	static long CodeAddress (StackFrame f)
+	{
+		return (long) method_address.Invoke (f, null) + f.GetNativeOffset ();
 	}
 
 	static int Root (int n, object v)
@@ -111,7 +122,7 @@ static class Program {
 
 		Check (caught, "the store that does not fit raises at tier 1");
 		Check (frames >= 2, "and the wrapper has a frame of its own");
-		Check (inner_offset >= 0 && root_offset >= 0 && inner_offset != root_offset,
+		Check (inner_at >= 0 && root_at >= 0 && inner_at != root_at,
 			"and that frame reports an offset into the wrapper's own code");
 
 		int tier1_frames = frames;
@@ -134,10 +145,10 @@ static class Program {
 		Check (frames == tier1_frames, "the wrapper still has a frame at tier 2");
 
 		if (inlines)
-			Check (inner_offset >= 0 && inner_offset == root_offset,
+			Check (inner_at >= 0 && inner_at == root_at,
 				"and the inlined wrapper reports Root ()'s offset");
 		else
-			Check (inner_offset >= 0 && inner_offset != root_offset,
+			Check (inner_at >= 0 && inner_at != root_at,
 				"and a wrapper the model refused reports its own");
 
 		Console.WriteLine (fails == 0 ? "OK" : "FAILED");

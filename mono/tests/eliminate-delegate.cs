@@ -246,7 +246,7 @@ class DelegateEliminate {
 	static bool InlinedInto (Exception e, string bang, string root)
 	{
 		StackTrace trace = new StackTrace (e, false);
-		int in_bang = -1, in_root = -2;
+		long in_bang = -1, in_root = -2;
 
 		foreach (StackFrame frame in trace.GetFrames ()) {
 			MethodBase m = frame.GetMethod ();
@@ -254,12 +254,22 @@ class DelegateEliminate {
 			if (m == null || m.DeclaringType != typeof (DelegateEliminate))
 				continue;
 			if (m.Name == bang)
-				in_bang = frame.GetNativeOffset ();
+				in_bang = CodeAddress (frame);
 			if (m.Name == root)
-				in_root = frame.GetNativeOffset ();
+				in_root = CodeAddress (frame);
 		}
 
 		return in_bang >= 0 && in_bang == in_root;
+	}
+
+	static readonly MethodInfo method_address =
+		typeof (StackFrame).GetMethod ("GetMethodAddress", BindingFlags.NonPublic | BindingFlags.Instance);
+
+	/// Where a frame is executing. A native offset alone is relative to its
+	/// own body, so frames in two bodies can share one.
+	static long CodeAddress (StackFrame f)
+	{
+		return (long) method_address.Invoke (f, null) + f.GetNativeOffset ();
 	}
 
 	static bool Threw (Func<int, int> run, string root)

@@ -67,7 +67,7 @@ static class ProfileContext {
 	static bool RunsInsideRoot (Exception e, string helper)
 	{
 		StackTrace st = new StackTrace (e, false);
-		int in_helper = -1, in_root = -2;
+		long in_helper = -1, in_root = -2;
 
 		for (int i = 0; i < st.FrameCount; i++) {
 			StackFrame f = st.GetFrame (i);
@@ -76,12 +76,22 @@ static class ProfileContext {
 			if (m == null)
 				continue;
 			if (m.DeclaringType.Name == "ProfileContext" && m.Name == helper)
-				in_helper = f.GetNativeOffset ();
+				in_helper = CodeAddress (f);
 			if (m.DeclaringType.Name == "ProfileContext" && m.Name == "ThrowHelperLoop")
-				in_root = f.GetNativeOffset ();
+				in_root = CodeAddress (f);
 		}
 
 		return in_helper >= 0 && in_helper == in_root;
+	}
+
+	static readonly MethodInfo method_address =
+		typeof (StackFrame).GetMethod ("GetMethodAddress", BindingFlags.NonPublic | BindingFlags.Instance);
+
+	/// Where a frame is executing. A native offset alone is relative to its
+	/// own body, so frames in two bodies can share one.
+	static long CodeAddress (StackFrame f)
+	{
+		return (long) method_address.Invoke (f, null) + f.GetNativeOffset ();
 	}
 
 	static int fails;
