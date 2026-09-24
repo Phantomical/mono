@@ -15,6 +15,7 @@ void sgen_restart_world (int generation, gboolean serial_collection);
 void sgen_gc_lock (void);
 void sgen_gc_unlock (void);
 gboolean sgen_is_world_stopped (void);
+void sgen_finish_concurrent_work (const char *reason, gboolean stw);
 #elif defined(HAVE_BOEHM_GC)
 /* GC_stop_world_external/GC_start_world_external come from mono/utils/gc_wrapper.h's <gc.h> */
 #else
@@ -905,6 +906,9 @@ void mono_unity_liveness_stop_gc_world (void)
 	 * mono_gc_stop_world()/mono_gc_restart_world() keep in sgen-mono.c. */
 	sgen_gc_lock ();
 	sgen_stop_world (0, FALSE);
+	/* A stopped world leaves the concurrent mark and sweep workers running,
+	 * and they read the vtable word the walk marks. */
+	sgen_finish_concurrent_work ("unity liveness", FALSE);
 #elif defined(HAVE_BOEHM_GC)
 	GC_stop_world_external ();
 #else

@@ -949,6 +949,7 @@ void sgen_stop_world (int generation, gboolean serial_collection)
 void sgen_restart_world (int generation, gboolean serial_collection)
 	MONO_PERMIT (need (sgen_gc_locked), use (sgen_world_stopped), revoke (sgen_world_stopped), grant (sgen_stop_world));
 gboolean sgen_is_world_stopped (void);
+void sgen_finish_concurrent_work (const char *reason, gboolean stw);
 
 gboolean sgen_set_allow_synchronous_major (gboolean flag);
 

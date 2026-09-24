@@ -843,7 +843,7 @@ clear_domain_free_los_object_callback (GCObject *obj, size_t size, MonoDomain *d
 	return need_remove_object_for_domain (obj, domain);
 }
 
-static void
+void
 sgen_finish_concurrent_work (const char *reason, gboolean stw)
 {
 	if (sgen_get_concurrent_collection_in_progress ())
