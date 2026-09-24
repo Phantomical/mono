@@ -153,7 +153,7 @@ MethodLLVMEmitter::open_sharing (MonoIrBuilder &builder)
 	 */
 	llvm::Value *self = builder.CreateAlignedLoad (ptr, args[0].alloca, align);
 
-	rgctx = load_vtable (builder, self);
+	rgctx = load_vtable (builder, self, m_class_get_byval_arg (method->klass));
 	pin_context_slot (builder, args[0].alloca);
 }
 

@@ -229,7 +229,7 @@ MethodLLVMEmitter::emit_array_type_check (MonoIrBuilder &builder, llvm::Value *a
 {
 	emit_null_check (builder, array, /*object_reference=*/true);
 
-	llvm::Value *vtable = load_vtable (builder, array);
+	llvm::Value *vtable = load_vtable (builder, array, m_class_get_byval_arg (array_class));
 	llvm::Expected<llvm::Value *> wanted =
 		class_operand (builder, array_class, "mono_vtable_");
 
@@ -560,7 +560,8 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 	} else {
 		emit_null_check (builder, array.value, /*object_reference=*/true);
 
-		llvm::Value *array_vtable = load_vtable (builder, array.value, "array_vtable");
+		llvm::Value *array_vtable =
+			load_vtable (builder, array.value, array.type, "array_vtable");
 		llvm::Value *array_class = builder.CreateCall (vtable_klass_decl (*module),
 		                                               { array_vtable }, "array_class");
 
@@ -577,7 +578,7 @@ MethodLLVMEmitter::emit_stelem_ref_check (MonoIrBuilder &builder, const StackVal
 		trace_stelem_check (method, "tests the array's element class");
 	}
 
-	llvm::Value *value_vtable = load_vtable (builder, stored, "value_vtable");
+	llvm::Value *value_vtable = load_vtable (builder, stored, value.type, "value_vtable");
 	llvm::Value *value_class = builder.CreateCall (vtable_klass_decl (*module),
 	                                               { value_vtable }, "value_class");
 
@@ -1412,7 +1413,8 @@ MethodLLVMEmitter::emit_array_rank (MonoIrBuilder &builder)
 	emit_null_check (builder, array.value, /*object_reference=*/true);
 
 	llvm::Value *rank = builder.CreateCall (
-		vtable_rank_decl (*module), { load_vtable (builder, array.value) }, "rank");
+		vtable_rank_decl (*module), { load_vtable (builder, array.value, array.type) },
+		"rank");
 
 	pop_stack (1);
 	push_stack (builder.CreateZExt (rank, builder.getInt32Ty ()), mono_get_int32_type ());
