@@ -134,12 +134,12 @@ bool rgctx_cast_depth ();
 /// same IR either way, so the two arms differ in one pass.
 bool eliminate_delegates ();
 
-/// Whether the Enum.HasFlag () elimination is on.
+/// Whether the System.Enum eliminations are on.
 ///
-/// A false value leaves every HasFlag () site calling the method itself, which
-/// is the answer an elimination has to agree with. The translator writes the
-/// same IR either way, so the two arms differ in one pass.
-bool eliminate_enum_has_flag_option ();
+/// A false value leaves every site calling the method itself, which is the
+/// answer an elimination has to agree with. The translator writes the same IR
+/// either way, so the two arms differ in one pass.
+bool eliminate_enums ();
 
 /// Whether the backend writes a SIMD type's operations as vector IR instead of
 /// translating the managed body they are declared with.

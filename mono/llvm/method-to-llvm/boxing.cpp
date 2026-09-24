@@ -115,14 +115,10 @@ MethodLLVMEmitter::store_object_vtable (MonoIrBuilder &builder, llvm::Value *obj
 	                     llvm::MDNode::get (header->getContext (), {}));
 }
 
-llvm::Expected<llvm::Value *>
-MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, bool for_box)
+/// How an instance of \p klass is allocated, all but the vtable operand.
+llvm::Expected<ObjectAlloc>
+MethodLLVMEmitter::object_allocator (MonoClass *klass, bool for_box)
 {
-	llvm::Expected<llvm::Value *> vtable = class_operand (builder, klass, "mono_vtable_");
-
-	if (!vtable)
-		return vtable.takeError ();
-
 	int32_t size = mono_class_instance_size (klass);
 	MonoMethod *allocator = nullptr;
 	llvm::Function *serves = nullptr;
@@ -197,14 +193,34 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 		serves = *chosen;
 	}
 
+	ObjectAlloc made;
+	made.size = size;
+	made.allocator = serves;
+	made.erasable = !allocation_is_observable (klass);
+	made.raises = allocator != nullptr;
+	return made;
+}
+
+llvm::Expected<llvm::Value *>
+MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, bool for_box)
+{
+	llvm::Expected<llvm::Value *> vtable = class_operand (builder, klass, "mono_vtable_");
+
+	if (!vtable)
+		return vtable.takeError ();
+
+	llvm::Expected<ObjectAlloc> alloc = object_allocator (klass, for_box);
+
+	if (!alloc)
+		return alloc.takeError ();
+
 	llvm::Value *object = emit_protected_call (
-		builder,
-		alloc_func_decl (*module, AllocShape::object, !allocation_is_observable (klass)),
-		{*vtable, builder.getIntN (TARGET_SIZEOF_VOID_P * 8, size), serves});
+		builder, alloc_func_decl (*module, AllocShape::object, alloc->erasable),
+		{*vtable, builder.getIntN (TARGET_SIZEOF_VOID_P * 8, alloc->size), alloc->allocator});
 
 	// Only the fast path raises rather than answering null, so only its site
 	// says the answer is not null.
-	if (allocator != nullptr)
+	if (alloc->raises)
 		if (auto *site = llvm::dyn_cast<llvm::CallBase> (object))
 			site->addRetAttr (llvm::Attribute::NonNull);
 

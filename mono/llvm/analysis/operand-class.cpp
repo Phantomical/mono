@@ -10,6 +10,7 @@
 #include "passes/alloc-func.hpp"
 #include "strip-casts.hpp"
 #include "constant-values.hpp"
+#include "type-info.hpp"
 
 #include "mono/metadata/class.h"
 #include "mono/metadata/class-internals.h"
@@ -289,6 +290,13 @@ leaf_operand_class (const Value *v, const Function &f)
 		return { nullptr, true };
 	}
 
+	if (const auto *global = dyn_cast<GlobalObject> (v)) {
+		if (std::optional<TypeInfo> info = type_info (*global))
+			return { info->object_class, true };
+
+		return { nullptr, false };
+	}
+
 	const auto *arg = dyn_cast<Argument> (v);
 
 	if (arg == nullptr || arg->getParent () != &f)
@@ -344,6 +352,10 @@ enum class ClassRule {
 std::pair<MonoClass *, bool>
 class_of (Value *v, const Function &f, ClassRule rule, const ConstantValues &values)
 {
+	// A global is its own only source, and values tracks none.
+	if (isa<GlobalObject> (v))
+		return leaf_operand_class (v, f);
+
 	const ValueSources &from = values.sources (v);
 	std::pair<MonoClass *, bool> agreed { nullptr, false };
 	bool constrained = false;

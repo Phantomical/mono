@@ -11,7 +11,7 @@
  * states only a bound: the class its slot is declared with. A delegate either
  * of the first two produced also states the method it calls.
  *
- * Three channels carry them, and a reader here takes any of them. What the
+ * Four channels carry them, and a reader here takes any of them. What the
  * translator writes down is a host pointer in metadata, the way a marked
  * declaration carries one in an attribute (`method-symbols.hpp`). So it names
  * no symbol and costs the link nothing.
@@ -28,6 +28,9 @@
  * moves into a protected region and LLVM rewrites the call into an invoke
  * (`operand-class.cpp` says where). The operand is not metadata, so it
  * survives that rewrite and every other one.
+ *
+ * A System.Type constant states the class of the object it is through the
+ * mark analysis/type-info.hpp puts on its symbol.
  *
  * Either way a reader has to be inside the compile: a metadata pointer means
  * nothing to a later process reading a dumped module, and the field is read

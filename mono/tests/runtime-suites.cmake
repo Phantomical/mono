@@ -692,6 +692,15 @@ mono_runtime_suite(runtime-eliminate-delegate-off TESTS ${_eliminate_delegate}
                    ENV "MONO_ELIMINATE_DELEGATES=off"
                        "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-eliminate-delegates=0")
 
+# System.Enum's operations computed inline, and the off arm that calls the
+# methods. The root drives its own compiles, as runtime-eliminate-delegate's
+# does.
+_mono_exe_list(_eliminate_enum ${MONO_TESTS_ELIMINATE_ENUM_SRC})
+mono_runtime_suite(runtime-eliminate-enum TESTS ${_eliminate_enum}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0")
+mono_runtime_suite(runtime-eliminate-enum-off TESTS ${_eliminate_enum}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-eliminate-enums=0")
+
 # An object address folded into compiled code out of a readonly static, against a
 # collector that then moves the object. SGen only: nothing moves under Boehm, so
 # that arm would pass whatever the fold wrote down. Both thresholds are zero, so

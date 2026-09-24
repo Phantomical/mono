@@ -1,12 +1,12 @@
 /**
  * \file
- * \brief Compiling Enum.HasFlag () as a symbolic call the pipeline settles or
- * lowers back to the method itself.
+ * \brief Compiling a System.Enum operation as a symbolic call the pipeline
+ * settles or lowers back to the method itself.
  */
 
 #include "method-to-llvm.hpp"
 
-#include "passes/enum-flag.hpp"
+#include "passes/enum.hpp"
 
 #include <llvm/IR/Function.h>
 #include <llvm/IR/Value.h>
@@ -14,10 +14,11 @@
 namespace mono {
 
 llvm::Error
-MethodLLVMEmitter::emit_enum_has_flag (MonoIrBuilder &builder, MonoMethod *callee_method,
-                                       MonoMethodSignature *sig)
+MethodLLVMEmitter::emit_enum_builtin (MonoIrBuilder &builder, llvm::StringRef name,
+                                      MonoMethod *callee_method, MonoMethodSignature *sig)
 {
-	llvm::Expected<llvm::Function *> fallback = create_method_decl (callee_method);
+	llvm::Expected<llvm::Function *> fallback =
+		create_method_decl (icall_wrapper_target (callee_method));
 
 	if (!fallback)
 		return fallback.takeError ();
@@ -27,13 +28,12 @@ MethodLLVMEmitter::emit_enum_has_flag (MonoIrBuilder &builder, MonoMethod *calle
 	if (!args)
 		return args.takeError ();
 
-	llvm::Value *call_args[] = { (*args)[0], (*args)[1], *fallback };
+	args->push_back (*fallback);
 	llvm::Value *result =
-		emit_protected_call (builder, enum_hasflag_decl (*module), call_args);
+		emit_protected_call (builder, enum_builtin_decl (*module, name), *args);
 
 	pop_stack (sig->param_count + sig->hasthis);
-	return push_produced (builder, builder.CreateZExt (result, builder.getInt8Ty ()),
-	                      sig->ret);
+	return push_produced (builder, result, sig->ret);
 }
 
 } // namespace mono

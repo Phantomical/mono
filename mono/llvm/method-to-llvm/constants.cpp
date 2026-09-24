@@ -307,7 +307,67 @@ MethodLLVMEmitter::typeof_symbol (MonoType *type)
 	std::string symbol = identity_symbol (std::string ("mono_typeof_") + name, object);
 
 	g_free (name);
-	return address_symbol (symbol, object);
+
+	llvm::Constant *named = address_symbol (symbol, object);
+	auto *global = llvm::cast<llvm::GlobalObject> (named);
+
+	if (!global->hasMetadata (type_info_metadata)) {
+		// Marked before type_info_for () runs, because naming an enum's
+		// vtable asks for its System.Type again.
+		TypeInfo named_only { type, mono_object_class (object) };
+
+		mark_type_info (*global, named_only);
+		mark_type_info (*global, type_info_for (named_only));
+	}
+
+	return named;
+}
+
+/// What \p named's type settles for the mark typeof_symbol () puts on its
+/// symbol, \p named being the fields that do not name another symbol.
+TypeInfo
+MethodLLVMEmitter::type_info_for (const TypeInfo &named)
+{
+	TypeInfo info = named;
+	MonoType *type = info.type;
+	MonoClass *klass = mono_class_from_mono_type_internal (type);
+
+	if (type->byref || !m_class_is_enumtype (klass) || depends_on_context (klass))
+		return info;
+
+	MonoType *underlying = mono_class_enum_basetype_internal (klass);
+
+	if (underlying == nullptr)
+		return info;
+
+	llvm::Expected<llvm::Constant *> underlying_object = typeof_symbol (underlying);
+	llvm::Expected<llvm::Constant *> base_object =
+		typeof_symbol (m_class_get_byval_arg (mono_defaults.enum_class));
+
+	if (!underlying_object || !base_object) {
+		llvm::consumeError (underlying_object.takeError ());
+		llvm::consumeError (base_object.takeError ());
+		return info;
+	}
+
+	info.underlying = *underlying_object;
+	info.base = *base_object;
+
+	llvm::Constant *vtable = vtable_for (klass);
+
+	if (vtable == nullptr)
+		return info;
+
+	llvm::Expected<ObjectAlloc> box = object_allocator (klass, true);
+
+	if (!box) {
+		llvm::consumeError (box.takeError ());
+		return info;
+	}
+
+	info.box = *box;
+	info.box.vtable = vtable;
+	return info;
 }
 
 /// Eliminates `ldtoken` and the `Type::GetTypeFromHandle` call behind it into

@@ -3,9 +3,10 @@
 #include "alloc-func.hpp"
 #include "analysis/builtins.hpp"
 #include "analysis/constant-values.hpp"
-#include "analysis/enum-flag.hpp"
+#include "analysis/enum.hpp"
 #include "analysis/operand-class.hpp"
 #include "analysis/strip-casts.hpp"
+#include "analysis/type-info.hpp"
 #include "analysis/vtable-info.hpp"
 #include "array-address.hpp"
 #include "array-shape.hpp"
@@ -13,7 +14,7 @@
 #include "compile-state.hpp"
 #include "devirtualize.hpp"
 #include "direct-call.hpp"
-#include "enum-flag.hpp"
+#include "enum.hpp"
 #include "gc-barrier.hpp"
 #include "hidden-return.hpp"
 #include "lower-builtins.hpp"
@@ -22,6 +23,7 @@
 #include "runtime/options.hpp"
 #include "vtable-func.hpp"
 
+#include "mono/llvm/internal-loads.hpp"
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/class.h"
@@ -161,6 +163,11 @@ CastAnswer
 answer_for (Value *v, MonoClass *target, const Function &f,
             const ConstantValues &values)
 {
+	if (isa<GlobalObject> (v)) {
+		std::pair<MonoClass *, bool> held = stated_class (v, f);
+		return cast_answer (target, held.first, held.second);
+	}
+
 	const ValueSources &from_v = values.sources (v);
 	CastAnswer agreed = CastAnswer::Unknown;
 	bool constrained = false;
@@ -267,46 +274,366 @@ eliminate_type_tests (Function &f, FunctionAnalysisManager &fam)
 	return eliminate_sites (f, cast_castclass_name, true, fam) || changed;
 }
 
-bool
-eliminate_enum_has_flag (Function &f, FunctionAnalysisManager &fam)
+namespace {
+
+/// The value inside \p boxed, a boxed enum held as \p scalar.
+Value *
+load_enum_value (IRBuilder<> &b, Value *boxed, EnumScalar scalar)
 {
-	if (current_compile ().domain == nullptr || !eliminate_enum_has_flag_option ())
+	Value *payload = b.CreateGEP (b.getInt8Ty (), boxed,
+	                              b.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
+
+	return b.CreateAlignedLoad (b.getIntNTy (scalar.bits), payload, Align (scalar.bits / 8));
+}
+
+/// Whether `ves_icall_System_Enum_get_hashcode ()` hashes a \p klass value.
+bool
+enum_hashes (MonoClass *klass)
+{
+	return mono_class_enum_basetype_internal (klass)->type != MONO_TYPE_BOOLEAN;
+}
+
+/// What `ves_icall_System_Enum_get_hashcode ()` returns for \p value, a
+/// \p klass value.
+Value *
+enum_hash (IRBuilder<> &b, MonoClass *klass, Value *value)
+{
+	Type *i32 = b.getInt32Ty ();
+
+	switch (mono_class_enum_basetype_internal (klass)->type) {
+	case MONO_TYPE_I1: {
+		Value *wide = b.CreateSExt (value, i32);
+		return b.CreateXor (wide, b.CreateShl (wide, 8));
+	}
+	case MONO_TYPE_I2:
+		return b.CreateOr (b.CreateZExt (value, i32),
+		                   b.CreateShl (b.CreateSExt (value, i32), 16));
+	case MONO_TYPE_U1:
+	case MONO_TYPE_U2:
+	case MONO_TYPE_CHAR:
+		return b.CreateZExt (value, i32);
+	case MONO_TYPE_I4:
+	case MONO_TYPE_U4:
+		return value;
+	case MONO_TYPE_I8:
+	case MONO_TYPE_U8:
+	case MONO_TYPE_I:
+	case MONO_TYPE_U:
+		return b.CreateXor (b.CreateTrunc (value, i32),
+		                    b.CreateTrunc (b.CreateLShr (value, 32), i32));
+	default:
+		llvm_unreachable ("an underlying type enum_hashes () refuses");
+	}
+}
+
+/// -1, 0 or 1 as \p mine is below, equal to or above \p other.
+Value *
+enum_compare (IRBuilder<> &b, Value *mine, Value *other, EnumScalar scalar)
+{
+	Value *above = scalar.is_signed ? b.CreateICmpSGT (mine, other)
+	                                : b.CreateICmpUGT (mine, other);
+	Value *ordered = b.CreateSelect (above, b.getInt32 (1), b.getInt32 (-1));
+
+	return b.CreateSelect (b.CreateICmpEQ (mine, other), b.getInt32 (0), ordered);
+}
+
+/*
+ * ValueType.DefaultEquals (this, other) where only this is settled: other is
+ * null, or another class, or the same class holding the same value.
+ *
+ *   head:   br (other == null), done, check
+ *   check:  br (other->vtable == this->vtable), same, done
+ *   same:   br done
+ *   done:   phi [0, head], [0, check], [value == value, same]
+ */
+Value *
+equals_unsettled (CallBase *site, Value *mine, Value *other, EnumScalar scalar)
+{
+	LLVMContext &c = site->getContext ();
+	Type *ptr = PointerType::get (c, 0);
+	Align word (TARGET_SIZEOF_VOID_P);
+	BasicBlock *head = site->getParent ();
+	BasicBlock *done = head->splitBasicBlock (site->getIterator (), "enum.equals.done");
+	Function *f = head->getParent ();
+	auto *check = BasicBlock::Create (c, "enum.equals.check", f, done);
+	auto *same = BasicBlock::Create (c, "enum.equals.same", f, done);
+
+	head->getTerminator ()->eraseFromParent ();
+	IRBuilder<> b (head);
+	b.CreateCondBr (b.CreateIsNull (other), done, check);
+
+	b.SetInsertPoint (check);
+	Value *other_vtable = mark_object_vtable_read (b.CreateAlignedLoad (ptr, other, word));
+	Value *mine_vtable = mark_object_vtable_read (b.CreateAlignedLoad (ptr, mine, word));
+	b.CreateCondBr (b.CreateICmpEQ (other_vtable, mine_vtable), same, done);
+
+	b.SetInsertPoint (same);
+	Value *equal = b.CreateZExt (b.CreateICmpEQ (load_enum_value (b, mine, scalar),
+	                                             load_enum_value (b, other, scalar)),
+	                             b.getInt8Ty ());
+	b.CreateBr (done);
+
+	b.SetInsertPoint (site);
+	PHINode *answer = b.CreatePHI (b.getInt8Ty (), 3);
+	answer->addIncoming (b.getInt8 (0), head);
+	answer->addIncoming (b.getInt8 (0), check);
+	answer->addIncoming (equal, same);
+	return answer;
+}
+
+/// What the IR settles about one enum site's operands.
+struct EnumSite {
+	CallBase *site;
+	MonoClass *klass;
+	EnumScalar scalar;
+	/// The class of the second operand, or null where it is unsettled or the
+	/// site has no second operand.
+	MonoClass *other;
+};
+
+/// What \p site's operands settle, or nothing where they settle too little to
+/// answer it.
+std::optional<EnumSite>
+settle_enum_site (CallBase *site, const Function &f, const ConstantValues &values)
+{
+	MonoClass *klass = enum_class_of (site->getArgOperand (0), f, values);
+
+	if (klass == nullptr)
+		return std::nullopt;
+
+	StringRef name = site->getCalledFunction ()->getName ();
+
+	// The element type needs the class alone, not a value it can read.
+	if (name == enum_elementtype_name)
+		return EnumSite { site, klass, {}, nullptr };
+
+	std::optional<EnumScalar> scalar = enum_scalar (klass);
+
+	if (!scalar)
+		return std::nullopt;
+
+	EnumSite settled { site, klass, *scalar, nullptr };
+
+	if (name == enum_hashcode_name)
+		return enum_hashes (klass) ? std::optional (settled) : std::nullopt;
+
+	std::pair<MonoClass *, bool> held = operand_class (site->getArgOperand (1), f, values);
+
+	if (held.second)
+		settled.other = held.first;
+
+	// CompareTo () raises on another class and InternalCompareTo () returns a
+	// code for it, so only equals answers anything but this class.
+	if (name != enum_equals_name && settled.other != klass)
+		return std::nullopt;
+
+	return settled;
+}
+
+/// The value \p at's site stands for, written in front of it.
+Value *
+enum_site_value (const EnumSite &at)
+{
+	CallBase *site = at.site;
+	StringRef name = site->getCalledFunction ()->getName ();
+	Value *mine = site->getArgOperand (0);
+
+	if (name == enum_equals_name && at.other == nullptr)
+		return equals_unsettled (site, mine, site->getArgOperand (1), at.scalar);
+
+	IRBuilder<> b (site);
+
+	if (name == enum_elementtype_name)
+		return b.getInt8 (mono_class_enum_basetype_internal (at.klass)->type);
+
+	if (name == enum_hashcode_name)
+		return enum_hash (b, at.klass, load_enum_value (b, mine, at.scalar));
+
+	if (name == enum_equals_name && at.other != at.klass)
+		return b.getInt8 (0);
+
+	Value *held = load_enum_value (b, mine, at.scalar);
+	Value *asked = load_enum_value (b, site->getArgOperand (1), at.scalar);
+
+	if (name == enum_equals_name)
+		return b.CreateZExt (b.CreateICmpEQ (held, asked), b.getInt8Ty ());
+
+	if (name == enum_hasflag_name)
+		return b.CreateZExt (b.CreateICmpEQ (b.CreateAnd (held, asked), asked), b.getInt8Ty ());
+
+	return enum_compare (b, held, asked, at.scalar);
+}
+
+} // namespace
+
+bool
+eliminate_enum_builtins (Function &f, FunctionAnalysisManager &fam)
+{
+	if (current_compile ().domain == nullptr || !eliminate_enums ())
 		return false;
 
-	SmallVector<CallBase *, 8> sites = builtin_sites (f, enum_hasflag_name);
+	SmallVector<CallBase *, 8> sites;
+
+	for (StringRef name : { enum_hasflag_name, enum_hashcode_name, enum_compare_name,
+	                        enum_equals_name, enum_elementtype_name })
+		sites.append (builtin_sites (f, name));
 
 	if (sites.empty ())
 		return false;
 
+	// Every site is settled before any is written, because equals_unsettled ()
+	// splits blocks under the analysis.
 	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
-	bool changed = false;
+	SmallVector<EnumSite, 8> settled;
+
+	for (CallBase *site : sites)
+		if (std::optional<EnumSite> at = settle_enum_site (site, f, values))
+			settled.push_back (*at);
+
+	for (const EnumSite &at : settled)
+		answer_with (at.site, enum_site_value (at));
+
+	return !settled.empty ();
+}
+
+namespace {
+
+/// A call of \p callee with \p args, written in front of \p site and raising
+/// wherever \p site raises.
+CallBase *
+call_in_place_of (CallBase *site, Function *callee, ArrayRef<Value *> args)
+{
+	CallBase *made;
+
+	if (auto *invoke = dyn_cast<InvokeInst> (site)) {
+		BasicBlock *head = site->getParent ();
+		BasicBlock *tail = head->splitBasicBlock (site->getIterator ());
+		BasicBlock *unwind = invoke->getUnwindDest ();
+
+		head->getTerminator ()->eraseFromParent ();
+		made = InvokeInst::Create (callee, tail, unwind, args, "", head);
+
+		for (PHINode &phi : unwind->phis ())
+			phi.addIncoming (phi.getIncomingValueForBlock (tail), head);
+	} else {
+		made = CallInst::Create (callee, args, "", site->getIterator ());
+	}
+
+	made->setDebugLoc (site->getDebugLoc ());
+	return made;
+}
+
+/// The boxed \p klass holding \p value, written in front of \p site the way
+/// `emit_object_alloc ()` writes a box.
+Value *
+box_enum (CallBase *site, MonoClass *klass, const ObjectAlloc &alloc, Value *value,
+          EnumScalar scalar)
+{
+	Module &m = *site->getModule ();
+	Type *word = Type::getIntNTy (m.getContext (), TARGET_SIZEOF_VOID_P * 8);
+	CallBase *object = call_in_place_of (
+		site, alloc_func_decl (m, AllocShape::object, alloc.erasable),
+		{ alloc.vtable, ConstantInt::get (word, alloc.size), alloc.allocator });
+
+	if (alloc.raises)
+		object->addRetAttr (Attribute::NonNull);
+
+	IRBuilder<> b (site);
+	StoreInst *header = mark_internal_store (
+		b.CreateAlignedStore (alloc.vtable,
+		                      b.CreateGEP (b.getInt8Ty (), object,
+		                                   b.getInt32 (MONO_STRUCT_OFFSET (MonoObject, vtable))),
+		                      Align (TARGET_SIZEOF_VOID_P)),
+		object_header_tbaa_leaf);
+
+	header->setMetadata (LLVMContext::MD_invariant_group, MDNode::get (m.getContext (), {}));
+	mark_exact_class (*object, klass);
+
+	b.CreateAlignedStore (b.CreateTrunc (value, b.getIntNTy (scalar.bits)),
+	                      b.CreateGEP (b.getInt8Ty (), object,
+	                                   b.getInt32 (MONO_ABI_SIZEOF (MonoObject))),
+	                      Align (scalar.bits / 8));
+	return object;
+}
+
+/// What a System.Type site's constant operand settles.
+struct TypeSite {
+	CallBase *site;
+	TypeInfo info;
+};
+
+/// The value \p at's site stands for, written in front of it, or null where
+/// the mark does not settle it.
+Value *
+type_site_value (const TypeSite &at)
+{
+	CallBase *site = at.site;
+	StringRef name = site->getCalledFunction ()->getName ();
+	MonoType *type = at.info.type;
+
+	if (name == type_is_generic_var_name) {
+		bool variable = !type->byref
+		                && (type->type == MONO_TYPE_VAR || type->type == MONO_TYPE_MVAR);
+		return ConstantInt::get (Type::getInt8Ty (site->getContext ()), variable);
+	}
+
+	if (name == type_attributes_name)
+		return ConstantInt::get (Type::getInt32Ty (site->getContext ()),
+		                         mono_class_get_flags (mono_class_from_mono_type_internal (type)));
+
+	if (name == type_enum_underlying_name)
+		return at.info.underlying;
+
+	if (name == type_base_name)
+		return at.info.base;
+
+	MonoClass *klass = mono_class_from_mono_type_internal (type);
+	std::optional<EnumScalar> scalar = enum_scalar (klass);
+
+	if (at.info.box.vtable == nullptr || !scalar)
+		return nullptr;
+
+	return box_enum (site, klass, at.info.box, site->getArgOperand (1), *scalar);
+}
+
+} // namespace
+
+bool
+eliminate_type_builtins (Function &f, FunctionAnalysisManager &fam)
+{
+	if (current_compile ().domain == nullptr || !eliminate_enums ())
+		return false;
+
+	SmallVector<CallBase *, 8> sites;
+
+	for (StringRef name : { type_enum_underlying_name, type_enum_box_name, type_base_name,
+	                        type_is_generic_var_name, type_attributes_name })
+		sites.append (builtin_sites (f, name));
+
+	if (sites.empty ())
+		return false;
+
+	// Settled before any is written, because box_enum () can split blocks.
+	const ConstantValues &values = fam.getResult<MonoConstantValues> (f);
+	SmallVector<TypeSite, 8> settled;
 
 	for (CallBase *site : sites) {
-		MonoClass *klass = enum_has_flag_class (site->getArgOperand (0),
-		                                        site->getArgOperand (1), f, values);
+		auto *global = dyn_cast_or_null<GlobalObject> (values.global (site->getArgOperand (0)));
 
-		if (klass == nullptr)
+		if (global == nullptr)
 			continue;
 
-		uint32_t align;
-		int width = mono_class_value_size (klass, &align);
-		IRBuilder<> b (site);
-		Type *scalar = b.getIntNTy ((unsigned) width * 8);
-		Align load_align ((unsigned) width);
+		if (std::optional<TypeInfo> info = type_info (*global))
+			settled.push_back ({ site, *info });
+	}
 
-		auto payload = [&] (Value *boxed) {
-			return b.CreateGEP (b.getInt8Ty (), boxed,
-			                    b.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
-		};
+	bool changed = false;
 
-		Value *held = b.CreateAlignedLoad (scalar, payload (site->getArgOperand (0)),
-		                                   load_align);
-		Value *asked = b.CreateAlignedLoad (scalar, payload (site->getArgOperand (1)),
-		                                    load_align);
-		Value *equal = b.CreateICmpEQ (b.CreateAnd (held, asked), asked);
-
-		answer_with (site, b.CreateZExt (equal, b.getInt8Ty ()));
-		changed = true;
+	for (const TypeSite &at : settled) {
+		if (Value *value = type_site_value (at)) {
+			answer_with (at.site, value);
+			changed = true;
+		}
 	}
 
 	return changed;
@@ -1127,7 +1454,8 @@ MonoBuiltinConstProp::run (Function &f, FunctionAnalysisManager &fam)
 		// chain's receiver comes from.
 		bool again = eliminate_type_tests (f, fam);
 
-		again |= eliminate_enum_has_flag (f, fam);
+		again |= eliminate_enum_builtins (f, fam);
+		again |= eliminate_type_builtins (f, fam);
 		again |= eliminate_object_vtables (f, fam);
 		again |= eliminate_vtable_fields (f, fam);
 		again |= eliminate_element_class_reads (f, fam);
@@ -1171,7 +1499,7 @@ MonoBuiltinLower::run (Module &m, ModuleAnalysisManager &)
 	case LowerStage::post_inline:
 		changed = lower_vtable_reads (m);
 		changed |= lower_type_tests (m);
-		changed |= lower_enum_has_flag (m);
+		changed |= lower_enum_builtins (m);
 		break;
 
 	case LowerStage::post_optimization:

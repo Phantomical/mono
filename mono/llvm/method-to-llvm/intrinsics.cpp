@@ -9,6 +9,7 @@
 #include "hidden-return.hpp"
 #include "mini-runtime.h"
 
+#include "../passes/enum.hpp"
 #include "../runtime/options.hpp"
 #include "../util/never-destroyed.hpp"
 
@@ -211,10 +212,11 @@ struct BuiltinEmitters {
 		return emitter.emit_assume (builder, call.sig);
 	}
 
-	static BuiltinResult enum_has_flag (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
-	                                    const BuiltinCall &call)
+	template <const llvm::StringRef &name>
+	static BuiltinResult enum_builtin (MethodLLVMEmitter &emitter, llvm::IRBuilder<> &builder,
+	                                   const BuiltinCall &call)
 	{
-		return emitter.emit_enum_has_flag (builder, call.callee, call.sig);
+		return emitter.emit_enum_builtin (builder, name, call.callee, call.sig);
 	}
 
 	/// Fold RuntimeHelpers.IsReferenceOrContainsReferences<T> for concrete T.
@@ -545,11 +547,15 @@ const BuiltinMethod runtime_imports_methods[] = {
 	{ "Memmove", 3, Receiver::none, BuiltinEmitters::buffer_copy },
 };
 
-// Each of these reads what the icall reads, and Array.GetValue () asks both
-// once for every element.
+// GetCorElementType and GetElementType read what the icall reads, and
+// Array.GetValue () asks both once for every element.
 const BuiltinMethod type_handle_methods[] = {
 	{ "GetCorElementType", 1, Receiver::none, BuiltinEmitters::cor_element_type },
 	{ "GetElementType", 1, Receiver::none, BuiltinEmitters::element_type },
+	{ "GetBaseType", 1, Receiver::none, BuiltinEmitters::enum_builtin<type_base_name> },
+	{ "GetAttributes", 1, Receiver::none, BuiltinEmitters::enum_builtin<type_attributes_name> },
+	{ "IsGenericVariable", 1, Receiver::none,
+	  BuiltinEmitters::enum_builtin<type_is_generic_var_name> },
 };
 
 const BuiltinMethod monitor_methods[] = {
@@ -579,7 +585,21 @@ const BuiltinMethod volatile_methods[] = {
 };
 
 const BuiltinMethod enum_methods[] = {
-	{ "HasFlag", 1, Receiver::one, BuiltinEmitters::enum_has_flag },
+	{ "HasFlag", 1, Receiver::one, BuiltinEmitters::enum_builtin<enum_hasflag_name> },
+	{ "get_hashcode", 0, Receiver::one, BuiltinEmitters::enum_builtin<enum_hashcode_name> },
+	{ "CompareTo", 1, Receiver::one, BuiltinEmitters::enum_builtin<enum_compare_name> },
+	{ "InternalCompareTo", 2, Receiver::none,
+	  BuiltinEmitters::enum_builtin<enum_compare_name> },
+	{ "InternalGetCorElementType", 0, Receiver::one,
+	  BuiltinEmitters::enum_builtin<enum_elementtype_name> },
+	{ "InternalGetUnderlyingType", 1, Receiver::none,
+	  BuiltinEmitters::enum_builtin<type_enum_underlying_name> },
+	{ "InternalBoxEnum", 2, Receiver::none, BuiltinEmitters::enum_builtin<type_enum_box_name> },
+};
+
+// Enum.Equals () forwards here. Any other value type's site stays the call.
+const BuiltinMethod value_type_methods[] = {
+	{ "DefaultEquals", 2, Receiver::none, BuiltinEmitters::enum_builtin<enum_equals_name> },
 };
 
 const BuiltinMethod debugger_methods[] = {
@@ -693,6 +713,7 @@ class_table ()
 		  thread_methods },
 		{ { nullptr, "System.Threading", "Volatile" }, nullptr, volatile_methods },
 		{ { nullptr, "System", "Enum" }, &mono_defaults.enum_class, enum_methods },
+		{ { nullptr, "System", "ValueType" }, nullptr, value_type_methods },
 		{ { nullptr, "System.Diagnostics", "Debugger" }, nullptr, debugger_methods },
 		{ { nullptr, "System.Runtime.CompilerServices", "RuntimeHelpers" }, nullptr,
 		  runtime_helpers_methods },
