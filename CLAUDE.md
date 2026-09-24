@@ -528,6 +528,15 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   recorded receivers one method needs, and `-mono-guard-profile-min-samples=<n>`
   (default 32) is how many receivers a record needs before it is read at all. None of
   the three is calibrated yet.
+- `--llvm-opt=-mono-hoist-guard-vtable=<0|false|empty>` (`runtime/options.cpp`) — turn
+  off `HoistGuardVtablePass` (`passes/hoist-guard-vtable.cpp`). On by default, and tier 2
+  only. Where a guard sits in a loop its receiver does not change across, the pass reads
+  the receiver's vtable once in the preheader, behind a null test of its own, and points
+  the guard's compares at that read. The dispatch on the arm that misses keeps its own
+  read in the loop. LICM cannot move the read itself when the loop checks the receiver
+  for null only after other work that can throw, which is the ordinary shape. Moving the
+  read makes the compare loop-invariant, which is what unswitching needs.
+  `mono/tests/guard-vtable-hoist.cs` runs with the pass on and off.
 - `--llvm-opt=-mono-receiver-profile=<0|false|empty>` (`runtime/options.cpp`) — turn the
   tier-1 receiver record off, which is the negative control for what recording costs at
   tier 1, where nearly all code stays.

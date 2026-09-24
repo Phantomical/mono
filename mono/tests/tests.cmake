@@ -1158,6 +1158,11 @@ set(MONO_TESTS_PROFILE_DEVIRT_SRC
   profile-devirt.cs
 )
 
+# A guard's vtable read moved in front of the loop the guard sits in.
+set(MONO_TESTS_GUARD_VTABLE_HOIST_SRC
+  guard-vtable-hoist.cs
+)
+
 # Whether a readonly static's folded bytes survive the collector moving what
 # they name. It runs once per compiled tier, and reads the variable to know
 # which tier to ask its readers to compile at.

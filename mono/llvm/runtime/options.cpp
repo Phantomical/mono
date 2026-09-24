@@ -117,6 +117,11 @@ llvm::cl::opt<unsigned> GuardProfileMinSamplesOpt (
 	llvm::cl::desc ("Receivers a dispatch has to have recorded before its record "
 	                "is read"));
 
+llvm::cl::opt<bool> HoistGuardVtableOpt (
+	"mono-hoist-guard-vtable", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Read a loop-invariant receiver's vtable in front of the loop "
+	                "for the guard compares on it"));
+
 llvm::cl::opt<bool> InlineClauseBearingCalleesOpt (
 	"mono-inline-clauses", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Let the tier-2 cost model translate a clause-bearing callee"));
@@ -463,6 +468,12 @@ uint64_t
 guard_profile_min_samples ()
 {
 	return GuardProfileMinSamplesOpt;
+}
+
+bool
+hoist_guard_vtable ()
+{
+	return HoistGuardVtableOpt;
 }
 
 bool

@@ -15,6 +15,7 @@
 #include "passes/dump-ir.hpp"
 #include "passes/eliminate-delegate-and-guard-dispatch.hpp"
 #include "passes/eliminate-empty-finally.hpp"
+#include "passes/hoist-guard-vtable.hpp"
 #include "passes/initonly-nullness.hpp"
 #include "passes/inline-copies.hpp"
 #include "passes/lower-keepalive.hpp"
@@ -710,6 +711,16 @@ MonoPassBuilder::buildTier2Pipeline ()
 	 */
 	if (dump_point_enabled (DumpPoint::tier2_inlined_ir))
 		MPM.addPass (mono::DumpIRPass (DumpPoint::tier2_inlined_ir));
+
+	// Run after guard creation and before vtable-read lowering. LoopSimplify
+	// provides the preheaders used for hoisting.
+	{
+		llvm::FunctionPassManager hoist;
+
+		hoist.addPass (llvm::LoopSimplifyPass ());
+		hoist.addPass (mono::HoistGuardVtablePass ());
+		MPM.addPass (llvm::createModuleToFunctionPassAdaptor (std::move (hoist)));
+	}
 
 	/*
 	 * Behind the inliner and GuardDispatchPass, both of which read the vtable
