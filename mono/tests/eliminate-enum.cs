@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
+using System.Runtime.Serialization.Formatters.Binary;
 using System.Runtime.CompilerServices;
 
 /*
@@ -176,6 +178,24 @@ class Program {
 		Check (tier, "EqObjectU8 wider enum, same bytes", EqObjectU8 (U8.Max, U16.Max), false);
 	}
 
+	static void CheckComparerObject ()
+	{
+		var sorted = new List<U32> { U32.Max, U32.Zero, U32.High, U32.Mid };
+		sorted.Sort ();
+		Check ("corlib", "List<U32>.Sort ()", string.Join (",", sorted), "Zero,Mid,High,Max");
+
+		var stream = new MemoryStream ();
+		var formatter = new BinaryFormatter ();
+		formatter.Serialize (stream, Comparer<S8>.Default);
+		string written = System.Text.Encoding.UTF8.GetString (stream.ToArray ());
+		Check ("corlib", "Comparer<S8> serialized as ObjectComparer",
+		       written.Contains ("System.Collections.Generic.ObjectComparer`1"), true);
+
+		stream.Position = 0;
+		var read = (Comparer<S8>) formatter.Deserialize (stream);
+		Check ("corlib", "deserialized Comparer<S8>", read.Compare (S8.Min, S8.Max), -1);
+	}
+
 	static bool Promote (MethodInfo target, int tier)
 	{
 		if (Mono.Tiering.MonoTier.PromoteNow (target.MethodHandle.Value, tier))
@@ -207,6 +227,7 @@ class Program {
 
 	public static int Main ()
 	{
+		CheckComparerObject ();
 		RunAll ("tier 0");
 
 		if (!PromoteAll (tier1))
