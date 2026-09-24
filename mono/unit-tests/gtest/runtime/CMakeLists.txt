@@ -76,7 +76,7 @@ mono_add_unit_test(test-mono-runtime RUNTIME SOURCES
   test-function-pointer.cpp test-detour.cpp test-icall.cpp
   test-unmanaged-callers-only.cpp test-arch-amd64.cpp
   test-unity-pinned-alloc.cpp test-unity-liveness.cpp
-  test-type-init-recursion.cpp test-tier.cpp
+  test-type-init-recursion.cpp test-tier.cpp test-eh-ranges.cpp
   test-etw-profiler.cpp test-il-analyzer.cpp test-windows-unwind-table.cpp
   test-race-entry.cpp)
 mono_unit_test_cases(test-mono-runtime test-mono-callspec "Callspec.*")
@@ -97,6 +97,7 @@ mono_unit_test_cases(test-mono-runtime test-unity-liveness-serial "UnityLiveness
 mono_unit_test_cases(test-mono-runtime test-type-init-recursion
                      "TypeInitRecursion.*")
 mono_unit_test_cases(test-mono-runtime test-tier          "MethodTier.*")
+mono_unit_test_cases(test-mono-runtime test-eh-ranges     "EHRanges.*")
 mono_unit_test_cases(test-mono-runtime test-etw-profiler
                      "EtwProfiler.*:EtwProfilerNaming.*:EtwProfilerPure.*")
 mono_unit_test_cases(test-mono-runtime test-il-analyzer   "ILAnalyzer.*")
@@ -166,6 +167,7 @@ if(MONO_ENABLE_MCS_BUILD)
   _mono_test_assembly(type-init-recursion.exe
                       "${CMAKE_CURRENT_SOURCE_DIR}/type-init-recursion.cs")
   _mono_test_assembly(tier.exe "${CMAKE_CURRENT_SOURCE_DIR}/tier.cs")
+  _mono_test_assembly(eh-ranges.exe "${CMAKE_CURRENT_SOURCE_DIR}/eh-ranges.cs")
   _mono_test_assembly(race-entry.exe "${CMAKE_CURRENT_SOURCE_DIR}/race-entry.cs")
   _mono_test_assembly(etw.exe "${CMAKE_CURRENT_SOURCE_DIR}/etw.cs")
   _mono_test_assembly(il-analyzer.exe "${CMAKE_CURRENT_SOURCE_DIR}/il-analyzer.cs")
@@ -182,6 +184,7 @@ if(MONO_ENABLE_MCS_BUILD)
     "${CMAKE_CURRENT_BINARY_DIR}/unity-liveness.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/type-init-recursion.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/tier.exe"
+    "${CMAKE_CURRENT_BINARY_DIR}/eh-ranges.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/race-entry.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/etw.exe"
     "${CMAKE_CURRENT_BINARY_DIR}/il-analyzer.exe"

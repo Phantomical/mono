@@ -383,19 +383,42 @@ MonoEHGatherPass::runOnMachineFunction (MachineFunction &mf)
 
 		published = end;
 
-		MCSymbol *try_begin = plant_label (*positions[begin].mbb,
-		                                   positions[begin].at, ctx, tii);
-		MCSymbol *try_end =
-			end < positions.size ()
-				? plant_label (*positions[end].mbb, positions[end].at, ctx, tii)
+		auto label_at = [&] (unsigned at) {
+			return at < positions.size ()
+				? plant_label (*positions[at].mbb, positions[at].at, ctx, tii)
 				: plant_label (mf.back (), mf.back ().end (), ctx, tii);
+		};
+		auto publish = [&] (MCSymbol *try_begin, MCSymbol *try_end,
+		                    std::vector<MonoEHClause>::const_iterator first,
+		                    std::vector<MonoEHClause>::const_iterator last) {
+			for (; first != last; ++first) {
+				MonoEHClause clause = *first;
+				clause.try_begin = try_begin;
+				clause.try_end = try_end;
+				fn.clauses.push_back (clause);
+			}
+		};
+
+		const std::vector<MonoEHClause> &chain = chains[invoke.chain];
+		auto own = llvm::find_if (chain, [] (const MonoEHClause &c) { return c.owner == 0; });
 
 		planted = true;
-		for (MonoEHClause clause : chains[invoke.chain]) {
-			clause.try_begin = try_begin;
-			clause.try_end = try_end;
-			fn.clauses.push_back (clause);
+
+		// Inlined instructions use the root call site's IL offset. Keep their
+		// clauses on the invoke, and widen only the root's clauses around it.
+		if (own == chain.begin ()) {
+			publish (label_at (begin), label_at (end), chain.begin (), chain.end ());
+			continue;
 		}
+
+		MCSymbol *call_begin = label_at (invoke.begin);
+		MCSymbol *call_end = label_at (invoke.end);
+
+		publish (call_begin, call_end, chain.begin (), chain.end ());
+		if (begin < invoke.begin)
+			publish (label_at (begin), call_begin, own, chain.end ());
+		if (invoke.end < end)
+			publish (call_end, label_at (end), own, chain.end ());
 	}
 
 	sc_->functions.push_back (std::move (fn));
