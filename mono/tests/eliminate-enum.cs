@@ -6,12 +6,13 @@ using System.Runtime.Serialization.Formatters.Binary;
 using System.Runtime.CompilerServices;
 
 /*
- * GetHashCode (), Equals () and CompareTo () on an enum, and the comparers
- * Comparer<T>.Default and EqualityComparer<T>.Default hand out for one, over
- * every underlying type C# can declare. Each probe runs at tier 0, then at
- * tier 1 and tier 2, and every tier has to give the answer the underlying
- * primitive gives. Each underlying type's extremes are there because a load
- * or a compare of the wrong width or signedness gets exactly those wrong.
+ * System.Enum's operations over every underlying type C# can declare: hashing,
+ * equality and ordering, the default comparers, the underlying type, boxing a
+ * value through ToObject (), and reading the value back. Each probe runs at
+ * tier 0, then at tier 1 and tier 2, and every tier has to give the answer the
+ * underlying primitive gives. Each underlying type's extremes are there
+ * because a load or a compare of the wrong width or signedness gets exactly
+ * those wrong.
  */
 
 enum S8 : sbyte { Min = sbyte.MinValue, Neg = -1, Zero = 0, Max = sbyte.MaxValue }
@@ -71,6 +72,21 @@ class Program {
 	[MethodImpl (MethodImplOptions.NoInlining)] static bool EqObjectU8 (U8 a, object b) => a.Equals (b);
 
 	[MethodImpl (MethodImplOptions.NoInlining)] static bool EqDefaultU64 (U64 a, U64 b) => EqualityComparer<U64>.Default.Equals (a, b);
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static Type TypeUnderlyingU16 () => Enum.GetUnderlyingType (typeof (U16));
+	[MethodImpl (MethodImplOptions.NoInlining)] static TypeCode TypeCodeS64 (S64 v) => v.GetTypeCode ();
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool TypeIsEnumU8 () => typeof (U8).IsEnum;
+	[MethodImpl (MethodImplOptions.NoInlining)] static bool TypeIsEnumInt () => typeof (int).IsEnum;
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static object BoxS8 (int v) => Enum.ToObject (typeof (S8), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static object BoxU8 (int v) => Enum.ToObject (typeof (U8), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static object BoxU64 (ulong v) => Enum.ToObject (typeof (U64), v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static object BoxNotEnum (int v) => Enum.ToObject (typeof (int), v);
+
+	[MethodImpl (MethodImplOptions.NoInlining)] static long ValueS32 (S32 v) => Convert.ToInt64 (v);
+	[MethodImpl (MethodImplOptions.NoInlining)] static string ValueU32 (U32 v) => v.ToString ("D");
+	[MethodImpl (MethodImplOptions.NoInlining)] static int ValueIConvertibleS16 (S16 v) => ((IConvertible) v).ToInt32 (null);
+	[MethodImpl (MethodImplOptions.NoInlining)] static string ValueNameU8 (U8 v) => v.ToString ();
 
 	static int failures;
 
@@ -176,6 +192,33 @@ class Program {
 		Check (tier, "EqObjectU8 same", EqObjectU8 (U8.High, U8.High), true);
 		Check (tier, "EqObjectU8 underlying byte", EqObjectU8 (U8.High, (byte) 0x80), false);
 		Check (tier, "EqObjectU8 wider enum, same bytes", EqObjectU8 (U8.Max, U16.Max), false);
+
+		Check (tier, "TypeUnderlyingU16", TypeUnderlyingU16 (), typeof (ushort));
+		Check (tier, "TypeCodeS64", TypeCodeS64 (S64.Neg), TypeCode.Int64);
+		Check (tier, "TypeIsEnumU8", TypeIsEnumU8 (), true);
+		Check (tier, "TypeIsEnumInt", TypeIsEnumInt (), false);
+
+		object boxed = BoxS8 (-1);
+		Check (tier, "BoxS8 (-1) class", boxed.GetType (), typeof (S8));
+		Check (tier, "BoxS8 (-1)", (S8) boxed, S8.Neg);
+		Check (tier, "BoxS8 (0x17f) truncates", (S8) BoxS8 (0x17f), S8.Max);
+		Check (tier, "BoxU8 (300) truncates", (U8) BoxU8 (300), (U8) 44);
+		Check (tier, "BoxU8 (0x80)", (U8) BoxU8 (0x80), U8.High);
+		Check (tier, "BoxU64 (max)", (U64) BoxU64 (ulong.MaxValue), U64.Max);
+
+		bool threw = false;
+		try {
+			BoxNotEnum (1);
+		} catch (ArgumentException) {
+			threw = true;
+		}
+		Check (tier, "BoxNotEnum throws", threw, true);
+
+		Check (tier, "ValueS32 (Min)", ValueS32 (S32.Min), (long) int.MinValue);
+		Check (tier, "ValueU32 (Max)", ValueU32 (U32.Max), "4294967295");
+		Check (tier, "ValueIConvertibleS16 (Neg)", ValueIConvertibleS16 (S16.Neg), -1);
+		Check (tier, "ValueNameU8 (High)", ValueNameU8 (U8.High), "High");
+		Check (tier, "ValueNameU8 (5)", ValueNameU8 ((U8) 5), "5");
 	}
 
 	static void CheckComparerObject ()
@@ -210,7 +253,8 @@ class Program {
 		bool ok = true;
 
 		foreach (MethodInfo m in typeof (Program).GetMethods (BindingFlags.Static | BindingFlags.NonPublic)) {
-			if (m.Name.StartsWith ("Hash") || m.Name.StartsWith ("Cmp") || m.Name.StartsWith ("Eq")) {
+			if (m.Name.StartsWith ("Hash") || m.Name.StartsWith ("Cmp") || m.Name.StartsWith ("Eq")
+			    || m.Name.StartsWith ("Type") || m.Name.StartsWith ("Box") || m.Name.StartsWith ("Value")) {
 				MethodInfo target = m.IsGenericMethodDefinition ? null : m;
 
 				if (target != null)

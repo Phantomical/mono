@@ -1,6 +1,6 @@
 /**
  * \file
- * \brief Writing back a System.Enum site nothing settled.
+ * \brief Lowering unresolved System.Enum builtins to their fallback calls.
  */
 
 #include "enum.hpp"
@@ -25,6 +25,12 @@ const StringRef enum_builtin_names[] = {
 	enum_hashcode_name,
 	enum_compare_name,
 	enum_equals_name,
+	enum_elementtype_name,
+	type_enum_underlying_name,
+	type_enum_box_name,
+	type_base_name,
+	type_is_generic_var_name,
+	type_attributes_name,
 };
 
 } // namespace
@@ -42,8 +48,14 @@ enum_builtin_decl (Module &m, StringRef name)
 		shape = FunctionType::get (i8, { ptr, ptr, ptr }, false);
 	else if (name == enum_compare_name)
 		shape = FunctionType::get (i32, { ptr, ptr, ptr }, false);
-	else if (name == enum_hashcode_name)
+	else if (name == enum_hashcode_name || name == type_attributes_name)
 		shape = FunctionType::get (i32, { ptr, ptr }, false);
+	else if (name == enum_elementtype_name || name == type_is_generic_var_name)
+		shape = FunctionType::get (i8, { ptr, ptr }, false);
+	else if (name == type_enum_underlying_name || name == type_base_name)
+		shape = FunctionType::get (ptr, { ptr, ptr }, false);
+	else if (name == type_enum_box_name)
+		shape = FunctionType::get (ptr, { ptr, Type::getInt64Ty (c), ptr }, false);
 	else
 		llvm_unreachable ("not an enum builtin");
 

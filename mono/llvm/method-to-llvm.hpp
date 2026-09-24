@@ -12,6 +12,7 @@
 
 #include "arch/arch.hpp"
 
+#include "analysis/type-info.hpp"
 #include "analysis/vtable-info.hpp"
 #include "il-line-table.hpp"
 #include "method-symbols.hpp"
@@ -1049,6 +1050,7 @@ private:
 	llvm::Constant *vtable_symbol (MonoClass *klass, const std::string &symbol);
 	std::optional<VTableInfo> vtable_info_for (MonoClass *klass);
 	llvm::Expected<llvm::Constant *> typeof_symbol (MonoType *type);
+	TypeInfo type_info_for (const TypeInfo &named);
 	MonoClass *declared_class (MonoType *type);
 	llvm::Constant *field_symbol (MonoClassField *field);
 	llvm::Constant *address_symbol (const std::string &name, void *address);
@@ -1248,6 +1250,7 @@ private:
 	llvm::Expected<llvm::Function *> object_new_decl ();
 	void store_object_vtable (MonoIrBuilder &builder, llvm::Value *object,
 	                          llvm::Value *vtable);
+	llvm::Expected<ObjectAlloc> object_allocator (MonoClass *klass, bool for_box);
 	llvm::Expected<llvm::Value *> emit_object_alloc (MonoIrBuilder &builder,
 	                                                 MonoClass *klass, bool for_box);
 	llvm::Value *unbox_payload (MonoIrBuilder &builder, const StackValue &obj,

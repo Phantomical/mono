@@ -547,11 +547,15 @@ const BuiltinMethod runtime_imports_methods[] = {
 	{ "Memmove", 3, Receiver::none, BuiltinEmitters::buffer_copy },
 };
 
-// Each of these reads what the icall reads, and Array.GetValue () asks both
-// once for every element.
+// GetCorElementType and GetElementType read what the icall reads, and
+// Array.GetValue () asks both once for every element.
 const BuiltinMethod type_handle_methods[] = {
 	{ "GetCorElementType", 1, Receiver::none, BuiltinEmitters::cor_element_type },
 	{ "GetElementType", 1, Receiver::none, BuiltinEmitters::element_type },
+	{ "GetBaseType", 1, Receiver::none, BuiltinEmitters::enum_builtin<type_base_name> },
+	{ "GetAttributes", 1, Receiver::none, BuiltinEmitters::enum_builtin<type_attributes_name> },
+	{ "IsGenericVariable", 1, Receiver::none,
+	  BuiltinEmitters::enum_builtin<type_is_generic_var_name> },
 };
 
 const BuiltinMethod monitor_methods[] = {
@@ -586,6 +590,11 @@ const BuiltinMethod enum_methods[] = {
 	{ "CompareTo", 1, Receiver::one, BuiltinEmitters::enum_builtin<enum_compare_name> },
 	{ "InternalCompareTo", 2, Receiver::none,
 	  BuiltinEmitters::enum_builtin<enum_compare_name> },
+	{ "InternalGetCorElementType", 0, Receiver::one,
+	  BuiltinEmitters::enum_builtin<enum_elementtype_name> },
+	{ "InternalGetUnderlyingType", 1, Receiver::none,
+	  BuiltinEmitters::enum_builtin<type_enum_underlying_name> },
+	{ "InternalBoxEnum", 2, Receiver::none, BuiltinEmitters::enum_builtin<type_enum_box_name> },
 };
 
 // Enum.Equals () forwards here. Any other value type's site stays the call.

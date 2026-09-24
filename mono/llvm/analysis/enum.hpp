@@ -19,19 +19,19 @@ namespace mono {
 
 class ConstantValues;
 
-/// The enum class \p boxed is an instance of. Null where \p boxed can be null,
-/// its class is unsettled or only bounded, or the class is not an enum.
+/// Returns the exact enum class of \p boxed, or null unless it is known to be a
+/// non-null enum instance.
 MonoClass *enum_class_of (llvm::Value *boxed, const llvm::Function &f,
                           const ConstantValues &values);
 
-/// The integer an enum's value is held as.
+/// The width and signedness of an enum's underlying value.
 struct EnumScalar {
 	unsigned bits;
 	bool is_signed;
 };
 
-/// How \p klass holds its value. Nothing for an enum over a floating-point
-/// type, which the loader admits and ECMA-335 II.14.3 does not.
+/// Returns the representation of \p klass, or nothing for a floating-point
+/// enum accepted by the loader but disallowed by ECMA-335 II.14.3.
 std::optional<EnumScalar> enum_scalar (MonoClass *klass);
 
 } // namespace mono

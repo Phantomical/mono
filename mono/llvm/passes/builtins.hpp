@@ -87,6 +87,11 @@ bool eliminate_type_tests (llvm::Function &f, llvm::FunctionAnalysisManager &fam
 /// for. Says whether it changed anything.
 bool eliminate_enum_builtins (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
 
+/// Replaces each System.Type builtin site in \p f whose type operand is a
+/// marked System.Type constant with what the mark settles. Says whether it
+/// changed anything.
+bool eliminate_type_builtins (llvm::Function &f, llvm::FunctionAnalysisManager &fam);
+
 /// Replaces each object vtable read in \p f whose class the IR settles with
 /// that class's own vtable symbol. Says whether it changed anything.
 ///

@@ -712,7 +712,23 @@ namespace System
         internal unsafe Object GetValue()
         {
 #if MONO
-            return get_value ();
+            // A boxed enum unboxes as its underlying type, so each arm reboxes
+            // the value as that type without the get_value () icall.
+            object boxed = this;
+
+            switch (InternalGetCorElementType ()) {
+            case CorElementType.ELEMENT_TYPE_I1: return (sbyte) boxed;
+            case CorElementType.ELEMENT_TYPE_U1: return (byte) boxed;
+            case CorElementType.ELEMENT_TYPE_BOOLEAN: return (bool) boxed;
+            case CorElementType.ELEMENT_TYPE_I2: return (short) boxed;
+            case CorElementType.ELEMENT_TYPE_U2: return (ushort) boxed;
+            case CorElementType.ELEMENT_TYPE_CHAR: return (char) boxed;
+            case CorElementType.ELEMENT_TYPE_I4: return (int) boxed;
+            case CorElementType.ELEMENT_TYPE_U4: return (uint) boxed;
+            case CorElementType.ELEMENT_TYPE_I8: return (long) boxed;
+            case CorElementType.ELEMENT_TYPE_U8: return (ulong) boxed;
+            default: return get_value ();
+            }
 #else
             fixed (void* pValue = &JitHelpers.GetPinningHelper(this).m_data)
             {
@@ -764,6 +780,9 @@ namespace System
         [MethodImplAttribute(MethodImplOptions.InternalCall)]
 #if MONO
         private extern int get_hashcode ();
+
+        [MethodImplAttribute(MethodImplOptions.InternalCall)]
+        private extern CorElementType InternalGetCorElementType();
 #else
         [System.Security.SecuritySafeCritical]  // auto-generated
         [ResourceExposure(ResourceScope.None)]
