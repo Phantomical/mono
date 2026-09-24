@@ -398,11 +398,10 @@ MethodLLVMEmitter::emit_cpobj (MonoIrBuilder &builder, uint32_t token)
 		            emit_value_copy (builder, *dest, *src, klass, /*may_overlap=*/true))
 			return copied;
 	} else {
-		guint32 align = 0;
-		guint32 size = mono_class_value_size (klass, &align);
+		llvm::Align align = assumed_alignment (*type);
 
-		builder.CreateMemCpyInline (*dest, llvm::Align (align), *src,
-		                            llvm::Align (align), builder.getInt64 (size));
+		builder.CreateMemCpyInline (*dest, align, *src, align,
+		                            builder.getInt64 (mono_class_value_size (klass, NULL)));
 	}
 
 	return llvm::Error::success ();
@@ -470,11 +469,9 @@ MethodLLVMEmitter::emit_initobj (MonoIrBuilder &builder, uint32_t token)
 		                            llvm::Align (TARGET_SIZEOF_VOID_P));
 	} else {
 		MonoClass *klass = mono_class_from_mono_type_internal (*type);
-		guint32 align = 0;
-		guint32 size = mono_class_value_size (klass, &align);
 
-		builder.CreateMemSetInline (*dest, llvm::Align (align), builder.getInt8 (0),
-		                           builder.getInt64 (size));
+		builder.CreateMemSetInline (*dest, assumed_alignment (*type), builder.getInt8 (0),
+		                           builder.getInt64 (mono_class_value_size (klass, NULL)));
 	}
 
 	return llvm::Error::success ();

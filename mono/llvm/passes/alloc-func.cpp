@@ -6,6 +6,7 @@
 #include "alloc-func.hpp"
 
 #include "builtins.hpp"
+#include "layout.hpp"
 
 #include "mono/metadata/abi-details.h"
 
@@ -122,6 +123,7 @@ alloc_func_decl (Module &m, AllocShape shape, bool erasable)
 	                               FunctionType::get (ptr, { ptr, word, ptr }, false));
 
 	decl->addRetAttr (Attribute::NoAlias);
+	decl->addRetAttr (Attribute::getWithAlignment (c, object_alignment ()));
 
 	/*
 	 * The allocator reads the vtable it is handed and writes the collector's

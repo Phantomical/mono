@@ -9,6 +9,7 @@
 #include "analysis/constant-values.hpp"
 #include "analysis/escape.hpp"
 #include "builtins.hpp"
+#include "layout.hpp"
 
 #include "analysis/operand-class.hpp"
 
@@ -28,18 +29,6 @@ using namespace llvm;
 
 namespace mono {
 namespace {
-
-/*
- * An object holds pointers, so both collectors hand one back on a pointer
- * boundary. A frame slot with that alignment gives the object what the heap gave
- * it, and asking the class for a wider one would read a guarantee no collector
- * here makes.
- */
-Align
-object_align ()
-{
-	return Align (TARGET_SIZEOF_VOID_P);
-}
 
 /// The size \p alloc makes, or none where the compile cannot read it.
 ///
@@ -71,7 +60,7 @@ promote (CallInst &alloc, uint64_t bytes)
 		entry.CreateAlloca (ArrayType::get (entry.getInt8Ty (), bytes), nullptr,
 	                            "promoted");
 
-	slot->setAlignment (object_align ());
+	slot->setAlignment (object_alignment ());
 
 	/*
 	 * The class the site named moves to the slot. `leaf_operand_class ()`
@@ -89,7 +78,7 @@ promote (CallInst &alloc, uint64_t bytes)
 	IRBuilder<> site (&alloc);
 
 	site.SetCurrentDebugLocation (alloc.getDebugLoc ());
-	site.CreateMemSet (slot, site.getInt8 (0), site.getInt64 (bytes), object_align ());
+	site.CreateMemSet (slot, site.getInt8 (0), site.getInt64 (bytes), object_alignment ());
 
 	alloc.replaceAllUsesWith (slot);
 	alloc.eraseFromParent ();

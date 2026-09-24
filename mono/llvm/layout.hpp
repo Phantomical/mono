@@ -15,8 +15,19 @@
 
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Type.h>
+#include <llvm/Support/Alignment.h>
 
 namespace mono {
+
+/// Alignment guaranteed for a managed object.
+///
+/// Collectors allocate objects on a pointer boundary. A class's natural
+/// alignment is not guaranteed.
+inline llvm::Align
+object_alignment ()
+{
+	return llvm::Align (sizeof (void *));
+}
 
 /// Returns a type spanning \p bytes of layout no field claims.
 ///

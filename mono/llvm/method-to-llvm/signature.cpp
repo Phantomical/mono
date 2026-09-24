@@ -199,6 +199,42 @@ dereferenceable_attr (llvm::LLVMContext &context, MonoType *t)
 	return llvm::Attribute::getWithDereferenceableOrNullBytes (context, *bytes);
 }
 
+/// Whether every slot holding t is pointer-aligned.
+///
+/// The collector requires references to be pointer-aligned. The loader
+/// therefore aligns them in sequential layouts and rejects misaligned
+/// explicit layouts, including value types containing references.
+bool
+slot_is_pointer_aligned (MonoType *t)
+{
+	MonoType *underlying = mini_get_underlying_type (t);
+
+	if (mini_type_is_reference (underlying))
+		return true;
+
+	return MONO_TYPE_ISSTRUCT (underlying)
+	       && m_class_has_references (mono_class_from_mono_type_internal (underlying));
+}
+
+/// Returns an align attribute for an object or a byref to a pointer-aligned
+/// slot.
+std::optional<llvm::Attribute>
+alignment_attr (llvm::LLVMContext &context, MonoType *t)
+{
+	if (!t->byref)
+		return mini_type_is_reference (t) ? std::optional<llvm::Attribute> (
+							    llvm::Attribute::getWithAlignment (
+								    context, object_alignment ()))
+		                                  : std::nullopt;
+
+	MonoClass *klass = mono_class_from_mono_type_internal (t);
+
+	if (klass == nullptr || !slot_is_pointer_aligned (m_class_get_byval_arg (klass)))
+		return std::nullopt;
+
+	return llvm::Attribute::getWithAlignment (context, llvm::Align (TARGET_SIZEOF_VOID_P));
+}
+
 /// Whether method is entered with sig's value types already marshalled.
 ///
 /// A pinvoke signature by itself does not prove that a caller holds
@@ -828,6 +864,17 @@ MethodLLVMEmitter::type_alignment (MonoType *t, bool native)
 	return llvm::Align (llvm::PowerOf2Ceil (std::max (align, 1u)));
 }
 
+llvm::Align
+MethodLLVMEmitter::assumed_alignment (MonoType *t)
+{
+	// Managed pointers are GC references, so stack slots holding them are
+	// pointer-aligned.
+	if (t->byref || slot_is_pointer_aligned (t))
+		return llvm::Align (TARGET_SIZEOF_VOID_P);
+
+	return llvm::Align (1);
+}
+
 /// The LLVM function type for sig, built in this backend's own convention.
 /// Every value keeps its natural type. A value type travels by value, as
 /// its struct, and an aggregate return comes back as an aggregate. Only
@@ -1186,6 +1233,8 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 
 	if (std::optional<llvm::Attribute> deref = dereferenceable_attr (context (), sig->ret))
 		function->addRetAttr (*deref);
+	if (std::optional<llvm::Attribute> align = alignment_attr (context (), sig->ret))
+		function->addRetAttr (*align);
 
 	// A string constructor returns the string it creates, and that string is new.
 	if (method->string_ctor)
@@ -1211,9 +1260,12 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 
 		function->getArg (at)->setName ("this");
 
-		if (std::optional<llvm::Attribute> deref =
-			    dereferenceable_attr (context (), m_class_get_this_arg (method->klass)))
+		MonoType *self = m_class_get_this_arg (method->klass);
+
+		if (std::optional<llvm::Attribute> deref = dereferenceable_attr (context (), self))
 			function->addParamAttr (at, *deref);
+		if (std::optional<llvm::Attribute> align = alignment_attr (context (), self))
+			function->addParamAttr (at, *align);
 	}
 
 	std::vector<const char *> names (sig->param_count);
@@ -1235,6 +1287,8 @@ MethodLLVMEmitter::create_method_decl (MonoMethod *method, bool by_context)
 		if (std::optional<llvm::Attribute> deref =
 			    dereferenceable_attr (context (), sig->params[i]))
 			function->addParamAttr (pindex, *deref);
+		if (std::optional<llvm::Attribute> align = alignment_attr (context (), sig->params[i]))
+			function->addParamAttr (pindex, *align);
 	}
 
 	declarations[method] = function;

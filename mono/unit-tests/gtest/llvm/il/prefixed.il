@@ -77,12 +77,44 @@
 		ret
 	}
 
-	.method public static int64 UnalignedRead (native int p) cil managed
+	.method public static void VolatileWriteStatic (int32 v) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		volatile.
+		stsfld int32 Chatty::Shared
+		ret
+	}
+
+	.method public static object UnalignedRead (native int p) cil managed
 	{
 		.maxstack 1
 		ldarg.0
 		unaligned. 1
-		ldind.i8
+		ldind.ref
+		ret
+	}
+
+	.method public static int32 ReadThroughPointer (native int p) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		ldind.i4
+		ret
+	}
+
+	.method public static object ReadReference (native int p) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		ldind.ref
+		ret
+	}
+
+	.method public static object PassObject (object o) cil managed
+	{
+		.maxstack 1
+		ldarg.0
 		ret
 	}
 
