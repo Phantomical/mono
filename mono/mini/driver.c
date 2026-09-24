@@ -1373,6 +1373,8 @@ mono_jit_parse_options (int argc, char * argv[])
 			mono_gc_debug_set (argv[i] + 11);
 		} else if (strncmp (argv [i], "--llvm-opt=", 11) == 0) {
 			mono_llvm_jit_add_option (argv [i] + 11);
+		} else if (strcmp (argv [i], "--ffast-math") == 0) {
+			mono_use_fast_math = TRUE;
 #ifdef ENABLE_JIT_DUMP
 		} else if (strcmp (argv [i], "--jitdump") == 0) {
 			mono_enable_jit_dump ();
