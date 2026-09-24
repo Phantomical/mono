@@ -92,7 +92,7 @@ static class Program {
 	static bool RunsInsideRoot (Exception e)
 	{
 		StackTrace st = new StackTrace (e, false);
-		int in_walk = -1, in_root = -2;
+		long in_walk = -1, in_root = -2;
 
 		for (int i = 0; i < st.FrameCount; i++) {
 			StackFrame f = st.GetFrame (i);
@@ -101,12 +101,22 @@ static class Program {
 			if (m == null)
 				continue;
 			if (m.DeclaringType.Name == "Chain" && m.Name == "Walk")
-				in_walk = f.GetNativeOffset ();
+				in_walk = CodeAddress (f);
 			if (m.DeclaringType.Name == "Program" && m.Name == "Root")
-				in_root = f.GetNativeOffset ();
+				in_root = CodeAddress (f);
 		}
 
 		return in_walk >= 0 && in_walk == in_root;
+	}
+
+	static readonly MethodInfo method_address =
+		typeof (StackFrame).GetMethod ("GetMethodAddress", BindingFlags.NonPublic | BindingFlags.Instance);
+
+	/// Where a frame is executing. A native offset alone is relative to its
+	/// own body, so frames in two bodies can share one.
+	static long CodeAddress (StackFrame f)
+	{
+		return (long) method_address.Invoke (f, null) + f.GetNativeOffset ();
 	}
 
 	/*

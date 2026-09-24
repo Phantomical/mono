@@ -10,6 +10,7 @@
 
 #include "config.h"
 
+#include "cl-opt-override.hpp"
 #include "harness.hpp"
 
 #include "jit.hpp"
@@ -34,6 +35,7 @@
 
 #include <mono/utils/mono-mmap.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -98,6 +100,21 @@ build_helper_call_module (const char *helper_name)
 
 	EXPECT_FALSE (verifyFunction (*fn, &errs ()));
 	return m;
+}
+
+/// Maps a page outside rel32 range of ordinary code. Returns null on failure.
+static void *
+map_far_page (size_t page)
+{
+	for (uintptr_t at = 0x200000000000ULL; at < 0x400000000000ULL; at += 0x10000000000ULL) {
+		void *got = mono_valloc (reinterpret_cast<void *> (at), page,
+		                         MONO_MMAP_READ | MONO_MMAP_WRITE | MONO_MMAP_EXEC
+		                         | MONO_MMAP_PRIVATE | MONO_MMAP_ANON | MONO_MMAP_FIXED,
+		                         MONO_MEM_ACCOUNT_OTHER);
+		if (got != nullptr)
+			return got;
+	}
+	return nullptr;
 }
 
 extern "C" int64_t
@@ -436,20 +453,8 @@ TEST_F (Jit, CallsAHelperFurtherAwayThanRel32Reaches)
 #endif
 
 	size_t page = 4096;
-	void *far = nullptr;
+	void *far = map_far_page (page);
 
-	/* Somewhere no ordinary mapping lands, and > 4GB from both the test binary
-	 * and any slab, so a rel32 from either cannot encode it. */
-	for (uintptr_t at = 0x200000000000ULL; at < 0x400000000000ULL; at += 0x10000000000ULL) {
-		void *got = mono_valloc (reinterpret_cast<void *> (at), page,
-		                         MONO_MMAP_READ | MONO_MMAP_WRITE | MONO_MMAP_EXEC
-		                         | MONO_MMAP_PRIVATE | MONO_MMAP_ANON | MONO_MMAP_FIXED,
-		                         MONO_MEM_ACCOUNT_OTHER);
-		if (got != nullptr) {
-			far = got;
-			break;
-		}
-	}
 	ASSERT_NE (far, nullptr) << "could not place a far helper";
 	memcpy (far, body, sizeof (body));
 
@@ -474,12 +479,93 @@ TEST_F (Jit, CallsAHelperFurtherAwayThanRel32Reaches)
 	mono_vfree (far, page, MONO_MEM_ACCOUNT_OTHER);
 }
 
-/*
- * The counter cases, which read a body that must stay at tier 1 while they do.
- * jit.cpp reads the threshold once and keeps the answer, so a case cannot pin it
- * for itself. The build registers this suite as a run of its own under a count
- * nothing reaches, and the check below is what keeps a run without it honest.
- */
+/// Builds i64 entry(i64 x) { return helper(x + word); } with external symbols.
+static OwnedModule
+build_word_and_helper_module (const char *word_name, const char *helper_name, bool tier2)
+{
+	OwnedModule m;
+	m.context = std::make_unique<LLVMContext> ();
+	m.module = std::make_unique<Module> ("jit.far", *m.context);
+
+	if (tier2)
+		m.module->addModuleFlag (Module::Error, "mono.tier2", 1);
+
+	Type *i64 = Type::getInt64Ty (*m.context);
+	FunctionType *fty = FunctionType::get (i64, { i64 }, false);
+	FunctionCallee helper = m.module->getOrInsertFunction (helper_name, fty);
+	auto *word = new GlobalVariable (*m.module, i64, false, GlobalValue::ExternalLinkage,
+	                                 nullptr, word_name);
+	Function *fn = Function::Create (fty, Function::ExternalLinkage, "entry",
+	                                 m.module.get ());
+	IRBuilder<> b (BasicBlock::Create (*m.context, "entry", fn));
+	Value *sum = b.CreateAdd (fn->getArg (0), b.CreateLoad (i64, word));
+	b.CreateRet (b.CreateCall (helper, { sum }));
+
+	EXPECT_FALSE (verifyFunction (*fn, &errs ()));
+	return m;
+}
+
+static bool
+code_holds_address (const CompiledMethod &compiled, const void *address)
+{
+	uintptr_t bits = reinterpret_cast<uintptr_t> (address);
+	const uint8_t *needle = reinterpret_cast<const uint8_t *> (&bits);
+
+	return std::search (compiled.code, compiled.code + compiled.code_size, needle,
+	                    needle + sizeof (bits))
+	       != compiled.code + compiled.code_size;
+}
+
+/* Verify the direct forms and the GOT/stub fallback with each option disabled. */
+TEST_F (Jit, ReachesFarDataAndHelpersWithoutAStub)
+{
+#ifdef HOST_WIN32
+	GTEST_SKIP () << "a PE target reaches both through an __imp_ pointer";
+#endif
+
+	size_t page = 4096;
+	uint8_t *far = static_cast<uint8_t *> (map_far_page (page));
+
+	ASSERT_NE (far, nullptr) << "could not place a far page";
+
+	/* mov rax, rdi; add rax, rax; ret */
+	static const uint8_t body[] = { 0x48, 0x89, 0xf8, 0x48, 0x01, 0xc0, 0xc3 };
+	int64_t *word = reinterpret_cast<int64_t *> (far + 64);
+
+	memcpy (far, body, sizeof (body));
+	*word = 1;
+
+	for (bool tier2 : { false, true })
+		for (bool direct : { true, false }) {
+			SCOPED_TRACE (tier2 ? "tier 2" : "tier 1");
+			SCOPED_TRACE (direct ? "options on" : "options off");
+			BoolOptionOverride data ("mono-far-data-immediates", direct);
+			BoolOptionOverride calls ("mono-far-calls-through-got", direct);
+
+			auto jit = test::make_jit ();
+			ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+			ASSERT_FALSE (bool ((*jit)->register_symbol ("mono_jit_test_far_word", word)));
+			ASSERT_FALSE (bool ((*jit)->register_code_symbol ("mono_jit_test_far_helper",
+			                                                  far)));
+
+			auto entry = (*jit)->compile (
+				build_word_and_helper_module ("mono_jit_test_far_word",
+				                              "mono_jit_test_far_helper", tier2)
+					.take (),
+				"entry");
+			ASSERT_TRUE (bool (entry)) << toString (entry.takeError ());
+
+			auto fn = reinterpret_cast<int64_t (*) (int64_t)> (entry->entry);
+			EXPECT_EQ (fn (20), 42);
+
+			EXPECT_EQ (code_holds_address (*entry, word), direct && tier2);
+			EXPECT_EQ (entry->linker_stubs.empty (), direct);
+		}
+
+	mono_vfree (far, page, MONO_MEM_ACCOUNT_OTHER);
+}
+
+/* Counter cases that must remain at tier 1 while they run. */
 class JitProfile : public ::testing::Test {
 public:
 	static void SetUpTestSuite ()

@@ -109,7 +109,7 @@ static class Program {
 	static bool RunsInsideKernel (Exception e, string kernel)
 	{
 		StackTrace st = new StackTrace (e, false);
-		int in_probe = -1, in_kernel = -2;
+		long in_probe = -1, in_kernel = -2;
 
 		for (int i = 0; i < st.FrameCount; i++) {
 			StackFrame f = st.GetFrame (i);
@@ -118,12 +118,22 @@ static class Program {
 			if (m == null || m.DeclaringType.Name != "Program")
 				continue;
 			if (m.Name == "Probe")
-				in_probe = f.GetNativeOffset ();
+				in_probe = CodeAddress (f);
 			if (m.Name == kernel)
-				in_kernel = f.GetNativeOffset ();
+				in_kernel = CodeAddress (f);
 		}
 
 		return in_probe >= 0 && in_probe == in_kernel;
+	}
+
+	static readonly MethodInfo method_address =
+		typeof (StackFrame).GetMethod ("GetMethodAddress", BindingFlags.NonPublic | BindingFlags.Instance);
+
+	/// Where a frame is executing. A native offset alone is relative to its
+	/// own body, so frames in two bodies can share one.
+	static long CodeAddress (StackFrame f)
+	{
+		return (long) method_address.Invoke (f, null) + f.GetNativeOffset ();
 	}
 
 	/*

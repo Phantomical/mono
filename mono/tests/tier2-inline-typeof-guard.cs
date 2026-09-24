@@ -178,13 +178,13 @@ class Program {
 		++fails;
 	}
 
-	/// Whether Pick and its caller share the native offset of an inlined call.
+	/// Whether Pick and its caller share the code address of an inlined call.
 	static bool RunsInsideRoot (Exception e, Type root)
 	{
 		string picker = root.Name.Replace ("Caller", "Picker");
 		string arg = root.GetGenericArguments ()[0].Name;
 		StackTrace st = new StackTrace (e, false);
-		int in_pick = -1, in_root = -2;
+		long in_pick = -1, in_root = -2;
 
 		for (int i = 0; i < st.FrameCount; i++) {
 			StackFrame f = st.GetFrame (i);
@@ -196,13 +196,23 @@ class Program {
 			Type declaring = m.DeclaringType;
 
 			if (declaring.Name == picker && m.Name == "Pick")
-				in_pick = f.GetNativeOffset ();
+				in_pick = CodeAddress (f);
 			if (declaring.Name == root.Name && m.Name == "Call"
 			    && declaring.GetGenericArguments ()[0].Name == arg)
-				in_root = f.GetNativeOffset ();
+				in_root = CodeAddress (f);
 		}
 
 		return in_pick >= 0 && in_pick == in_root;
+	}
+
+	static readonly MethodInfo method_address =
+		typeof (StackFrame).GetMethod ("GetMethodAddress", BindingFlags.NonPublic | BindingFlags.Instance);
+
+	/// Where a frame is executing. A native offset alone is relative to its
+	/// own body, so frames in two bodies can share one.
+	static long CodeAddress (StackFrame f)
+	{
+		return (long) method_address.Invoke (f, null) + f.GetNativeOffset ();
 	}
 
 	/// One root and what its Pick is expected to do at tier 2.
