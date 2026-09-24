@@ -1599,12 +1599,26 @@ TEST_F (TranslatorTest, GetTypeReadsTheVtable)
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_EQ (t.count ("object:GetType"), 0u) << t.text ();
 	EXPECT_EQ (t.count ("%obj_type = call ptr @mono.vtable.type"), 1u) << t.text ();
-
-	// The read off the object is a load, because an allocation's own store
-	// writes that word. `!invariant.group` is `mark_object_vtable_read ()`'s
-	// tag for that load.
-	EXPECT_EQ (t.count ("!invariant.group"), 1u) << t.text ();
 	EXPECT_GT (t.count ("NullReferenceException"), 0u) << t.text ();
+}
+
+// A transparent proxy can receive a new vtable during a cast.
+TEST_F (TranslatorTest, AVtableReadIsInvariantOnlyWhereNoProxyCanStand)
+{
+	const Translation &object = translate ("tokens", "Tokens:TypeOfObject");
+	const Translation &string = translate ("tokens", "Tokens:TypeOfString");
+	const Translation &iface = translate ("calls", "Calls:CallInterface");
+	const Translation &klass = translate ("calls", "Calls:CallVirtual");
+
+	ASSERT_NE (object.function, nullptr) << object.error;
+	ASSERT_NE (string.function, nullptr) << string.error;
+	ASSERT_NE (iface.function, nullptr) << iface.error;
+	ASSERT_NE (klass.function, nullptr) << klass.error;
+
+	EXPECT_EQ (object.count ("!invariant.group"), 0u) << object.text ();
+	EXPECT_EQ (iface.count ("!invariant.group"), 0u) << iface.text ();
+	EXPECT_EQ (string.count ("!invariant.group"), 1u) << string.text ();
+	EXPECT_EQ (klass.count ("!invariant.group"), 1u) << klass.text ();
 }
 
 /* ------------------------------------------------------------------ casts */

@@ -74,6 +74,14 @@
 		ret
 	}
 
+	.method public static class [mscorlib]System.Type TypeOfString (string s) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		callvirt instance class [mscorlib]System.Type [mscorlib]System.Object::GetType ()
+		ret
+	}
+
 	.method public static valuetype [mscorlib]System.RuntimeMethodHandle MethodToken () cil managed
 	{
 		.maxstack 1

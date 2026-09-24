@@ -231,13 +231,14 @@ MethodLLVMEmitter::emit_object_alloc (MonoIrBuilder &builder, MonoClass *klass, 
 /// A boxed enum unboxes as its underlying type, and a boxed underlying value
 /// unboxes as the enum.
 llvm::Value *
-MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, MonoClass *klass)
+MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, const StackValue &obj,
+                                  MonoClass *klass)
 {
 	llvm::Type *ptr = llvm::PointerType::get (context (), 0);
 
-	emit_null_check (builder, obj, /*object_reference=*/false);
+	emit_null_check (builder, obj.value, /*object_reference=*/false);
 
-	llvm::Value *vtable = load_vtable (builder, obj);
+	llvm::Value *vtable = load_vtable (builder, obj.value, obj.type);
 	// An array of T and a boxed T have the same element class, so the rank is
 	// what tells them apart.
 	llvm::Value *rank = builder.CreateCall (vtable_rank_decl (*module), { vtable });
@@ -261,7 +262,7 @@ MethodLLVMEmitter::unbox_payload (MonoIrBuilder &builder, llvm::Value *obj, Mono
 			element, class_symbol (m_class_get_element_class (klass), "mono_class_")),
 		"InvalidCastException");
 
-	return builder.CreateGEP (builder.getInt8Ty (), obj,
+	return builder.CreateGEP (builder.getInt8Ty (), obj.value,
 	                          builder.getInt32 (MONO_ABI_SIZEOF (MonoObject)));
 }
 
@@ -563,7 +564,7 @@ MethodLLVMEmitter::emit_unbox (MonoIrBuilder &builder, uint32_t token)
 		return invalid_il (llvm::Twine ("unbox is not defined for operand type ")
 		                   + describe (obj.type, obj_type));
 
-	llvm::Value *payload = unbox_payload (builder, obj.value, klass);
+	llvm::Value *payload = unbox_payload (builder, obj, klass);
 
 	pop_stack (1);
 	push_stack (payload, m_class_get_this_arg (klass));
@@ -632,7 +633,7 @@ MethodLLVMEmitter::emit_unbox_any (MonoIrBuilder &builder, uint32_t token)
 		return invalid_il (llvm::Twine ("unbox.any is not defined for operand type ")
 		                   + describe (obj.type, obj_type));
 
-	llvm::Value *payload = unbox_payload (builder, obj.value, klass);
+	llvm::Value *payload = unbox_payload (builder, obj, klass);
 
 	pop_stack (1);
 	push_stack (payload, m_class_get_this_arg (klass));

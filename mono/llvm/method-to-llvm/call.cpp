@@ -353,25 +353,27 @@ MethodLLVMEmitter::pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignatu
 	return args;
 }
 
-/// Reads the vtable of object.
+/// Reads the vtable of object, of static type held.
 ///
-/// The read is a load, and mark_object_vtable_read () (passes/vtable-func.cpp)
-/// states on it that the word is invariant. eliminate_object_vtables ()
-/// (passes/builtins.cpp) names the vtable from the class the IR gives object.
-/// It reaches a receiver no store names: one a sealed slot declares, or one read
-/// out of an initonly static. Where a store does name it, LLVM forwards that
-/// store itself.
+/// Transparent proxies can change vtables during a cast, so only mark the load
+/// invariant when held cannot be a proxy. This lets the vtable passes recover
+/// known vtables without preserving a stale value across a proxy upgrade.
 llvm::Value *
-MethodLLVMEmitter::load_vtable (MonoIrBuilder &builder, llvm::Value *object,
+MethodLLVMEmitter::load_vtable (MonoIrBuilder &builder, llvm::Value *object, MonoType *held,
                                 const llvm::Twine &name)
 {
 	llvm::Value *at =
 		builder.CreateGEP (builder.getInt8Ty (), object,
 	                           builder.getInt64 (MONO_STRUCT_OFFSET (MonoObject, vtable)));
+	llvm::LoadInst *load = builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0),
+	                                                  at, llvm::Align (sizeof (void *)), name);
 
-	return mark_object_vtable_read (
-		builder.CreateAlignedLoad (llvm::PointerType::get (context (), 0), at,
-	                                   llvm::Align (sizeof (void *)), name));
+	// A proxy upgrade can replace its vtable with one that has additional class
+	// or interface information.
+	if (can_be_a_proxy (held))
+		return mark_internal_load (load, object_header_tbaa_leaf, InternalLife::varies);
+
+	return mark_object_vtable_read (load);
 }
 
 /// Loads the callee out of target's vtable slot in the object receiver points
@@ -387,11 +389,11 @@ MethodLLVMEmitter::load_vtable (MonoIrBuilder &builder, llvm::Value *object,
 /// signed, so such a site needs no case of its own here.
 llvm::Value *
 MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
-                                   MonoMethod *target)
+                                   MonoType *held, MonoMethod *target)
 {
 	return builder.CreateCall (
 		vtable_func_decl (*module),
-		{ load_vtable (builder, receiver),
+		{ load_vtable (builder, receiver, held),
 	          builder.getInt32 (mono_method_get_vtable_index (target)) });
 }
 
@@ -402,11 +404,12 @@ MethodLLVMEmitter::virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver
 /// name one method.
 llvm::Value *
 MethodLLVMEmitter::generic_virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
-                                           MonoMethod *target, llvm::Value *key)
+                                           MonoType *held, MonoMethod *target,
+                                           llvm::Value *key)
 {
 	return builder.CreateCall (
 		vtable_gfunc_decl (*module),
-		{ load_vtable (builder, receiver),
+		{ load_vtable (builder, receiver, held),
 	          builder.getInt32 (mono_method_get_vtable_index (target)), key });
 }
 
@@ -424,11 +427,11 @@ MethodLLVMEmitter::generic_virtual_callee (MonoIrBuilder &builder, llvm::Value *
 /// every site nothing folded.
 llvm::Value *
 MethodLLVMEmitter::interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
-                                     MonoMethod *target, llvm::Value *key)
+                                     MonoType *held, MonoMethod *target, llvm::Value *key)
 {
 	return builder.CreateCall (
 		imt_func_decl (*module),
-		{ load_vtable (builder, receiver),
+		{ load_vtable (builder, receiver, held),
 	          builder.getInt32 (mono_method_get_imt_slot (target)), key });
 }
 
@@ -467,7 +470,10 @@ MethodLLVMEmitter::delegate_invoke_callee (MonoIrBuilder &builder, llvm::Value *
 		llvm::Align (TARGET_SIZEOF_VOID_P));
 
 	return builder.CreateSelect (builder.CreateIsNull (impl),
-	                             virtual_callee (builder, receiver, target), impl);
+	                             virtual_callee (builder, receiver,
+	                                             m_class_get_byval_arg (target->klass),
+	                                             target),
+	                             impl);
 }
 
 /// Emits a use of value that generates no code, so it stays live here.
@@ -554,6 +560,19 @@ bool
 MethodLLVMEmitter::allocation_can_be_a_proxy (MonoClass *klass)
 {
 	return m_class_get_marshalbyref (klass) || mono_class_is_com_object (klass);
+}
+
+/// Whether an object of static type held can be a transparent proxy.
+bool
+MethodLLVMEmitter::can_be_a_proxy (MonoType *held)
+{
+	if (mono_type_is_generic_parameter (held))
+		return true;
+
+	MonoClass *klass = mono_class_from_mono_type_internal (held);
+
+	return klass == mono_defaults.object_class || mono_class_is_interface (klass)
+	       || allocation_can_be_a_proxy (klass);
 }
 
 /// The class the receiver has at run time, or null where the IL leaves it open.
@@ -1298,7 +1317,7 @@ MethodLLVMEmitter::emit_get_type (MonoIrBuilder &builder, bool receiver_by_refer
 
 	emit_null_check (builder, object, /*object_reference=*/false);
 
-	llvm::Value *vtable = load_vtable (builder, object);
+	llvm::Value *vtable = load_vtable (builder, object, receiver.type);
 	/*
 	 * mono_class_create_runtime_vtable () fills in `type` before it publishes
 	 * the vtable, so an object that exists has one. RuntimeType is the
@@ -1679,6 +1698,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 	if (!declaration)
 		return declaration.takeError ();
 
+	MonoType *receiver_type = sig->hasthis && stack.size () > sig->param_count
+	                                  ? stack[stack.size () - 1 - sig->param_count].type
+	                                  : nullptr;
 	llvm::Expected<std::vector<llvm::Value *>> args = pop_call_arguments (builder, sig);
 	if (!args)
 		return args.takeError ();
@@ -1768,8 +1790,9 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 
 			llvm::Value *code =
 				is_interface
-					? interface_callee (builder, (*args)[0], callee_method, *key)
-					: generic_virtual_callee (builder, (*args)[0],
+					? interface_callee (builder, (*args)[0], receiver_type,
+				                            callee_method, *key)
+					: generic_virtual_callee (builder, (*args)[0], receiver_type,
 				                                  callee_method, *key);
 			std::vector<llvm::Type *> params (slot_type->param_begin (),
 			                                  slot_type->param_end ());
@@ -1785,7 +1808,7 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		} else if (overridable && mono_method_get_vtable_index (callee_method) >= 0) {
 			callee = llvm::FunctionCallee (
 				slot_type,
-				virtual_callee (builder, (*args)[0], callee_method));
+				virtual_callee (builder, (*args)[0], receiver_type, callee_method));
 			through_slot = true;
 		}
 	}

@@ -979,14 +979,16 @@ private:
 	llvm::Expected<std::vector<llvm::Value *>>
 	pop_call_arguments (MonoIrBuilder &builder, MonoMethodSignature *sig,
 	                    bool native = false);
-	llvm::Value *load_vtable (MonoIrBuilder &builder, llvm::Value *object,
+	static bool can_be_a_proxy (MonoType *held);
+	llvm::Value *load_vtable (MonoIrBuilder &builder, llvm::Value *object, MonoType *held,
 	                          const llvm::Twine &name = "");
 	llvm::Value *virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
-	                             MonoMethod *target);
+	                             MonoType *held, MonoMethod *target);
 	llvm::Value *generic_virtual_callee (MonoIrBuilder &builder, llvm::Value *receiver,
-	                                     MonoMethod *target, llvm::Value *key);
+	                                     MonoType *held, MonoMethod *target,
+	                                     llvm::Value *key);
 	llvm::Value *interface_callee (MonoIrBuilder &builder, llvm::Value *receiver,
-	                               MonoMethod *target, llvm::Value *key);
+	                               MonoType *held, MonoMethod *target, llvm::Value *key);
 	llvm::Value *delegate_invoke_callee (MonoIrBuilder &builder, llvm::Value *receiver,
 	                                     MonoMethod *target);
 	llvm::Constant *method_symbol (MonoMethod *target);
@@ -1239,7 +1241,7 @@ private:
 	                          llvm::Value *vtable);
 	llvm::Expected<llvm::Value *> emit_object_alloc (MonoIrBuilder &builder,
 	                                                 MonoClass *klass, bool for_box);
-	llvm::Value *unbox_payload (MonoIrBuilder &builder, llvm::Value *obj,
+	llvm::Value *unbox_payload (MonoIrBuilder &builder, const StackValue &obj,
 	                            MonoClass *klass);
 	llvm::Error call_nullable_helper (MonoIrBuilder &builder, MonoClass *klass,
 	                                  const char *name);

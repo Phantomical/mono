@@ -516,6 +516,7 @@ set(MONO_TESTS_CS_SRC
   transparentproxy.cs
   proxy-cast-cache.cs
   proxy-cast-concrete-class.cs
+  proxy-upgrade-gettype.cs
   tier2-interface-cast-fastpath.cs
   bug-48015.cs
   delegate9.cs
@@ -585,6 +586,7 @@ set(MONO_TESTS_CS_SRC
 # Tests written directly in IL, assembled with ilasm.
 set(MONO_TESTS_IL_SRC
   tbaa-straddle.il
+  proxy-upgrade-dispatch.il
   typeload-isclass-no-layout.il
   float-stack-precision.il
   tailcall/2.il
