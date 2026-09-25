@@ -4,6 +4,7 @@
 #include "mini-runtime.h"
 #include "runtime-error.hpp"
 #include "runtime/naming.hpp"
+#include "mono/metadata/class-init.h"
 #include "mono/metadata/class-internals.h"
 #include "mono/metadata/debug-helpers.h"
 #include "mono/metadata/icall-internals.h"
@@ -156,29 +157,31 @@ marshals_unchanged (MonoClass *klass)
 std::optional<uint64_t>
 known_dereferenceable_bytes (MonoType *t)
 {
-	if (t->byref)
+	if (!mini_type_is_reference (t))
 		return std::nullopt;
 
-	switch (mini_get_underlying_type (t)->type) {
-	case MONO_TYPE_STRING:
-	case MONO_TYPE_CLASS:
-	case MONO_TYPE_OBJECT:
+	// mini_get_underlying_type () reports object for every reference type.
+	switch (t->type) {
 	case MONO_TYPE_ARRAY:
 	case MONO_TYPE_SZARRAY:
-		return (uint64_t) m_class_get_instance_size (mono_class_from_mono_type_internal (t));
-	case MONO_TYPE_GENERICINST:
-		return mono_type_generic_inst_is_valuetype (t)
-			       ? std::nullopt
-			       : std::optional<uint64_t> ((uint64_t) m_class_get_instance_size (
-					 mono_class_from_mono_type_internal (t)));
+		// The array instance size excludes each array's bounds and length.
+		return (uint64_t) MONO_SIZEOF_MONO_ARRAY;
 	case MONO_TYPE_VAR:
 	case MONO_TYPE_MVAR:
-		// Generic sharing only handles reference-type instantiations here, and
-		// every object contains at least a MonoObject header.
+		// A type parameter can reference an object with only a header.
 		return (uint64_t) MONO_ABI_SIZEOF (MonoObject);
 	default:
-		return std::nullopt;
+		break;
 	}
+
+	// Initialize the layout before reading the instance size.
+	MonoClass *klass = mono_class_from_mono_type_internal (t);
+
+	mono_class_init_sizes (klass);
+	if (mono_class_has_failure (klass))
+		return std::nullopt;
+
+	return (uint64_t) m_class_get_instance_size (klass);
 }
 
 /// Returns a dereferenceable_or_null attribute when the size of t is known.
@@ -388,6 +391,44 @@ struct_for_layout (ModuleTypes &types, llvm::LLVMContext &ctx, llvm::StringRef n
 }
 
 } // namespace
+
+MonoType *
+narrowed_reference (MonoType *element, MonoType *held)
+{
+	if (element->type != MONO_TYPE_OBJECT || element->byref || !mini_type_is_reference (held))
+		return element;
+
+	return held;
+}
+
+void
+carry_return_extent (llvm::CallBase *call, MonoType *ret)
+{
+	llvm::LLVMContext &ctx = call->getContext ();
+
+	if (std::optional<llvm::Attribute> deref = dereferenceable_attr (ctx, ret))
+		call->addRetAttr (*deref);
+	if (std::optional<llvm::Attribute> align = alignment_attr (ctx, ret))
+		call->addRetAttr (*align);
+}
+
+void
+mark_object_extent (llvm::LoadInst *load, MonoType *t)
+{
+	std::optional<uint64_t> bytes = known_dereferenceable_bytes (t);
+
+	if (!bytes || *bytes == 0 || !is_object_pointer (load->getType ()))
+		return;
+
+	llvm::LLVMContext &ctx = load->getContext ();
+	auto word = [&] (uint64_t value) {
+		return llvm::MDNode::get (ctx, llvm::ConstantAsMetadata::get (llvm::ConstantInt::get (
+						       llvm::Type::getInt64Ty (ctx), value)));
+	};
+
+	load->setMetadata (llvm::LLVMContext::MD_dereferenceable_or_null, word (*bytes));
+	load->setMetadata (llvm::LLVMContext::MD_align, word (object_alignment ().value ()));
+}
 
 /// The C ABI leaves a narrow integer's high bits undefined. The signature
 /// must say which way to fill them, because the caller and the callee
