@@ -15,6 +15,7 @@
 #include "analysis/type-info.hpp"
 #include "analysis/vtable-info.hpp"
 #include "il-line-table.hpp"
+#include "managed-pointer.hpp"
 #include "method-symbols.hpp"
 #include "mini.h"
 #include "runtime/minimal-compile.hpp"
@@ -440,6 +441,9 @@ private:
 	llvm::DenseMap<size_t, Block> blocks;
 	llvm::DenseMap<std::pair<size_t, llvm::Type *>, llvm::AllocaInst *> spills;
 	llvm::BasicBlock *entry_block = nullptr;
+
+	/// Builder used to convert pushed pointers to their stack address space.
+	llvm::IRBuilder<> *stack_builder = nullptr;
 
 	std::vector<llvm::BasicBlock *> cold_blocks;
 
@@ -1371,8 +1375,10 @@ private:
 
 	void push_stack (llvm::Value *value, MonoType *type, bool native = false)
 	{
-		stack.push_back ({ value, type, native });
+		stack.push_back ({ in_stack_address_space (value, type), type, native });
 	}
+
+	llvm::Value *in_stack_address_space (llvm::Value *value, MonoType *type);
 
 	void pop_stack (size_t count)
 	{

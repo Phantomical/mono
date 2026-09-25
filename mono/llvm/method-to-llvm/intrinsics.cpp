@@ -338,8 +338,7 @@ struct BuiltinEmitters {
 		}
 		if (name == "get_Value") {
 			builder.CreateRet (builder.CreateAlignedLoad (
-				llvm::PointerType::get (emitter.context (), 0), argument (0),
-				align));
+				emitter.function->getReturnType (), argument (0), align));
 			return llvm::Error::success ();
 		}
 

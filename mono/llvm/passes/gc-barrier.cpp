@@ -7,6 +7,7 @@
 #include "gc-barrier.hpp"
 
 #include "builtins.hpp"
+#include "managed-pointer.hpp"
 #include "runtime/options.hpp"
 
 #include "mono/metadata/abi-details.h"
@@ -318,7 +319,7 @@ lower_helper (CallInst *site)
 	IRBuilder<> b (site);
 
 	b.SetCurrentDebugLocation (site->getDebugLoc ());
-	b.CreateCall (helper, { site->getArgOperand (0) });
+	b.CreateCall (helper, { in_address_space (b, site->getArgOperand (0), 0) });
 	site->eraseFromParent ();
 }
 
@@ -352,7 +353,8 @@ lower_value_copy (CallInst *site)
 	IRBuilder<> b (site);
 
 	b.SetCurrentDebugLocation (site->getDebugLoc ());
-	b.CreateCall (helper, { site->getArgOperand (0), site->getArgOperand (1),
+	b.CreateCall (helper, { in_address_space (b, site->getArgOperand (0), 0),
+	                        in_address_space (b, site->getArgOperand (1), 0),
 	                        site->getArgOperand (2), site->getArgOperand (4) });
 	site->eraseFromParent ();
 }
@@ -382,10 +384,9 @@ Function *
 gc_barrier_decl (Module &m, const GcBarrierLayout &layout)
 {
 	LLVMContext &c = m.getContext ();
-	Type *ptr = PointerType::get (c, 0);
-	Function *decl =
-		builtin_decl (m, gc_barrier_name,
-	                      FunctionType::get (Type::getVoidTy (c), { ptr, ptr }, false));
+	Type *object = object_pointer_type (c);
+	Function *decl = builtin_decl (m, gc_barrier_name,
+	                               FunctionType::get (Type::getVoidTy (c), { object, object }, false));
 
 	stamp_barrier (decl, layout);
 	return decl;
@@ -396,10 +397,11 @@ gc_value_copy_decl (Module &m, const GcBarrierLayout &layout)
 {
 	LLVMContext &c = m.getContext ();
 	Type *ptr = PointerType::get (c, 0);
+	Type *object = object_pointer_type (c);
 	Function *decl = builtin_decl (
 		m, gc_value_copy_name,
 		FunctionType::get (Type::getVoidTy (c),
-	                           { ptr, ptr, Type::getInt32Ty (c),
+	                           { object, object, Type::getInt32Ty (c),
 	                             Type::getInt64Ty (c), ptr },
 	                           false));
 

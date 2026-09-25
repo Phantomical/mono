@@ -128,10 +128,10 @@ MethodLLVMEmitter::emit_interlocked_compare_exchange_object (MonoIrBuilder &buil
 	if (!args)
 		return args.takeError ();
 
-	llvm::Type *ptr_ty = llvm::PointerType::get (context (), 0);
+	llvm::Type *object = object_pointer_type (context ());
 	llvm::Value *location = (*args)[0];
-	llvm::Value *value = builder.CreateAlignedLoad (ptr_ty, (*args)[1], llvm::Align (8));
-	llvm::Value *comparand = builder.CreateAlignedLoad (ptr_ty, (*args)[2], llvm::Align (8));
+	llvm::Value *value = builder.CreateAlignedLoad (object, (*args)[1], llvm::Align (8));
+	llvm::Value *comparand = builder.CreateAlignedLoad (object, (*args)[2], llvm::Align (8));
 
 	llvm::AtomicCmpXchgInst *cx = builder.CreateAtomicCmpXchg (
 		location, comparand, value, llvm::MaybeAlign (8), seq_cst, seq_cst);
@@ -140,7 +140,10 @@ MethodLLVMEmitter::emit_interlocked_compare_exchange_object (MonoIrBuilder &buil
 	const GcBarrierLayout &gc = current_write_barrier_layout ();
 
 	record_barrier_symbols (gc);
-	builder.CreateCall (gc_barrier_decl (*module, gc), { location, value });
+
+	llvm::Function *barrier = gc_barrier_decl (*module, gc);
+
+	builder.CreateCall (barrier, adapt_to_callee (builder, barrier, { location, value }));
 
 	// result is always a fresh local of the one caller this icall has
 	// (Interlocked.cs), never a field, so it owes no card of its own.
@@ -189,9 +192,9 @@ MethodLLVMEmitter::emit_interlocked_exchange_object (MonoIrBuilder &builder,
 	if (!args)
 		return args.takeError ();
 
-	llvm::Type *ptr_ty = llvm::PointerType::get (context (), 0);
 	llvm::Value *location = (*args)[0];
-	llvm::Value *value = builder.CreateAlignedLoad (ptr_ty, (*args)[1], llvm::Align (8));
+	llvm::Value *value =
+		builder.CreateAlignedLoad (object_pointer_type (context ()), (*args)[1], llvm::Align (8));
 
 	llvm::Value *old = builder.CreateAtomicRMW (llvm::AtomicRMWInst::Xchg, location, value,
 	                                            llvm::MaybeAlign (8), seq_cst);
@@ -199,7 +202,10 @@ MethodLLVMEmitter::emit_interlocked_exchange_object (MonoIrBuilder &builder,
 	const GcBarrierLayout &gc = current_write_barrier_layout ();
 
 	record_barrier_symbols (gc);
-	builder.CreateCall (gc_barrier_decl (*module, gc), { location, value });
+
+	llvm::Function *barrier = gc_barrier_decl (*module, gc);
+
+	builder.CreateCall (barrier, adapt_to_callee (builder, barrier, { location, value }));
 
 	builder.CreateAlignedStore (old, (*args)[2], llvm::Align (8));
 
