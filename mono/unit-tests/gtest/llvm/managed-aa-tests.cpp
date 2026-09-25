@@ -86,8 +86,8 @@ struct Parsed {
 	std::unique_ptr<Module> module;
 	Function *caller = nullptr;
 
-	/// \p params are the classes `@caller`'s arguments are declared with, in
-	/// order.
+	/// \param params  the classes `@caller`'s arguments are declared with, in
+	///                order.
 	explicit Parsed (const std::string &ir, std::initializer_list<MonoClass *> params = {})
 	{
 		SMDiagnostic problem;

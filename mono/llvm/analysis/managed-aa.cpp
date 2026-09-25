@@ -39,8 +39,7 @@ struct Base {
 	};
 
 	Kind kind = Kind::unknown;
-	/// For a heap base, a class every object it can be is an instance of, or
-	/// null where the IR states none.
+	/// Object class bound, if any.
 	MonoClass *bound = nullptr;
 };
 
@@ -112,6 +111,7 @@ classify (const Value *pointer, const Function &f)
 	if (static_field_addressed (pointer, layout, offset) != nullptr)
 		return { Base::Kind::statics };
 
+	// Plain GEPs can escape their source object.
 	const Value *root = pointer->stripInBoundsOffsets ();
 
 	if (MonoClass *klass = stated_class (root, f).first)
