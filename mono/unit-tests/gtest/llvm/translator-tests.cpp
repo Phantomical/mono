@@ -613,6 +613,135 @@ TEST_F (TranslatorTest, StaticsOfOneClassShareOneSymbol)
 	EXPECT_EQ (holder, 1u) << t.text ();
 }
 
+namespace {
+
+/// TBAA access-type names on scalar loads and stores in \p f.
+std::vector<std::string>
+access_types (const llvm::Function &f)
+{
+	std::vector<std::string> names;
+
+	for (const llvm::Instruction &in : llvm::instructions (f)) {
+		llvm::Type *type = nullptr;
+
+		if (const auto *load = llvm::dyn_cast<llvm::LoadInst> (&in))
+			type = load->getType ();
+		else if (const auto *store = llvm::dyn_cast<llvm::StoreInst> (&in))
+			type = store->getValueOperand ()->getType ();
+
+		if (type == nullptr || !(type->isIntegerTy (32) || type->isFloatTy ()))
+			continue;
+
+	// Ignore untagged parameter spills.
+		if (llvm::isa<llvm::AllocaInst> (llvm::getLoadStorePointerOperand (&in)))
+			continue;
+
+		const llvm::MDNode *tag = in.getMetadata (llvm::LLVMContext::MD_tbaa);
+
+		names.push_back (tag == nullptr
+		                         ? ""
+		                         : llvm::cast<llvm::MDString> (
+		                                   llvm::cast<llvm::MDNode> (tag->getOperand (1))
+		                                           ->getOperand (0))
+		                                   ->getString ()
+		                                   .str ());
+	}
+
+	return names;
+}
+
+} // namespace
+
+TEST_F (TranslatorTest, AnAccessThroughAFieldAddressCarriesTheFieldTag)
+{
+	const Translation &t = translate ("fields", "Fields:BumpX");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (access_types (*t.function),
+	           (std::vector<std::string> { "mono scalar 4i", "mono scalar 4i" }))
+		<< t.text ();
+}
+
+TEST_F (TranslatorTest, AnAccessUnderAnotherTypeCarriesNoTag)
+{
+	const Translation &t = translate ("fields", "Fields:ReadXAsFloat");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (access_types (*t.function), (std::vector<std::string> { "" })) << t.text ();
+}
+
+TEST_F (TranslatorTest, AnAccessThroughAnElementAddressCarriesTheElementTag)
+{
+	const Translation &t = translate ("fields", "Fields:BumpElement");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+
+	// The bounds check reads the length first.
+	std::vector<std::string> names = access_types (*t.function);
+
+	ASSERT_GE (names.size (), 2u) << t.text ();
+	EXPECT_EQ (std::vector<std::string> (names.end () - 2, names.end ()),
+	           (std::vector<std::string> { "mono element 4i[1]", "mono element 4i[1]" }))
+		<< t.text ();
+}
+
+namespace {
+
+/// The TBAA base and access-type names on a managed-reference access.
+std::pair<std::string, std::string>
+reference_tag (const llvm::Function &f)
+{
+	std::pair<std::string, std::string> names;
+
+	for (const llvm::Instruction &in : llvm::instructions (f)) {
+		const llvm::Value *address = llvm::getLoadStorePointerOperand (&in);
+
+		if (address == nullptr || !llvm::getLoadStoreType (&in)->isPointerTy ()
+		    || address->getType ()->getPointerAddressSpace () == 0)
+			continue;
+
+		const llvm::MDNode *tag = in.getMetadata (llvm::LLVMContext::MD_tbaa);
+
+		if (tag == nullptr)
+			return { "", "" };
+
+		auto name = [&] (unsigned at) {
+			return llvm::cast<llvm::MDString> (
+				       llvm::cast<llvm::MDNode> (tag->getOperand (at))->getOperand (0))
+				->getString ()
+				.str ();
+		};
+
+		names = { name (0), name (1) };
+	}
+
+	return names;
+}
+
+} // namespace
+
+TEST_F (TranslatorTest, AReferenceFieldIsAMemberOfItsClass)
+{
+	const Translation &t = translate ("fields", "Fields:SetRef");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (reference_tag (*t.function),
+	           std::make_pair (std::string ("fields!Holder"),
+	                           std::string ("mono managed reference")))
+		<< t.text ();
+}
+
+TEST_F (TranslatorTest, AReferenceElementHasALeafOfItsOwn)
+{
+	const Translation &t = translate ("fields", "Fields:GetFirst");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (reference_tag (*t.function),
+	           std::make_pair (std::string ("mono element ref[1]"),
+	                           std::string ("mono element ref[1]")))
+		<< t.text ();
+}
+
 TEST_F (TranslatorTest, ALiteralLeavesItsClassItsStaticsDescriptor)
 {
 	const Translation &t = translate ("fields", "Fields:GetCount");

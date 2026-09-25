@@ -41,6 +41,42 @@
 
 .class public abstract auto ansi sealed beforefieldinit Fields extends [mscorlib]System.Object
 {
+	.method public static void BumpX (class Holder h) cil managed
+	{
+		.maxstack 3
+		ldarg.0
+		ldflda int32 Holder::X
+		dup
+		ldind.i4
+		ldc.i4.1
+		add
+		stind.i4
+		ret
+	}
+
+	.method public static float32 ReadXAsFloat (class Holder h) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		ldflda int32 Holder::X
+		ldind.r4
+		ret
+	}
+
+	.method public static void BumpElement (int32[] a, int32 i) cil managed
+	{
+		.maxstack 4
+		ldarg.0
+		ldarg.1
+		ldelema int32
+		dup
+		ldind.i4
+		ldc.i4.1
+		add
+		stind.i4
+		ret
+	}
+
 	.method public static int32 GetCount () cil managed
 	{
 		.maxstack 1

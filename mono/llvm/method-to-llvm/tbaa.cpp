@@ -72,6 +72,23 @@ MethodLLVMEmitter::tbaa_scalar_node (MonoType *t)
 	                          tbaa_coarse_scalar_node ());
 }
 
+/// The coarse node for reference accesses.
+llvm::MDNode *
+MethodLLVMEmitter::tbaa_reference_node ()
+{
+	llvm::MDBuilder md (context ());
+
+	return md.createTBAANode (managed_reference_tbaa_leaf,
+	                          md.createTBAARoot (managed_memory_tbaa_root));
+}
+
+/// The TBAA node for a member of type \p t.
+llvm::MDNode *
+MethodLLVMEmitter::tbaa_member_node (MonoType *t)
+{
+	return mini_type_is_reference (t) ? tbaa_reference_node () : tbaa_scalar_node (t);
+}
+
 /// The descriptor LLVM disambiguates this class's fields with, or null where it
 /// cannot have one. statics selects the class's static block, which is a
 /// separate allocation from any instance and so gets a descriptor of its own.
@@ -134,7 +151,7 @@ MethodLLVMEmitter::type_descriptor (MonoClass *klass, bool statics)
 
 		// named must select the members whose accesses carry a fine tag,
 		// which is what held_in_memory () decides.
-		bool named = !mini_type_is_reference (ftype) && !held_in_memory (ftype);
+		bool named = !held_in_memory (ftype);
 
 		// An unnamed member is kept for the overlap check below. Left out, a
 		// scalar sharing its bytes would read as disjoint.
@@ -155,7 +172,7 @@ MethodLLVMEmitter::type_descriptor (MonoClass *klass, bool statics)
 		if (!member.named)
 			continue;
 
-		fields.emplace_back (tbaa_scalar_node (member.type),
+		fields.emplace_back (tbaa_member_node (member.type),
 		                     static_cast<uint64_t> (member.offset));
 	}
 
@@ -196,24 +213,25 @@ MethodLLVMEmitter::type_descriptor (MonoClass *klass, bool statics)
  * The tree is:
  *
  *     "mono managed memory"                 root
- *     |- "mono managed reference"           every reference access
- *     |- "mono managed scalar"              coarse: an access we cannot place
- *     |  |- "mono scalar 8f"                the nodes a type descriptor names
+ *     |- "mono managed reference"           coarse: a reference we cannot place
+ *     |  \- "mono element ref[2]"           one leaf per rank of reference elements
+ *     |- "mono managed scalar"              coarse: a scalar we cannot place
+ *     |  |- "mono scalar 8f"                the scalar nodes a type descriptor names
  *     |  \- "mono element 8f[2]"            one leaf per scalar array element
  *     \- the leaves internal-loads.hpp names, for the runtime's own memory
  *
  * Type descriptors sit beside that tree, one for a class's instance fields and
- * one for its static block, naming the "mono scalar" nodes.
+ * one for its static block, naming "mono managed reference" and the "mono
+ * scalar" nodes.
  *
  * A field access names its declaring type rather than the receiver's, so an
  * inherited field is one leaf however it is reached.
  *
- * Every fine node hangs below "mono managed scalar", so an access this declines
- * to place still aliases all of them. That is what lets one opcode carry a fine
- * tag while the next carries none.
+ * Every fine node hangs below the coarse node of its kind, so an access this
+ * declines to place still aliases all of them. That is what lets one opcode
+ * carry a fine tag while the next carries none.
  *
- * is_reference must be what mini_type_is_reference () says of the slot, and it
- * outranks the kind: a reference is on its own leaf whatever named it.
+ * is_reference must be what mini_type_is_reference () says of the slot.
  */
 llvm::MDNode *
 MethodLLVMEmitter::tbaa_tag (const ManagedAccess &access, bool is_reference)
@@ -222,14 +240,6 @@ MethodLLVMEmitter::tbaa_tag (const ManagedAccess &access, bool is_reference)
 		return nullptr;
 
 	llvm::MDBuilder md (context ());
-
-	if (is_reference) {
-		llvm::MDNode *leaf =
-			md.createTBAANode (managed_reference_tbaa_leaf,
-			                   md.createTBAARoot (managed_memory_tbaa_root));
-
-		return md.createTBAAStructTagNode (leaf, leaf, 0);
-	}
 
 	/*
 	 * A shared body names a field's class in its open form, not the
@@ -253,9 +263,20 @@ MethodLLVMEmitter::tbaa_tag (const ManagedAccess &access, bool is_reference)
 			if (!statics && m_class_is_valuetype (parent))
 				offset -= MONO_ABI_SIZEOF (MonoObject);
 
-			return md.createTBAAStructTagNode (descriptor, tbaa_scalar_node (ftype),
+			return md.createTBAAStructTagNode (descriptor, tbaa_member_node (ftype),
 			                                   static_cast<uint64_t> (offset));
 		}
+	}
+
+	if (is_reference) {
+		llvm::MDNode *leaf = tbaa_reference_node ();
+
+		// Covariance means reference elements are distinguished only by rank.
+		if (access.kind == ManagedAccess::Kind::element)
+			leaf = md.createTBAANode ("mono element ref[" + std::to_string (access.rank) + "]",
+			                          leaf);
+
+		return md.createTBAAStructTagNode (leaf, leaf, 0);
 	}
 
 	// A whole element carries a leaf only where it is one scalar. A value type

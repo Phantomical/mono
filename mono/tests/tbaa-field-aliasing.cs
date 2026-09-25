@@ -41,6 +41,7 @@ struct Vec4 {
 class Counter {
 	public int Value;
 	public int Other;
+	public object Held;
 }
 
 class Derived : Counter {
@@ -168,6 +169,50 @@ static class Program {
 		return before + c.Value;
 	}
 
+	/// Reference-field variant of SameFieldTwoObjects.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SameReferenceFieldTwoObjects (Counter a, Counter b, object value)
+	{
+		object before = b.Held;
+
+		a.Held = value;
+
+		return (before == null ? 1 : 0) + (b.Held == value ? 1 : 0);
+	}
+
+	/// Reference-field variant of InheritedField.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int InheritedReferenceField (Derived d, Counter c, object value)
+	{
+		object before = c.Held;
+
+		d.Held = value;
+
+		return (before == null ? 1 : 0) + (c.Held == value ? 1 : 0);
+	}
+
+	/// Reference-element variant of SameElementTwoArrays.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int SameReferenceElementTwoArrays (object[] first, string[] second, string value)
+	{
+		string before = second [2];
+
+		first [2] = value;
+
+		return (before == null ? 1 : 0) + (second [2] == value ? 1 : 0);
+	}
+
+	/// An indirect element access carries the same tag as a direct one.
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int BumpedElementTwoArrays (int[] first, int[] second, int value)
+	{
+		int before = second [2];
+
+		first [2] += value;
+
+		return before + second [2];
+	}
+
 	/// One array in two fields, read and written as whole elements. This is the
 	/// element leaf rather than the field leaf.
 	[MethodImpl (MethodImplOptions.NoInlining)]
@@ -260,6 +305,24 @@ static class Program {
 		derived.Value = 1;
 		Check (tier + " inherited field", InheritedField (derived, derived, 7), 8);
 
+		object held = new object ();
+
+		counter.Held = null;
+		Check (tier + " same reference field two objects",
+			SameReferenceFieldTwoObjects (counter, counter, held), 2);
+
+		derived.Held = null;
+		Check (tier + " inherited reference field",
+			InheritedReferenceField (derived, derived, held), 2);
+
+		string[] strings = new string [4];
+		Check (tier + " same reference element two arrays",
+			SameReferenceElementTwoArrays (strings, strings, "x"), 2);
+
+		int[] ints = new int [4];
+		ints [2] = 1;
+		Check (tier + " bumped element two arrays", BumpedElementTwoArrays (ints, ints, 7), 9);
+
 		arrays.FirstFlat [2] = 1.0;
 		Check (tier + " same element two arrays",
 			SameElementTwoArrays (arrays.FirstFlat, arrays.SecondFlat, 7.0), 8.0);
@@ -287,6 +350,8 @@ static class Program {
 		"VolatileTwoRefs", "SameFieldTwoArrays", "SameFieldTwoGrids",
 		"DistinctFields", "SameFieldTwoObjects", "InheritedField",
 		"SameElementTwoArrays", "WholeElementSeesField", "SharedGenericField",
+		"SameReferenceFieldTwoObjects", "InheritedReferenceField",
+		"SameReferenceElementTwoArrays", "BumpedElementTwoArrays",
 	};
 
 	public static int Main ()
