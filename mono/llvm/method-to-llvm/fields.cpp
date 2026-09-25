@@ -262,6 +262,23 @@ MethodLLVMEmitter::vtable_symbol (MonoClass *klass, const std::string &symbol)
 	return global;
 }
 
+/// Return the statics block global, typed to its allocation size.
+llvm::Constant *
+MethodLLVMEmitter::statics_symbol (MonoClass *klass, const std::string &symbol)
+{
+	if (llvm::GlobalValue *existing = module->getNamedValue (symbol))
+		return existing;
+
+	auto *block = llvm::ArrayType::get (llvm::Type::getInt8Ty (context ()),
+	                                    mono_class_data_size (klass));
+	auto *global = new llvm::GlobalVariable (*module, block, false,
+	                                         llvm::GlobalValue::ExternalLinkage, nullptr,
+	                                         symbol);
+
+	global->setAlignment (llvm::Align (sizeof (gpointer)));
+	return global;
+}
+
 /// What an elimination can read off klass's vtable symbol, or nothing where
 /// this compile cannot state every field.
 ///
@@ -345,9 +362,9 @@ MethodLLVMEmitter::class_symbol (MonoClass *klass, const char *prefix)
 	g_free (name);
 	record_external (symbol, kind, klass);
 
-	llvm::Constant *symbolic = kind == ExternalSymbol::Kind::VTable
-	                                   ? vtable_symbol (klass, symbol)
-	                                   : extern_symbol (symbol);
+	llvm::Constant *symbolic = kind == ExternalSymbol::Kind::VTable    ? vtable_symbol (klass, symbol)
+	                           : kind == ExternalSymbol::Kind::Statics ? statics_symbol (klass, symbol)
+	                                                                   : extern_symbol (symbol);
 
 	// A pass that answers a dispatch site has the vtable and needs the class. A
 	// pass that answers a type test has the class the test names.
