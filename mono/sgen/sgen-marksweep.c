@@ -2320,18 +2320,97 @@ major_free_swept_blocks (size_t section_reserve)
 	}
 }
 
+/* A contiguous block range in the sorted pin queue. */
+typedef struct {
+	char *block;
+	guint32 first, last;
+	gboolean is_block;
+} PinQueueRun;
+
+typedef struct {
+	char *block;
+	guint32 run;
+} PinQueueSlot;
+
+#define PIN_PREFETCH_DISTANCE 8
+
+static size_t
+pin_queue_run_hash (char *block, size_t mask)
+{
+	return (size_t)((((guint64)(mword)block / ms_block_size) * 0x9E3779B97F4A7C15ull) >> 32) & mask;
+}
+
+/* The sorted pin queue groups entries by block. */
 static void
 major_pin_objects (SgenGrayQueue *queue)
 {
+	size_t count = sgen_get_pinned_count ();
+	void **entries = sgen_pinning_get_entry (0);
+	size_t num_runs = 0, table_size = 1, mask, i, r;
+	PinQueueRun *runs;
+	PinQueueSlot *table;
 	MSBlockInfo *block;
 
+	if (!count)
+		return;
+	SGEN_ASSERT (0, count <= G_MAXUINT32, "Pin queue too large to index");
+
+	for (i = 0; i < count; ++i) {
+		if (i == 0 || MS_BLOCK_DATA_FOR_OBJ (entries [i]) != MS_BLOCK_DATA_FOR_OBJ (entries [i - 1]))
+			++num_runs;
+	}
+	while (table_size < num_runs * 2)
+		table_size <<= 1;
+	mask = table_size - 1;
+	runs = (PinQueueRun*)sgen_alloc_internal_dynamic (sizeof (PinQueueRun) * num_runs, INTERNAL_MEM_TEMPORARY, TRUE);
+	table = (PinQueueSlot*)sgen_alloc_internal_dynamic (sizeof (PinQueueSlot) * table_size, INTERNAL_MEM_TEMPORARY, TRUE);
+
+	for (i = 0, r = 0; i < count; ++r) {
+		char *start = MS_BLOCK_DATA_FOR_OBJ (entries [i]);
+		size_t slot = pin_queue_run_hash (start, mask);
+
+		runs [r].block = start;
+		runs [r].first = (guint32)i;
+		while (i < count && MS_BLOCK_DATA_FOR_OBJ (entries [i]) == start)
+			++i;
+		runs [r].last = (guint32)i;
+
+		while (table [slot].block)
+			slot = (slot + 1) & mask;
+		table [slot].block = start;
+		table [slot].run = (guint32)r;
+	}
+
 	FOREACH_BLOCK_NO_LOCK (block) {
-		size_t first_entry, last_entry;
+		char *start = MS_BLOCK_FOR_BLOCK_INFO (block);
+		size_t slot = pin_queue_run_hash (start, mask);
+
 		SGEN_ASSERT (6, block_is_swept_or_marking (block), "All blocks must be swept when we're pinning.");
-		sgen_find_optimized_pin_queue_area (MS_BLOCK_FOR_BLOCK_INFO (block) + MS_BLOCK_SKIP, MS_BLOCK_FOR_BLOCK_INFO (block) + ms_block_size,
-				&first_entry, &last_entry);
-		mark_pinned_objects_in_block (block, first_entry, last_entry, queue);
+		while (table [slot].block && table [slot].block != start)
+			slot = (slot + 1) & mask;
+		if (table [slot].block)
+			runs [table [slot].run].is_block = TRUE;
 	} END_FOREACH_BLOCK_NO_LOCK;
+
+	/* Address order lets us prefetch upcoming blocks and objects. */
+	for (r = 0; r < num_runs; ++r) {
+		size_t first;
+
+		if (r + PIN_PREFETCH_DISTANCE < num_runs && runs [r + PIN_PREFETCH_DISTANCE].is_block) {
+			PREFETCH_READ (runs [r + PIN_PREFETCH_DISTANCE].block);
+			PREFETCH_READ (entries [runs [r + PIN_PREFETCH_DISTANCE].first]);
+		}
+		if (!runs [r].is_block)
+			continue;
+
+		first = runs [r].first;
+		while (first < runs [r].last && (char*)entries [first] < runs [r].block + MS_BLOCK_SKIP)
+			++first;
+		mark_pinned_objects_in_block ((MSBlockInfo*)runs [r].block, first, runs [r].last, queue);
+	}
+
+	sgen_free_internal_dynamic (table, sizeof (PinQueueSlot) * table_size, INTERNAL_MEM_TEMPORARY);
+	sgen_free_internal_dynamic (runs, sizeof (PinQueueRun) * num_runs, INTERNAL_MEM_TEMPORARY);
 }
 
 static void
