@@ -166,13 +166,11 @@ constexpr size_t STACK_TYPE_COUNT = ObjectRef + 1;
 /// `Unsafe.As<TFrom,TTo> (ref)` carries the opposite contract. It is documented
 /// as a reinterpret_cast, and our class libraries write one field's storage
 /// through a second field with it. So a managed pointer describes its storage
-/// only where this translation gave it its type, which trusted_byrefs records.
+/// only where this translation gave it its type, which trusted_byrefs and
+/// addressed record.
 struct ManagedAccess {
 	enum class Kind {
-		/// No tag, so LLVM keeps the access aliasing everything. Every opcode
-		/// that reaches memory through a raw address takes this.
-		/// `Unsafe.As ()`, `MemoryMarshal.Cast ()` and `Span<T>` arrive that
-		/// way, and each reads one slot under a type its storage does not have.
+		/// No tag: LLVM must assume the access aliases everything.
 		untagged,
 		/// The reference or the scalar leaf, which is all we can say about a
 		/// slot whose type we cannot place.
@@ -471,6 +469,9 @@ private:
 	/// A value that reached its use through a spill is not in here either, which
 	/// costs a tag and never correctness.
 	llvm::DenseSet<llvm::Value *> trusted_byrefs;
+
+	/// Fields and elements named by addresses produced in this method.
+	llvm::DenseMap<llvm::Value *, ManagedAccess> addressed;
 
 	/// The `!tbaa` descriptor each class got for its instance fields, or null
 	/// where it cannot have one.
@@ -844,9 +845,14 @@ private:
 	                        ManagedAccess access = ManagedAccess::untagged ());
 
 	ManagedAccess field_access (const StackValue &object, MonoClassField *field);
+
+	/// The named slot's tag for an access of type \p t, or none.
+	ManagedAccess indirect_access (llvm::Value *address, MonoType *t);
 	llvm::MDNode *tbaa_tag (const ManagedAccess &access, bool is_reference);
 	llvm::MDNode *type_descriptor (MonoClass *klass, bool statics);
 	llvm::MDNode *tbaa_scalar_node (MonoType *t);
+	llvm::MDNode *tbaa_reference_node ();
+	llvm::MDNode *tbaa_member_node (MonoType *t);
 	llvm::MDNode *tbaa_coarse_scalar_node ();
 	std::string tbaa_scalar_name (MonoType *t);
 
