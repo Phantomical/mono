@@ -660,6 +660,12 @@ MethodLLVMEmitter::field_address (MonoIrBuilder &builder, StackValue object,
 	if (m_class_is_valuetype (field->parent))
 		offset -= MONO_ABI_SIZEOF (MonoObject);
 
+	// Behind its null check an object reference points at a whole object, and
+	// the field is inside it. A managed or native pointer can be null, and
+	// inbounds off null is poison.
+	if (type == ObjectRef && null_check)
+		return builder.CreateInBoundsGEP (builder.getInt8Ty (), base, builder.getInt32 (offset));
+
 	return builder.CreateGEP (builder.getInt8Ty (), base, builder.getInt32 (offset));
 }
 

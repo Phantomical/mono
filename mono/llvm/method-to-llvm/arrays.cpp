@@ -167,8 +167,8 @@ MethodLLVMEmitter::array_length (MonoIrBuilder &builder, StackValue array)
 	emit_null_check (builder, array.value, /*object_reference=*/true);
 
 	llvm::Value *slot =
-		builder.CreateGEP (builder.getInt8Ty (), array.value,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, max_length)));
+		builder.CreateInBoundsGEP (builder.getInt8Ty (), array.value,
+	                                   builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, max_length)));
 
 	/* This is a scalar typedef, so its size alone is the layout. No ABI table is involved. */
 	constexpr unsigned bytes = sizeof (mono_array_size_t);
@@ -209,12 +209,13 @@ MethodLLVMEmitter::element_address (MonoIrBuilder &builder, StackValue array, St
 
 	MonoClass *klass = mono_class_from_mono_type_internal (element);
 	int32_t size = mono_class_array_element_size (klass);
+	// Inbounds rests on the two checks above.
 	llvm::Value *vector =
-		builder.CreateGEP (builder.getInt8Ty (), array.value,
-	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, vector)));
+		builder.CreateInBoundsGEP (builder.getInt8Ty (), array.value,
+	                                   builder.getInt32 (MONO_STRUCT_OFFSET (MonoArray, vector)));
 
-	return builder.CreateGEP (builder.getInt8Ty (), vector,
-	                          builder.CreateMul (at, llvm::ConstantInt::get (native, size)));
+	return builder.CreateInBoundsGEP (builder.getInt8Ty (), vector,
+	                                  builder.CreateMul (at, llvm::ConstantInt::get (native, size)));
 }
 
 /// Throws ArrayTypeMismatchException unless array is exactly an instance of array_class.

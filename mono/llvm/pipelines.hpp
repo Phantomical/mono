@@ -94,6 +94,11 @@ public:
 	llvm::ModulePassManager buildTier1Pipeline ();
 	llvm::ModulePassManager buildTier2Pipeline ();
 
+	/// Registers tier 2's alias analyses, LLVM's defaults with ManagedAA
+	/// behind them. Call it before `registerFunctionAnalyses ()`, whose own
+	/// AAManager would otherwise take the slot first.
+	void registerTier2AliasAnalyses (llvm::FunctionAnalysisManager &fam);
+
 	/// Build what a candidate the tier-2 inliner materializes is put through.
 	///
 	/// The inliner translates a candidate into a module of its own and runs

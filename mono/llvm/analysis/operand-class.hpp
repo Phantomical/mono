@@ -166,6 +166,11 @@ MonoClass *guessed_class (llvm::Value *v, const llvm::Function &f, const Constan
 /// compile finds the class already warm for - is its own question.
 std::pair<MonoClassField *, int64_t> initonly_static_field (const llvm::Value *v);
 
+/// The static field of \p klass whose storage covers \p offset, or null
+/// where no field of that class reaches there. A struct-typed field answers
+/// for any offset nested inside it, not only its own start.
+MonoClassField *static_field_at (MonoClass *klass, int offset);
+
 /// Says that \p site produces a delegate whose target method is \p target.
 ///
 /// Only where \p target is the method the delegate will really enter. An
