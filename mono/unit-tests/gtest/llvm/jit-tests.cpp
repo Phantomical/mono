@@ -117,6 +117,16 @@ map_far_page (size_t page)
 	return nullptr;
 }
 
+/// Maps a page within rel32 range of the code arena. Returns null on failure.
+static void *
+map_near_page (size_t page)
+{
+	return mono_valloc (nullptr, page,
+	                    MONO_MMAP_READ | MONO_MMAP_WRITE | MONO_MMAP_EXEC
+	                            | MONO_MMAP_JIT | MONO_MMAP_32BIT,
+	                    MONO_MEM_ACCOUNT_OTHER);
+}
+
 extern "C" int64_t
 mono_jit_test_double_it (int64_t x)
 {
@@ -563,6 +573,61 @@ TEST_F (Jit, ReachesFarDataAndHelpersWithoutAStub)
 		}
 
 	mono_vfree (far, page, MONO_MEM_ACCOUNT_OTHER);
+}
+
+/* Verify that near runtime references skip the __imp_ indirection. */
+TEST_F (Jit, ReachesNearRuntimeReferencesWithoutTheImportPointer)
+{
+#ifndef HOST_WIN32
+	GTEST_SKIP () << "only a PE target ever marks a runtime symbol dllimport";
+#endif
+
+	size_t page = 4096;
+	uint8_t *near = static_cast<uint8_t *> (map_near_page (page));
+
+	ASSERT_NE (near, nullptr) << "could not place a near page";
+
+	/* mov rax, rcx; add rax, rax; ret */
+	static const uint8_t body[] = { 0x48, 0x89, 0xc8, 0x48, 0x01, 0xc0, 0xc3 };
+	int64_t *word = reinterpret_cast<int64_t *> (near + 64);
+
+	memcpy (near, body, sizeof (body));
+	*word = 1;
+
+	for (bool tier2 : { false, true }) {
+		SCOPED_TRACE (tier2 ? "tier 2" : "tier 1");
+
+		auto compiled_size = [&] (bool option) -> size_t {
+			SCOPED_TRACE (option ? "option on" : "option off");
+			BoolOptionOverride near_opt ("mono-near-runtime-references", option);
+
+			auto jit = test::make_jit ();
+			EXPECT_TRUE (bool (jit)) << toString (jit.takeError ());
+			if (!jit)
+				return 0;
+			EXPECT_FALSE (bool ((*jit)->register_symbol ("mono_jit_test_near_word", word)));
+			EXPECT_FALSE (bool ((*jit)->register_code_symbol ("mono_jit_test_near_helper",
+			                                                  near)));
+
+			auto entry = (*jit)->compile (
+				build_word_and_helper_module ("mono_jit_test_near_word",
+				                              "mono_jit_test_near_helper", tier2)
+					.take (),
+				"entry");
+			EXPECT_TRUE (bool (entry)) << toString (entry.takeError ());
+			if (!entry)
+				return 0;
+
+			auto fn = reinterpret_cast<int64_t (*) (int64_t)> (entry->entry);
+			EXPECT_EQ (fn (20), 42);
+			return entry->code_size;
+		};
+
+		EXPECT_LT (compiled_size (true), compiled_size (false))
+			<< "the option should have removed an indirection, shrinking the code";
+	}
+
+	mono_vfree (near, page, MONO_MEM_ACCOUNT_OTHER);
 }
 
 /* Counter cases that must remain at tier 1 while they run. */

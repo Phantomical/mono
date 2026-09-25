@@ -955,6 +955,11 @@ cl::opt<bool> FarCallsThroughGot (
 	cl::desc ("Call a helper out of rel32 range through its GOT entry rather "
 	          "than through a linker stub"));
 
+cl::opt<bool> NearRuntimeReferences (
+	"mono-near-runtime-references", cl::Hidden, cl::init (true),
+	cl::desc ("On a PE target, reach a runtime symbol within rel32 range "
+	          "directly rather than through its __imp_ pointer"));
+
 } // namespace
 
 bool
@@ -1830,19 +1835,51 @@ MonoJit::register_code_symbol (StringRef name, void *addr)
 void
 MonoJit::bind_far_references (Module &m)
 {
-	// X86 instruction selection otherwise folds an absolute symbol into a
-	// 32-bit memory displacement. PE targets already use __imp_ pointers.
-	if (!triple ().isOSBinFormatELF ())
-		return;
-
-	auto is_far = [&] (const GlobalValue &g) {
+	auto find_registered = [&] (const GlobalValue &g) -> std::optional<void *> {
 		if (!g.isDeclaration () || !g.hasDefaultVisibility ())
-			return false;
+			return std::nullopt;
 
 		std::lock_guard<std::mutex> lock (named_symbols_mutex_);
 		auto it = named_symbols_.find (g.getName ().str ());
 
-		return it != named_symbols_.end () && !within_displacement (it->second);
+		if (it == named_symbols_.end ())
+			return std::nullopt;
+		return it->second;
+	};
+
+	if (triple ().isOSBinFormatCOFF ()) {
+		if (!NearRuntimeReferences)
+			return;
+
+		// mark_external_imports () reads this metadata.
+		auto mark_near = [] (GlobalObject &g) {
+			g.setMetadata ("mono.near", MDNode::get (g.getContext (), {}));
+		};
+
+		auto is_near = [&] (const GlobalValue &g) {
+			auto addr = find_registered (g);
+			return addr && within_displacement (*addr);
+		};
+
+		for (GlobalVariable &g : m.globals ())
+			if (is_near (g))
+				mark_near (g);
+
+		for (Function &f : m)
+			if (!f.isIntrinsic () && is_near (f))
+				mark_near (f);
+
+		return;
+	}
+
+	// Prevent x86 instruction selection from folding an absolute symbol into
+	// a 32-bit memory displacement.
+	if (!triple ().isOSBinFormatELF ())
+		return;
+
+	auto is_far = [&] (const GlobalValue &g) {
+		auto addr = find_registered (g);
+		return addr && !within_displacement (*addr);
 	};
 
 	if (FarDataImmediates && m.getModuleFlag ("mono.tier2") != nullptr) {

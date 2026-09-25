@@ -1188,7 +1188,8 @@ build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &
 }
 
 /*
- * Marks everything this module names but does not define as an import.
+ * Marks undefined symbols as imports unless bind_far_references () tagged
+ * them `mono.near`.
  *
  * A reference has to reach what it names, and the code arena is below 2GB while
  * the runtime's own objects are wherever the allocator put them -- further than
@@ -1206,8 +1207,8 @@ build_object_pipeline (TargetMachine &tm, ObjectPipeline &p, raw_pwrite_stream &
 void
 mark_external_imports (Module &m)
 {
-	auto mark = [] (GlobalValue &g) {
-		if (!g.hasDefaultVisibility ())
+	auto mark = [] (GlobalObject &g) {
+		if (!g.hasDefaultVisibility () || g.getMetadata ("mono.near") != nullptr)
 			return;
 
 		g.setDLLStorageClass (GlobalValue::DLLImportStorageClass);
