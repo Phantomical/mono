@@ -188,6 +188,7 @@
 #include "mono/sgen/sgen-workers.h"
 #include "mono/sgen/sgen-client.h"
 #include "mono/sgen/sgen-pointer-queue.h"
+#include "mono/sgen/sgen-ipnsort.h"
 #include "mono/sgen/gc-internal-agnostic.h"
 #include "mono/utils/mono-proclib.h"
 #include "mono/utils/mono-memory-model.h"
@@ -973,54 +974,12 @@ sgen_pin_object (GCObject *object, SgenGrayQueue *queue)
 }
 
 /* Sort the addresses in array in increasing order.
- * Done using a by-the book heap sort. Which has decent and stable performance, is pretty cache efficient.
+ * Done using ipnsort, which has quite good performance.
  */
 void
 sgen_sort_addresses (void **array, size_t size)
 {
-	size_t i;
-	void *tmp;
-
-	for (i = 1; i < size; ++i) {
-		size_t child = i;
-		while (child > 0) {
-			size_t parent = (child - 1) / 2;
-
-			if (array [parent] >= array [child])
-				break;
-
-			tmp = array [parent];
-			array [parent] = array [child];
-			array [child] = tmp;
-
-			child = parent;
-		}
-	}
-
-	for (i = size - 1; i > 0; --i) {
-		size_t end, root;
-		tmp = array [i];
-		array [i] = array [0];
-		array [0] = tmp;
-
-		end = i - 1;
-		root = 0;
-
-		while (root * 2 + 1 <= end) {
-			size_t child = root * 2 + 1;
-
-			if (child < end && array [child] < array [child + 1])
-				++child;
-			if (array [root] >= array [child])
-				break;
-
-			tmp = array [root];
-			array [root] = array [child];
-			array [child] = tmp;
-
-			root = child;
-		}
-	}
+	sgen_ipnsort(array, size);
 }
 
 /* 

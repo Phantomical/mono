@@ -13,6 +13,7 @@ mono_add_object_library(monosgen
     sgen-gray.c
     sgen-hash-table.c
     sgen-internal.c
+    sgen-ipnsort.c
     sgen-layout-stats.c
     sgen-los.c
     sgen-marksweep.c
