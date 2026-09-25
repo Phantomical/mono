@@ -182,6 +182,31 @@
 		stfld valuetype Flat Holder::F
 		ret
 	}
+
+	.method public static class Node GetNext (class Node n) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		ldfld class Node Node::Next
+		ret
+	}
+
+	.method public static class Node GetFirst (class Node[] a) cil managed
+	{
+		.maxstack 2
+		ldarg.0
+		ldc.i4.0
+		ldelem.ref
+		ret
+	}
+
+	.method public static class Node GetThrough (class Node& r) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		ldind.ref
+		ret
+	}
 }
 
 // A struct the collector cares about - its stores go through the value-copy
@@ -196,6 +221,13 @@
 {
 	.field public int32 A
 	.field public int32 B
+}
+
+.class public auto ansi beforefieldinit Node extends [mscorlib]System.Object
+{
+	.field public class Node Next
+	.field public int64 A
+	.field public int64 B
 }
 
 .data D_BAKED = int32 (42)

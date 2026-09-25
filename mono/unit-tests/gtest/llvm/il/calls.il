@@ -48,6 +48,13 @@
 		ldarg.1
 		ret
 	}
+
+	.method public newslot virtual instance string Name () cil managed
+	{
+		.maxstack 1
+		ldstr "base"
+		ret
+	}
 }
 
 .class interface public abstract auto ansi IPicker
@@ -112,6 +119,14 @@
 		ldarg.0
 		ldarg.1
 		callvirt instance int32 Base::Virt (int32)
+		ret
+	}
+
+	.method public static string CallVirtualName (class Base b) cil managed
+	{
+		.maxstack 1
+		ldarg.0
+		callvirt instance string Base::Name ()
 		ret
 	}
 

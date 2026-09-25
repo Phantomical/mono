@@ -1395,6 +1395,15 @@ private:
 /// to fill its register, or None for everything else.
 llvm::Attribute::AttrKind integer_extension (MonoType *t);
 
+/// Returns held when element is object and held is a reference type.
+MonoType *narrowed_reference (MonoType *element, MonoType *held);
+
+/// Adds ret's extent and alignment attributes to call.
+void carry_return_extent (llvm::CallBase *call, MonoType *ret);
+
+/// Adds extent and alignment metadata to a reference load.
+void mark_object_extent (llvm::LoadInst *load, MonoType *t);
+
 /// Puts target's narrow-integer extension attributes on call.
 void carry_parameter_extensions (llvm::CallBase *call, const llvm::Function *target);
 

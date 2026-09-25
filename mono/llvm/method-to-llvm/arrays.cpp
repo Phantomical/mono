@@ -403,6 +403,11 @@ MethodLLVMEmitter::emit_ldelem (MonoIrBuilder &builder, MonoType *element)
 	if (stack.size () < 2)
 		return unbalanced_stack (2);
 
+	MonoType *array = get_stack (1).type;
+
+	if (array->type == MONO_TYPE_SZARRAY && !array->byref)
+		element = narrowed_reference (element, m_class_get_byval_arg (array->data.klass));
+
 	llvm::Expected<llvm::Value *> address =
 		element_address (builder, get_stack (1), get_stack (0), element);
 	if (!address)

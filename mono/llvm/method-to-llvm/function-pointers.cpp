@@ -485,6 +485,8 @@ MethodLLVMEmitter::emit_calli (MonoIrBuilder &builder, uint32_t token)
 		                            hidden != nullptr
 		                                    ? at
 		                                    : (*type)->getNumParams ());
+		if (sig->pinvoke == 0)
+			carry_return_extent (site, sig->ret);
 	};
 
 	llvm::Value *result = emit_protected_call (

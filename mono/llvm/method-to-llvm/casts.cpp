@@ -250,9 +250,14 @@ MethodLLVMEmitter::emit_cast (MonoIrBuilder &builder, uint32_t token, bool throw
 
 	// A value-type token means the boxed form. What comes back is still an
 	// object reference, not the token's own type.
+	MonoType *answer = m_class_is_valuetype (klass) ? mono_get_object_type ()
+	                                                : m_class_get_byval_arg (klass);
+
+	if (auto *site = llvm::dyn_cast<llvm::CallBase> (result))
+		carry_return_extent (site, answer);
+
 	pop_stack (1);
-	push_stack (result, m_class_is_valuetype (klass) ? mono_get_object_type ()
-	                                                 : m_class_get_byval_arg (klass));
+	push_stack (result, answer);
 	return llvm::Error::success ();
 }
 

@@ -114,6 +114,12 @@ MethodLLVMEmitter::emit_ldind (MonoIrBuilder &builder, MonoType *element)
 	if (stack.empty ())
 		return unbalanced_stack (1);
 
+	MonoType *pointer = get_stack (0).type;
+
+	if (pointer->byref)
+		element = narrowed_reference (
+			element, m_class_get_byval_arg (mono_class_from_mono_type_internal (pointer)));
+
 	llvm::Expected<llvm::Value *> address = indirect_address (builder, get_stack (0));
 	if (!address)
 		return address.takeError ();
