@@ -69,12 +69,22 @@ struct Invoke {
 
 } // namespace
 
-/// Plants a label at \p at that emits no code, so it can sit anywhere in a
-/// block.
+/// A label at \p at, which emits no code.
 static MCSymbol *
 plant_label (MachineBasicBlock &mbb, MachineBasicBlock::iterator at, MCContext &ctx,
              const TargetInstrInfo *tii)
 {
+	/* Keep terminator labels out of the terminator range AsmPrinter scans. */
+	if (at != mbb.end () && at->isTerminator ()) {
+		if (MCSymbol *sym = at->getPreInstrSymbol ())
+			return sym;
+
+		MCSymbol *sym = ctx.createTempSymbol ("mono_try");
+
+		at->setPreInstrSymbol (*mbb.getParent (), sym);
+		return sym;
+	}
+
 	MCSymbol *sym = ctx.createTempSymbol ("mono_try");
 
 	BuildMI (mbb, at, DebugLoc (), tii->get (TargetOpcode::EH_LABEL)).addSym (sym);
