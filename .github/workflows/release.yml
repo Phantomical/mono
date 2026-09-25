@@ -1,0 +1,251 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+    branches: [release-workflow]
+  pull_request:
+    paths: [".github/workflows/release.yml"]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Match ci.yml smoke-test exclusions.
+  CTEST_EXCLUDE_LABELS: "bcl|slow|stress|acceptance|interp-mixed"
+
+jobs:
+  build-linux:
+    name: Release build (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        uses: ./.github/actions/deps
+
+      - name: Install lld
+        run: sudo apt-get install -y --no-install-recommends lld-18
+
+      - name: Pin the build date to the commit
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      # ThinLTO requires lld and benefits from lower link concurrency.
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS_RELEASE="-O3 -g" \
+            -DCMAKE_CXX_FLAGS_RELEASE="-O3 -g" \
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+            -DCMAKE_C_COMPILER=clang-18 \
+            -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DMONO_USE_LINKER=lld \
+            -DMONO_MAX_CONCURRENT_LINKS=2 \
+            -DMONO_LLVM_PREFIX=/usr/lib/llvm-23 \
+            -DCMAKE_INSTALL_PREFIX="$PWD/tmp" \
+            -DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON \
+            -DMONO_UNITY_BUILD=ON
+
+      - name: Build
+        run: cmake --build build -j "$(nproc)"
+
+      # Fail if CMake silently disables IPO.
+      - name: The runtime compiled to bitcode
+        run: |
+          obj=$(find build/mono/mini -name 'mini-runtime.c.o' | head -1)
+          test -n "$obj"
+          test "$(head -c 2 "$obj")" = BC || {
+            echo "::error::$obj is not LLVM bitcode, so ThinLTO did not run"
+            exit 1
+          }
+
+      - name: Runtime identifies itself
+        run: |
+          ./build/mono/mini/mono-sgen --version
+          ./build/mono/mini/mono-sgen --version | grep -q 'LLVM:.*yes'
+
+      - name: Smoke test
+        env:
+          MONO_LLVM_JIT_VERIFY: "1"
+        run: >
+          ctest --test-dir build -L regression -LE "$CTEST_EXCLUDE_LABELS"
+          -j "$(nproc)" --output-on-failure
+
+      - name: Package the KSP zip
+        run: cmake --build build --target package-ksp -j "$(nproc)"
+
+      - name: Upload the KSP package
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-ksp-linux-x64
+          path: build/mono-llvm-jit-ksp-linux.zip
+          compression-level: 0
+          if-no-files-found: error
+
+  build-windows:
+    name: Release build (Windows)
+    runs-on: windows-2025
+    timeout-minutes: 360
+
+    env:
+      LLVM_VERSION: 23.1.1
+      LLVM_PREFIX: C:\llvm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Restore LLVM
+        id: llvm-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ env.LLVM_PREFIX }}
+          key: llvm-win64-${{ env.LLVM_VERSION }}
+
+      - name: Download LLVM
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $name = "clang+llvm-$env:LLVM_VERSION-x86_64-pc-windows-msvc"
+          $url = "https://github.com/llvm/llvm-project/releases/download/llvmorg-$env:LLVM_VERSION/$name.tar.xz"
+          curl.exe -fsSL --retry 3 -o llvm.tar.xz $url
+          New-Item -ItemType Directory -Force -Path C:\llvm-unpack | Out-Null
+          tar -xf llvm.tar.xz -C C:\llvm-unpack
+          Move-Item "C:\llvm-unpack\$name" $env:LLVM_PREFIX
+          Remove-Item -Recurse -Force C:\llvm-unpack, llvm.tar.xz
+
+      - name: Restore vcpkg packages
+        uses: actions/cache/restore@v6
+        with:
+          path: build/vcpkg_installed
+          key: vcpkg-x64-windows-${{ hashFiles('vcpkg.json', 'vcpkg-triplets/**') }}
+
+      - name: Install mono
+        shell: pwsh
+        run: |
+          choco install mono --no-progress -y
+          "$env:ProgramFiles\Mono\bin" `
+            | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Install nasm
+        shell: pwsh
+        run: |
+          choco install nasm --no-progress -y
+          "$env:ProgramFiles\NASM" `
+            | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Exclude the workspace from Windows Defender
+        shell: pwsh
+        run: |
+          try {
+            Add-MpPreference -ExclusionPath "${{ github.workspace }}" -ErrorAction Stop
+          } catch {
+            Write-Warning "Add-MpPreference failed, continuing without the exclusion: $_"
+          }
+
+      - name: Set up the MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Pin the build date to the commit
+        shell: bash
+        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+
+      # Use LLVM tools for ThinLTO bitcode and pass -O3 through clang-cl.
+      - name: Configure
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_FLAGS_RELEASE="/O2 /Ob2 /clang:-O3 /DNDEBUG" `
+            -DCMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /clang:-O3 /DNDEBUG" `
+            -DCMAKE_EXE_LINKER_FLAGS_RELEASE="/opt:lldlto=3" `
+            -DCMAKE_SHARED_LINKER_FLAGS_RELEASE="/opt:lldlto=3" `
+            -DCMAKE_MODULE_LINKER_FLAGS_RELEASE="/opt:lldlto=3" `
+            -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON `
+            -DCMAKE_C_COMPILER="$env:LLVM_PREFIX/bin/clang-cl.exe" `
+            -DCMAKE_CXX_COMPILER="$env:LLVM_PREFIX/bin/clang-cl.exe" `
+            -DCMAKE_LINKER="$env:LLVM_PREFIX/bin/lld-link.exe" `
+            -DCMAKE_AR="$env:LLVM_PREFIX/bin/llvm-lib.exe" `
+            -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded `
+            -DCMAKE_DISABLE_FIND_PACKAGE_LibXml2=ON `
+            -DMONO_MAX_CONCURRENT_LINKS=2 `
+            -DMONO_LLVM_PREFIX="$env:LLVM_PREFIX" `
+            -DCMAKE_INSTALL_PREFIX="$env:GITHUB_WORKSPACE/tmp" `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DMONO_USE_SYSTEM_RUNTIME_FOR_TOOLS=ON
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build -j $env:NUMBER_OF_PROCESSORS
+
+      - name: The runtime compiled to bitcode
+        shell: bash
+        run: |
+          obj=$(find build/mono/mini -name 'mini-runtime.c.obj' | head -1)
+          test -n "$obj"
+          test "$(head -c 2 "$obj")" = BC || {
+            echo "::error::$obj is not LLVM bitcode, so ThinLTO did not run"
+            exit 1
+          }
+
+      - name: Runtime identifies itself
+        shell: bash
+        run: |
+          ./build/mono/mini/mono-sgen.exe --version
+          ./build/mono/mini/mono-sgen.exe --version | grep -q 'LLVM:.*yes'
+
+      - name: Smoke test
+        shell: bash
+        env:
+          MONO_LLVM_JIT_VERIFY: "1"
+        run: >
+          ctest --test-dir build -L regression -LE "$CTEST_EXCLUDE_LABELS"
+          -j "$NUMBER_OF_PROCESSORS" --output-on-failure
+
+      - name: Package the KSP zip
+        shell: pwsh
+        run: cmake --build build --target package-ksp -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Upload the KSP package
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-ksp-windows-x64
+          path: build/mono-llvm-jit-ksp-windows.zip
+          compression-level: 0
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: [build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download the packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-ksp-*
+          path: packages
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" packages/*.zip
+          --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
