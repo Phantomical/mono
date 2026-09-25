@@ -537,6 +537,10 @@ argv to read, so `mono/unit-tests/gtest/llvm/harness.cpp` forwards the same vari
   for null only after other work that can throw, which is the ordinary shape. Moving the
   read makes the compare loop-invariant, which is what unswitching needs.
   `mono/tests/guard-vtable-hoist.cs` runs with the pass on and off.
+- `--llvm-opt=-mono-managed-aa=<0|false|empty>` (`runtime/options.cpp`) — disable
+  ManagedAA in tier 2. It distinguishes statics blocks and incompatible managed object
+  classes when accesses remain inbounds. `mono/tests/managed-aa.cs` runs with it on and
+  off.
 - `--llvm-opt=-mono-receiver-profile=<0|false|empty>` (`runtime/options.cpp`) — turn the
   tier-1 receiver record off, which is the negative control for what recording costs at
   tier 1, where nearly all code stays.

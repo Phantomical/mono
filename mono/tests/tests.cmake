@@ -1170,6 +1170,11 @@ set(MONO_TESTS_GUARD_VTABLE_HOIST_SRC
   guard-vtable-hoist.cs
 )
 
+# One object, or one statics block, reached through two bases at tier 2.
+set(MONO_TESTS_MANAGED_AA_SRC
+  managed-aa.cs
+)
+
 # Whether a readonly static's folded bytes survive the collector moving what
 # they name. It runs once per compiled tier, and reads the variable to know
 # which tier to ask its readers to compile at.

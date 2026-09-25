@@ -23,7 +23,7 @@ set(MONO_LLVM_TEST_SOURCES
     array-address-tests.cpp array-shape-tests.cpp ir-dump-tests.cpp
     cast-func-tests.cpp eliminate-delegate-tests.cpp eliminate-cast-tests.cpp inline-heat-tests.cpp
     inline-cost-dom-chain-tests.cpp sink-keep-alive-tests.cpp lower-keepalive-tests.cpp
-    hoist-guard-vtable-tests.cpp
+    hoist-guard-vtable-tests.cpp managed-aa-tests.cpp
     trap-unreachable-tests.cpp
     gc-barrier-tests.cpp operand-class-tests.cpp dead-alloc-tests.cpp
     escape-tests.cpp promote-alloc-tests.cpp constant-values-tests.cpp

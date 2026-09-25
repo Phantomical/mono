@@ -1,6 +1,7 @@
 #include "pipelines.hpp"
 
 #include "analysis/constant-values.hpp"
+#include "analysis/managed-aa.hpp"
 #include "arch/arch.hpp"
 #include "compile-state.hpp"
 #include "jit.hpp"
@@ -98,6 +99,21 @@ register_mono_analyses (llvm::FunctionAnalysisManager &fam)
 {
 	fam.registerPass ([] { return MonoConstantValues (); });
 	fam.registerPass ([] { return MonoMemoryValues (); });
+}
+
+void
+MonoPassBuilder::registerTier2AliasAnalyses (llvm::FunctionAnalysisManager &fam)
+{
+	if (!managed_aa ())
+		return;
+
+	fam.registerPass ([this] {
+		llvm::AAManager aa = buildDefaultAAPipeline ();
+
+		aa.registerFunctionAnalysis<ManagedAA> ();
+		return aa;
+	});
+	fam.registerPass ([] { return ManagedAA (); });
 }
 
 namespace {

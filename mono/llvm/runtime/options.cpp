@@ -122,6 +122,11 @@ llvm::cl::opt<bool> HoistGuardVtableOpt (
 	llvm::cl::desc ("Read a loop-invariant receiver's vtable in front of the loop "
 	                "for the guard compares on it"));
 
+llvm::cl::opt<bool> ManagedAAOpt (
+	"mono-managed-aa", llvm::cl::Hidden, llvm::cl::init (true),
+	llvm::cl::desc ("Let tier 2's alias analysis tell managed objects apart from each "
+	                "other and from the statics blocks"));
+
 llvm::cl::opt<bool> UnswitchNonTrivialOpt (
 	"mono-unswitch-nontrivial", llvm::cl::Hidden, llvm::cl::init (true),
 	llvm::cl::desc ("Let tier 2's loop unswitching clone a loop"));
@@ -478,6 +483,12 @@ bool
 hoist_guard_vtable ()
 {
 	return HoistGuardVtableOpt;
+}
+
+bool
+managed_aa ()
+{
+	return ManagedAAOpt;
 }
 
 bool

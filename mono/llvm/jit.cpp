@@ -1320,6 +1320,7 @@ ThreadPipelines::tier2 ()
 
 	pb.registerModuleAnalyses (tier.mam);
 	pb.registerCGSCCAnalyses (tier.cgam);
+	pb.registerTier2AliasAnalyses (tier.fam);
 	pb.registerFunctionAnalyses (tier.fam);
 	pb.registerLoopAnalyses (tier.lam);
 	pb.crossRegisterProxies (tier.lam, tier.fam, tier.cgam, tier.mam);

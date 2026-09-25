@@ -191,6 +191,9 @@ uint64_t guard_profile_min_samples ();
 /// in front of the loop.
 bool hoist_guard_vtable ();
 
+/// Whether tier 2 asks ManagedAA as well as LLVM's own alias analyses.
+bool managed_aa ();
+
 /// Whether tier 2's loop unswitching may clone a loop.
 bool unswitch_nontrivial ();
 
