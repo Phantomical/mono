@@ -221,7 +221,7 @@ MethodLLVMEmitter::tbaa_tag (const ManagedAccess &access, bool is_reference)
 
 	if (is_reference) {
 		llvm::MDNode *leaf =
-			md.createTBAANode ("mono managed reference",
+			md.createTBAANode (managed_reference_tbaa_leaf,
 			                   md.createTBAARoot (managed_memory_tbaa_root));
 
 		return md.createTBAAStructTagNode (leaf, leaf, 0);

@@ -17,6 +17,9 @@ namespace mono {
 /// Common root for managed and runtime-owned memory leaves.
 constexpr llvm::StringRef managed_memory_tbaa_root = "mono managed memory";
 
+/// Every managed slot that holds an object reference.
+constexpr llvm::StringRef managed_reference_tbaa_leaf = "mono managed reference";
+
 /// Object header fields: vtable, lock, and string length.
 constexpr llvm::StringRef object_header_tbaa_leaf = "mono object header";
 

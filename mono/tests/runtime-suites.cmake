@@ -801,6 +801,12 @@ mono_runtime_suite(runtime-guard-vtable-hoist-off TESTS ${_guard_vtable_hoist}
 mono_runtime_suite(runtime-guard-vtable-hoist-unswitch-off TESTS ${_guard_vtable_hoist}
                    ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-unswitch-nontrivial=0")
 
+_mono_exe_list(_managed_aa ${MONO_TESTS_MANAGED_AA_SRC})
+mono_runtime_suite(runtime-managed-aa TESTS ${_managed_aa}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0")
+mono_runtime_suite(runtime-managed-aa-off TESTS ${_managed_aa}
+                   ENV "MONO_ENV_OPTIONS=--llvm-opt=-mono-tier2-threshold=0 --llvm-opt=-mono-managed-aa=0")
+
 # Exercise List<T> indexers with the bounds-check hint enabled and disabled.
 mono_runtime_suite(runtime-list-bounds-hint TESTS list-bounds-hint.exe)
 mono_runtime_suite(runtime-list-bounds-hint-off TESTS list-bounds-hint.exe
