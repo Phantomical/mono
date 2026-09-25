@@ -7,6 +7,7 @@
  * arm that needs no runtime to build or to read.
  */
 
+#include "managed-pointer.hpp"
 #include "passes/cast-func.hpp"
 
 #include <llvm/IR/BasicBlock.h>
@@ -50,21 +51,22 @@ struct CastModule {
 		module = std::make_unique<Module> ("casts", *context);
 
 		Type *ptr = PointerType::get (*context, 0);
+		Type *object = object_pointer_type (*context);
 		Type *i16 = Type::getInt16Ty (*context);
 		Type *i64 = Type::getInt64Ty (*context);
 
 		// The wrapper's own signature spells the class and the cache as
 		// integers, which is what the runtime registered the icall with.
-		wrapper = Function::Create (FunctionType::get (ptr, { ptr, i64, i64 }, false),
+		wrapper = Function::Create (FunctionType::get (object, { object, i64, i64 }, false),
 		                            GlobalValue::ExternalLinkage, "isinst_wrapper",
 		                            module.get ());
 
 		// The uncached wrapper has no cache-slot argument.
 		remote_wrapper = Function::Create (
-			FunctionType::get (ptr, { ptr, i64 }, false), GlobalValue::ExternalLinkage,
+			FunctionType::get (object, { object, i64 }, false), GlobalValue::ExternalLinkage,
 			"isinst_remote_wrapper", module.get ());
 
-		caller = Function::Create (FunctionType::get (ptr, { ptr }, false),
+		caller = Function::Create (FunctionType::get (object, { object }, false),
 		                           GlobalValue::ExternalLinkage, "caller",
 		                           module.get ());
 		caller->setPersonalityFn (
@@ -113,7 +115,7 @@ struct CastModule {
 				StructType::get (ptr, Type::getInt32Ty (*context)), 0);
 
 			caught->setCleanup (true);
-			b.CreateRet (ConstantPointerNull::get (cast<PointerType> (ptr)));
+			b.CreateRet (ConstantPointerNull::get (cast<PointerType> (object)));
 		}
 
 		b.SetInsertPoint (tail);
@@ -158,7 +160,7 @@ TEST (CastFuncTest, ACallSiteBecomesTheProbeAndTheWrapper)
 	// The null check, the cache read and the wrapper the miss falls back to.
 	EXPECT_EQ (m.count ("icmp eq ptr"), 1u) << m.text ();
 	EXPECT_EQ (m.count ("%cached_vtable = load"), 1u) << m.text ();
-	EXPECT_EQ (m.count ("call ptr @isinst_wrapper"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("call ptr addrspace(1) @isinst_wrapper"), 1u) << m.text ();
 	EXPECT_EQ (m.count ("%cast_result = phi"), 1u) << m.text ();
 }
 
@@ -189,7 +191,7 @@ TEST (CastFuncTest, CastclassReadsItsSlotWholeAndMasksNothing)
 	EXPECT_EQ (m.count ("and i64"), 0u);
 	EXPECT_EQ (m.count ("answered_no"), 0u);
 	EXPECT_EQ (m.count ("select i1"), 0u);
-	EXPECT_EQ (m.count ("call ptr @isinst_wrapper"), 1u);
+	EXPECT_EQ (m.count ("call ptr addrspace(1) @isinst_wrapper"), 1u);
 }
 
 /*
@@ -204,7 +206,7 @@ TEST (CastFuncTest, AProtectedSiteLeavesTheWrapperOnTheUnwindEdge)
 	m.lower ();
 
 	ASSERT_FALSE (verifyModule (*m.module, &errs ()));
-	EXPECT_EQ (m.count ("invoke ptr @isinst_wrapper"), 1u);
+	EXPECT_EQ (m.count ("invoke ptr addrspace(1) @isinst_wrapper"), 1u);
 	EXPECT_EQ (m.count ("unwind label %pad"), 1u);
 
 	// The probe itself raises nothing, so nothing else reaches the pad.
@@ -252,8 +254,8 @@ TEST (CastFuncTest, ADynamicDepthBuildsTheSubtypeTestAndTheCachedFallback)
 	EXPECT_FALSE (verifyModule (*m.module, &errs ()));
 	EXPECT_EQ (m.count ("cast_subtype_dynamic_has_depth:"), 1u) << m.text ();
 	EXPECT_EQ (m.count ("%cached_vtable = load"), 1u) << m.text ();
-	EXPECT_EQ (m.count ("call ptr @isinst_wrapper"), 1u) << m.text ();
-	EXPECT_EQ (m.count ("call ptr @isinst_remote_wrapper"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("call ptr addrspace(1) @isinst_wrapper"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("call ptr addrspace(1) @isinst_remote_wrapper"), 1u) << m.text ();
 	EXPECT_EQ (m.count ("%cast_result = phi"), 1u) << m.text ();
 }
 

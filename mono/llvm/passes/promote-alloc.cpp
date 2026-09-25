@@ -62,13 +62,18 @@ promote (CallInst &alloc, uint64_t bytes)
 
 	slot->setAlignment (object_alignment ());
 
+	Value *object = entry.CreateAddrSpaceCast (slot, alloc.getType ());
+
 	/*
 	 * The class the site named moves to the slot. `leaf_operand_class ()`
 	 * reads it off the instruction that answers with the object, so a
 	 * dispatch this object settles keeps its answer.
 	 */
-	if (MDNode *klass = alloc.getMetadata (exact_class_md))
+	if (MDNode *klass = alloc.getMetadata (exact_class_md)) {
 		slot->setMetadata (exact_class_md, klass);
+		if (auto *cast = dyn_cast<Instruction> (object))
+			cast->setMetadata (exact_class_md, klass);
+	}
 
 	/*
 	 * The zeroing stands where the allocation stood rather than beside the
@@ -80,7 +85,7 @@ promote (CallInst &alloc, uint64_t bytes)
 	site.SetCurrentDebugLocation (alloc.getDebugLoc ());
 	site.CreateMemSet (slot, site.getInt8 (0), site.getInt64 (bytes), object_alignment ());
 
-	alloc.replaceAllUsesWith (slot);
+	alloc.replaceAllUsesWith (object);
 	alloc.eraseFromParent ();
 	return slot;
 }

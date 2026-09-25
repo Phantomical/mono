@@ -122,6 +122,15 @@ collect (CallInst &alloc, const Barriers &barriers, const Candidates &candidates
 				continue;
 			}
 
+			if (auto *cast = dyn_cast<AddrSpaceCastInst> (in)) {
+				if (cluster.derived.insert (cast).second) {
+					cluster.users.insert (cast);
+					queue.push_back (cast);
+				}
+
+				continue;
+			}
+
 			if (auto *store = dyn_cast<StoreInst> (in)) {
 				// A volatile or an atomic store is an event of its own.
 				if (!store->isSimple ())

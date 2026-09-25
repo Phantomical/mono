@@ -278,6 +278,16 @@ alloc_elision_fate (const Value &object, const CallBase *exclude)
 		if (isa<GetElementPtrInst> (user) || isa<LoadInst> (user))
 			continue;
 
+		// Runtime helpers may consume the object through a cast.
+		if (isa<AddrSpaceCastInst> (user)) {
+			AllocElisionFate through = alloc_elision_fate (*user, exclude);
+
+			if (through == AllocElisionFate::escapes)
+				return through;
+			held_elsewhere |= through == AllocElisionFate::pending;
+			continue;
+		}
+
 		if (const auto *store = dyn_cast<StoreInst> (user)) {
 			if (store->getPointerOperand () == &object)
 				continue;

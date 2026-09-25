@@ -38,9 +38,7 @@ MethodLLVMEmitter::emit_hash_code_fast_path (MonoIrBuilder &builder, MonoMethod 
 	// RuntimeHelpers.GetHashCode () reaches InternalGetHashCode () too, with a
 	// receiver that can be null. mono_object_hash_internal () returns 0 for
 	// null instead of reading its lock word.
-	llvm::Value *is_null = builder.CreateICmpEQ (
-		object, llvm::ConstantPointerNull::get (llvm::PointerType::get (context (), 0)),
-		"is_null");
+	llvm::Value *is_null = builder.CreateIsNull (object, "is_null");
 
 	llvm::BasicBlock *has_this = llvm::BasicBlock::Create (context (), "hash_has_this", function);
 	llvm::BasicBlock *is_null_bb = llvm::BasicBlock::Create (context (), "hash_null", function);
