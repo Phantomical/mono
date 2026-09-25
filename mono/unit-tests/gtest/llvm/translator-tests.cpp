@@ -613,6 +613,28 @@ TEST_F (TranslatorTest, StaticsOfOneClassShareOneSymbol)
 	EXPECT_EQ (holder, 1u) << t.text ();
 }
 
+TEST_F (TranslatorTest, ALiteralLeavesItsClassItsStaticsDescriptor)
+{
+	const Translation &t = translate ("fields", "Fields:GetCount");
+	const llvm::LoadInst *read = nullptr;
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+
+	for (const llvm::Instruction &in : llvm::instructions (*t.function))
+		if (const auto *load = llvm::dyn_cast<llvm::LoadInst> (&in))
+			if (load->getMetadata (llvm::LLVMContext::MD_tbaa) != nullptr)
+				read = load;
+
+	ASSERT_NE (read, nullptr) << t.text ();
+
+	const auto *base = llvm::cast<llvm::MDNode> (
+		read->getMetadata (llvm::LLVMContext::MD_tbaa)->getOperand (0));
+
+	EXPECT_EQ (llvm::cast<llvm::MDString> (base->getOperand (0))->getString ().str (),
+	           "fields!Counted statics")
+		<< t.text ();
+}
+
 // A thread-static's recorded offset is a per-thread lookup cookie, not a place in
 // the statics block, so its address comes from the runtime on every access - and
 // never through mono_statics_.
