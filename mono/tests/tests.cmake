@@ -939,6 +939,7 @@ set(MONO_TESTS_SGEN_REGULAR_SRC
   sgen-descriptors.cs
   sgen-gshared-vtype.cs
   sgen-wbarrier.cs
+  sgen-promote-concurrent.cs
   sgen-weakref-stress.cs
   sgen-cementing-stress.cs
   sgen-case-23400.cs
