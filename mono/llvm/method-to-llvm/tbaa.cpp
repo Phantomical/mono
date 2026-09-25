@@ -115,6 +115,10 @@ MethodLLVMEmitter::type_descriptor (MonoClass *klass, bool statics)
 		if (statics && mono_class_field_is_special_static (field))
 			continue;
 
+		// A literal has no storage, so its offset names nothing.
+		if ((mono_field_get_flags (field) & FIELD_ATTRIBUTE_LITERAL) != 0)
+			continue;
+
 		MonoType *ftype = mono_field_get_type_internal (field);
 		int32_t offset = static_cast<int32_t> (m_field_get_offset (field));
 
