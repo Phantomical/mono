@@ -2082,7 +2082,6 @@ MonoJit::compile_batch (ThreadSafeModule tsm, ArrayRef<StringRef> entries,
 	// module's dylib rather than a table shared across compiles - nothing but
 	// this one link ever asks for these names again.
 	if (!module_symbols.empty ()) {
-		ExecutionSession &es = jit_->getExecutionSession ();
 		SymbolMap symbols;
 
 		for (const auto &[name, addr] : module_symbols)
