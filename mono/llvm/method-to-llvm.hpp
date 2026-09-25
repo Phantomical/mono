@@ -1048,6 +1048,7 @@ private:
 	std::string identity_symbol (const std::string &name, const void *object);
 	llvm::Constant *class_symbol (MonoClass *klass, const char *prefix);
 	llvm::Constant *vtable_symbol (MonoClass *klass, const std::string &symbol);
+	llvm::Constant *statics_symbol (MonoClass *klass, const std::string &symbol);
 	std::optional<VTableInfo> vtable_info_for (MonoClass *klass);
 	llvm::Expected<llvm::Constant *> typeof_symbol (MonoType *type);
 	TypeInfo type_info_for (const TypeInfo &named);
