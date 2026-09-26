@@ -153,7 +153,7 @@ rebuild_isinst_over_incoming (PHINode &phi, function_ref<CastAnswer (Value *)> a
 	for (unsigned i = 0; i < n; i++) {
 		Value *edge = answer (phi.getIncomingValue (i)) == CastAnswer::Yes
 			? phi.getIncomingValue (i)
-			: ConstantPointerNull::get (PointerType::get (phi.getContext (), 0));
+			: ConstantPointerNull::get (cast<PointerType> (phi.getType ()));
 
 		rebuilt->addIncoming (edge, phi.getIncomingBlock (i));
 	}
