@@ -992,6 +992,10 @@ MethodLLVMEmitter::emit_ldflda (MonoIrBuilder &builder, uint32_t token)
 			? mono_get_int_type ()
 			: m_class_get_this_arg (mono_class_from_mono_type_internal (ftype));
 
+	if (ManagedAccess access = field_access (object, *field);
+	    access.kind == ManagedAccess::Kind::field)
+		addressed [*address] = access;
+
 	pop_stack (1);
 	if (m_class_is_valuetype (mono_class_from_mono_type_internal (ftype)))
 		trusted_byrefs.insert (*address);
@@ -1232,6 +1236,7 @@ MethodLLVMEmitter::emit_ldsflda (MonoIrBuilder &builder, uint32_t token)
 	if (!address)
 		return address.takeError ();
 
+	addressed [*address] = ManagedAccess::of_field (*field);
 	push_stack (*address,
 	            m_class_get_this_arg (mono_class_from_mono_type_internal (ftype)));
 	return llvm::Error::success ();

@@ -339,6 +339,7 @@ MethodLLVMEmitter::emit_ldelema (MonoIrBuilder &builder, uint32_t token)
 
 	pop_stack (2);
 	trusted_byrefs.insert (*address);
+	addressed [*address] = ManagedAccess::of_element (*element, 1);
 	push_stack (*address, m_class_get_this_arg (klass));
 	return llvm::Error::success ();
 }
@@ -902,6 +903,8 @@ MethodLLVMEmitter::emit_array_accessor_call (MonoIrBuilder &builder, MonoMethod 
 			ManagedAccess::of_element (element, m_class_get_rank (accessor->klass)));
 	} else {
 		trusted_byrefs.insert (*address);
+		addressed [*address] =
+			ManagedAccess::of_element (element, m_class_get_rank (accessor->klass));
 		push_stack (*address, m_class_get_this_arg (eclass));
 	}
 	return llvm::Error::success ();
