@@ -3,6 +3,7 @@
 using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace Mono.Tiering {
 	static class MonoTier {
@@ -27,6 +28,18 @@ class Counter : ICounter {
 	public int v;
 
 	public int Get () { return v; }
+}
+
+class Pair {
+	public Base b;
+	public Derived d;
+}
+
+// The fields overlap to defeat type-based disambiguation.
+[StructLayout (LayoutKind.Explicit)]
+class Overlap {
+	[FieldOffset (0)] public Counter c;
+	[FieldOffset (0)] public Base b;
 }
 
 abstract class Shape {
@@ -56,6 +69,64 @@ static class Program {
 		for (int i = 0; i < n; i++) {
 			b.x = i;
 			t += d.x;
+		}
+		return t;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static void Opaque ()
+	{
+	}
+
+	// The ref store is untagged; object classes must distinguish it from the read.
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int ThroughFields (Pair p, int n)
+	{
+		ref int x = ref p.b.x;
+		Opaque ();
+		Derived d = p.d;
+		int t = 0;
+
+		if (d == null)
+			throw new ArgumentNullException ();
+		for (int i = 0; i < n; i++) {
+			x = i;
+			t += d.x;
+		}
+		return t;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int ThroughElements (Base[] bs, Derived[] ds, int n)
+	{
+		ref int x = ref bs [0].x;
+		Opaque ();
+		Derived d = ds [0];
+		int t = 0;
+
+		if (d == null)
+			throw new ArgumentNullException ();
+		for (int i = 0; i < n; i++) {
+			x = i;
+			t += d.x;
+		}
+		return t;
+	}
+
+	[MethodImpl (MethodImplOptions.NoInlining)]
+	static int ThroughOverlap (Base b, Overlap o, int n)
+	{
+		ref int x = ref b.x;
+		Opaque ();
+		Counter c = o.c;
+		int t = 0;
+
+		if (c == null)
+			throw new ArgumentNullException ();
+		for (int i = 0; i < n; i++) {
+			x = i;
+			t += c.v;
 		}
 		return t;
 	}
@@ -151,6 +222,7 @@ static class Program {
 		string[] methods = {
 			"ThroughSubclass", "ThroughTwoArrayTypes", "ThroughInterface",
 			"SwappedByCall", "SwappedByStore", "StaticBesideElements",
+			"ThroughFields", "ThroughElements", "ThroughOverlap",
 		};
 
 		const int n = 1000;
@@ -170,6 +242,13 @@ static class Program {
 
 		Derived d = new Derived ();
 		ok &= Check ("ThroughSubclass", ThroughSubclass (d, d, n), series);
+		ok &= Check ("ThroughFields", ThroughFields (new Pair { b = d, d = d }, n), series);
+
+		Derived[] ds = { d };
+		ok &= Check ("ThroughElements", ThroughElements (ds, ds, n), series);
+
+		Base shared = new Base ();
+		ok &= Check ("ThroughOverlap", ThroughOverlap (shared, new Overlap { b = shared }, n), series);
 
 		uint[] u = new uint [1];
 		ok &= Check ("ThroughTwoArrayTypes", ThroughTwoArrayTypes ((int[]) (object) u, u, n), series);
