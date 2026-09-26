@@ -33,8 +33,21 @@
 	}
 }
 
+.class public abstract auto ansi sealed beforefieldinit Counted extends [mscorlib]System.Object
+{
+	.field public static literal int32 Limit = int32(3)
+	.field public static int32 Count
+}
+
 .class public abstract auto ansi sealed beforefieldinit Fields extends [mscorlib]System.Object
 {
+	.method public static int32 GetCount () cil managed
+	{
+		.maxstack 1
+		ldsfld int32 Counted::Count
+		ret
+	}
+
 	.method public static int32 Deref (int32& p) cil managed
 	{
 		.maxstack 1
