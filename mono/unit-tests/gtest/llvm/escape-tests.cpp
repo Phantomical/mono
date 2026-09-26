@@ -8,6 +8,7 @@
 
 #include "analysis/escape.hpp"
 
+#include "managed-pointer.hpp"
 #include "passes/alloc-func.hpp"
 #include "passes/gc-barrier.hpp"
 
@@ -49,16 +50,16 @@ struct EscapeModule {
 	{
 		module = std::make_unique<Module> ("escapes", *context);
 
-		Type *ptr = PointerType::get (*context, 0);
+		Type *object = object_pointer_type (*context);
 		Type *word = Type::getInt64Ty (*context);
 
-		allocator = Function::Create (FunctionType::get (ptr, { word, word }, false),
+		allocator = Function::Create (FunctionType::get (object, { word, word }, false),
 		                              GlobalValue::ExternalLinkage, "allocator",
 		                              module.get ());
-		sink = Function::Create (FunctionType::get (Type::getVoidTy (*context), { ptr },
+		sink = Function::Create (FunctionType::get (Type::getVoidTy (*context), { object },
 		                                            false),
 		                         GlobalValue::ExternalLinkage, "sink", module.get ());
-		caller = Function::Create (FunctionType::get (ptr, { ptr }, false),
+		caller = Function::Create (FunctionType::get (object, { object }, false),
 		                           GlobalValue::ExternalLinkage, "caller", module.get ());
 
 		b.SetInsertPoint (BasicBlock::Create (*context, "entry", caller));
@@ -99,7 +100,7 @@ struct EscapeModule {
 	bool escapes (CallInst &alloc, ArrayRef<CallInst *> vouched = {})
 	{
 		if (caller->getEntryBlock ().getTerminatorOrNull () == nullptr)
-			b.CreateRet (ConstantPointerNull::get (b.getPtrTy ()));
+			b.CreateRet (ConstantPointerNull::get (object_pointer_type (*context)));
 
 		EXPECT_FALSE (verifyModule (*module, &errs ()));
 

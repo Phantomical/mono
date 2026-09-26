@@ -9,6 +9,7 @@
 #include "analysis/type-info.hpp"
 #include "analysis/vtable-info.hpp"
 #include "array-address.hpp"
+#include "managed-pointer.hpp"
 #include "array-shape.hpp"
 #include "cast-func.hpp"
 #include "compile-state.hpp"
@@ -233,7 +234,7 @@ eliminate_sites (Function &f, StringRef name, bool throw_on_fail,
 		// leaves for the lowering to write as it stands.
 		if (answer == CastAnswer::No && !throw_on_fail) {
 			replacements.emplace_back (site, ConstantPointerNull::get (
-						     PointerType::get (f.getContext (), 0)));
+						     cast<PointerType> (site->getType ())));
 			continue;
 		}
 
@@ -1067,9 +1068,10 @@ hidden_return_argument (const CallBase &site)
 
 /// Loads the field at \p offset off \p delegate.
 Value *
-delegate_field (IRBuilderBase &b, Value *delegate, int offset, const Twine &name)
+delegate_field (IRBuilderBase &b, Value *delegate, int offset, const Twine &name,
+                Type *type = nullptr)
 {
-	return b.CreateAlignedLoad (b.getPtrTy (),
+	return b.CreateAlignedLoad (type != nullptr ? type : b.getPtrTy (),
 	                            b.CreateGEP (b.getInt8Ty (), delegate,
 	                                         b.getInt32 (offset)),
 	                            Align (TARGET_SIZEOF_VOID_P), name);
@@ -1113,7 +1115,8 @@ direct_arguments (IRBuilderBase &b, CallBase &site, Receiver receiver,
 	if (receiver == Receiver::bound)
 		natural.push_back (delegate_field (b, site.getArgOperand (0),
 		                                   MONO_STRUCT_OFFSET (MonoDelegate, target),
-		                                   "delegate_target"));
+		                                   "delegate_target",
+		                                   object_pointer_type (b.getContext ())));
 
 	for (unsigned i = 1; i < site.arg_size (); ++i)
 		if (i != hidden)

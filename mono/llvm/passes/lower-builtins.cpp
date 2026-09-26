@@ -11,6 +11,7 @@
 #include "lower-builtins.hpp"
 
 #include "builtins.hpp"
+#include "managed-pointer.hpp"
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/Constants.h>
@@ -33,7 +34,7 @@ lower_string_constructor (CallBase *site, Function *target)
 	IRBuilder<> b (site);
 	SmallVector<Value *, 8> args;
 
-	args.push_back (Constant::getNullValue (PointerType::get (site->getContext (), 0)));
+	args.push_back (Constant::getNullValue (target->getFunctionType ()->getParamType (0)));
 	args.append (site->arg_begin (), site->arg_end ());
 
 	CallBase *lowered;
@@ -53,7 +54,7 @@ lower_string_constructor (CallBase *site, Function *target)
 	}
 
 	lowered->setCallingConv (target->getCallingConv ());
-	site->replaceAllUsesWith (lowered);
+	replace_site_result (site, lowered);
 	site->eraseFromParent ();
 }
 

@@ -114,9 +114,9 @@ MethodLLVMEmitter::emit_value_copy (MonoIrBuilder &builder, llvm::Value *dest,
 
 	record_barrier_symbols (gc);
 
+	llvm::Function *copier = gc_value_copy_decl (*module, gc);
 	llvm::CallInst *copy = builder.CreateCall (
-		gc_value_copy_decl (*module, gc),
-		{ dest, src, builder.getInt32 (1), size, *cls });
+		copier, adapt_to_callee (builder, copier, { dest, src, builder.getInt32 (1), size, *cls }));
 
 	// The alignment the class asks for rides on the site, because an
 	// elimination that writes the copy in the open has no other way to read
@@ -142,13 +142,19 @@ MethodLLVMEmitter::emit_reference_store (MonoIrBuilder &builder, llvm::Value *ad
                                          ManagedAccess access)
 {
 	const GcBarrierLayout &gc = current_write_barrier_layout ();
+
+	value = in_address_space (builder, value, object_address_space);
+
 	llvm::StoreInst *store = builder.CreateAlignedStore (value, address, align);
 
 	if (llvm::MDNode *tag = tbaa_tag (access, /*is_reference=*/true))
 		store->setMetadata (llvm::LLVMContext::MD_tbaa, tag);
 
 	record_barrier_symbols (gc);
-	builder.CreateCall (gc_barrier_decl (*module, gc), { address, value });
+
+	llvm::Function *barrier = gc_barrier_decl (*module, gc);
+
+	builder.CreateCall (barrier, adapt_to_callee (builder, barrier, { address, value }));
 }
 
 /// Resolves the field that token names and lays out its declaring class, so callers can

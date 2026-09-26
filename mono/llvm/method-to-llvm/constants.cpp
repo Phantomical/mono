@@ -153,9 +153,8 @@ MethodLLVMEmitter::emit_ldc_r8 (MonoIrBuilder &builder, uint64_t bits)
 llvm::Error
 MethodLLVMEmitter::emit_ldnull (MonoIrBuilder &builder)
 {
-	llvm::PointerType *ptr = llvm::PointerType::get (context (), 0);
-
-	push_stack (llvm::ConstantPointerNull::get (ptr), mono_get_object_type ());
+	push_stack (llvm::ConstantPointerNull::get (object_pointer_type (context ())),
+	            mono_get_object_type ());
 	return llvm::Error::success ();
 }
 

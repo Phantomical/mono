@@ -195,6 +195,8 @@ MethodLLVMEmitter::coerce_to_location (MonoIrBuilder &builder, StackValue value,
 		return builder.CreatePtrToInt (value.value, *type);
 	if (from->isIntegerTy () && (*type)->isPointerTy ())
 		return builder.CreateIntToPtr (value.value, *type);
+	if (from->isPointerTy () && (*type)->isPointerTy ())
+		return in_address_space (builder, value.value, (*type)->getPointerAddressSpace ());
 	// The stack tracks one float type. An R4 location rounds the value, and an
 	// R8 location widens it.
 	if (from->isFloatingPointTy () && (*type)->isFloatingPointTy ())

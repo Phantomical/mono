@@ -367,9 +367,10 @@ TEST_F (JitExecution, LowerBuiltinsGivesTheStringConstructorItsNullThis)
 	mpm.run (*t->module, mam);
 
 	EXPECT_EQ (t->count ("mono.builtin."), 0u) << t->text ();
-	EXPECT_EQ (t->count ("call ptr @\"(wrapper managed-to-managed) string:.ctor"), 1u)
+	EXPECT_EQ (t->count ("call ptr addrspace(1) @\"(wrapper managed-to-managed) string:.ctor"),
+	           1u)
 		<< t->text ();
-	EXPECT_EQ (t->count ("(ptr null"), 1u) << t->text ();
+	EXPECT_EQ (t->count ("(ptr addrspace(1) null"), 1u) << t->text ();
 	EXPECT_EQ (verify_function (*t->function), "") << t->text ();
 }
 
@@ -630,6 +631,63 @@ TEST_F (Jit, ReachesNearRuntimeReferencesWithoutTheImportPointer)
 	}
 
 	mono_vfree (near, page, MONO_MEM_ACCOUNT_OTHER);
+extern "C" void
+mono_jit_test_never_called (void)
+{
+	abort ();
+}
+
+/* Places the handler after a faulting read whose try range ends at a branch. */
+TEST_F (Jit, AFaultingReadInATryKeepsItsHandlerLabel)
+{
+	static const char ir[] = R"(
+@type_info_0 = private constant { i32, i32, i64 } { i32 0, i32 0, i64 0 }
+
+declare i32 @mono_personality(...)
+declare ptr @mono_jit_test_make()
+declare void @mono_llvm_throw_corlib_exception(i32) cold noreturn
+
+define i64 @entry() personality ptr @mono_personality {
+entry:
+  %p = invoke ptr @mono_jit_test_make() to label %check unwind label %pad
+check:
+  %null = icmp eq ptr %p, null
+  br i1 %null, label %throw, label %load, !prof !0, !make.implicit !1
+load:
+  %v = load i64, ptr %p
+  ret i64 %v
+throw:
+  invoke void @mono_llvm_throw_corlib_exception(i32 332) to label %dead unwind label %pad
+dead:
+  unreachable
+pad:
+  %lp = landingpad { ptr, i32 } catch ptr @type_info_0
+  ret i64 0
+}
+
+!llvm.module.flags = !{!2}
+!0 = !{!"branch_weights", i32 1000, i32 1}
+!1 = !{}
+!2 = !{i32 1, !"mono.tier2", i32 1}
+)";
+
+	OwnedModule m;
+	SMDiagnostic problem;
+
+	m.context = std::make_unique<LLVMContext> ();
+	m.module = parseAssemblyString (ir, problem, *m.context);
+	ASSERT_NE (m.module, nullptr) << problem.getMessage ().str ();
+
+	auto jit = test::make_jit ();
+	ASSERT_TRUE (bool (jit)) << toString (jit.takeError ());
+
+	for (const char *name : { "mono_personality", "mono_jit_test_make",
+	                          "mono_llvm_throw_corlib_exception" })
+		ASSERT_FALSE (bool ((*jit)->register_code_symbol (
+			name, (void *) &mono_jit_test_never_called)));
+
+	auto entry = (*jit)->compile (m.take (), "entry");
+	ASSERT_TRUE (bool (entry)) << toString (entry.takeError ());
 }
 
 extern "C" void
