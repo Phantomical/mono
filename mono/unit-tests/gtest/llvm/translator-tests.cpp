@@ -1353,6 +1353,147 @@ TEST_F (TranslatorTest, AnObjectCannotBeFreed)
 	EXPECT_FALSE (t.function->getArg (0)->canBeFreed ()) << t.text ();
 }
 
+namespace {
+
+struct Extent {
+	uint64_t bytes;
+	bool can_be_null;
+	bool can_be_freed;
+	uint64_t align;
+};
+
+Extent
+extent_of (const llvm::Value &pointer, const llvm::Function &f)
+{
+	const llvm::DataLayout &dl = f.getDataLayout ();
+	Extent e {};
+
+	e.bytes = pointer.getPointerDereferenceableBytes (dl, e.can_be_null, &e.can_be_freed);
+	e.align = pointer.getPointerAlignment (dl).value ();
+	return e;
+}
+
+/// Finds a non-frame object-reference load in f.
+const llvm::LoadInst *
+heap_object_load (const llvm::Function &f)
+{
+	for (const llvm::Instruction &in : llvm::instructions (f))
+		if (auto *load = llvm::dyn_cast<llvm::LoadInst> (&in))
+			if (mono::is_object_pointer (load->getType ())
+			    && !llvm::isa<llvm::AllocaInst> (load->getPointerOperand ()))
+				return load;
+
+	return nullptr;
+}
+
+/// Finds an indirect object-returning call in f.
+const llvm::CallBase *
+dispatched_object_call (const llvm::Function &f)
+{
+	for (const llvm::Instruction &in : llvm::instructions (f))
+		if (auto *call = llvm::dyn_cast<llvm::CallBase> (&in))
+			if (call->getCalledFunction () == nullptr
+			    && mono::is_object_pointer (call->getType ()))
+				return call;
+
+	return nullptr;
+}
+
+} // namespace
+
+TEST_F (TranslatorTest, AFieldReadStatesItsClassExtent)
+{
+	const Translation &t = translate ("fields", "Fields:GetNext");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+
+	const llvm::LoadInst *next = heap_object_load (*t.function);
+
+	ASSERT_NE (next, nullptr) << t.text ();
+
+	Extent e = extent_of (*next, *t.function);
+
+	// Node has a header and three words.
+	EXPECT_EQ (e.bytes, 40u) << t.text ();
+	EXPECT_TRUE (e.can_be_null);
+	EXPECT_FALSE (e.can_be_freed);
+	EXPECT_EQ (e.align, 8u);
+}
+
+TEST_F (TranslatorTest, AnElementReadStatesItsClassExtent)
+{
+	const Translation &t = translate ("fields", "Fields:GetFirst");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+
+	const llvm::LoadInst *first = heap_object_load (*t.function);
+
+	ASSERT_NE (first, nullptr) << t.text ();
+	EXPECT_EQ (extent_of (*first, *t.function).bytes, 40u) << t.text ();
+}
+
+TEST_F (TranslatorTest, AnIndirectReadStatesItsClassExtent)
+{
+	const Translation &t = translate ("fields", "Fields:GetThrough");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+
+	const llvm::LoadInst *read = heap_object_load (*t.function);
+
+	ASSERT_NE (read, nullptr) << t.text ();
+	EXPECT_EQ (extent_of (*read, *t.function).bytes, 40u) << t.text ();
+
+	// Managed pointers can point into native memory.
+	EXPECT_EQ (extent_of (*t.function->getArg (0), *t.function).bytes, 0u) << t.text ();
+}
+
+TEST_F (TranslatorTest, AnArrayStatesItsWholeHeader)
+{
+	const Translation &t = translate ("fields", "Fields:GetFirst");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_EQ (extent_of (*t.function->getArg (0), *t.function).bytes,
+	           (uint64_t) MONO_SIZEOF_MONO_ARRAY)
+		<< t.text ();
+}
+
+TEST_F (TranslatorTest, ADispatchStatesTheDeclaredReturnExtent)
+{
+	const Translation &t = translate ("calls", "Calls:CallVirtualName");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+
+	const llvm::CallBase *call = dispatched_object_call (*t.function);
+
+	ASSERT_NE (call, nullptr) << t.text ();
+
+	Extent e = extent_of (*call, *t.function);
+
+	EXPECT_EQ (e.bytes, (uint64_t) m_class_get_instance_size (mono_defaults.string_class))
+		<< t.text ();
+	EXPECT_EQ (e.align, 8u);
+}
+
+TEST_F (TranslatorTest, ACastStatesTheExtentOfTheClassItTests)
+{
+	const Translation &t = translate ("casts", "Casts:CastString");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+
+	for (const llvm::Instruction &in : llvm::instructions (*t.function))
+		if (auto *call = llvm::dyn_cast<llvm::CallBase> (&in))
+			if (call->getCalledFunction () != nullptr
+			    && call->getCalledFunction ()->getName () == "mono.cast.castclass") {
+				EXPECT_EQ (extent_of (*call, *t.function).bytes,
+				           (uint64_t) m_class_get_instance_size (
+						   mono_defaults.string_class))
+					<< t.text ();
+				return;
+			}
+
+	ADD_FAILURE () << "no castclass site\n" << t.text ();
+}
+
 // constrained. on a reference type dereferences the pointer and dispatches as usual;
 // on a value type that implements the method it calls the implementation directly
 // with the pointer as this - no boxing, and no vtable in sight.
@@ -1709,7 +1850,7 @@ TEST_F (TranslatorTest, ACastIsOneCallCarryingWhatDecidesIt)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 
-	EXPECT_EQ (t.count ("call ptr addrspace(1) @mono.cast.castclass"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("ptr addrspace(1) @mono.cast.castclass("), 1u) << t.text ();
 	EXPECT_EQ (t.count ("@\"mono_class_string"), 1u) << t.text ();
 	EXPECT_EQ (t.count ("ptr @cast_cache"), 1u) << t.text ();
 	EXPECT_EQ (t.count ("mono_object_castclass_with_cache"), 1u) << t.text ();
@@ -1731,9 +1872,9 @@ TEST_F (TranslatorTest, IsinstAndCastclassAreDifferentDeclarations)
 	ASSERT_NE (cast.function, nullptr) << cast.error;
 	ASSERT_NE (test.function, nullptr) << test.error;
 
-	EXPECT_EQ (cast.count ("call ptr addrspace(1) @mono.cast.castclass"), 1u) << cast.text ();
+	EXPECT_EQ (cast.count ("ptr addrspace(1) @mono.cast.castclass("), 1u) << cast.text ();
 	EXPECT_EQ (cast.count ("mono.cast.isinst"), 0u) << cast.text ();
-	EXPECT_EQ (test.count ("call ptr addrspace(1) @mono.cast.isinst"), 1u) << test.text ();
+	EXPECT_EQ (test.count ("ptr addrspace(1) @mono.cast.isinst("), 1u) << test.text ();
 	EXPECT_EQ (test.count ("mono.cast.castclass"), 0u) << test.text ();
 }
 
