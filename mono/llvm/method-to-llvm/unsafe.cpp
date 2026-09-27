@@ -153,10 +153,18 @@ MethodLLVMEmitter::emit_unsafe_body (MonoIrBuilder &builder, MonoMethod *method)
 	auto argument = [&] (unsigned i) {
 		return function->getArg (natural_parameter_index (i, function));
 	};
+	// Unsafe conversions can cross address spaces.
+	auto ret = [&] (llvm::Value *value) {
+		llvm::Type *type = function->getReturnType ();
+
+		if (type->isPointerTy ())
+			value = in_address_space (builder, value, type->getPointerAddressSpace ());
+		builder.CreateRet (value);
+	};
 
 	switch (call->op) {
 	case UnsafeOp::Move:
-		builder.CreateRet (argument (0));
+		ret (argument (0));
 		return llvm::Error::success ();
 
 	case UnsafeOp::AreSame:
@@ -203,13 +211,12 @@ MethodLLVMEmitter::emit_unsafe_body (MonoIrBuilder &builder, MonoMethod *method)
 			builder.CreateMul (count, builder.getInt32 (esize)),
 			builder.getIntNTy (TARGET_SIZEOF_VOID_P * 8));
 
-		builder.CreateRet (builder.CreateGEP (builder.getInt8Ty (), argument (0), bytes));
+		ret (builder.CreateGEP (builder.getInt8Ty (), argument (0), bytes));
 		return llvm::Error::success ();
 	}
 
 	case UnsafeOp::AddBytes:
-		builder.CreateRet (
-			builder.CreateGEP (builder.getInt8Ty (), argument (0), argument (1)));
+		ret (builder.CreateGEP (builder.getInt8Ty (), argument (0), argument (1)));
 		return llvm::Error::success ();
 
 	case UnsafeOp::Read:
@@ -232,7 +239,7 @@ MethodLLVMEmitter::emit_unsafe_body (MonoIrBuilder &builder, MonoMethod *method)
 			return llvm::Error::success ();
 		}
 
-		builder.CreateRet (builder.CreateAlignedLoad (*conv, source, source_align));
+		ret (builder.CreateAlignedLoad (*conv, source, source_align));
 		return llvm::Error::success ();
 	}
 

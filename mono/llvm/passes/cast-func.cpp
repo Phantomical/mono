@@ -9,6 +9,7 @@
 #include "method-symbols.hpp"
 
 #include "mono/llvm/internal-loads.hpp"
+#include "mono/llvm/managed-pointer.hpp"
 
 #include "mono/metadata/abi-details.h"
 #include "mono/metadata/class-init.h"
@@ -226,7 +227,9 @@ adapt_to_callee (IRBuilder<> &b, Function *callee, ArrayRef<Value *> args)
 
 		if (have->getType () == want)
 			continue;
-		if (want->isPointerTy ())
+		if (want->isPointerTy () && have->getType ()->isPointerTy ())
+			adapted[i] = in_address_space (b, have, want->getPointerAddressSpace ());
+		else if (want->isPointerTy ())
 			adapted[i] = b.CreateIntToPtr (have, want);
 		else if (want->isIntegerTy ())
 			adapted[i] = b.CreatePtrToInt (have, want);
@@ -250,7 +253,7 @@ lower (CallBase *site, bool throw_on_fail)
 	BasicBlock *head = site->getParent ();
 	Type *ptr = PointerType::get (c, 0);
 	Type *word = Type::getIntNTy (c, TARGET_SIZEOF_VOID_P * 8);
-	Constant *null = ConstantPointerNull::get (cast<PointerType> (ptr));
+	Constant *null = ConstantPointerNull::get (cast<PointerType> (site->getType ()));
 
 	Value *obj = site->getArgOperand (0);
 	Value *target = site->getArgOperand (1);
@@ -424,7 +427,7 @@ lower (CallBase *site, bool throw_on_fail)
 
 	b.SetInsertPoint (done);
 
-	PHINode *result = b.CreatePHI (ptr, 4, "cast_result");
+	PHINode *result = b.CreatePHI (site->getType (), 4, "cast_result");
 
 	// Before the incoming values name it, so that replacing the site's uses
 	// does not reach into the phi's own operand for the wrapper's answer.
@@ -562,11 +565,13 @@ cast_func_decl (Module &m, bool throw_on_fail)
 	StringRef name = throw_on_fail ? cast_castclass_name : cast_isinst_name;
 	LLVMContext &c = m.getContext ();
 	Type *ptr = PointerType::get (c, 0);
+	Type *object = object_pointer_type (c);
 
 	return builtin_decl (
 		m, name,
 		FunctionType::get (
-			ptr, { ptr, ptr, ptr, ptr, ptr, ptr, Type::getInt16Ty (c), Type::getInt16Ty (c) },
+			object,
+			{ object, ptr, ptr, ptr, ptr, ptr, Type::getInt16Ty (c), Type::getInt16Ty (c) },
 			false));
 }
 

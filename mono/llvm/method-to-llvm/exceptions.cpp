@@ -24,7 +24,7 @@ throw_decl (llvm::Module *module, const char *name)
 {
 	llvm::LLVMContext &ctx = module->getContext ();
 	llvm::FunctionCallee callee = module->getOrInsertFunction (
-		name, llvm::Type::getVoidTy (ctx), llvm::PointerType::get (ctx, 0));
+		name, llvm::Type::getVoidTy (ctx), object_pointer_type (ctx));
 
 	if (auto *function = llvm::dyn_cast<llvm::Function> (callee.getCallee ())) {
 		function->setDoesNotReturn ();
@@ -280,7 +280,8 @@ MethodLLVMEmitter::handler_entry (uint32_t clause, llvm::Value *exc)
 		enter_finally (prep, clause, entered_by_unwinding);
 	} else if (info->flags != MONO_EXCEPTION_CLAUSE_FAULT
 	           && !handler.entry.empty ()) {
-		prep.CreateStore (exc, handler.entry[0].alloca);
+		prep.CreateStore (in_address_space (prep, exc, object_address_space),
+		                  handler.entry[0].alloca);
 	}
 
 	prep.CreateBr (handler.block);
@@ -519,14 +520,21 @@ MethodLLVMEmitter::emit_unwinding_call (MonoIrBuilder &builder, llvm::FunctionCa
                                         llvm::ArrayRef<llvm::Value *> args)
 {
 	int clause = innermost_try (offset);
+	llvm::FunctionType *type = callee.getFunctionType ();
+	llvm::SmallVector<llvm::Value *, 4> operands (args.begin (), args.end ());
+
+	for (unsigned i = 0; i < operands.size () && i < type->getNumParams (); ++i)
+		if (type->getParamType (i)->isPointerTy ())
+			operands[i] = in_address_space (builder, operands[i],
+			                                type->getParamType (i)->getPointerAddressSpace ());
 
 	if (clause >= 0) {
 		llvm::BasicBlock *unwound = create_cold_block ("unwound");
 
-		builder.CreateInvoke (callee, unwound, landing_pad (clause), args);
+		builder.CreateInvoke (callee, unwound, landing_pad (clause), operands);
 		builder.SetInsertPoint (unwound);
 	} else {
-		builder.CreateCall (callee, args);
+		builder.CreateCall (callee, operands);
 	}
 
 	builder.CreateUnreachable ();
@@ -557,6 +565,15 @@ MethodLLVMEmitter::emit_protected_call (MonoIrBuilder &builder, llvm::FunctionCa
 
 	llvm::SmallVector<llvm::Value *, 8> operands (args.begin (), args.end ());
 	llvm::AllocaInst *slot = nullptr;
+	llvm::FunctionType *type = callee.getFunctionType ();
+
+	for (unsigned i = 0; i < operands.size (); ++i) {
+		unsigned param = hidden != nullptr && i >= at ? i + 1 : i;
+
+		if (param < type->getNumParams () && type->getParamType (param)->isPointerTy ())
+			operands[i] = in_address_space (
+				builder, operands[i], type->getParamType (param)->getPointerAddressSpace ());
+	}
 
 	if (hidden != nullptr) {
 		slot = entry_alloca (hidden, "retslot");

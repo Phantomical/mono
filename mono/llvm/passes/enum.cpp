@@ -6,6 +6,7 @@
 #include "enum.hpp"
 
 #include "builtins.hpp"
+#include "managed-pointer.hpp"
 
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -74,6 +75,15 @@ lower_enum_builtins (Module &m)
 			auto *fallback = cast<Function> (site->getArgOperand (last));
 			SmallVector<Value *, 2> args (site->args ().begin (),
 			                              site->args ().begin () + last);
+			IRBuilder<> b (site);
+
+			for (unsigned i = 0; i < args.size (); ++i) {
+				Type *want = fallback->getFunctionType ()->getParamType (i);
+
+				if (want->isPointerTy ())
+					args[i] = in_address_space (b, args[i], want->getPointerAddressSpace ());
+			}
+
 			CallBase *direct;
 
 			if (auto *invoke = dyn_cast<InvokeInst> (site))
@@ -84,7 +94,7 @@ lower_enum_builtins (Module &m)
 				direct = CallInst::Create (fallback, args, "", site->getIterator ());
 
 			direct->setDebugLoc (site->getDebugLoc ());
-			site->replaceAllUsesWith (direct);
+			replace_site_result (site, direct);
 			site->eraseFromParent ();
 			changed = true;
 		}

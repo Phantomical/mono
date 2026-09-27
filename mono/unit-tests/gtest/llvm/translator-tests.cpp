@@ -1318,7 +1318,7 @@ TEST_F (TranslatorTest, UnalignedLowersTheAccessAlignment)
 	const Translation &t = translate ("prefixed", "Prefixed:UnalignedRead");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("load ptr, ptr %1, align 1"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("load ptr addrspace(1), ptr %1, align 1"), 1u) << t.text ();
 }
 
 // Packed and explicit layouts can under-align fields. An external address can
@@ -1332,7 +1332,8 @@ TEST_F (TranslatorTest, APointerClaimsOnlyWhatTheLoaderEnforces)
 	EXPECT_EQ (scalar.count ("load i32, ptr %1, align 1"), 1u) << scalar.text ();
 
 	ASSERT_NE (reference.function, nullptr) << reference.error;
-	EXPECT_EQ (reference.count ("load ptr, ptr %1, align 8"), 1u) << reference.text ();
+	EXPECT_EQ (reference.count ("load ptr addrspace(1), ptr %1, align 8"), 1u)
+		<< reference.text ();
 }
 
 TEST_F (TranslatorTest, AnObjectIsPointerAligned)
@@ -1341,7 +1342,15 @@ TEST_F (TranslatorTest, AnObjectIsPointerAligned)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_EQ (t.count ("define align 8"), 1u) << t.text ();
-	EXPECT_EQ (t.count ("ptr align 8 dereferenceable_or_null(16) %arg_o"), 1u);
+	EXPECT_EQ (t.count ("ptr addrspace(1) align 8 dereferenceable_or_null(16) %arg_o"), 1u);
+}
+
+TEST_F (TranslatorTest, AnObjectCannotBeFreed)
+{
+	const Translation &t = translate ("prefixed", "Prefixed:PassObject");
+
+	ASSERT_NE (t.function, nullptr) << t.error;
+	EXPECT_FALSE (t.function->getArg (0)->canBeFreed ()) << t.text ();
 }
 
 // constrained. on a reference type dereferences the pointer and dispatches as usual;
@@ -1376,7 +1385,7 @@ TEST_F (TranslatorTest, ConstrainedCallOnANonOverridingStructBoxes)
 	EXPECT_EQ (plain.count ("mono_vtable_Bare"), 2u) << plain.text ();
 	EXPECT_EQ (plain.count ("store ptr @\"mono_vtable_Bare"), 1u) << plain.text ();
 	/* Dispatch stays virtual: the target comes off the box's vtable, never named. */
-	EXPECT_EQ (plain.count ("call ptr @\"System.Object:ToString"), 0u);
+	EXPECT_EQ (plain.count ("call ptr addrspace(1) @\"System.Object:ToString"), 0u);
 
 	ASSERT_NE (buried.function, nullptr) << buried.error;
 	EXPECT_EQ (buried.count ("object:AllocSmall"), 1u) << buried.text ();
@@ -1524,11 +1533,11 @@ TEST_F (TranslatorTest, StringNewobjAsksTheBuiltinForTheObject)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_EQ (t.count ("ves_icall_object_new_specific"), 0u);
-	EXPECT_EQ (t.count ("call ptr @\"mono.builtin.string_constructor."
+	EXPECT_EQ (t.count ("call ptr addrspace(1) @\"mono.builtin.string_constructor."
 	                    "(wrapper managed-to-managed) string:.ctor"),
 	           1u)
 		<< t.text ();
-	EXPECT_EQ (t.count ("(ptr null"), 0u);
+	EXPECT_EQ (t.count ("(ptr addrspace(1) null"), 0u);
 
 	/* The result is fresh, and the declaration says so. */
 	for (const llvm::Function &decl : t.module->functions ())
@@ -1546,7 +1555,7 @@ TEST_F (TranslatorTest, StringCtorCalledDirectlyLeavesTheString)
 	const Translation &t = translate ("objects", "Objects:CallStringCtor");
 
 	ASSERT_NE (t.function, nullptr) << t.error;
-	EXPECT_EQ (t.count ("call ptr @\"mono.builtin.string_constructor."
+	EXPECT_EQ (t.count ("call ptr addrspace(1) @\"mono.builtin.string_constructor."
 	                    "(wrapper managed-to-managed) string:.ctor"),
 	           1u)
 		<< t.text ();
@@ -1700,7 +1709,7 @@ TEST_F (TranslatorTest, ACastIsOneCallCarryingWhatDecidesIt)
 
 	ASSERT_NE (t.function, nullptr) << t.error;
 
-	EXPECT_EQ (t.count ("call ptr @mono.cast.castclass"), 1u) << t.text ();
+	EXPECT_EQ (t.count ("call ptr addrspace(1) @mono.cast.castclass"), 1u) << t.text ();
 	EXPECT_EQ (t.count ("@\"mono_class_string"), 1u) << t.text ();
 	EXPECT_EQ (t.count ("ptr @cast_cache"), 1u) << t.text ();
 	EXPECT_EQ (t.count ("mono_object_castclass_with_cache"), 1u) << t.text ();
@@ -1722,9 +1731,9 @@ TEST_F (TranslatorTest, IsinstAndCastclassAreDifferentDeclarations)
 	ASSERT_NE (cast.function, nullptr) << cast.error;
 	ASSERT_NE (test.function, nullptr) << test.error;
 
-	EXPECT_EQ (cast.count ("call ptr @mono.cast.castclass"), 1u) << cast.text ();
+	EXPECT_EQ (cast.count ("call ptr addrspace(1) @mono.cast.castclass"), 1u) << cast.text ();
 	EXPECT_EQ (cast.count ("mono.cast.isinst"), 0u) << cast.text ();
-	EXPECT_EQ (test.count ("call ptr @mono.cast.isinst"), 1u) << test.text ();
+	EXPECT_EQ (test.count ("call ptr addrspace(1) @mono.cast.isinst"), 1u) << test.text ();
 	EXPECT_EQ (test.count ("mono.cast.castclass"), 0u) << test.text ();
 }
 

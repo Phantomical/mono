@@ -10,6 +10,7 @@
  * harness links.
  */
 
+#include "managed-pointer.hpp"
 #include "passes/builtins.hpp"
 #include "passes/gc-barrier.hpp"
 
@@ -54,10 +55,10 @@ struct BarrierModule {
 	{
 		module = std::make_unique<Module> ("barriers", *context);
 
-		Type *ptr = PointerType::get (*context, 0);
+		Type *object = object_pointer_type (*context);
 
 		caller = Function::Create (FunctionType::get (Type::getVoidTy (*context),
-		                                              { ptr, ptr }, false),
+		                                              { object, object }, false),
 		                           GlobalValue::ExternalLinkage, "caller", module.get ());
 
 		BasicBlock *entry = BasicBlock::Create (*context, "entry", caller);
@@ -233,7 +234,8 @@ TEST (GcBarrierTest, ACollectorWithNoCardTableCallsItsHelper)
 	m.lower ();
 
 	EXPECT_FALSE (verifyModule (*m.module, &errs ()));
-	EXPECT_EQ (m.count ("call void @mono_gc_wbarrier_generic_nostore_internal(ptr %0)"),
+	EXPECT_EQ (m.count ("%2 = addrspacecast ptr addrspace(1) %0 to ptr"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("call void @mono_gc_wbarrier_generic_nostore_internal(ptr %2)"),
 	           1u)
 		<< m.text ();
 	EXPECT_EQ (m.count ("@mono_gc_card_table"), 0u) << m.text ();
@@ -310,21 +312,24 @@ struct StackModule {
 	std::unique_ptr<Module> module;
 	Function *caller = nullptr;
 	AllocaInst *local = nullptr;
+	/// local as the managed pointer ldloca gives it.
+	Value *slot = nullptr;
 	IRBuilder<> b;
 
 	StackModule () : b (*context)
 	{
 		module = std::make_unique<Module> ("stack barriers", *context);
 
-		Type *ptr = PointerType::get (*context, 0);
+		Type *object = object_pointer_type (*context);
 
 		caller = Function::Create (
 			FunctionType::get (Type::getVoidTy (*context),
-		                           { ptr, ptr, Type::getInt1Ty (*context) }, false),
+		                           { object, object, Type::getInt1Ty (*context) }, false),
 			GlobalValue::ExternalLinkage, "caller", module.get ());
 
 		b.SetInsertPoint (BasicBlock::Create (*context, "entry", caller));
 		local = b.CreateAlloca (ArrayType::get (Type::getInt8Ty (*context), 32));
+		slot = b.CreateAddrSpaceCast (local, object);
 	}
 
 	Value *value () { return caller->getArg (0); }
@@ -370,7 +375,7 @@ TEST (StackBarrierTest, ALocalsFieldNeedsNoCard)
 {
 	StackModule m;
 
-	m.store_through (m.b.CreateConstInBoundsGEP1_32 (m.b.getInt8Ty (), m.local, 8));
+	m.store_through (m.b.CreateConstInBoundsGEP1_32 (m.b.getInt8Ty (), m.slot, 8));
 
 	EXPECT_TRUE (m.eliminate ());
 	EXPECT_EQ (m.barriers (), 0u);
@@ -403,9 +408,9 @@ TEST (StackBarrierTest, ADestinationOfTwoObjectsKeepsItsBarrier)
 	m.b.CreateBr (join);
 	m.b.SetInsertPoint (join);
 
-	PHINode *address = m.b.CreatePHI (PointerType::get (*m.context, 0), 2);
+	PHINode *address = m.b.CreatePHI (object_pointer_type (*m.context), 2);
 
-	address->addIncoming (m.local, on_stack);
+	address->addIncoming (m.slot, on_stack);
 	address->addIncoming (m.elsewhere (), on_heap);
 	m.store_through (address);
 
@@ -431,18 +436,18 @@ struct ValueCopyModule {
 		module = std::make_unique<Module> ("value copies", *context);
 
 		Type *ptr = PointerType::get (*context, 0);
+		Type *object = object_pointer_type (*context);
 
 		caller = Function::Create (FunctionType::get (Type::getVoidTy (*context),
-		                                              { ptr, ptr }, false),
+		                                              { object, object }, false),
 		                           GlobalValue::ExternalLinkage, "caller", module.get ());
 
 		BasicBlock *entry = BasicBlock::Create (*context, "entry", caller);
 		IRBuilder<> b (entry);
 		Type *block = ArrayType::get (b.getInt8Ty (), copied_bytes);
-		Value *dest = dest_in_frame ? cast<Value> (b.CreateAlloca (block))
-		                            : cast<Value> (caller->getArg (0));
-		Value *src = src_in_frame ? cast<Value> (b.CreateAlloca (block))
-		                          : cast<Value> (caller->getArg (1));
+		auto frame_slot = [&] { return b.CreateAddrSpaceCast (b.CreateAlloca (block), object); };
+		Value *dest = dest_in_frame ? frame_slot () : caller->getArg (0);
+		Value *src = src_in_frame ? frame_slot () : caller->getArg (1);
 
 		site = b.CreateCall (gc_value_copy_decl (*module, value_decides_layout ()),
 		                     { dest, src, b.getInt32 (1), b.getInt64 (copied_bytes),
@@ -545,7 +550,9 @@ TEST (GcValueCopyTest, ADestinationInTheHeapStaysOneCall)
 
 	EXPECT_FALSE (verifyModule (*m.module, &errs ()));
 	EXPECT_EQ (m.module->getFunction (gc_value_copy_name), nullptr);
-	EXPECT_EQ (m.count ("call void @mono_gc_wbarrier_value_copy_internal(ptr %0, ptr %1, "
+	EXPECT_EQ (m.count ("%2 = addrspacecast ptr addrspace(1) %0 to ptr"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("%3 = addrspacecast ptr addrspace(1) %1 to ptr"), 1u) << m.text ();
+	EXPECT_EQ (m.count ("call void @mono_gc_wbarrier_value_copy_internal(ptr %2, ptr %3, "
 	                    "i32 1, ptr null)"),
 	           1u)
 		<< m.text ();

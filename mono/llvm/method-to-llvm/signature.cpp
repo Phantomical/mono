@@ -156,14 +156,8 @@ marshals_unchanged (MonoClass *klass)
 std::optional<uint64_t>
 known_dereferenceable_bytes (MonoType *t)
 {
-	if (t->byref) {
-		MonoClass *klass = mono_class_from_mono_type_internal (t);
-		if (klass == nullptr)
-			return std::nullopt;
-
-		return m_class_is_valuetype (klass) ? mono_class_value_size (klass, NULL)
-		                                    : (uint64_t) TARGET_SIZEOF_VOID_P;
-	}
+	if (t->byref)
+		return std::nullopt;
 
 	switch (mini_get_underlying_type (t)->type) {
 	case MONO_TYPE_STRING:
@@ -541,7 +535,7 @@ llvm::Expected<llvm::Type *>
 MethodLLVMEmitter::convert_type (MonoType *t, bool native)
 {
 	if (t->byref)
-		return pointer_type (context ());
+		return object_pointer_type (context ());
 
 	t = mini_get_underlying_type (t);
 
@@ -552,20 +546,21 @@ MethodLLVMEmitter::convert_type (MonoType *t, bool native)
 	switch (t->type) {
 	case MONO_TYPE_VOID:
 		return llvm::Type::getVoidTy (context ());
+	case MONO_TYPE_PTR:
+	case MONO_TYPE_FNPTR:
+		return pointer_type (context ());
 	case MONO_TYPE_OBJECT:
 	case MONO_TYPE_STRING:
 	case MONO_TYPE_CLASS:
 	case MONO_TYPE_ARRAY:
 	case MONO_TYPE_SZARRAY:
-	case MONO_TYPE_PTR:
-	case MONO_TYPE_FNPTR:
 	// Generic sharing hands these over as references.
 	case MONO_TYPE_VAR:
 	case MONO_TYPE_MVAR:
-		return pointer_type (context ());
+		return object_pointer_type (context ());
 	case MONO_TYPE_GENERICINST:
 		if (!mono_type_generic_inst_is_valuetype (t))
-			return pointer_type (context ());
+			return object_pointer_type (context ());
 		// Fall through
 	case MONO_TYPE_VALUETYPE:
 	case MONO_TYPE_TYPEDBYREF:
@@ -910,8 +905,9 @@ MethodLLVMEmitter::convert_method_signature (MonoMethodSignature *sig, bool nati
 
 	std::vector<llvm::Type *> params;
 
+	// `this` is always an object-space pointer.
 	if (sig->hasthis)
-		params.push_back (pointer_type (context ()));
+		params.push_back (object_pointer_type (context ()));
 
 	for (int i = 0; i < vararg_fixed_params (sig); ++i) {
 		llvm::Expected<llvm::Type *> converted = convert_type (sig->params[i], native);

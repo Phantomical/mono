@@ -326,7 +326,7 @@ MethodLLVMEmitter::emit_element_type (MonoIrBuilder &builder, MonoMethod *callee
 	builder.SetInsertPoint (read);
 
 	llvm::LoadInst *answered = builder.CreateAlignedLoad (
-		ptr,
+		object_pointer_type (context ()),
 		builder.CreateGEP (builder.getInt8Ty (), vtable,
 	                           builder.getInt32 (MONO_STRUCT_OFFSET (MonoVTable, type))),
 		align, "element_type");
@@ -344,7 +344,8 @@ MethodLLVMEmitter::emit_element_type (MonoIrBuilder &builder, MonoMethod *callee
 	builder.CreateBr (done);
 	builder.SetInsertPoint (done);
 
-	llvm::PHINode *result = builder.CreatePHI (ptr, 2, "element_type_answer");
+	llvm::PHINode *result =
+		builder.CreatePHI (object_pointer_type (context ()), 2, "element_type_answer");
 
 	result->addIncoming (answered, read);
 	result->addIncoming (raised, raised_in);

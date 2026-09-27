@@ -7,6 +7,7 @@
 
 #include "builtins.hpp"
 #include "layout.hpp"
+#include "mono/llvm/managed-pointer.hpp"
 
 #include "mono/metadata/abi-details.h"
 
@@ -58,6 +59,8 @@ adapt_to_callee (IRBuilder<> &b, Function *callee, ArrayRef<Value *> args)
 
 		if (have->getType () == want)
 			adapted.push_back (have);
+		else if (want->isPointerTy () && have->getType ()->isPointerTy ())
+			adapted.push_back (in_address_space (b, have, want->getPointerAddressSpace ()));
 		else if (want->isPointerTy ())
 			adapted.push_back (b.CreateIntToPtr (have, want));
 		else if (have->getType ()->isPointerTy ())
@@ -107,7 +110,7 @@ lower (CallBase *site)
 		site->getContext (),
 		AttrBuilder (site->getContext (), site->getAttributes ().getRetAttrs ())));
 
-	site->replaceAllUsesWith (call);
+	replace_site_result (site, call);
 	site->eraseFromParent ();
 }
 
@@ -120,7 +123,8 @@ alloc_func_decl (Module &m, AllocShape shape, bool erasable)
 	Type *ptr = PointerType::get (c, 0);
 	Type *word = Type::getIntNTy (c, TARGET_SIZEOF_VOID_P * 8);
 	Function *decl = builtin_decl (m, name_of (shape, erasable),
-	                               FunctionType::get (ptr, { ptr, word, ptr }, false));
+	                               FunctionType::get (object_pointer_type (c),
+	                                                  { ptr, word, ptr }, false));
 
 	decl->addRetAttr (Attribute::NoAlias);
 	decl->addRetAttr (Attribute::getWithAlignment (c, object_alignment ()));

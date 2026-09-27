@@ -6,6 +6,7 @@
  * runtime and no collector stands under the walk.
  */
 
+#include "managed-pointer.hpp"
 #include "passes/alloc-func.hpp"
 #include "passes/dead-alloc.hpp"
 #include "passes/gc-barrier.hpp"
@@ -52,14 +53,14 @@ struct AllocModule {
 	{
 		module = std::make_unique<Module> ("dead allocations", *context);
 
-		Type *ptr = PointerType::get (*context, 0);
+		Type *object = object_pointer_type (*context);
 		Type *word = Type::getInt64Ty (*context);
 
-		allocator = Function::Create (FunctionType::get (ptr, { word, word }, false),
+		allocator = Function::Create (FunctionType::get (object, { word, word }, false),
 		                              GlobalValue::ExternalLinkage, "allocator",
 		                              module.get ());
 		caller = Function::Create (FunctionType::get (Type::getVoidTy (*context),
-		                                              { ptr, ptr }, false),
+		                                              { object, object }, false),
 		                           GlobalValue::ExternalLinkage, "caller", module.get ());
 
 		b.SetInsertPoint (BasicBlock::Create (*context, "entry", caller));

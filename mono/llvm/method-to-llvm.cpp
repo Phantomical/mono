@@ -187,11 +187,52 @@ MethodLLVMEmitter::coerce (MonoIrBuilder &builder, llvm::Value *value, llvm::Typ
 		return value;
 	if (type->isFloatingPointTy ())
 		return builder.CreateFPExt (value, type);
+	if (from->isPointerTy () && type->isPointerTy ())
+		return in_address_space (builder, value, type->getPointerAddressSpace ());
 	// An unmanaged pointer is tracked as native int but travels as a pointer.
 	if (from->isPointerTy ())
 		return builder.CreatePtrToInt (value, type);
 	// int32 paired with native int is sign-extended, never zero-extended.
 	return builder.CreateSExt (value, type);
+}
+
+/// Convert stack pointers to their managed or native address space.
+llvm::Value *
+MethodLLVMEmitter::in_stack_address_space (llvm::Value *value, MonoType *type)
+{
+	if (!value->getType ()->isPointerTy ())
+		return value;
+
+	unsigned space;
+
+	switch (stack_type (type)) {
+	case ObjectRef:
+	case ManagedPtr:
+		space = object_address_space;
+		break;
+	case NativeInt:
+		space = 0;
+		break;
+	default:
+		return value;
+	}
+
+	if (value->getType ()->getPointerAddressSpace () == space)
+		return value;
+
+	llvm::Value *cast;
+
+	if (auto *constant = llvm::dyn_cast<llvm::Constant> (value))
+		cast = constant_in_address_space (constant, space);
+	else
+		cast = in_address_space (*stack_builder, value, space);
+
+	if (trusted_byrefs.count (value) != 0)
+		trusted_byrefs.insert (cast);
+	if (allocated_here.count (value) != 0)
+		allocated_here.insert (cast);
+
+	return cast;
 }
 
 /// `value`, freshly loaded out of a location of type `t`, as the CLI tracks it on the
@@ -815,7 +856,7 @@ MethodLLVMEmitter::seed_handler_entry_stacks (MonoIrBuilder &builder)
 
 		if (clause->flags == MONO_EXCEPTION_CLAUSE_NONE
 		    || clause->flags == MONO_EXCEPTION_CLAUSE_FILTER)
-			entry.push_back ({ spill_slot (0, llvm::PointerType::get (context (), 0)),
+			entry.push_back ({ spill_slot (0, object_pointer_type (context ())),
 			                   mono_get_object_type () });
 
 		if (auto error = enter_block (builder, clause->handler_offset, entry))
@@ -927,8 +968,12 @@ MethodLLVMEmitter::emit ()
 		emit_clause_geometry ();
 	}
 
+	function->setGC (object_gc_strategy.str ());
+
 	MonoIrBuilder builder (context ());
 
+	stack_builder = &builder;
+	llvm::scope_exit forget_builder ([this] { stack_builder = nullptr; });
 	il_debug_reapply (il_scope, &builder);
 
 	entry_block = llvm::BasicBlock::Create (context (), "entry", function);
@@ -1229,6 +1274,7 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 	// call. So the frame must realign itself, or every callee inherits the wrong
 	// parity.
 	function->addFnAttr ("stackrealign");
+	function->setGC (object_gc_strategy.str ());
 
 	if (il_debug) {
 		std::string name = function->getName ().str ();
@@ -1239,6 +1285,8 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 
 	MonoIrBuilder builder (context ());
 
+	stack_builder = &builder;
+	llvm::scope_exit forget_builder ([this] { stack_builder = nullptr; });
 	il_debug_reapply (il_scope, &builder);
 
 	entry_block = llvm::BasicBlock::Create (context (), "entry", function);
@@ -1274,9 +1322,10 @@ MethodLLVMEmitter::emit_filter (llvm::Function *parent, uint32_t clause_index)
 		return std::move (error);
 
 	// Entered like a handler. The exception is the whole evaluation stack.
-	llvm::AllocaInst *exc_slot = spill_slot (0, ptr);
+	llvm::AllocaInst *exc_slot = spill_slot (0, object_pointer_type (context ()));
 
-	builder.CreateAlignedStore (exc, exc_slot, exc_slot->getAlign ());
+	builder.CreateAlignedStore (in_address_space (builder, exc, object_address_space),
+	                            exc_slot, exc_slot->getAlign ());
 	if (auto error = enter_block (builder, begin,
 	                              { { exc_slot, mono_get_object_type () } }))
 		return std::move (error);
@@ -2138,6 +2187,17 @@ void
 MethodLLVMEmitter::emit_null_check (MonoIrBuilder &builder, llvm::Value *pointer,
                                     bool object_reference)
 {
+	// An addrspacecast can hide a known non-null global from LLVM.
+	llvm::Value *named = pointer;
+
+	while (auto *cast = llvm::dyn_cast<llvm::ConstantExpr> (named)) {
+		if (!cast->isCast ())
+			break;
+		named = cast->getOperand (0);
+	}
+	if (llvm::isa<llvm::GlobalValue> (named))
+		return;
+
 	llvm::CondBrInst *branch = emit_cond_exception (builder, builder.CreateIsNull (pointer),
 	                                                "NullReferenceException");
 

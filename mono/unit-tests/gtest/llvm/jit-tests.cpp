@@ -367,9 +367,10 @@ TEST_F (JitExecution, LowerBuiltinsGivesTheStringConstructorItsNullThis)
 	mpm.run (*t->module, mam);
 
 	EXPECT_EQ (t->count ("mono.builtin."), 0u) << t->text ();
-	EXPECT_EQ (t->count ("call ptr @\"(wrapper managed-to-managed) string:.ctor"), 1u)
+	EXPECT_EQ (t->count ("call ptr addrspace(1) @\"(wrapper managed-to-managed) string:.ctor"),
+	           1u)
 		<< t->text ();
-	EXPECT_EQ (t->count ("(ptr null"), 1u) << t->text ();
+	EXPECT_EQ (t->count ("(ptr addrspace(1) null"), 1u) << t->text ();
 	EXPECT_EQ (verify_function (*t->function), "") << t->text ();
 }
 
