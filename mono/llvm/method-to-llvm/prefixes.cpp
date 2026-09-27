@@ -256,6 +256,9 @@ MethodLLVMEmitter::emit_memory_load (MonoIrBuilder &builder, llvm::Type *type, l
 	llvm::Align align = access_alignment (location, access);
 	llvm::LoadInst *value = builder.CreateAlignedLoad (type, address, align);
 
+	// Explicit-layout overlaps and Unsafe.As can invalidate this assumption.
+	mark_object_extent (value, location);
+
 	if (llvm::MDNode *tag = tbaa_tag (access, mini_type_is_reference (location)))
 		value->setMetadata (llvm::LLVMContext::MD_tbaa, tag);
 

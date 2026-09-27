@@ -1842,6 +1842,8 @@ MethodLLVMEmitter::emit_call (MonoIrBuilder &builder, uint32_t token, bool is_vi
 		if (keyed)
 			site->addParamAttr (site->arg_size () - 1, llvm::Attribute::Nest);
 		carry_parameter_extensions (site, *declaration);
+		if (site->getCalledFunction () == nullptr)
+			carry_return_extent (site, sig->ret);
 	};
 
 	llvm::CallInst::TailCallKind tail_kind =
