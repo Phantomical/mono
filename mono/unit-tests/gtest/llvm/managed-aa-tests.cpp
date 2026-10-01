@@ -10,6 +10,7 @@
 #include <mono/metadata/class-internals.h>
 #include <mono/metadata/class.h>
 #include <mono/metadata/metadata-internals.h>
+#include <mono/metadata/tabledefs.h>
 
 #include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/Analysis/MemoryLocation.h>
@@ -24,6 +25,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstring>
 #include <memory>
 #include <string>
 
@@ -69,14 +71,45 @@ empty_offset ()
 	return field != nullptr ? m_field_get_offset (field) : 0;
 }
 
-/// \p ir with `EMPTY` replaced by String.Empty's offset.
+/// The offset of the first instance field of \p klass declared as \p type.
+int
+field_offset (MonoClass *klass, MonoClass *type)
+{
+	gpointer iter = nullptr;
+
+	while (MonoClassField *field = mono_class_get_fields_internal (klass, &iter))
+		if ((mono_field_get_flags (field) & FIELD_ATTRIBUTE_STATIC) == 0
+		    && mono_class_from_mono_type_internal (mono_field_get_type_internal (field)) == type)
+			return m_field_get_offset (field);
+
+	ADD_FAILURE () << "no such field";
+	return 0;
+}
+
+MonoClass *
+exception_class ()
+{
+	return corlib_class ("System", "Exception");
+}
+
+/// \p ir with `EMPTY` replaced by String.Empty's offset, `MESSAGE` by
+/// Exception's first string field's and `INNER` by its Exception field's.
 std::string
 at_empty (std::string ir)
 {
-	std::string offset = std::to_string (empty_offset ());
+	std::pair<const char *, int> names[] = {
+		{ "EMPTY", empty_offset () },
+		{ "MESSAGE", field_offset (exception_class (), mono_defaults.string_class) },
+		{ "INNER", field_offset (exception_class (), exception_class ()) },
+	};
 
-	for (size_t at = ir.find ("EMPTY"); at != std::string::npos; at = ir.find ("EMPTY", at))
-		ir.replace (at, 5, offset);
+	for (auto [name, offset] : names) {
+		std::string spelled = std::to_string (offset);
+		size_t length = strlen (name);
+
+		for (size_t at = ir.find (name); at != std::string::npos; at = ir.find (name, at))
+			ir.replace (at, length, spelled);
+	}
 
 	return ir;
 }
@@ -260,6 +293,116 @@ define void @caller(ptr %array) {
 	          { vector_of (mono_defaults.int32_class) });
 
 	EXPECT_EQ (m.alias ("a", "b"), AliasResult::NoAlias);
+}
+
+TEST_F (ManagedAATest, InstanceFieldTypeBoundsWhatItHolds)
+{
+	Parsed m (R"(
+define void @caller(ptr %exception, ptr %array) {
+  %slot = getelementptr inbounds i8, ptr %exception, i64 MESSAGE
+  %string = load ptr, ptr %slot, !tbaa !100
+  %a = getelementptr inbounds i8, ptr %string, i64 16
+  %b = getelementptr inbounds i8, ptr %array, i64 32
+  ret void
+}
+)",
+	          { exception_class (), vector_of (mono_defaults.int32_class) });
+
+	EXPECT_EQ (m.alias ("a", "b"), AliasResult::NoAlias);
+}
+
+TEST_F (ManagedAATest, PlainGepToAFieldBoundsNothing)
+{
+	Parsed m (R"(
+define void @caller(ptr %exception, ptr %array) {
+  %slot = getelementptr i8, ptr %exception, i64 MESSAGE
+  %string = load ptr, ptr %slot, !tbaa !100
+  %a = getelementptr inbounds i8, ptr %string, i64 16
+  %b = getelementptr inbounds i8, ptr %array, i64 32
+  ret void
+}
+)",
+	          { exception_class (), vector_of (mono_defaults.int32_class) });
+
+	EXPECT_EQ (m.alias ("a", "b"), AliasResult::MayAlias);
+}
+
+TEST_F (ManagedAATest, OffsetInsideAFieldBoundsNothing)
+{
+	Parsed m (R"(
+define void @caller(ptr %exception, ptr %array) {
+  %slot = getelementptr inbounds i8, ptr %exception, i64 MESSAGE
+  %inside = getelementptr inbounds i8, ptr %slot, i64 4
+  %string = load ptr, ptr %inside, !tbaa !100
+  %a = getelementptr inbounds i8, ptr %string, i64 16
+  %b = getelementptr inbounds i8, ptr %array, i64 32
+  ret void
+}
+)",
+	          { exception_class (), vector_of (mono_defaults.int32_class) });
+
+	EXPECT_EQ (m.alias ("a", "b"), AliasResult::MayAlias);
+}
+
+TEST_F (ManagedAATest, ElementClassBoundsWhatItHolds)
+{
+	Parsed m (R"(
+define void @caller(ptr %strings, ptr %array, i64 %i) {
+  %vector = getelementptr inbounds i8, ptr %strings, i64 32
+  %at = getelementptr inbounds ptr, ptr %vector, i64 %i
+  %string = load ptr, ptr %at, !tbaa !100
+  %a = getelementptr inbounds i8, ptr %string, i64 16
+  %b = getelementptr inbounds i8, ptr %array, i64 32
+  ret void
+}
+)",
+	          { vector_of (mono_defaults.string_class), vector_of (mono_defaults.int32_class) });
+
+	EXPECT_EQ (m.alias ("a", "b"), AliasResult::NoAlias);
+}
+
+TEST_F (ManagedAATest, LoopPhiKeepsTheClassItsFieldHolds)
+{
+	Parsed m (R"(
+define void @caller(ptr %first, ptr %array) {
+entry:
+  br label %loop
+loop:
+  %node = phi ptr [ %first, %entry ], [ %next, %loop ]
+  %slot = getelementptr inbounds i8, ptr %node, i64 INNER
+  %next = load ptr, ptr %slot, !tbaa !100
+  %a = getelementptr inbounds i8, ptr %node, i64 16
+  %b = getelementptr inbounds i8, ptr %array, i64 32
+  %done = icmp eq ptr %next, null
+  br i1 %done, label %exit, label %loop
+exit:
+  ret void
+}
+)",
+	          { exception_class (), vector_of (mono_defaults.int32_class) });
+
+	EXPECT_EQ (m.alias ("a", "b"), AliasResult::NoAlias);
+}
+
+TEST_F (ManagedAATest, PhiOfTwoClassesBoundsNothing)
+{
+	Parsed m (R"(
+define void @caller(ptr %string, ptr %exception, ptr %array, i1 %which) {
+entry:
+  br i1 %which, label %left, label %join
+left:
+  br label %join
+join:
+  %either = phi ptr [ %string, %left ], [ %exception, %entry ]
+  %a = getelementptr inbounds i8, ptr %either, i64 16
+  %b = getelementptr inbounds i8, ptr %array, i64 32
+  ret void
+}
+)",
+	          { mono_defaults.string_class, exception_class (),
+	            vector_of (mono_defaults.int32_class) });
+
+	EXPECT_EQ (m.alias ("a", "b"), AliasResult::MayAlias);
 }
 
 TEST_F (ManagedAATest, ClassesShareNoInstance)
