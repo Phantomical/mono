@@ -120,12 +120,13 @@ MethodLLVMEmitter::emit_ldind (MonoIrBuilder &builder, MonoType *element)
 		element = narrowed_reference (
 			element, m_class_get_byval_arg (mono_class_from_mono_type_internal (pointer)));
 
+	ManagedAccess access = indirect_access (get_stack (0).value, element);
 	llvm::Expected<llvm::Value *> address = indirect_address (builder, get_stack (0));
 	if (!address)
 		return address.takeError ();
 
 	pop_stack (1);
-	return push_from_location (builder, *address, element);
+	return push_from_location (builder, *address, element, /*native=*/false, access);
 }
 
 /*
@@ -198,14 +199,37 @@ MethodLLVMEmitter::emit_stind (MonoIrBuilder &builder, MonoType *element)
 	if (!value)
 		return value.takeError ();
 
+	ManagedAccess access = indirect_access (get_stack (1).value, element);
 	llvm::Expected<llvm::Value *> address = indirect_address (builder, get_stack (1));
 	if (!address)
 		return address.takeError ();
 
 	pop_stack (2);
-	if (llvm::Error stored = emit_memory_store (builder, *value, *address, element))
+	if (llvm::Error stored = emit_memory_store (builder, *value, *address, element, access))
 		return stored;
 	return llvm::Error::success ();
+}
+
+ManagedAccess
+MethodLLVMEmitter::indirect_access (llvm::Value *address, MonoType *t)
+{
+	auto named = addressed.find (address);
+
+	if (named == addressed.end () || held_in_memory (t))
+		return ManagedAccess::untagged ();
+
+	const ManagedAccess &access = named->second;
+	MonoType *slot = access.kind == ManagedAccess::Kind::field
+	                         ? mono_field_get_type_internal (access.field)
+	                         : access.element;
+
+	// A tag must describe the slot's stored type.
+	if (held_in_memory (slot) || mini_type_is_reference (slot) != mini_type_is_reference (t))
+		return ManagedAccess::untagged ();
+	if (!mini_type_is_reference (t) && tbaa_scalar_name (slot) != tbaa_scalar_name (t))
+		return ManagedAccess::untagged ();
+
+	return access;
 }
 
 /*

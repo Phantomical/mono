@@ -82,14 +82,17 @@ loads_reference (const LoadInst &load)
 	if (tag == nullptr || tag->getNumOperands () < 2)
 		return false;
 
-	const auto *type = dyn_cast<MDNode> (tag->getOperand (1));
+	// The access type is the reference node or a node below it.
+	for (const auto *type = dyn_cast<MDNode> (tag->getOperand (1));
+	     type != nullptr && type->getNumOperands () >= 2;
+	     type = dyn_cast<MDNode> (type->getOperand (1))) {
+		const auto *name = dyn_cast<MDString> (type->getOperand (0));
 
-	if (type == nullptr || type->getNumOperands () < 1)
-		return false;
+		if (name != nullptr && name->getString () == managed_reference_tbaa_leaf)
+			return true;
+	}
 
-	const auto *name = dyn_cast<MDString> (type->getOperand (0));
-
-	return name != nullptr && name->getString () == managed_reference_tbaa_leaf;
+	return false;
 }
 
 /// The class declared by a reference slot, or null.
