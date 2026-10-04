@@ -38,7 +38,8 @@ class Driver {
 			th [i].Join ();
 
 		GC.Collect (2);
-		
+		GC.WaitForPendingFinalizers ();
+
 		return Bridge.bridges_done > 0 ? 0 : 1;
 	}
 }
