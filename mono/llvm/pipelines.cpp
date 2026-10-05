@@ -19,6 +19,7 @@
 #include "passes/hoist-guard-vtable.hpp"
 #include "passes/initonly-nullness.hpp"
 #include "passes/inline-copies.hpp"
+#include "passes/keep-alive-tail-calls.hpp"
 #include "passes/lower-keepalive.hpp"
 #include "passes/profile-counter-promoter.hpp"
 #include "passes/profile-counters.hpp"
@@ -844,6 +845,10 @@ MonoPassBuilder::buildTier2Pipeline ()
 	FPM.addPass (mono::EliminateStaticConstPass ());
 	FPM.addPass (mono::InitonlyNullnessPass ());
 	FPM.addPass (mono::RgctxDedupPass ());
+
+	// Run after inlining and TailCallElimPass, which can introduce tail calls
+	// before fake uses.
+	FPM.addPass (mono::KeepAliveTailCallsPass ());
 
 	// Restore tail position before adding the final class-init guards.
 	FPM.addPass (mono::RestoreTailPositionPass ());

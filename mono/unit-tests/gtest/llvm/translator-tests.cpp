@@ -33,6 +33,7 @@
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/InstrTypes.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 
@@ -111,6 +112,8 @@ const MethodRef translatable[] = {
 	{"locals", "Locals:ArgAddress"},
 	{"locals", "Locals:LocalAddress"},
 	{"locals", "Locals:ManyLocals"},
+	{"pinned", "Pinned:Store"},
+	{"pinned", "Pinned:Return"},
 
 	{"flow", "Flow:Max"},
 	{"flow", "Flow:SumTo"},
@@ -1095,6 +1098,42 @@ TEST_F (TranslatorTest, AVoidCallLeavesNothingOnTheStack)
 	ASSERT_NE (t.function, nullptr) << t.error;
 	EXPECT_TRUE (t.function->getReturnType ()->isVoidTy ());
 	EXPECT_GE (t.count ("ret void"), 1u);
+}
+
+TEST_F (TranslatorTest, APinnedLocalStaysLiveUntilItsBlockEnds)
+{
+	auto has_fake_use_before = [] (const llvm::Instruction &at) {
+		for (const llvm::Instruction *i = at.getPrevNode (); i != nullptr; i = i->getPrevNode ())
+			if (const auto *call = llvm::dyn_cast<llvm::CallInst> (i))
+				if (call->getIntrinsicID () == llvm::Intrinsic::fake_use)
+					return true;
+
+		return false;
+	};
+
+	auto all_pin_ends_follow_fake_use = [&] (const Translation &t) {
+		for (const llvm::Instruction &at : llvm::instructions (*t.function)) {
+			bool ends_a_pin = llvm::isa<llvm::ReturnInst> (at);
+
+			if (const auto *store = llvm::dyn_cast<llvm::StoreInst> (&at))
+				ends_a_pin = llvm::isa<llvm::ConstantPointerNull> (store->getValueOperand ())
+				             && store->getValueOperand ()->getType ()->getPointerAddressSpace () != 0;
+			if (ends_a_pin && !has_fake_use_before (at))
+				return false;
+		}
+
+		return true;
+	};
+
+	const Translation &store_exit = translate ("pinned", "Pinned:Store");
+	ASSERT_NE (store_exit.function, nullptr) << store_exit.error;
+	EXPECT_TRUE (all_pin_ends_follow_fake_use (store_exit)) << store_exit.text ();
+
+	const Translation &early_return = translate ("pinned", "Pinned:Return");
+	ASSERT_NE (early_return.function, nullptr) << early_return.error;
+	EXPECT_TRUE (all_pin_ends_follow_fake_use (early_return)) << early_return.text ();
+
+	EXPECT_EQ (translate ("locals", "Locals:RoundTrip").count ("llvm.fake.use"), 0u);
 }
 
 // A tail. call whose prototype matches the caller's is honored as a musttail
