@@ -278,10 +278,56 @@ MethodLLVMEmitter::emit_stloc (MonoIrBuilder &builder, uint32_t index)
 		return value.takeError ();
 
 	pop_stack (1);
-	if (held_in_memory (local.type))
+	if (held_in_memory (local.type)) {
 		copy_vtype (builder, local.alloca, *value, local.type, /*native=*/false);
-	else
-		builder.CreateAlignedStore (*value, local.alloca, type_alignment (local.type));
+		return llvm::Error::success ();
+	}
+
+	// SGen pins only pointers it finds in a register or frame slot. Keep the
+	// old value live through the store that ends its pin.
+	if (local.type->pinned) {
+		if (llvm::Error error = keep_pinned_local_alive (builder, local))
+			return error;
+	}
+
+	builder.CreateAlignedStore (*value, local.alloca, type_alignment (local.type));
+	return llvm::Error::success ();
+}
+
+bool
+MethodLLVMEmitter::has_pinned_local () const
+{
+	for (const Entry &local : locals)
+		if (local.type->pinned)
+			return true;
+
+	return false;
+}
+
+llvm::Error
+MethodLLVMEmitter::keep_pinned_local_alive (MonoIrBuilder &builder, const Entry &local)
+{
+	llvm::Expected<llvm::Type *> type = convert_type (local.type);
+
+	if (!type)
+		return type.takeError ();
+
+	keep_alive (builder, builder.CreateAlignedLoad (*type, local.alloca,
+	                                                type_alignment (local.type)));
+	return llvm::Error::success ();
+}
+
+// A return inside a fixed block has no closing store.
+llvm::Error
+MethodLLVMEmitter::keep_pinned_locals_alive (MonoIrBuilder &builder)
+{
+	for (const Entry &local : locals) {
+		if (!local.type->pinned || held_in_memory (local.type))
+			continue;
+		if (llvm::Error error = keep_pinned_local_alive (builder, local))
+			return error;
+	}
+
 	return llvm::Error::success ();
 }
 

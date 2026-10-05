@@ -61,6 +61,9 @@ MethodLLVMEmitter::emit_ret (MonoIrBuilder &builder)
 	// debugger stopped here still sees the frame the IL described.
 	emit_seq_point (builder, SEQ_POINT_ENCODED_EXIT);
 
+	if (llvm::Error error = keep_pinned_locals_alive (builder))
+		return error;
+
 	if (ret->type == MONO_TYPE_VOID && !ret->byref) {
 		if (!stack.empty ())
 			return unbalanced_stack (0);

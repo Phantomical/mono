@@ -811,6 +811,9 @@ private:
 
 	llvm::Error emit_arg_allocas (MonoIrBuilder &builder);
 	llvm::Error emit_local_allocas (MonoIrBuilder &builder);
+	bool has_pinned_local () const;
+	llvm::Error keep_pinned_local_alive (MonoIrBuilder &builder, const Entry &local);
+	llvm::Error keep_pinned_locals_alive (MonoIrBuilder &builder);
 	llvm::Error emit_push_lmf (MonoIrBuilder &builder);
 	void emit_pop_lmf (MonoIrBuilder &builder);
 
@@ -1409,6 +1412,10 @@ void carry_return_extent (llvm::CallBase *call, MonoType *ret);
 
 /// Adds extent and alignment metadata to a reference load.
 void mark_object_extent (llvm::LoadInst *load, MonoType *t);
+
+/// FastISel drops llvm.fake.use, so LowerKeepAlivePass replaces it with an
+/// inline asm read before tier-1 code generation.
+void keep_alive (llvm::IRBuilderBase &builder, llvm::Value *value);
 
 /// Puts target's narrow-integer extension attributes on call.
 void carry_parameter_extensions (llvm::CallBase *call, const llvm::Function *target);

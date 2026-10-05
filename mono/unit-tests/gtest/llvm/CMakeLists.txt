@@ -23,6 +23,7 @@ set(MONO_LLVM_TEST_SOURCES
     array-address-tests.cpp array-shape-tests.cpp ir-dump-tests.cpp
     cast-func-tests.cpp eliminate-delegate-tests.cpp eliminate-cast-tests.cpp inline-heat-tests.cpp
     inline-cost-dom-chain-tests.cpp sink-keep-alive-tests.cpp lower-keepalive-tests.cpp
+    keep-alive-tail-calls-tests.cpp
     hoist-guard-vtable-tests.cpp managed-aa-tests.cpp
     trap-unreachable-tests.cpp
     gc-barrier-tests.cpp operand-class-tests.cpp dead-alloc-tests.cpp
@@ -40,6 +41,7 @@ if(MONO_CORPUS_ENABLED)
     cmake_path(GET ilfile STEM testname)
     mono_corpus_il("${testname}.dll" "${ilfile}" LIBRARY)
   endforeach()
+  mono_corpus_cs(pinned.dll LIBRARY SOURCES pinned.cs)
 
   add_custom_target(test-llvm-data ALL DEPENDS ${MONO_CORPUS_OUTPUTS})
   mono_tools_runtime_depends(test-llvm-data)

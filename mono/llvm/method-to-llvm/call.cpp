@@ -476,16 +476,9 @@ MethodLLVMEmitter::delegate_invoke_callee (MonoIrBuilder &builder, llvm::Value *
 	                             impl);
 }
 
-/// Emits a use of value that generates no code, so it stays live here.
-///
-/// `llvm.fake.use` already carries the memory effects this needs.
-/// IntrInaccessibleMemOnly keeps LICM from reading the call as touching
-/// every location, so a loop's invariant loads still hoist past it.
-///
-/// FastISel drops the intrinsic instead of lowering it. LowerKeepAlivePass
-/// (passes/lower-keepalive.hpp) rewrites every one of these back into an
-/// inline asm read before a tier-1 compile reaches codegen.
-static void
+// IntrInaccessibleMemOnly tells LICM that fake.use does not touch ordinary
+// memory, so invariant loads can still move out of loops.
+void
 keep_alive (llvm::IRBuilderBase &builder, llvm::Value *value)
 {
 	llvm::Module *module = builder.GetInsertBlock ()->getModule ();
@@ -881,6 +874,11 @@ MethodLLVMEmitter::should_tail_call (MonoMethodSignature *callee_sig, MonoMethod
 
 	// This frame owes an LMF pop on the way out, so it cannot be discarded.
 	if (method->save_lmf || lmf_slot != nullptr)
+		return llvm::CallInst::TCK_None;
+
+	// A tail call drops the frame while the callee may still use a pointer
+	// into an object pinned by this method.
+	if (has_pinned_local ())
 		return llvm::CallInst::TCK_None;
 
 	// The cookie buffer a vararg call passes sits in this frame, and the callee
