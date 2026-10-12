@@ -54,31 +54,27 @@ jobs:
       - name: Runtime identifies itself
         run: ./mono/mini/mono-sgen --version
 
+      # Laid out to unpack over a KSP install root. The player loads only the
+      # bdwgc runtime.
       - name: Package
         run: |
           dest=package/MonoBleedingEdge/x86_64
+          lib=libmonobdwgc-2.0.so
           mkdir -p "$dest"
-          for lib in mono/mini/.libs/libmonobdwgc-2.0.so \
-                     mono/mini/.libs/libmonosgen-2.0.so \
-                     support/.libs/libMonoPosixHelper.so; do
-            name=$(basename "$lib")
-            cp -L "$lib" "$dest/$name"
-            objcopy --only-keep-debug "$dest/$name" "$dest/$name.debug"
-            strip --strip-debug --strip-unneeded "$dest/$name"
-            objcopy --add-gnu-debuglink="$dest/$name.debug" "$dest/$name"
-          done
-          echo "Newest glibc symbol version each library asks for:"
-          for so in "$dest"/*.so; do
-            printf '  %s: ' "$(basename "$so")"
-            objdump -T "$so" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
-          done
-          (cd package && zip -r ../mono-2019.4-etw-linux-x64.zip MonoBleedingEdge)
+          cp -L "mono/mini/.libs/$lib" "$dest/$lib"
+          objcopy --only-keep-debug "$dest/$lib" "$dest/$lib.debug"
+          strip --strip-debug --strip-unneeded "$dest/$lib"
+          (cd "$dest" && objcopy --add-gnu-debuglink="$lib.debug" "$lib")
+          printf 'Newest glibc symbol version %s asks for: ' "$lib"
+          objdump -T "$dest/$lib" | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
+          cp .github/ksp/README-linux.txt package/README-mono-2019.4.txt
+          (cd package && zip -r ../mono-2019.4-etw-ksp-linux.zip .)
 
       - name: Upload the package
         uses: actions/upload-artifact@v7
         with:
           name: release-linux-x64
-          path: mono-2019.4-etw-linux-x64.zip
+          path: mono-2019.4-etw-ksp-linux.zip
           compression-level: 0
           if-no-files-found: error
 
@@ -111,32 +107,27 @@ jobs:
             '/p:Configuration=Release', '/p:Platform=x64',
             '/p:PlatformToolset=v143', '/p:WindowsTargetPlatformVersion=10.0'
           )
-          foreach ($gc in 'bdwgc', 'sgen') {
-            msbuild @common /t:Runtime\libmono-dynamic /p:MONO_TARGET_GC=$gc
-            if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          }
-          msbuild @common /t:Libraries\monoposixhelper /p:MONO_TARGET_GC=bdwgc
+          msbuild @common /t:Runtime\libmono-dynamic /p:MONO_TARGET_GC=bdwgc
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
+      # Laid out to unpack over a KSP install root. The player loads only the
+      # bdwgc runtime.
       - name: Package
         shell: pwsh
         run: |
           $dest = 'package\MonoBleedingEdge\EmbedRuntime'
           New-Item -ItemType Directory -Force $dest | Out-Null
-          foreach ($gc in 'bdwgc', 'sgen') {
-            Copy-Item "msvc\build\$gc\x64\bin\Release\mono-2.0-$gc.dll", `
-                      "msvc\build\$gc\x64\bin\Release\mono-2.0-$gc.pdb" $dest
-          }
-          Copy-Item 'msvc\build\bdwgc\x64\bin\Release\MonoPosixHelper.dll', `
-                    'msvc\build\bdwgc\x64\bin\Release\MonoPosixHelper.pdb' $dest
-          Compress-Archive -Path 'package\MonoBleedingEdge' `
-            -DestinationPath 'mono-2019.4-etw-windows-x64.zip'
+          Copy-Item 'msvc\build\bdwgc\x64\bin\Release\mono-2.0-bdwgc.dll', `
+                    'msvc\build\bdwgc\x64\bin\Release\mono-2.0-bdwgc.pdb' $dest
+          Copy-Item '.github\ksp\README-windows.txt' 'package\README-mono-2019.4.txt'
+          Compress-Archive -Path 'package\*' `
+            -DestinationPath 'mono-2019.4-etw-ksp-windows.zip'
 
       - name: Upload the package
         uses: actions/upload-artifact@v7
         with:
           name: release-windows-x64
-          path: mono-2019.4-etw-windows-x64.zip
+          path: mono-2019.4-etw-ksp-windows.zip
           compression-level: 0
           if-no-files-found: error
 
