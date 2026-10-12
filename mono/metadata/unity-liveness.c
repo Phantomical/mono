@@ -127,6 +127,7 @@ static struct {
 	void (*job) (LivenessWorker *worker);
 	int running;
 	int n_threads;
+	int n_started;
 } liveness_pool;
 
 static void * liveness_realloc(LivenessState *state, void *ptr, int size)
@@ -848,6 +849,8 @@ static mono_thread_start_return_t WINAPI liveness_pool_thread(gpointer arg)
 #endif
 
 	mono_os_mutex_lock (&liveness_pool.lock);
+	liveness_pool.n_started++;
+	mono_os_cond_broadcast (&liveness_pool.finished);
 	for (;;) {
 		while (liveness_pool.generation == seen)
 			mono_os_cond_wait (&liveness_pool.wake, &liveness_pool.lock);
@@ -892,8 +895,9 @@ static void liveness_pool_run(LivenessState *state, void (*job) (LivenessWorker 
 	mono_os_mutex_unlock (&liveness_pool.lock);
 }
 
-/* Create the unmanaged pool before stopping the world: thread creation can
- * acquire libc locks held by a suspended thread. */
+/* Start the unmanaged pool before stopping the world: thread creation and a
+ * new thread's startup can wait on libc and loader locks a suspended thread
+ * holds. */
 static void liveness_initialize(void)
 {
 	mono_os_mutex_init (&liveness_alloc_lock);
@@ -914,6 +918,11 @@ static void liveness_initialize(void)
 			break;
 		liveness_pool.n_threads++;
 	}
+
+	mono_os_mutex_lock (&liveness_pool.lock);
+	while (liveness_pool.n_started < liveness_pool.n_threads)
+		mono_os_cond_wait (&liveness_pool.finished, &liveness_pool.lock);
+	mono_os_mutex_unlock (&liveness_pool.lock);
 }
 
 /**
