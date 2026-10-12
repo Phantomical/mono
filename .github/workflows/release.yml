@@ -24,6 +24,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # autogen.sh runs bdwgc's own autogen before configure checks out the
+      # submodules, and bdwgc's nested libatomic_ops still names a git:// URL
+      # GitHub no longer serves.
+      - name: Check out bdwgc
+        run: >
+          git -c url.https://github.com/.insteadOf=git://github.com/
+          submodule update --init --recursive external/bdwgc
+
       # The build runs genmdesc.py as `python`.
       - name: Install dependencies
         run: |
@@ -31,7 +39,6 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             autoconf automake libtool pkg-config gettext python-is-python3
 
-      # Configure checks out every submodule itself, rewriting git:// URLs.
       # --disable-parallel-mark is what Unity's own Linux build passes.
       - name: Configure
         env:
