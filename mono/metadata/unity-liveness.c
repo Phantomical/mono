@@ -13,6 +13,7 @@
 #include <mono/utils/gc_wrapper.h>
 #include <mono/utils/mono-error.h>
 #include <mono/utils/mono-lazy-init.h>
+#include <mono/utils/mono-mmap.h>
 #include <mono/utils/mono-os-mutex.h>
 #include <mono/utils/mono-proclib.h>
 #include <mono/utils/mono-threads.h>
@@ -1190,16 +1191,21 @@ void mono_unity_liveness_start_gc_world (void)
 /*
  * Unity's scripting_liveness_calculation_begin() tail-calls straight into this
  * function rather than going through mono_unity_liveness_allocate_struct(), so
- * there's no caller-supplied ReallocateArray on this path; back the block
- * array with g_malloc/g_free instead.
+ * there's no caller-supplied ReallocateArray on this path. The walk calls this
+ * with the world stopped, when a suspended thread can hold the CRT heap lock.
+ * Blocks are therefore mapped pages rather than malloc'd.
  */
 static void * default_liveness_reallocate_array(void *ptr, int size, void *callback_userdata)
 {
+	g_assert (size == 0 || size == k_block_size);
 	if (size == 0) {
-		g_free(ptr);
+		mono_vfree (ptr, k_block_size, MONO_MEM_ACCOUNT_OTHER);
 		return NULL;
 	}
-	return g_malloc(size);
+	void *block = mono_valloc (NULL, k_block_size, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_OTHER);
+	if (!block)
+		g_error ("liveness: out of memory mapping a %d-byte block", k_block_size);
+	return block;
 }
 
 LivenessState * mono_unity_liveness_calculation_begin(MonoClass *filter, guint max_count, register_object_callback callback, void *callback_userdata, WorldStateChanged onWorldStarted, WorldStateChanged onWorldStopped)
@@ -1209,7 +1215,8 @@ LivenessState * mono_unity_liveness_calculation_begin(MonoClass *filter, guint m
 	mono_unity_liveness_stop_gc_world();
 	if (onWorldStopped)
 		onWorldStopped();
-	// no allocations can happen beyond this point
+	// Until the world restarts, a call to malloc can deadlock on a lock a
+	// suspended thread holds.
 	return state;
 }
 
