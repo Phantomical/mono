@@ -1,8 +1,9 @@
 name: Release
 
 on:
+  release:
+    types: [published]
   push:
-    tags: ["v*"]
     branches: [release-workflow]
   pull_request:
     paths: [".github/workflows/release.yml"]
@@ -229,7 +230,7 @@ jobs:
   publish:
     name: Publish
     needs: [build-linux, build-windows]
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'release'
     runs-on: ubuntu-24.04
 
     permissions:
@@ -243,9 +244,10 @@ jobs:
           path: packages
           merge-multiple: true
 
-      - name: Create the release
+      - name: Attach the packages to the release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
         run: >
-          gh release create "$GITHUB_REF_NAME" packages/*.zip
-          --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$TAG" packages/*.zip
+          --repo "$GITHUB_REPOSITORY" --clobber
