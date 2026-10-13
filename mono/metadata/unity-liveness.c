@@ -13,6 +13,7 @@
 #include <mono/utils/gc_wrapper.h>
 #include <mono/utils/mono-error.h>
 #include <mono/utils/mono-lazy-init.h>
+#include <mono/utils/mono-mmap.h>
 #include <mono/utils/mono-os-mutex.h>
 #include <mono/utils/mono-proclib.h>
 #include <mono/utils/mono-threads.h>
@@ -126,6 +127,7 @@ static struct {
 	void (*job) (LivenessWorker *worker);
 	int running;
 	int n_threads;
+	int n_started;
 } liveness_pool;
 
 static void * liveness_realloc(LivenessState *state, void *ptr, int size)
@@ -847,6 +849,8 @@ static mono_thread_start_return_t WINAPI liveness_pool_thread(gpointer arg)
 #endif
 
 	mono_os_mutex_lock (&liveness_pool.lock);
+	liveness_pool.n_started++;
+	mono_os_cond_broadcast (&liveness_pool.finished);
 	for (;;) {
 		while (liveness_pool.generation == seen)
 			mono_os_cond_wait (&liveness_pool.wake, &liveness_pool.lock);
@@ -891,8 +895,9 @@ static void liveness_pool_run(LivenessState *state, void (*job) (LivenessWorker 
 	mono_os_mutex_unlock (&liveness_pool.lock);
 }
 
-/* Create the unmanaged pool before stopping the world: thread creation can
- * acquire libc locks held by a suspended thread. */
+/* Start the unmanaged pool before stopping the world: thread creation and a
+ * new thread's startup can wait on libc and loader locks a suspended thread
+ * holds. */
 static void liveness_initialize(void)
 {
 	mono_os_mutex_init (&liveness_alloc_lock);
@@ -913,6 +918,11 @@ static void liveness_initialize(void)
 			break;
 		liveness_pool.n_threads++;
 	}
+
+	mono_os_mutex_lock (&liveness_pool.lock);
+	while (liveness_pool.n_started < liveness_pool.n_threads)
+		mono_os_cond_wait (&liveness_pool.finished, &liveness_pool.lock);
+	mono_os_mutex_unlock (&liveness_pool.lock);
 }
 
 /**
@@ -1190,16 +1200,21 @@ void mono_unity_liveness_start_gc_world (void)
 /*
  * Unity's scripting_liveness_calculation_begin() tail-calls straight into this
  * function rather than going through mono_unity_liveness_allocate_struct(), so
- * there's no caller-supplied ReallocateArray on this path; back the block
- * array with g_malloc/g_free instead.
+ * there's no caller-supplied ReallocateArray on this path. The walk calls this
+ * with the world stopped, when a suspended thread can hold the CRT heap lock.
+ * Blocks are therefore mapped pages rather than malloc'd.
  */
 static void * default_liveness_reallocate_array(void *ptr, int size, void *callback_userdata)
 {
+	g_assert (size == 0 || size == k_block_size);
 	if (size == 0) {
-		g_free(ptr);
+		mono_vfree (ptr, k_block_size, MONO_MEM_ACCOUNT_OTHER);
 		return NULL;
 	}
-	return g_malloc(size);
+	void *block = mono_valloc (NULL, k_block_size, MONO_MMAP_READ | MONO_MMAP_WRITE, MONO_MEM_ACCOUNT_OTHER);
+	if (!block)
+		g_error ("liveness: out of memory mapping a %d-byte block", k_block_size);
+	return block;
 }
 
 LivenessState * mono_unity_liveness_calculation_begin(MonoClass *filter, guint max_count, register_object_callback callback, void *callback_userdata, WorldStateChanged onWorldStarted, WorldStateChanged onWorldStopped)
@@ -1209,7 +1224,8 @@ LivenessState * mono_unity_liveness_calculation_begin(MonoClass *filter, guint m
 	mono_unity_liveness_stop_gc_world();
 	if (onWorldStopped)
 		onWorldStopped();
-	// no allocations can happen beyond this point
+	// Until the world restarts, a call to malloc can deadlock on a lock a
+	// suspended thread holds.
 	return state;
 }
 

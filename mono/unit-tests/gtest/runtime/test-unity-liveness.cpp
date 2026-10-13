@@ -45,9 +45,13 @@ namespace {
 
 #define TESTPROG "unity-liveness.exe"
 
+/* Runs with the world stopped, where growing the vector can deadlock on a heap
+ * lock a suspended thread holds, so each case reserves room up front. */
 void collect (gpointer *arr, int size, void *userdata)
 {
 	auto *found = static_cast<std::vector<MonoObject *> *> (userdata);
+	if (found->size () + size > found->capacity ())
+		abort ();
 	found->insert (found->end (), (MonoObject **) arr, (MonoObject **) arr + size);
 }
 
@@ -122,6 +126,7 @@ TEST_F (UnityLiveness, FromStaticsReportsEachReachableObjectOnce)
 {
 	int expected = invoke_int ("Build", 200000);
 	std::vector<MonoObject *> found;
+	found.reserve (expected);
 
 	LivenessState *state = mono_unity_liveness_calculation_begin (
 		tracked, 0, collect, &found, nullptr, nullptr);
@@ -138,6 +143,7 @@ TEST_F (UnityLiveness, FromRootReportsOnlyWhatStaticsDidNot)
 	MonoObject *detached = invoke ("MakeDetached", &fresh);
 	MonoGCHandle handle = mono_gchandle_new_internal (detached, FALSE);
 	std::vector<MonoObject *> found;
+	found.reserve (expected + fresh);
 
 	LivenessState *state = mono_unity_liveness_calculation_begin (
 		tracked, 0, collect, &found, nullptr, nullptr);
@@ -155,6 +161,7 @@ TEST_F (UnityLiveness, ManySmallObjects)
 {
 	int expected = invoke_int ("BuildVessels", 20000);
 	std::vector<MonoObject *> found;
+	found.reserve (expected);
 
 	LivenessState *state = mono_unity_liveness_calculation_begin (
 		tracked, 0, collect, &found, nullptr, nullptr);
